@@ -127,6 +127,13 @@ function Sidebar({ currentView, onViewChange, onOpenSettings }: any) {
    VIEWS
    ========================================================================== */
 function ButlerView({ scenario, onViewChange, onOpenArb, onOpenReview }: any) {
+  const [input, setInput] = useState('');
+  const handleSend = () => {
+    if (!input.trim()) return;
+    setInput('');
+    // Placeholder for send action
+  };
+
   return (
     <div className="h-full flex flex-col relative bg-white/40 animate-in fade-in duration-500">
       {/* Header */}
@@ -193,8 +200,18 @@ function ButlerView({ scenario, onViewChange, onOpenArb, onOpenReview }: any) {
       {/* Input Area */}
       <div className="p-5 bg-white/70 backdrop-blur-md border-t border-slate-200/60 shrink-0">
         <div className="relative max-w-3xl mx-auto">
-          <input type="text" placeholder="跟管家说点什么，比如：帮我安排一个会议..." className="w-full bg-white border border-slate-200 rounded-xl pl-5 pr-14 py-3.5 text-[14px] focus:outline-none focus:ring-2 focus:ring-slate-500/20 focus:border-slate-500 transition-all shadow-sm" />
-          <button className="absolute right-2 top-1/2 -translate-y-1/2 w-9 h-9 flex items-center justify-center text-white bg-slate-800 rounded-lg transition-colors shadow-sm hover:bg-slate-700">
+          <input 
+            type="text" 
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && handleSend()}
+            placeholder="跟管家说点什么，比如：帮我安排一个会议..." 
+            className="w-full bg-white border border-slate-200 rounded-xl pl-5 pr-14 py-3.5 text-[14px] focus:outline-none focus:ring-2 focus:ring-slate-500/20 focus:border-slate-500 transition-all shadow-sm" 
+          />
+          <button 
+            onClick={handleSend}
+            className="absolute right-2 top-1/2 -translate-y-1/2 w-9 h-9 flex items-center justify-center text-white bg-slate-800 rounded-lg transition-colors shadow-sm hover:bg-slate-700"
+          >
             <Play size={16} className="ml-0.5" fill="currentColor" />
           </button>
         </div>
@@ -345,7 +362,7 @@ function RoleView({ roleId, onOpenTask }: any) {
             <div className={cn("mx-auto space-y-6 transition-all duration-500", openTab ? "w-full" : "max-w-3xl")}>
               <div className="flex flex-col gap-1.5 items-start">
                 <span className="text-[11px] font-medium text-slate-400 ml-1 uppercase tracking-wider">{role.name}</span>
-                <div className="bg-white border border-slate-200/80 shadow-sm rounded-2xl rounded-tl-sm px-5 py-4 max-w-[85%] text-[14.5px] leading-[1.7] text-slate-700">
+                <div className="bg-white border border-slate-200/80 shadow-sm rounded-2xl rounded-tl-sm p-6 max-w-[85%] text-[14.5px] leading-[1.7] text-slate-700">
                   boss，关于周末的科技馆活动我已经规划好了路线。你需要我现在把详情发给你吗？
                 </div>
               </div>
@@ -432,7 +449,7 @@ function MemoryTab() {
     <div className="space-y-4">
       <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm hover:shadow-md transition-shadow">
         <div className="flex justify-between items-start mb-3">
-          <h4 className="text-[15px] font-semibold text-slate-800 flex items-center gap-2">
+          <h4 className="text-[15px] font-medium text-slate-800 flex items-center gap-2">
             <span className="text-indigo-500">🧠</span> 数据驱动偏好
           </h4>
           <button className="text-[12px] text-red-500 hover:bg-red-50 hover:border-red-200 border border-transparent px-2.5 py-1 rounded-md transition-colors">遗忘</button>
@@ -498,71 +515,71 @@ function Modal({ children, onClose, width = "w-[540px]" }: any) {
 function GlobalSettingsModal({ onClose }: any) {
   const [tab, setTab] = useState('llm');
   return (
-    <Modal onClose={onClose} width="w-[800px]">
-      <div className="flex h-[560px]">
-        <div className="w-56 bg-slate-50 border-r border-slate-200 p-6 flex flex-col gap-2">
-          <h2 className="text-[16px] font-semibold text-slate-800 mb-4 px-3">全局设置</h2>
-          <button onClick={() => setTab('llm')} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'llm' ? "bg-white text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 hover:bg-slate-200/50")}>模型配置 (BYOK)</button>
-          <button onClick={() => setTab('data')} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'data' ? "bg-white text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 hover:bg-slate-200/50")}>数据与主权</button>
-          <button onClick={() => setTab('mission')} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'mission' ? "bg-white text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 hover:bg-slate-200/50")}>使命宣言</button>
+    <div className="fixed inset-0 z-50 bg-white flex animate-in fade-in duration-300">
+      <div className="w-64 bg-slate-50 border-r border-slate-200 p-6 flex flex-col gap-2 shrink-0">
+        <div className="flex items-center justify-between mb-8 px-3">
+          <h2 className="text-[16px] font-semibold text-slate-800">全局设置</h2>
         </div>
-        <div className="flex-1 p-8 overflow-y-auto">
-          <div className="flex justify-between items-center mb-8">
-            <h3 className="text-[20px] font-semibold text-slate-800">{tab === 'llm' ? 'LLM Provider 配置' : tab === 'data' ? '数据与隐私' : '个人使命宣言'}</h3>
-            <button onClick={onClose} className="p-2 text-slate-400 hover:bg-slate-100 rounded-full transition-colors"><X size={20}/></button>
-          </div>
-          
-          {tab === 'llm' && (
-            <div className="space-y-6">
-              <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-4 text-[13px] text-indigo-800 leading-relaxed">
-                EgoSync 采用 BYOK (Bring Your Own Key) 模式，我们不触碰你的数据，也不赚取 API 差价。支持 OpenAI 兼容格式或 Anthropic 格式。
-              </div>
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-[13px] font-medium text-slate-700 mb-1.5">Provider 标准</label>
-                  <select className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none">
-                    <option>OpenAI 兼容 (OpenAI, DeepSeek, Ollama...)</option>
-                    <option>Anthropic (Claude)</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-[13px] font-medium text-slate-700 mb-1.5">Base URL</label>
-                  <input type="text" defaultValue="https://api.openai.com/v1" className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none font-mono" />
-                </div>
-                <div>
-                  <label className="block text-[13px] font-medium text-slate-700 mb-1.5">API Key</label>
-                  <input type="password" defaultValue="sk-..........................." className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none font-mono" />
-                </div>
-                <div>
-                  <label className="block text-[13px] font-medium text-slate-700 mb-1.5">Model Name</label>
-                  <input type="text" defaultValue="gpt-4o" className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none font-mono" />
-                </div>
-              </div>
-              <button className="mt-4 px-6 py-2.5 bg-indigo-600 text-white rounded-lg text-[14px] font-medium hover:bg-indigo-700 transition-colors">保存并测试连接</button>
-            </div>
-          )}
-
-          {tab === 'data' && (
-            <div className="space-y-8">
-              <div>
-                <h4 className="text-[15px] font-medium text-slate-800 mb-2">导出完整数据</h4>
-                <p className="text-[13px] text-slate-500 mb-4">将所有角色的记忆、任务和对话记录导出为标准的 JSON/Markdown 格式。</p>
-                <button className="flex items-center gap-2 px-5 py-2.5 border border-slate-300 rounded-lg text-[14px] font-medium text-slate-700 hover:bg-slate-50 transition-colors">
-                  <Download size={16}/> 导出存档
-                </button>
-              </div>
-              <div className="pt-6 border-t border-slate-200">
-                <h4 className="text-[15px] font-medium text-red-600 mb-2 flex items-center gap-2">危险区域</h4>
-                <p className="text-[13px] text-slate-500 mb-4">永久销毁本地数据库中的所有数据。此操作不可逆！</p>
-                <button className="flex items-center gap-2 px-5 py-2.5 bg-red-50 border border-red-200 rounded-lg text-[14px] font-medium text-red-600 hover:bg-red-100 transition-colors">
-                  <Trash2 size={16}/> 销毁所有数据
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
+        <button onClick={() => setTab('llm')} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'llm' ? "bg-white text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 hover:bg-slate-200/50")}>模型配置 (BYOK)</button>
+        <button onClick={() => setTab('data')} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'data' ? "bg-white text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 hover:bg-slate-200/50")}>数据与主权</button>
+        <button onClick={() => setTab('mission')} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'mission' ? "bg-white text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 hover:bg-slate-200/50")}>使命宣言</button>
       </div>
-    </Modal>
+      <div className="flex-1 p-12 overflow-y-auto max-w-5xl mx-auto">
+        <div className="flex justify-between items-center mb-8">
+          <h3 className="text-[24px] font-semibold text-slate-800">{tab === 'llm' ? 'LLM Provider 配置' : tab === 'data' ? '数据与隐私' : '个人使命宣言'}</h3>
+          <button onClick={onClose} className="p-2 text-slate-400 hover:bg-slate-100 rounded-full transition-colors"><X size={24}/></button>
+        </div>
+        
+        {tab === 'llm' && (
+          <div className="space-y-6">
+            <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-4 text-[13px] text-indigo-800 leading-relaxed">
+              EgoSync 采用 BYOK (Bring Your Own Key) 模式，我们不触碰你的数据，也不赚取 API 差价。支持 OpenAI 兼容格式或 Anthropic 格式。
+            </div>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-[13px] font-medium text-slate-700 mb-1.5">Provider 标准</label>
+                <select className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none">
+                  <option>OpenAI 兼容 (OpenAI, DeepSeek, Ollama...)</option>
+                  <option>Anthropic (Claude)</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-[13px] font-medium text-slate-700 mb-1.5">Base URL</label>
+                <input type="text" defaultValue="https://api.openai.com/v1" className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none font-mono" />
+              </div>
+              <div>
+                <label className="block text-[13px] font-medium text-slate-700 mb-1.5">API Key</label>
+                <input type="password" defaultValue="sk-..........................." className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none font-mono" />
+              </div>
+              <div>
+                <label className="block text-[13px] font-medium text-slate-700 mb-1.5">Model Name</label>
+                <input type="text" defaultValue="gpt-4o" className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none font-mono" />
+              </div>
+            </div>
+            <button className="mt-4 px-6 py-2.5 bg-indigo-600 text-white rounded-lg text-[14px] font-medium hover:bg-indigo-700 transition-colors">保存并测试连接</button>
+          </div>
+        )}
+
+        {tab === 'data' && (
+          <div className="space-y-8">
+            <div>
+              <h4 className="text-[15px] font-medium text-slate-800 mb-2">导出完整数据</h4>
+              <p className="text-[13px] text-slate-500 mb-4">将所有角色的记忆、任务和对话记录导出为标准的 JSON/Markdown 格式。</p>
+              <button className="flex items-center gap-2 px-5 py-2.5 border border-slate-300 rounded-lg text-[14px] font-medium text-slate-700 hover:bg-slate-50 transition-colors">
+                <Download size={16}/> 导出存档
+              </button>
+            </div>
+            <div className="pt-6 border-t border-slate-200">
+              <h4 className="text-[15px] font-medium text-red-600 mb-2 flex items-center gap-2">危险区域</h4>
+              <p className="text-[13px] text-slate-500 mb-4">永久销毁本地数据库中的所有数据。此操作不可逆！</p>
+              <button className="flex items-center gap-2 px-5 py-2.5 bg-red-50 border border-red-200 rounded-lg text-[14px] font-medium text-red-600 hover:bg-red-100 transition-colors">
+                <Trash2 size={16}/> 销毁所有数据
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 

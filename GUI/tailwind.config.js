@@ -1,5 +1,6 @@
 /** @type {import('tailwindcss').Config} */
 export default {
+  darkMode: 'class',
   content: [
     "./index.html",
     "./src/**/*.{js,ts,jsx,tsx}",
@@ -8,12 +9,29 @@ export default {
     extend: {
       fontFamily: {
         sans: ['Inter', 'Noto Sans SC', 'sans-serif'],
+        mono: ['JetBrains Mono', 'monospace'],
       },
       colors: {
-        accent: '#6366F1',
-        sidebar: '#F1F3F5',
-      }
+        accent: 'var(--role-accent)',
+        sidebar: 'var(--sidebar-bg)',
+        surface: 'var(--bg-surface)',
+        elevated: 'var(--bg-elevated)',
+        'energy-high': 'var(--energy-high)',
+        'energy-mid': 'var(--energy-mid)',
+        'energy-low': 'var(--energy-low)',
+      },
+      borderRadius: {
+        button: 'var(--radius-button)',
+        card: 'var(--radius-card)',
+        dialog: 'var(--radius-dialog)',
+        input: 'var(--radius-input)',
+      },
+      transitionDuration: {
+        fast: 'var(--duration-fast)',
+        normal: 'var(--duration-normal)',
+        color: 'var(--duration-color)',
+      },
     },
   },
-  plugins: [],
+  plugins: [require("tailwindcss-animate")],
 }

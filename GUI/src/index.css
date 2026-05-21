@@ -3,8 +3,59 @@
 @tailwind utilities;
 
 @layer base {
+  :root {
+    /* 色彩 Token — 浅色主题 */
+    --bg-base: #F8F9FA;
+    --bg-surface: #FFFFFF;
+    --bg-elevated: #FAFAFA;
+    --text-primary: #1A1A2E;
+    --text-secondary: #6B7280;
+    --text-muted: #9CA3AF;
+    --border-default: #E5E7EB;
+    --sidebar-bg: #F1F3F5;
+
+    /* 圆角 Token */
+    --radius-button: 6px;
+    --radius-card: 10px;
+    --radius-dialog: 12px;
+    --radius-input: 24px;
+
+    /* 动效时长 Token */
+    --duration-fast: 200ms;
+    --duration-normal: 250ms;
+    --duration-color: 300ms;
+    --duration-breath: 3s;
+
+    /* 能量值色谱 */
+    --energy-high: #10B981;
+    --energy-mid: #F59E0B;
+    --energy-low: #9CA3AF;
+
+    /* 功能色 */
+    --color-success: #10B981;
+    --color-info: #3B82F6;
+    --color-warning: #F59E0B;
+    --color-error: #EF4444;
+
+    /* 角色色温（默认=管家） */
+    --role-accent: #6366F1;
+    --role-bg-tint: transparent;
+  }
+
+  .dark {
+    /* 色彩 Token — 深色主题 */
+    --bg-base: #0F1117;
+    --bg-surface: #1A1B2E;
+    --bg-elevated: #252638;
+    --text-primary: #E8E8ED;
+    --text-secondary: #9CA3AF;
+    --text-muted: #6B7280;
+    --border-default: #374151;
+    --sidebar-bg: #1E293B;
+  }
+
   body {
-    @apply bg-[#F8F9FA] text-[#1A1A2E] antialiased overflow-hidden h-screen;
+    @apply bg-[--bg-base] text-[--text-primary] antialiased overflow-hidden h-screen;
   }
 }
 
@@ -16,19 +67,30 @@
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #E5E7EB;
+  background: var(--border-default);
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #D1D5DB;
+  background: var(--text-muted);
 }
 
 /* Animations */
 .breathe {
-  animation: breathe 3s ease-in-out infinite;
+  animation: breathe var(--duration-breath) ease-in-out infinite;
 }
 
 @keyframes breathe {
   0%, 100% { opacity: 0.6; }
   50% { opacity: 1; }
+}
+
+/* Accessibility: Reduced Motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

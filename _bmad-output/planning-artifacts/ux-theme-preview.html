@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EgoSync UX Theme Preview</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;600&display=swap');
+
+  :root {
+    --bg-base: #F8F9FA;
+    --bg-surface: #FFFFFF;
+    --bg-elevated: #FAFAFA;
+    --text-primary: #1A1A2E;
+    --text-secondary: #6B7280;
+    --text-muted: #9CA3AF;
+    --border-default: #E5E7EB;
+    --role-accent: #6366F1;
+    --role-bg-tint: transparent;
+    --energy-high: #10B981;
+    --energy-mid: #F59E0B;
+    --energy-low: #9CA3AF;
+    --info: #3B82F6;
+    --success: #10B981;
+    --warning: #F59E0B;
+    --error: #EF4444;
+    --sidebar-bg: #F1F3F5;
+    --input-bg: #F3F4F6;
+    --shadow: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.04);
+    --shadow-lg: 0 4px 12px rgba(0,0,0,0.08);
+    --radius-card: 8px;
+    --radius-dialog: 12px;
+    --radius-input: 24px;
+    --breath-opacity: 1;
+  }
+
+  [data-theme="dark"] {
+    --bg-base: #0F1117;
+    --bg-surface: #1A1B2E;
+    --bg-elevated: #252638;
+    --text-primary: #E8E8ED;
+    --text-secondary: #9CA3AF;
+    --text-muted: #6B7280;
+    --border-default: #2D2E3F;
+    --sidebar-bg: #14152A;
+    --input-bg: #252638;
+    --shadow: 0 1px 3px rgba(0,0,0,0.3);
+    --shadow-lg: 0 4px 12px rgba(0,0,0,0.4);
+  }
+
+  /* Role color temperatures */
+  [data-role="butler"] { --role-accent: #6366F1; --role-bg-tint: transparent; }
+  [data-role="work"] { --role-accent: #4F46E5; --role-bg-tint: rgba(79,70,229,0.04); }
+  [data-role="family"] { --role-accent: #D97706; --role-bg-tint: rgba(217,119,6,0.04); }
+  [data-role="learn"] { --role-accent: #7C3AED; --role-bg-tint: rgba(124,58,237,0.04); }
+  [data-role="health"] { --role-accent: #059669; --role-bg-tint: rgba(5,150,105,0.04); }
+
+  [data-theme="dark"][data-role="work"] { --role-bg-tint: rgba(79,70,229,0.08); }
+  [data-theme="dark"][data-role="family"] { --role-bg-tint: rgba(217,119,6,0.08); }
+  [data-theme="dark"][data-role="learn"] { --role-bg-tint: rgba(124,58,237,0.08); }
+  [data-theme="dark"][data-role="health"] { --role-bg-tint: rgba(5,150,105,0.08); }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Inter', 'Noto Sans SC', -apple-system, sans-serif;
+    background: var(--bg-base);
+    color: var(--text-primary);
+    transition: background 0.3s, color 0.3s;
+    overflow-x: hidden;
+  }
+
+  /* ===== Controls Bar ===== */
+  .controls {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+    background: var(--bg-surface);
+    border-bottom: 1px solid var(--border-default);
+    padding: 12px 24px;
+    display: flex; align-items: center; gap: 16px;
+    box-shadow: var(--shadow);
+    transition: background 0.3s;
+  }
+  .controls h1 { font-size: 16px; font-weight: 600; flex-shrink: 0; }
+  .controls-group { display: flex; gap: 8px; align-items: center; margin-left: 24px; }
+  .controls-group label { font-size: 12px; color: var(--text-secondary); font-weight: 500; }
+  .btn {
+    padding: 6px 14px; border-radius: 6px; border: 1px solid var(--border-default);
+    background: var(--bg-surface); color: var(--text-primary); cursor: pointer;
+    font-size: 12px; font-weight: 500; transition: all 0.2s;
+    font-family: inherit;
+  }
+  .btn:hover { border-color: var(--role-accent); color: var(--role-accent); }
+  .btn.active { background: var(--role-accent); color: white; border-color: var(--role-accent); }
+
+  /* ===== App Shell ===== */
+  .app-shell {
+    margin-top: 56px;
+    display: flex;
+    height: calc(100vh - 56px);
+  }
+
+  /* Sidebar */
+  .sidebar {
+    width: 56px; background: var(--sidebar-bg);
+    border-right: 1px solid var(--border-default);
+    display: flex; flex-direction: column; align-items: center;
+    padding: 12px 0; gap: 8px;
+    transition: background 0.3s;
+  }
+  .sidebar-icon {
+    width: 40px; height: 40px; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; position: relative;
+    transition: all 0.2s; font-size: 18px;
+    background: transparent;
+  }
+  .sidebar-icon:hover { background: var(--border-default); }
+  .sidebar-icon.active {
+    background: var(--role-accent);
+    color: white;
+    box-shadow: 0 2px 8px rgba(99,102,241,0.3);
+  }
+  .sidebar-icon .status-dot {
+    position: absolute; top: 4px; right: 4px;
+    width: 8px; height: 8px; border-radius: 50%;
+    border: 2px solid var(--sidebar-bg);
+  }
+  .sidebar-icon .status-dot.green { background: var(--success); }
+  .sidebar-icon .status-dot.blue { background: var(--info); }
+  .sidebar-divider { width: 24px; height: 1px; background: var(--border-default); margin: 4px 0; }
+
+  /* Breathing animation */
+  @keyframes breathe {
+    0%, 100% { opacity: 0.7; transform: scale(1); }
+    50% { opacity: 1; transform: scale(1.04); }
+  }
+  .sidebar-icon.breathing { animation: breathe 3s ease-in-out infinite; }
+  .sidebar-icon.dim { opacity: 0.4; }
+
+  /* Main Area */
+  .main-area {
+    flex: 1; display: flex; flex-direction: column;
+    background: var(--bg-base);
+    transition: background 0.3s;
+    position: relative;
+  }
+  .main-area::before {
+    content: ''; position: absolute; inset: 0;
+    background: var(--role-bg-tint);
+    transition: background 0.3s;
+    pointer-events: none;
+  }
+  .main-content {
+    flex: 1; overflow-y: auto; padding: 32px;
+    position: relative; z-index: 1;
+  }
+
+  /* Butler View */
+  .butler-view {}
+  .greeting { font-size: 22px; font-weight: 600; margin-bottom: 8px; line-height: 1.4; }
+  .summary {
+    font-size: 14px; line-height: 1.8; color: var(--text-secondary);
+    max-width: 600px; margin-bottom: 32px;
+  }
+  .summary .role-link {
+    color: var(--role-accent); cursor: pointer; font-weight: 500;
+    text-decoration: underline; text-decoration-style: dotted;
+    text-underline-offset: 2px;
+  }
+
+  /* Action Cards */
+  .action-cards { display: flex; flex-direction: column; gap: 12px; max-width: 600px; }
+  .action-card {
+    background: var(--bg-surface); border: 1px solid var(--border-default);
+    border-radius: var(--radius-card); padding: 16px;
+    box-shadow: var(--shadow); transition: all 0.2s;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .action-card:hover { box-shadow: var(--shadow-lg); border-color: var(--role-accent); }
+  .action-card-content h3 { font-size: 14px; font-weight: 500; margin-bottom: 4px; }
+  .action-card-content p { font-size: 12px; color: var(--text-muted); }
+  .action-btns { display: flex; gap: 8px; }
+  .btn-confirm {
+    padding: 6px 16px; border-radius: 6px; border: none;
+    background: var(--role-accent); color: white; cursor: pointer;
+    font-size: 12px; font-weight: 500; font-family: inherit;
+  }
+  .btn-dismiss {
+    padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border-default);
+    background: transparent; color: var(--text-muted); cursor: pointer;
+    font-size: 12px; font-family: inherit;
+  }
+
+  /* Role View */
+  .role-view { display: none; }
+  .role-view.active { display: block; }
+  .role-header {
+    display: flex; align-items: center; gap: 12px; margin-bottom: 24px;
+  }
+  .role-icon-lg {
+    width: 48px; height: 48px; border-radius: 12px;
+    background: var(--role-accent); color: white;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 24px;
+  }
+  .role-info h2 { font-size: 18px; font-weight: 600; }
+  .role-info .energy-bar {
+    width: 120px; height: 4px; border-radius: 2px;
+    background: var(--border-default); margin-top: 6px; overflow: hidden;
+  }
+  .role-info .energy-fill { height: 100%; border-radius: 2px; transition: width 0.5s; }
+
+  /* Chat Area */
+  .chat-messages { display: flex; flex-direction: column; gap: 16px; max-width: 600px; }
+  .chat-bubble {
+    padding: 12px 16px; border-radius: 12px;
+    font-size: 14px; line-height: 1.7; max-width: 480px;
+  }
+  .chat-bubble.role {
+    background: var(--bg-surface); border: 1px solid var(--border-default);
+    align-self: flex-start;
+  }
+  .chat-bubble.user {
+    background: var(--role-accent); color: white;
+    align-self: flex-end; border: none;
+  }
+  .chat-bubble .sender {
+    font-size: 11px; font-weight: 500; color: var(--text-muted);
+    margin-bottom: 4px; display: block;
+  }
+  .chat-bubble.user .sender { color: rgba(255,255,255,0.7); }
+
+  /* Input Area */
+  .input-area {
+    padding: 12px 32px 16px;
+    border-top: 1px solid var(--border-default);
+    position: relative; z-index: 1;
+    background: var(--bg-base);
+    transition: background 0.3s;
+  }
+  .input-wrapper {
+    background: var(--input-bg); border: 1px solid var(--border-default);
+    border-radius: var(--radius-input); padding: 12px 20px;
+    display: flex; align-items: center; gap: 12px;
+    transition: all 0.2s;
+  }
+  .input-wrapper:focus-within { border-color: var(--role-accent); }
+  .input-wrapper input {
+    flex: 1; border: none; background: transparent;
+    font-size: 14px; color: var(--text-primary); outline: none;
+    font-family: inherit;
+  }
+  .input-wrapper input::placeholder { color: var(--text-muted); }
+  .send-btn {
+    width: 32px; height: 32px; border-radius: 50%;
+    background: var(--role-accent); color: white; border: none;
+    cursor: pointer; display: flex; align-items: center; justify-content: center;
+    font-size: 14px;
+  }
+
+  /* ===== Typography Preview ===== */
+  .typo-section {
+    margin-top: 48px; padding-top: 32px;
+    border-top: 1px solid var(--border-default);
+    max-width: 600px;
+  }
+  .typo-section h2 { font-size: 16px; font-weight: 600; margin-bottom: 24px; }
+  .typo-row {
+    display: flex; align-items: baseline; gap: 16px;
+    margin-bottom: 16px; padding-bottom: 16px;
+    border-bottom: 1px solid var(--border-default);
+  }
+  .typo-label { font-size: 11px; color: var(--text-muted); width: 80px; flex-shrink: 0; }
+  .typo-display { font-size: 28px; font-weight: 600; line-height: 1.3; }
+  .typo-h1 { font-size: 22px; font-weight: 600; line-height: 1.4; }
+  .typo-h2 { font-size: 18px; font-weight: 600; line-height: 1.4; }
+  .typo-h3 { font-size: 16px; font-weight: 500; line-height: 1.5; }
+  .typo-body { font-size: 14px; font-weight: 400; line-height: 1.6; }
+  .typo-small { font-size: 12px; font-weight: 400; line-height: 1.5; color: var(--text-secondary); }
+  .typo-caption { font-size: 11px; font-weight: 400; line-height: 1.5; color: var(--text-muted); }
+
+  /* ===== Color Swatches ===== */
+  .swatches-section { margin-top: 48px; padding-top: 32px; border-top: 1px solid var(--border-default); }
+  .swatches-section h2 { font-size: 16px; font-weight: 600; margin-bottom: 16px; }
+  .swatches-grid { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 24px; }
+  .swatch {
+    width: 64px; height: 64px; border-radius: 8px;
+    display: flex; align-items: flex-end; justify-content: center;
+    padding-bottom: 4px; font-size: 10px; color: white;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.3);
+    border: 1px solid var(--border-default);
+  }
+  .swatch-label { font-size: 11px; color: var(--text-muted); margin-top: 4px; text-align: center; }
+  .swatch-group { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+</style>
+</head>
+<body data-role="butler">
+
+<!-- Controls -->
+<div class="controls">
+  <h1>EgoSync Theme Preview</h1>
+  <div class="controls-group">
+    <label>主题：</label>
+    <button class="btn active" onclick="setTheme('light')">☀️ 浅色</button>
+    <button class="btn" onclick="setTheme('dark')">🌙 深色</button>
+  </div>
+  <div class="controls-group">
+    <label>角色色温：</label>
+    <button class="btn active" onclick="setRole('butler')">🏠 管家</button>
+    <button class="btn" onclick="setRole('work')">💼 工作</button>
+    <button class="btn" onclick="setRole('family')">🏡 家庭</button>
+    <button class="btn" onclick="setRole('learn')">📚 学习</button>
+    <button class="btn" onclick="setRole('health')">🏃 健康</button>
+  </div>
+</div>
+
+<!-- App Shell -->
+<div class="app-shell">
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <div class="sidebar-icon active" onclick="setRole('butler')" title="管家">🏠</div>
+    <div class="sidebar-divider"></div>
+    <div class="sidebar-icon breathing" onclick="setRole('work')" title="产品经理">
+      💼<span class="status-dot green"></span>
+    </div>
+    <div class="sidebar-icon breathing" onclick="setRole('family')" title="家庭">
+      🏡<span class="status-dot blue"></span>
+    </div>
+    <div class="sidebar-icon breathing" onclick="setRole('learn')" title="学习者">📚</div>
+    <div class="sidebar-icon dim" onclick="setRole('health')" title="健身教练">🏃</div>
+  </div>
+
+  <!-- Main Area -->
+  <div class="main-area">
+    <div class="main-content">
+
+      <!-- Butler View -->
+      <div class="butler-view" id="view-butler">
+        <div class="greeting">早上好，boss 👋</div>
+        <div class="summary">
+          今天最重要的一件事是下午3点的产品评审。<span class="role-link" onclick="setRole('work')">产品经理角色</span>已经准备好了演示文稿摘要，你可以点进去查看。<br><br>
+          另外，<span class="role-link" onclick="setRole('family')">家庭角色</span>想跟你聊一下周末的家庭活动安排。其他角色都在正常推进各自目标，一切平稳。
+        </div>
+        <div class="action-cards">
+          <div class="action-card">
+            <div class="action-card-content">
+              <h3>📋 产品评审准备就绪</h3>
+              <p>产品经理角色 · 2分钟前完成</p>
+            </div>
+            <div class="action-btns">
+              <button class="btn-confirm" onclick="setRole('work')">查看</button>
+            </div>
+          </div>
+          <div class="action-card">
+            <div class="action-card-content">
+              <h3>💬 周末活动建议</h3>
+              <p>家庭角色 · 希望跟你确认</p>
+            </div>
+            <div class="action-btns">
+              <button class="btn-confirm" onclick="setRole('family')">聊聊</button>
+              <button class="btn-dismiss">稍后</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Typography Preview -->
+        <div class="typo-section">
+          <h2>字体层级预览</h2>
+          <div class="typo-row">
+            <span class="typo-label">Display 28px</span>
+            <span class="typo-display">EgoSync 认知伙伴</span>
+          </div>
+          <div class="typo-row">
+            <span class="typo-label">H1 22px</span>
+            <span class="typo-h1">晨间简报 · 2026年5月18日</span>
+          </div>
+          <div class="typo-row">
+            <span class="typo-label">H2 18px</span>
+            <span class="typo-h2">产品经理角色 — 能量 85%</span>
+          </div>
+          <div class="typo-row">
+            <span class="typo-label">H3 16px</span>
+            <span class="typo-h3">今日待处理事项</span>
+          </div>
+          <div class="typo-row">
+            <span class="typo-label">Body 14px</span>
+            <span class="typo-body">boss，上次我们聊到竞品分析报告的事情，材料已经准备好了。这次我参考了三个竞品的核心功能对比，要看看吗？</span>
+          </div>
+          <div class="typo-row">
+            <span class="typo-label">Small 12px</span>
+            <span class="typo-small">3分钟前 · 产品经理角色 · 基于上次对话</span>
+          </div>
+          <div class="typo-row">
+            <span class="typo-label">Caption 11px</span>
+            <span class="typo-caption">数据来源：本地SQLite · 最后同步 10:32</span>
+          </div>
+        </div>
+
+        <!-- Color Swatches -->
+        <div class="swatches-section">
+          <h2>角色色温</h2>
+          <div class="swatches-grid">
+            <div class="swatch-group">
+              <div class="swatch" style="background:#6366F1">管家</div>
+              <span class="swatch-label">中性蓝灰</span>
+            </div>
+            <div class="swatch-group">
+              <div class="swatch" style="background:#4F46E5">工作</div>
+              <span class="swatch-label">冷色靛蓝</span>
+            </div>
+            <div class="swatch-group">
+              <div class="swatch" style="background:#D97706">家庭</div>
+              <span class="swatch-label">暖色琥珀</span>
+            </div>
+            <div class="swatch-group">
+              <div class="swatch" style="background:#7C3AED">学习</div>
+              <span class="swatch-label">紫罗兰</span>
+            </div>
+            <div class="swatch-group">
+              <div class="swatch" style="background:#059669">健康</div>
+              <span class="swatch-label">翠绿</span>
+            </div>
+          </div>
+          <h2>功能色</h2>
+          <div class="swatches-grid">
+            <div class="swatch-group">
+              <div class="swatch" style="background:#10B981">就绪</div>
+              <span class="swatch-label">成功/就绪</span>
+            </div>
+            <div class="swatch-group">
+              <div class="swatch" style="background:#3B82F6">对话</div>
+              <span class="swatch-label">信息/想聊</span>
+            </div>
+            <div class="swatch-group">
+              <div class="swatch" style="background:#F59E0B">注意</div>
+              <span class="swatch-label">警告/注意</span>
+            </div>
+            <div class="swatch-group">
+              <div class="swatch" style="background:#EF4444">紧急</div>
+              <span class="swatch-label">错误/紧急</span>
+            </div>
+          </div>
+          <h2>能量色谱</h2>
+          <div class="swatches-grid">
+            <div class="swatch-group">
+              <div class="swatch" style="background:#10B981">高</div>
+              <span class="swatch-label">80-100%</span>
+            </div>
+            <div class="swatch-group">
+              <div class="swatch" style="background:#F59E0B; color:#fff">中</div>
+              <span class="swatch-label">40-79%</span>
+            </div>
+            <div class="swatch-group">
+              <div class="swatch" style="background:#9CA3AF">低</div>
+              <span class="swatch-label">0-39%</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Work Role View -->
+      <div class="role-view" id="view-work">
+        <div class="role-header">
+          <div class="role-icon-lg">💼</div>
+          <div class="role-info">
+            <h2>产品经理</h2>
+            <div class="energy-bar"><div class="energy-fill" style="width:85%;background:var(--energy-high)"></div></div>
+          </div>
+        </div>
+        <div class="chat-messages">
+          <div class="chat-bubble role">
+            <span class="sender">产品经理</span>
+            boss，上次我们聊到竞品分析报告的事情，演示文稿摘要已经准备好了。这次我参考了三个竞品的核心功能对比，包括定价策略和用户增长数据。要看看吗？
+          </div>
+          <div class="chat-bubble user">
+            <span class="sender">boss</span>
+            好的，给我看看核心结论
+          </div>
+          <div class="chat-bubble role">
+            <span class="sender">产品经理</span>
+            核心发现：竞品A在用户留存上做得最好（D7 45%），主要靠每日推送个性化内容。竞品B的定价最激进但流失率也最高。我建议我们采取竞品A的留存策略，配合更灵活的定价模型。详细报告我放在任务面板里了。
+          </div>
+        </div>
+      </div>
+
+      <!-- Family Role View -->
+      <div class="role-view" id="view-family">
+        <div class="role-header">
+          <div class="role-icon-lg">🏡</div>
+          <div class="role-info">
+            <h2>家庭</h2>
+            <div class="energy-bar"><div class="energy-fill" style="width:60%;background:var(--energy-mid)"></div></div>
+          </div>
+        </div>
+        <div class="chat-messages">
+          <div class="chat-bubble role">
+            <span class="sender">家庭</span>
+            boss，这个周末有两个选项想跟你确认一下：周六下午可以带孩子去科技馆，或者周日上午去公园野餐。考虑到天气预报显示周日可能有雨，我建议优先安排周六。你觉得呢？
+          </div>
+        </div>
+      </div>
+
+      <!-- Learn Role View -->
+      <div class="role-view" id="view-learn">
+        <div class="role-header">
+          <div class="role-icon-lg">📚</div>
+          <div class="role-info">
+            <h2>学习者</h2>
+            <div class="energy-bar"><div class="energy-fill" style="width:70%;background:var(--energy-mid)"></div></div>
+          </div>
+        </div>
+        <div class="chat-messages">
+          <div class="chat-bubble role">
+            <span class="sender">学习者</span>
+            boss，本周的阅读目标进展顺利。《系统思考》已经读完第三章，我整理了几个关键概念的笔记。下一步打算开始第四章关于"反馈回路"的部分。一切按计划推进中。
+          </div>
+        </div>
+      </div>
+
+      <!-- Health Role View -->
+      <div class="role-view" id="view-health">
+        <div class="role-header">
+          <div class="role-icon-lg">🏃</div>
+          <div class="role-info">
+            <h2>健身教练</h2>
+            <div class="energy-bar"><div class="energy-fill" style="width:30%;background:var(--energy-low)"></div></div>
+          </div>
+        </div>
+        <div class="chat-messages">
+          <div class="chat-bubble role">
+            <span class="sender">健身教练</span>
+            boss，最近有点安静了……上次运动是三天前的晨跑。不急，等你准备好了随时可以聊聊本周的运动计划调整。
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Input Area -->
+    <div class="input-area">
+      <div class="input-wrapper">
+        <input type="text" placeholder="跟管家说点什么……" id="chatInput">
+        <button class="send-btn">↑</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  let currentTheme = 'light';
+  let currentRole = 'butler';
+
+  function setTheme(theme) {
+    currentTheme = theme;
+    if (theme === 'dark') {
+      document.body.setAttribute('data-theme', 'dark');
+    } else {
+      document.body.removeAttribute('data-theme');
+    }
+    updateButtons();
+  }
+
+  function setRole(role) {
+    currentRole = role;
+    document.body.setAttribute('data-role', role);
+
+    // Update sidebar
+    document.querySelectorAll('.sidebar-icon').forEach(el => el.classList.remove('active'));
+    const roleMap = { butler: 0, work: 2, family: 3, learn: 4, health: 5 };
+    const icons = document.querySelectorAll('.sidebar-icon');
+    if (icons[roleMap[role]]) icons[roleMap[role]].classList.add('active');
+
+    // Update views
+    document.querySelectorAll('.butler-view, .role-view').forEach(el => {
+      el.style.display = 'none';
+      el.classList.remove('active');
+    });
+    const view = document.getElementById('view-' + role);
+    if (view) {
+      view.style.display = 'block';
+      view.classList.add('active');
+    }
+
+    // Update input placeholder
+    const input = document.getElementById('chatInput');
+    if (role === 'butler') {
+      input.placeholder = '跟管家说点什么……';
+    } else {
+      const names = { work: '产品经理', family: '家庭', learn: '学习者', health: '健身教练' };
+      input.placeholder = '跟' + names[role] + '说点什么……';
+    }
+
+    updateButtons();
+  }
+
+  function updateButtons() {
+    // Theme buttons
+    document.querySelectorAll('.controls-group:nth-child(2) .btn').forEach(btn => {
+      btn.classList.remove('active');
+    });
+    const themeIdx = currentTheme === 'light' ? 0 : 1;
+    document.querySelectorAll('.controls-group:nth-child(2) .btn')[themeIdx].classList.add('active');
+
+    // Role buttons
+    document.querySelectorAll('.controls-group:nth-child(3) .btn').forEach(btn => {
+      btn.classList.remove('active');
+    });
+    const roles = ['butler', 'work', 'family', 'learn', 'health'];
+    const roleIdx = roles.indexOf(currentRole);
+    document.querySelectorAll('.controls-group:nth-child(3) .btn')[roleIdx].classList.add('active');
+  }
+</script>
+</body>
+</html>

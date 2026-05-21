@@ -1,0 +1,34 @@
+import { X } from 'lucide-react';
+import { cn } from '../../lib/utils';
+import { TasksTab } from './TasksTab';
+import { MemoryTab } from './MemoryTab';
+import { SettingsTab } from './SettingsTab';
+
+export function RoleWorkspacePanel({ role, currentTab, setTab, onOpenTask, onUpdateRole }: any) {
+  return (
+    <div className="flex flex-col h-full">
+      <div className="flex items-center justify-between border-b border-slate-200/80 px-6 pt-4 bg-white/60 backdrop-blur-md shrink-0">
+        <div className="flex gap-8">
+          <button onClick={() => setTab('tasks')} className={cn("pb-3.5 text-[14px] font-medium transition-colors border-b-[3px]", currentTab === 'tasks' ? `${role.text} border-current` : "border-transparent text-slate-500 hover:text-slate-800")}>
+            任务清单
+          </button>
+          <button onClick={() => setTab('memory')} className={cn("pb-3.5 text-[14px] font-medium transition-colors border-b-[3px]", currentTab === 'memory' ? `${role.text} border-current` : "border-transparent text-slate-500 hover:text-slate-800")}>
+            记忆档案
+          </button>
+          <button onClick={() => setTab('settings')} className={cn("pb-3.5 text-[14px] font-medium transition-colors border-b-[3px]", currentTab === 'settings' ? `${role.text} border-current` : "border-transparent text-slate-500 hover:text-slate-800")}>
+            设置
+          </button>
+        </div>
+        <button onClick={() => setTab(null)} className="pb-3.5 text-slate-400 hover:text-slate-700 transition-colors">
+          <X size={18} />
+        </button>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-6 scroll-smooth">
+        {currentTab === 'tasks' && <TasksTab role={role} onOpenTask={onOpenTask} />}
+        {currentTab === 'memory' && <MemoryTab />}
+        {currentTab === 'settings' && <SettingsTab role={role} onUpdateRole={onUpdateRole} />}
+      </div>
+    </div>
+  );
+}

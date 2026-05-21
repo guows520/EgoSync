@@ -1,0 +1,839 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EgoSync Interactive Prototype</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Noto+Sans+SC:wght@300;400;500;600&family=JetBrains+Mono:wght@400&display=swap');
+
+  :root {
+    --bg-base: #F8F9FA; --bg-surface: #FFFFFF; --bg-elevated: #FAFAFA;
+    --text-primary: #1A1A2E; --text-secondary: #6B7280; --text-muted: #9CA3AF;
+    --border: #E5E7EB; --border-light: #F3F4F6;
+    --accent: #6366F1; --accent-hover: #4F46E5;
+    --success: #10B981; --info: #3B82F6; --warning: #F59E0B;
+    --sidebar-bg: #F1F3F5; --sidebar-w: 56px;
+    --role-tint: transparent;
+    --transition-view: 250ms; --transition-color: 300ms;
+  }
+
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body { height:100%; overflow:hidden; }
+  body {
+    font-family: 'Inter', 'Noto Sans SC', -apple-system, sans-serif;
+    background: var(--bg-base); color: var(--text-primary);
+    display: flex;
+  }
+
+  /* ===== SIDEBAR ===== */
+  .sidebar {
+    width: var(--sidebar-w); height: 100vh;
+    background: var(--sidebar-bg); border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; align-items: center;
+    padding: 12px 0; gap: 4px; flex-shrink: 0; z-index: 10;
+  }
+  .s-icon {
+    width: 38px; height: 38px; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 17px; cursor: pointer; position: relative;
+    transition: all 0.2s; user-select: none;
+  }
+  .s-icon:hover { background: #E5E7EB; }
+  .s-icon.active { background: var(--accent); color: white; box-shadow: 0 2px 8px rgba(99,102,241,0.3); }
+  .s-icon .dot {
+    position: absolute; top: 2px; right: 2px;
+    width: 7px; height: 7px; border-radius: 50%;
+    border: 2px solid var(--sidebar-bg);
+  }
+  .dot-green { background: var(--success); }
+  .dot-blue { background: var(--info); }
+  @keyframes breathe { 0%,100%{opacity:0.6} 50%{opacity:1} }
+  .s-icon.breathe { animation: breathe 3s ease-in-out infinite; }
+  .s-icon.dim { opacity: 0.35; }
+  .s-divider { width: 28px; border-bottom: 1px solid var(--border); margin: 6px 0; }
+
+  /* ===== MAIN AREA ===== */
+  .main {
+    flex: 1; height: 100vh; display: flex; flex-direction: column;
+    background: var(--bg-base); transition: background var(--transition-color) ease;
+    position: relative; overflow: hidden;
+  }
+
+  /* ===== VIEWS ===== */
+  .view {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column;
+    opacity: 0; pointer-events: none;
+    transition: opacity var(--transition-view) ease;
+  }
+  .view.active { opacity: 1; pointer-events: auto; }
+
+  /* ===== BUTLER VIEW ===== */
+  .butler-view { align-items: center; justify-content: center; padding: 40px 24px; }
+  .butler-center { max-width: 520px; width: 100%; text-align: center; }
+  .greeting { font-size: 26px; font-weight: 300; letter-spacing: -0.5px; margin-bottom: 16px; }
+  .summary-text {
+    font-size: 15px; line-height: 2; color: #4B5563; margin-bottom: 28px; text-align: left;
+  }
+  .summary-text .role-link {
+    color: var(--accent); font-weight: 500; cursor: pointer;
+    text-decoration: underline; text-decoration-style: dotted;
+    text-underline-offset: 3px;
+  }
+  .summary-text .role-link:hover { text-decoration-style: solid; }
+
+  /* Action Cards */
+  .action-cards { display: flex; flex-direction: column; gap: 10px; text-align: left; }
+  .a-card {
+    background: var(--bg-surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 18px;
+    display: flex; justify-content: space-between; align-items: center;
+    transition: all 0.2s; cursor: default;
+  }
+  .a-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.06); transform: translateY(-1px); }
+  .a-card.done { opacity: 0.45; transform: none !important; box-shadow: none !important; }
+  .a-card-info { flex: 1; }
+  .a-card-title { font-size: 14px; font-weight: 500; margin-bottom: 2px; }
+  .a-card-meta { font-size: 11px; color: var(--text-muted); }
+  .a-card-btns { display: flex; gap: 6px; margin-left: 12px; }
+  .btn {
+    padding: 6px 16px; border-radius: 6px; border: none;
+    font-size: 12px; font-weight: 500; cursor: pointer; font-family: inherit;
+    transition: all 0.15s;
+  }
+  .btn-primary { background: var(--accent); color: white; }
+  .btn-primary:hover { background: var(--accent-hover); }
+  .btn-ghost { background: transparent; border: 1px solid var(--border); color: var(--text-muted); }
+  .btn-ghost:hover { border-color: #D1D5DB; color: var(--text-primary); }
+
+  /* ===== ROLE VIEW ===== */
+  .role-view { padding: 0; }
+  .role-header {
+    display: flex; align-items: center; gap: 14px;
+    padding: 20px 28px; border-bottom: 1px solid var(--border);
+    transition: background var(--transition-color) ease;
+  }
+  .rh-icon {
+    width: 46px; height: 46px; border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 22px; color: white; flex-shrink: 0;
+  }
+  .rh-name { font-size: 17px; font-weight: 600; }
+  .rh-desc { font-size: 12px; color: var(--text-secondary); margin-top: 1px; }
+  .rh-energy { display: flex; align-items: center; gap: 8px; margin-top: 5px; }
+  .energy-bar { width: 100px; height: 5px; border-radius: 3px; background: var(--border); overflow: hidden; }
+  .energy-fill { height: 100%; border-radius: 3px; transition: width 0.5s; }
+  .energy-label { font-size: 10px; color: var(--text-muted); }
+
+  /* Chat Area */
+  .chat-area { flex: 1; overflow-y: auto; padding: 20px 28px; display: flex; flex-direction: column; gap: 12px; }
+  .bubble {
+    padding: 11px 15px; border-radius: 12px; font-size: 14px; line-height: 1.7;
+    max-width: 460px; animation: bubbleIn 0.2s ease-out;
+  }
+  @keyframes bubbleIn { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
+  .bubble .sender { font-size: 11px; font-weight: 500; color: var(--text-muted); margin-bottom: 3px; display: block; }
+  .bubble.butler { background: var(--bg-surface); border: 1px solid var(--border); align-self: flex-start; }
+  .bubble.role-msg { border: 1px solid; align-self: flex-start; }
+  .bubble.user { background: var(--accent); color: white; align-self: flex-end; }
+  .bubble.user .sender { color: rgba(255,255,255,0.7); }
+  .bubble.streaming .stream-text::after { content: '▊'; color: var(--accent); animation: blink 0.8s infinite; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+
+  /* Chat Input */
+  .chat-input-bar {
+    padding: 12px 20px 16px; border-top: 1px solid var(--border);
+    background: var(--bg-base);
+  }
+  .chat-input-wrap {
+    background: #F3F4F6; border: 1px solid var(--border);
+    border-radius: 24px; padding: 10px 18px;
+    display: flex; align-items: center; gap: 10px;
+    transition: border-color 0.2s;
+  }
+  .chat-input-wrap:focus-within { border-color: var(--accent); }
+  .chat-input {
+    flex: 1; border: none; background: transparent;
+    font-size: 14px; color: var(--text-primary); outline: none;
+    font-family: inherit;
+  }
+  .chat-input::placeholder { color: var(--text-muted); }
+  .send-btn {
+    width: 30px; height: 30px; border-radius: 50%;
+    background: var(--accent); color: white; border: none;
+    cursor: pointer; display: flex; align-items: center; justify-content: center;
+    font-size: 13px; transition: background 0.15s;
+  }
+  .send-btn:hover { background: var(--accent-hover); }
+
+  /* ===== ONBOARDING VIEW ===== */
+  .onboard-view { align-items: center; justify-content: center; padding: 40px 24px; }
+  .onboard-center { max-width: 520px; width: 100%; text-align: center; }
+  .onboard-greeting { font-size: 26px; font-weight: 300; margin-bottom: 20px; }
+  .onboard-bubble {
+    background: var(--bg-surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 16px 20px;
+    font-size: 15px; line-height: 2; color: #4B5563; text-align: left;
+    margin-bottom: 20px;
+  }
+  .onboard-input-area { margin-top: 16px; }
+
+  /* ===== ARBITRATION OVERLAY ===== */
+  .overlay {
+    position: fixed; inset: 0; z-index: 100;
+    background: rgba(0,0,0,0.3); backdrop-filter: blur(4px);
+    display: flex; align-items: center; justify-content: center;
+    opacity: 0; pointer-events: none; transition: opacity 0.2s;
+  }
+  .overlay.show { opacity: 1; pointer-events: auto; }
+  .arb-dialog {
+    background: var(--bg-surface); border-radius: 12px;
+    width: 520px; max-width: 90vw;
+    box-shadow: 0 16px 48px rgba(0,0,0,0.12); overflow: hidden;
+    transform: translateY(8px); transition: transform 0.2s;
+  }
+  .overlay.show .arb-dialog { transform: translateY(0); }
+  .arb-header { padding: 16px 20px; border-bottom: 1px solid var(--border); font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .arb-steps { display: flex; padding: 10px 20px; gap: 6px; border-bottom: 1px solid var(--border); }
+  .arb-step { padding: 3px 10px; border-radius: 4px; font-size: 11px; font-weight: 500; background: #F3F4F6; color: var(--text-muted); transition: all 0.2s; }
+  .arb-step.active { background: var(--accent); color: white; }
+  .arb-step.done { background: var(--success); color: white; }
+  .arb-body { padding: 20px; }
+  .arb-compare { display: flex; gap: 12px; }
+  .arb-side { flex: 1; background: #FAFAFA; border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+  .arb-side-title { font-size: 12px; font-weight: 600; margin-bottom: 5px; display: flex; align-items: center; gap: 5px; }
+  .arb-side-text { font-size: 13px; line-height: 1.6; color: #4B5563; }
+  .arb-suggestion { margin-top: 14px; padding: 12px; background: #F0EDFF; border-radius: 8px; font-size: 13px; line-height: 1.7; color: #4B5563; display: none; }
+  .arb-footer { padding: 14px 20px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 6px; }
+
+  /* ===== REVIEW OVERLAY ===== */
+  .review-panel {
+    background: var(--bg-surface); border-radius: 12px;
+    width: 560px; max-width: 90vw; max-height: 85vh; overflow-y: auto;
+    box-shadow: 0 16px 48px rgba(0,0,0,0.12);
+    transform: translateY(8px); transition: transform 0.2s;
+    padding: 28px;
+  }
+  .overlay.show .review-panel { transform: translateY(0); }
+  .review-title { font-size: 20px; font-weight: 600; margin-bottom: 4px; text-align: center; }
+  .review-subtitle { font-size: 12px; color: var(--text-muted); text-align: center; margin-bottom: 20px; }
+  .review-narrative { font-size: 14px; line-height: 1.8; color: #4B5563; margin-bottom: 20px; }
+  .review-chart { background: #FAFAFA; border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  .review-chart-title { font-size: 11px; font-weight: 600; color: var(--text-muted); margin-bottom: 10px; }
+  .chart-bars { display: flex; gap: 10px; align-items: flex-end; height: 70px; }
+  .chart-bar { flex: 1; border-radius: 4px 4px 0 0; position: relative; transition: height 0.5s; }
+  .chart-bar-label { position: absolute; bottom: -18px; left: 50%; transform: translateX(-50%); font-size: 10px; color: var(--text-muted); white-space: nowrap; }
+  .review-stones { margin-bottom: 20px; }
+  .review-stones-title { font-size: 11px; font-weight: 600; color: var(--text-muted); margin-bottom: 6px; }
+  .stone { display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: 13px; }
+  .stone-done { color: var(--success); } .stone-cont { color: var(--warning); }
+  .review-prompt { font-size: 14px; line-height: 1.8; color: #4B5563; font-style: italic; text-align: center; margin-top: 16px; }
+
+  /* ===== TOAST ===== */
+  .toast {
+    position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%) translateY(20px);
+    background: var(--text-primary); color: white; padding: 10px 20px;
+    border-radius: 8px; font-size: 13px; z-index: 200;
+    opacity: 0; transition: all 0.3s; pointer-events: none;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  /* ===== SCENARIO BAR ===== */
+  .scenario-bar {
+    position: fixed; top: 0; left: var(--sidebar-w); right: 0; z-index: 50;
+    background: rgba(255,255,255,0.9); backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--border);
+    padding: 8px 16px; display: flex; align-items: center; gap: 8px;
+  }
+  .scenario-label { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-right: 4px; }
+  .scenario-btn {
+    padding: 4px 12px; border-radius: 5px; border: 1px solid var(--border);
+    background: white; font-size: 11px; font-weight: 500; cursor: pointer;
+    font-family: inherit; color: var(--text-secondary); transition: all 0.15s;
+  }
+  .scenario-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .scenario-btn.active { background: var(--accent); color: white; border-color: var(--accent); }
+</style>
+</head>
+<body>
+
+<!-- Scenario Bar -->
+<div class="scenario-bar">
+  <span class="scenario-label">场景</span>
+  <button class="scenario-btn active" onclick="loadScenario('daily')">每日晨间</button>
+  <button class="scenario-btn" onclick="loadScenario('onboard')">冷启动</button>
+  <button class="scenario-btn" onclick="loadScenario('conflict')">冲突仲裁</button>
+  <button class="scenario-btn" onclick="loadScenario('review')">周复盘</button>
+  <button class="scenario-btn" onclick="loadScenario('task')">任务派发</button>
+</div>
+
+<!-- Sidebar -->
+<div class="sidebar" style="padding-top:48px;">
+  <div class="s-icon active" onclick="goButler()" id="icon-butler" title="管家">🏠</div>
+  <div class="s-divider"></div>
+  <div class="s-icon breathe" onclick="goRole('pm')" id="icon-pm" title="产品经理">💼<span class="dot dot-green"></span></div>
+  <div class="s-icon breathe" onclick="goRole('family')" id="icon-family" title="家庭">🏡<span class="dot dot-blue"></span></div>
+  <div class="s-icon breathe" onclick="goRole('study')" id="icon-study" title="学习者">📚</div>
+  <div class="s-icon dim" onclick="goRole('fitness')" id="icon-fitness" title="健身教练">🏃</div>
+</div>
+
+<!-- Main Area -->
+<div class="main" id="mainArea" style="padding-top:40px;">
+
+  <!-- Butler View -->
+  <div class="view active" id="view-butler">
+    <div class="butler-view">
+      <div class="butler-center">
+        <div class="greeting" id="butlerGreeting">早上好，boss</div>
+        <div class="summary-text" id="butlerSummary">
+          今天最重要的一件事是下午3点的产品评审。<span class="role-link" onclick="goRole('pm')">产品经理角色</span>已经准备好了演示文稿摘要，你可以点进去查看。另外，<span class="role-link" onclick="goRole('family')">家庭角色</span>想跟你聊一下周末的活动安排。
+        </div>
+        <div class="action-cards" id="actionCards">
+          <div class="a-card" id="card1">
+            <div class="a-card-info">
+              <div class="a-card-title">📋 产品评审准备就绪</div>
+              <div class="a-card-meta">产品经理 · 2分钟前完成</div>
+            </div>
+            <div class="a-card-btns">
+              <button class="btn btn-ghost" onclick="dismissCard('card1')">稍后</button>
+              <button class="btn btn-primary" onclick="goRole('pm')">查看</button>
+            </div>
+          </div>
+          <div class="a-card" id="card2">
+            <div class="a-card-info">
+              <div class="a-card-title">💬 周末活动建议</div>
+              <div class="a-card-meta">家庭 · 希望跟你确认</div>
+            </div>
+            <div class="a-card-btns">
+              <button class="btn btn-ghost" onclick="dismissCard('card2')">稍后</button>
+              <button class="btn btn-primary" onclick="goRole('family')">聊聊</button>
+            </div>
+          </div>
+          <div class="a-card" id="card3" style="display:none;">
+            <div class="a-card-info">
+              <div class="a-card-title">⚖️ 时间冲突需要你来决定</div>
+              <div class="a-card-meta">产品经理 vs 家庭 · 下午时段冲突</div>
+            </div>
+            <div class="a-card-btns">
+              <button class="btn btn-ghost" onclick="dismissCard('card3')">延后</button>
+              <button class="btn btn-primary" onclick="openArbitration()">处理</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Role Views -->
+  <div class="view" id="view-pm">
+    <div class="role-view">
+      <div class="role-header" style="background:rgba(79,70,229,0.04);">
+        <div class="rh-icon" style="background:#4F46E5">💼</div>
+        <div>
+          <div class="rh-name">产品经理</div>
+          <div class="rh-desc">产品规划 · 竞品分析 · 评审准备</div>
+          <div class="rh-energy"><div class="energy-bar"><div class="energy-fill" style="width:85%;background:#10B981"></div></div><span class="energy-label">85%</span></div>
+        </div>
+      </div>
+      <div class="chat-area" id="chat-pm">
+        <div class="bubble role-msg" style="background:rgba(79,70,229,0.05);border-color:rgba(79,70,229,0.15);">
+          <span class="sender">产品经理</span>
+          boss，评审材料准备好了。这次包含三个竞品的核心功能对比和定价策略分析。要我说说重点吗？
+        </div>
+      </div>
+      <div class="chat-input-bar">
+        <div class="chat-input-wrap" style="border-color:rgba(79,70,229,0.3);">
+          <input class="chat-input" placeholder="跟产品经理说点什么……" onkeydown="handleRoleChat(event,'pm')">
+          <button class="send-btn" style="background:#4F46E5" onclick="sendRoleChat('pm')">↑</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="view" id="view-family">
+    <div class="role-view">
+      <div class="role-header" style="background:rgba(217,119,6,0.04);">
+        <div class="rh-icon" style="background:#D97706">🏡</div>
+        <div>
+          <div class="rh-name">家庭</div>
+          <div class="rh-desc">活动安排 · 亲子时间 · 生活品质</div>
+          <div class="rh-energy"><div class="energy-bar"><div class="energy-fill" style="width:60%;background:#F59E0B"></div></div><span class="energy-label">60%</span></div>
+        </div>
+      </div>
+      <div class="chat-area" id="chat-family">
+        <div class="bubble role-msg" style="background:rgba(217,119,6,0.05);border-color:rgba(217,119,6,0.15);">
+          <span class="sender">家庭</span>
+          boss，周末带孩子去科技馆怎么样？我查了一下周六上午人少，可以多玩几个项目。要不要我安排一下？
+        </div>
+      </div>
+      <div class="chat-input-bar">
+        <div class="chat-input-wrap" style="border-color:rgba(217,119,6,0.3);">
+          <input class="chat-input" placeholder="跟家庭角色说点什么……" onkeydown="handleRoleChat(event,'family')">
+          <button class="send-btn" style="background:#D97706" onclick="sendRoleChat('family')">↑</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="view" id="view-study">
+    <div class="role-view">
+      <div class="role-header" style="background:rgba(124,58,237,0.04);">
+        <div class="rh-icon" style="background:#7C3AED">📚</div>
+        <div>
+          <div class="rh-name">学习者</div>
+          <div class="rh-desc">阅读计划 · 知识管理 · 技能提升</div>
+          <div class="rh-energy"><div class="energy-bar"><div class="energy-fill" style="width:70%;background:#F59E0B"></div></div><span class="energy-label">70%</span></div>
+        </div>
+      </div>
+      <div class="chat-area" id="chat-study">
+        <div class="bubble role-msg" style="background:rgba(124,58,237,0.05);border-color:rgba(124,58,237,0.15);">
+          <span class="sender">学习者</span>
+          《系统思考》读到第四章了，核心概念整理好了。有什么想讨论的吗？
+        </div>
+      </div>
+      <div class="chat-input-bar">
+        <div class="chat-input-wrap" style="border-color:rgba(124,58,237,0.3);">
+          <input class="chat-input" placeholder="跟学习者说点什么……" onkeydown="handleRoleChat(event,'study')">
+          <button class="send-btn" style="background:#7C3AED" onclick="sendRoleChat('study')">↑</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="view" id="view-fitness">
+    <div class="role-view">
+      <div class="role-header" style="background:rgba(5,150,105,0.04);">
+        <div class="rh-icon" style="background:#059669">🏃</div>
+        <div>
+          <div class="rh-name">健身教练</div>
+          <div class="rh-desc">运动计划 · 健康目标 · 体能管理</div>
+          <div class="rh-energy"><div class="energy-bar"><div class="energy-fill" style="width:25%;background:#9CA3AF"></div></div><span class="energy-label">25%</span></div>
+        </div>
+      </div>
+      <div class="chat-area" id="chat-fitness">
+        <div class="bubble role-msg" style="background:rgba(5,150,105,0.05);border-color:rgba(5,150,105,0.15);">
+          <span class="sender">健身教练</span>
+          boss，好久没运动了。不着急，等你准备好了随时跟我说，咱们从简单的开始。
+        </div>
+      </div>
+      <div class="chat-input-bar">
+        <div class="chat-input-wrap" style="border-color:rgba(5,150,105,0.3);">
+          <input class="chat-input" placeholder="跟健身教练说点什么……" onkeydown="handleRoleChat(event,'fitness')">
+          <button class="send-btn" style="background:#059669" onclick="sendRoleChat('fitness')">↑</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Onboarding View -->
+  <div class="view" id="view-onboard">
+    <div class="onboard-view">
+      <div class="onboard-center">
+        <div class="onboard-greeting">你好 👋</div>
+        <div class="onboard-bubble" id="onboardBubble">
+          我是你的管家。聊聊你最近在忙什么？我来帮你安排。
+        </div>
+        <div class="onboard-input-area">
+          <div class="chat-input-wrap">
+            <input class="chat-input" id="onboardInput" placeholder="比如：我是一个产品经理，最近在忙新产品上线……" onkeydown="handleOnboard(event)">
+            <button class="send-btn" onclick="doOnboard()">↑</button>
+          </div>
+        </div>
+        <div id="onboardFlow" style="margin-top:20px;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Task View (butler with task flow) -->
+  <div class="view" id="view-task">
+    <div style="flex:1;display:flex;flex-direction:column;">
+      <div style="flex:1;overflow-y:auto;padding:20px 28px;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding-top:60px;">
+        <div style="max-width:520px;width:100%;">
+          <div class="greeting" style="text-align:center;">下午好，boss</div>
+          <div id="taskChat" style="margin-top:20px;display:flex;flex-direction:column;gap:12px;">
+          </div>
+        </div>
+      </div>
+      <div class="chat-input-bar">
+        <div class="chat-input-wrap">
+          <input class="chat-input" id="taskInput" placeholder="跟管家说点什么……" onkeydown="handleTask(event)">
+          <button class="send-btn" onclick="doTask()">↑</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Arbitration Overlay -->
+<div class="overlay" id="arbOverlay" onclick="if(event.target===this)closeArbitration()">
+  <div class="arb-dialog">
+    <div class="arb-header">⚖️ 时间冲突仲裁</div>
+    <div class="arb-steps">
+      <span class="arb-step active" id="arbStep1">诉求呈现</span>
+      <span class="arb-step" id="arbStep2">方案建议</span>
+      <span class="arb-step" id="arbStep3">你来决定</span>
+    </div>
+    <div class="arb-body">
+      <div class="arb-compare">
+        <div class="arb-side">
+          <div class="arb-side-title">💼 产品经理</div>
+          <div class="arb-side-text">下午3点需要进行产品评审，预计1.5小时。已准备好演示材料。</div>
+        </div>
+        <div class="arb-side">
+          <div class="arb-side-title">🏡 家庭</div>
+          <div class="arb-side-text">下午3点半需要去学校接孩子，车程约20分钟。</div>
+        </div>
+      </div>
+      <div class="arb-suggestion" id="arbSuggestion">
+        💡 <strong>管家建议</strong>：如果把评审提前到2点开始，3点半结束后刚好可以出发去接孩子。我已经确认会议室2点有空。
+      </div>
+    </div>
+    <div class="arb-footer" id="arbFooter">
+      <button class="btn btn-ghost" onclick="closeArbitration()">延后决定</button>
+      <button class="btn btn-primary" onclick="arbNext()">继续</button>
+    </div>
+  </div>
+</div>
+
+<!-- Review Overlay -->
+<div class="overlay" id="reviewOverlay" onclick="if(event.target===this)closeReview()">
+  <div class="review-panel">
+    <div class="review-title">本周回顾</div>
+    <div class="review-subtitle">5月12日 - 18日</div>
+    <div class="review-narrative">
+      这周你在3个维度都有进展。产品经理角色完成了竞品分析和两次评审准备，效率很高。家庭角色帮你安排了周末科技馆活动，孩子们很开心。学习者角色稳步推进《系统思考》的阅读，已经到了第四章。健身教练角色这周比较安静，但不急，下周可以重新启动。
+    </div>
+    <div class="review-chart">
+      <div class="review-chart-title">各角色能量变化趋势</div>
+      <div class="chart-bars">
+        <div class="chart-bar" style="height:85%;background:#10B981"><span class="chart-bar-label">💼 85%</span></div>
+        <div class="chart-bar" style="height:60%;background:#F59E0B"><span class="chart-bar-label">🏡 60%</span></div>
+        <div class="chart-bar" style="height:70%;background:#F59E0B"><span class="chart-bar-label">📚 70%</span></div>
+        <div class="chart-bar" style="height:30%;background:#9CA3AF"><span class="chart-bar-label">🏃 30%</span></div>
+      </div>
+    </div>
+    <div class="review-stones">
+      <div class="review-stones-title">本周大石头</div>
+      <div class="stone"><span class="stone-done">✓</span> 竞品分析报告完成</div>
+      <div class="stone"><span class="stone-done">✓</span> 周末家庭活动安排</div>
+      <div class="stone"><span class="stone-cont">→</span> 《系统思考》阅读（继续推进）</div>
+      <div class="stone"><span class="stone-cont">→</span> 本周运动计划（下周重启）</div>
+    </div>
+    <div class="review-prompt">下周最想关注哪个方面？</div>
+    <div style="margin-top:12px;display:flex;justify-content:center;">
+      <button class="btn btn-primary" onclick="closeReview()">回到管家视角</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ===== STATE =====
+let currentView = 'butler';
+let arbStep = 1;
+let onboardStep = 0;
+let taskStep = 0;
+
+// ===== VIEW SWITCHING =====
+function switchView(id) {
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.getElementById('view-' + id).classList.add('active');
+  document.querySelectorAll('.s-icon').forEach(i => i.classList.remove('active'));
+  currentView = id;
+}
+
+function goButler() {
+  switchView('butler');
+  document.getElementById('icon-butler').classList.add('active');
+  document.getElementById('mainArea').style.background = 'var(--bg-base)';
+}
+
+function goRole(role) {
+  switchView(role);
+  document.getElementById('icon-' + role).classList.add('active');
+  const tints = { pm: 'rgba(79,70,229,0.02)', family: 'rgba(217,119,6,0.02)', study: 'rgba(124,58,237,0.02)', fitness: 'rgba(5,150,105,0.02)' };
+  document.getElementById('mainArea').style.background = tints[role] || 'var(--bg-base)';
+}
+
+// ===== ACTION CARDS =====
+function dismissCard(id) {
+  const card = document.getElementById(id);
+  card.classList.add('done');
+  card.querySelector('.a-card-title').textContent = '✅ ' + card.querySelector('.a-card-title').textContent.replace(/^[^\s]+\s/, '');
+  card.querySelector('.a-card-btns').innerHTML = '<button class="btn btn-ghost" disabled>已处理</button>';
+  showToast('已标记为稍后处理');
+}
+
+// ===== ROLE CHAT =====
+const roleColors = {
+  pm: { bg: 'rgba(79,70,229,0.05)', border: 'rgba(79,70,229,0.15)' },
+  family: { bg: 'rgba(217,119,6,0.05)', border: 'rgba(217,119,6,0.15)' },
+  study: { bg: 'rgba(124,58,237,0.05)', border: 'rgba(124,58,237,0.15)' },
+  fitness: { bg: 'rgba(5,150,105,0.05)', border: 'rgba(5,150,105,0.15)' },
+};
+const roleNames = { pm: '产品经理', family: '家庭', study: '学习者', fitness: '健身教练' };
+const roleReplies = {
+  pm: ['好的，我来说说重点。这次竞品分析主要覆盖了三家公司，核心差异在定价模型上。', '演示文稿已经按你上次的反馈调整了结构，先讲数据再讲方案。', '还有什么需要我补充的吗？'],
+  family: ['好呀！周六上午10点出发，我来订票。', '另外科技馆旁边有家不错的面馆，中午可以去吃。', '安排好了，到时候提醒你。'],
+  study: ['第四章讲的是系统思考中的反馈环路，分正反馈和负反馈两种。', '正反馈会放大变化，负反馈会稳定系统。这个概念在产品设计里也很有用。', '要我整理一份笔记摘要吗？'],
+  fitness: ['不着急，可以从每天走路15分钟开始。', '等你习惯了再加上一些简单的拉伸。', '身体是慢慢来的，别给自己太大压力。'],
+};
+let roleReplyIdx = { pm: 0, family: 0, study: 0, fitness: 0 };
+
+function handleRoleChat(e, role) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendRoleChat(role); } }
+function sendRoleChat(role) {
+  const chatArea = document.getElementById('chat-' + role);
+  const input = chatArea.parentElement.querySelector('.chat-input');
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  addBubble(chatArea, 'user', 'boss', text);
+  setTimeout(() => {
+    const replies = roleReplies[role];
+    const idx = roleReplyIdx[role] % replies.length;
+    roleReplyIdx[role]++;
+    addBubbleStreaming(chatArea, 'role-msg', roleNames[role], replies[idx], roleColors[role]);
+  }, 600);
+}
+
+function addBubble(container, type, sender, text) {
+  const d = document.createElement('div');
+  d.className = 'bubble ' + type;
+  if (type === 'role-msg') { d.style.background = 'rgba(99,102,241,0.05)'; d.style.borderColor = 'rgba(99,102,241,0.15)'; }
+  d.innerHTML = '<span class="sender">' + sender + '</span>' + text;
+  container.appendChild(d);
+  container.scrollTop = container.scrollHeight;
+}
+
+function addBubbleStreaming(container, type, sender, fullText, colors) {
+  const d = document.createElement('div');
+  d.className = 'bubble ' + type + ' streaming';
+  if (colors) { d.style.background = colors.bg; d.style.borderColor = colors.border; }
+  d.innerHTML = '<span class="sender">' + sender + '</span><span class="stream-text"></span>';
+  container.appendChild(d);
+  container.scrollTop = container.scrollHeight;
+  const span = d.querySelector('.stream-text');
+  let i = 0;
+  const timer = setInterval(() => {
+    if (i < fullText.length) { span.textContent += fullText[i]; i++; container.scrollTop = container.scrollHeight; }
+    else { clearInterval(timer); d.classList.remove('streaming'); }
+  }, 30);
+}
+
+// ===== ARBITRATION =====
+function openArbitration() { document.getElementById('arbOverlay').classList.add('show'); arbStep = 1; resetArb(); }
+function closeArbitration() { document.getElementById('arbOverlay').classList.remove('show'); showToast('冲突已标记，管家稍后再提'); }
+function resetArb() {
+  document.getElementById('arbStep1').className = 'arb-step active';
+  document.getElementById('arbStep2').className = 'arb-step';
+  document.getElementById('arbStep3').className = 'arb-step';
+  document.getElementById('arbSuggestion').style.display = 'none';
+  document.getElementById('arbFooter').innerHTML = '<button class="btn btn-ghost" onclick="closeArbitration()">延后决定</button><button class="btn btn-primary" onclick="arbNext()">继续</button>';
+}
+function arbNext() {
+  if (arbStep === 1) {
+    arbStep = 2;
+    document.getElementById('arbStep1').className = 'arb-step done';
+    document.getElementById('arbStep2').className = 'arb-step active';
+    document.getElementById('arbSuggestion').style.display = 'block';
+    document.getElementById('arbFooter').innerHTML = '<button class="btn btn-ghost" onclick="closeArbitration()">延后决定</button><button class="btn btn-primary" onclick="arbNext()">继续</button>';
+  } else if (arbStep === 2) {
+    arbStep = 3;
+    document.getElementById('arbStep2').className = 'arb-step done';
+    document.getElementById('arbStep3').className = 'arb-step active';
+    document.getElementById('arbFooter').innerHTML = '<button class="btn btn-ghost" onclick="closeArbitration()">延后决定</button><button class="btn btn-ghost" onclick="closeArbitration()">自定义方案</button><button class="btn btn-primary" onclick="resolveConflict()">采纳建议</button>';
+  }
+}
+function resolveConflict() {
+  document.getElementById('arbOverlay').classList.remove('show');
+  const card3 = document.getElementById('card3');
+  card3.classList.add('done');
+  card3.querySelector('.a-card-title').textContent = '✅ 冲突已解决 · 评审提前到2点';
+  card3.querySelector('.a-card-btns').innerHTML = '<button class="btn btn-ghost" disabled>已解决</button>';
+  showToast('冲突已解决，两个角色的任务已更新');
+}
+
+// ===== REVIEW =====
+function openReview() { document.getElementById('reviewOverlay').classList.add('show'); }
+function closeReview() { document.getElementById('reviewOverlay').classList.remove('show'); }
+
+// ===== ONBOARDING =====
+function handleOnboard(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doOnboard(); } }
+function doOnboard() {
+  const input = document.getElementById('onboardInput');
+  const text = input.value.trim();
+  if (!text && onboardStep === 0) { input.value = '我是一个产品经理，平时还要照顾家庭和健身'; text || (input.value = ''); return; }
+  if (!text) return;
+  input.value = '';
+  const flow = document.getElementById('onboardFlow');
+
+  if (onboardStep === 0) {
+    const userMsg = document.createElement('div');
+    userMsg.className = 'bubble user';
+    userMsg.style.maxWidth = '100%';
+    userMsg.innerHTML = '<span class="sender">boss</span>' + text;
+    flow.appendChild(userMsg);
+
+    setTimeout(() => {
+      const reply = document.createElement('div');
+      reply.className = 'onboard-bubble';
+      reply.innerHTML = '听起来你工作中产品管理很重要，还兼顾家庭和健康。要不要先创建一个<strong>产品经理</strong>角色？';
+      flow.appendChild(reply);
+      input.placeholder = '确认，或者告诉我你想调整……';
+      onboardStep = 1;
+    }, 800);
+  } else if (onboardStep === 1) {
+    const userMsg = document.createElement('div');
+    userMsg.className = 'bubble user';
+    userMsg.style.maxWidth = '100%';
+    userMsg.innerHTML = '<span class="sender">boss</span>' + text;
+    flow.appendChild(userMsg);
+
+    setTimeout(() => {
+      // Show role emerging
+      const icon = document.getElementById('icon-pm');
+      icon.style.transition = 'opacity 0.4s';
+      icon.style.opacity = '0';
+      setTimeout(() => { icon.style.opacity = '1'; icon.classList.add('breathe'); showToast('产品经理角色已创建 ✨'); }, 200);
+
+      const reply = document.createElement('div');
+      reply.className = 'onboard-bubble';
+      reply.innerHTML = '好的，产品经理角色创建好了！还有其他你关注的方面吗？比如家庭、健身？';
+      flow.appendChild(reply);
+      input.placeholder = '继续聊，或者说"够了"……';
+      onboardStep = 2;
+    }, 800);
+  } else {
+    const userMsg = document.createElement('div');
+    userMsg.className = 'bubble user';
+    userMsg.style.maxWidth = '100%';
+    userMsg.innerHTML = '<span class="sender">boss</span>' + text;
+    flow.appendChild(userMsg);
+
+    setTimeout(() => {
+      const reply = document.createElement('div');
+      reply.className = 'onboard-bubble';
+      reply.innerHTML = '好的，我来照顾这些方面。明天早上给你第一份简报。现在先熟悉一下环境吧。';
+      flow.appendChild(reply);
+      setTimeout(() => { loadScenario('daily'); showToast('冷启动完成，进入每日模式'); }, 2000);
+    }, 800);
+  }
+}
+
+// ===== TASK FLOW =====
+function handleTask(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doTask(); } }
+function doTask() {
+  const input = document.getElementById('taskInput');
+  const chat = document.getElementById('taskChat');
+  let text = input.value.trim();
+  if (!text && taskStep === 0) text = '帮我准备明天的会议材料';
+  if (!text) return;
+  input.value = '';
+
+  addBubble(chat, 'user', 'boss', text);
+
+  if (taskStep === 0) {
+    setTimeout(() => {
+      addBubbleStreaming(chat, 'butler', '管家', '明天的产品评审对吧？我让产品经理角色去准备核心功能对比和数据摘要。', null);
+      input.placeholder = '确认，或者补充要求……';
+      taskStep = 1;
+    }, 600);
+  } else if (taskStep === 1) {
+    setTimeout(() => {
+      addBubbleStreaming(chat, 'butler', '管家', '收到，产品经理角色在准备了，完成后我告诉你。', null);
+      // Simulate icon status change
+      const pmIcon = document.getElementById('icon-pm');
+      pmIcon.querySelector('.dot').className = 'dot';
+      pmIcon.querySelector('.dot').style.background = '#3B82F6';
+      pmIcon.querySelector('.dot').style.animation = 'breathe 1s ease-in-out infinite';
+      taskStep = 2;
+      setTimeout(() => {
+        pmIcon.querySelector('.dot').className = 'dot dot-green';
+        pmIcon.querySelector('.dot').style.animation = '';
+        addBubbleStreaming(chat, 'butler', '管家', '产品经理已完成会议材料准备，包含竞品分析和定价策略。要看看吗？', null);
+        input.placeholder = '要看 / 不用了……';
+        taskStep = 3;
+      }, 3000);
+    }, 600);
+  } else if (taskStep === 3) {
+    setTimeout(() => {
+      if (text.includes('看') || text.includes('好') || text.includes('要')) {
+        addBubbleStreaming(chat, 'butler', '管家', '好的，点击侧边栏的产品经理图标进去查看吧。', null);
+      } else {
+        addBubbleStreaming(chat, 'butler', '管家', '好的，需要时随时进去看。还有什么要安排的吗？', null);
+      }
+      taskStep = 4;
+    }, 600);
+  } else {
+    setTimeout(() => {
+      addBubbleStreaming(chat, 'butler', '管家', '好的，我来安排。', null);
+    }, 600);
+  }
+}
+
+// ===== SCENARIOS =====
+function loadScenario(name) {
+  document.querySelectorAll('.scenario-btn').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+
+  // Reset all views
+  taskStep = 0;
+  onboardStep = 0;
+  document.getElementById('taskChat').innerHTML = '';
+  document.getElementById('onboardFlow').innerHTML = '';
+
+  if (name === 'daily') {
+    goButler();
+    document.getElementById('butlerGreeting').textContent = '早上好，boss';
+    document.getElementById('butlerSummary').innerHTML = '今天最重要的一件事是下午3点的产品评审。<span class="role-link" onclick="goRole(\'pm\')">产品经理角色</span>已经准备好了演示文稿摘要，你可以点进去查看。另外，<span class="role-link" onclick="goRole(\'family\')">家庭角色</span>想跟你聊一下周末的活动安排。';
+    document.getElementById('card1').style.display = 'flex'; document.getElementById('card1').classList.remove('done');
+    document.getElementById('card1').querySelector('.a-card-title').textContent = '📋 产品评审准备就绪';
+    document.getElementById('card1').querySelector('.a-card-btns').innerHTML = '<button class="btn btn-ghost" onclick="dismissCard(\'card1\')">稍后</button><button class="btn btn-primary" onclick="goRole(\'pm\')">查看</button>';
+    document.getElementById('card2').style.display = 'flex'; document.getElementById('card2').classList.remove('done');
+    document.getElementById('card2').querySelector('.a-card-title').textContent = '💬 周末活动建议';
+    document.getElementById('card2').querySelector('.a-card-btns').innerHTML = '<button class="btn btn-ghost" onclick="dismissCard(\'card2\')">稍后</button><button class="btn btn-primary" onclick="goRole(\'family\')">聊聊</button>';
+    document.getElementById('card3').style.display = 'none';
+  } else if (name === 'onboard') {
+    switchView('onboard');
+    document.getElementById('icon-butler').classList.add('active');
+    document.getElementById('mainArea').style.background = 'var(--bg-base)';
+    document.getElementById('onboardInput').placeholder = '比如：我是一个产品经理，最近在忙新产品上线……';
+  } else if (name === 'conflict') {
+    goButler();
+    document.getElementById('butlerGreeting').textContent = '下午好，boss';
+    document.getElementById('butlerSummary').innerHTML = '<span class="role-link" onclick="goRole(\'pm\')">产品经理</span>和<span class="role-link" onclick="goRole(\'family\')">家庭角色</span>有个时间冲突，需要你来决定。';
+    document.getElementById('card1').style.display = 'none';
+    document.getElementById('card2').style.display = 'none';
+    document.getElementById('card3').style.display = 'flex'; document.getElementById('card3').classList.remove('done');
+    document.getElementById('card3').querySelector('.a-card-title').textContent = '⚖️ 时间冲突需要你来决定';
+    document.getElementById('card3').querySelector('.a-card-btns').innerHTML = '<button class="btn btn-ghost" onclick="dismissCard(\'card3\')">延后</button><button class="btn btn-primary" onclick="openArbitration()">处理</button>';
+  } else if (name === 'review') {
+    goButler();
+    document.getElementById('butlerGreeting').textContent = '周末好，boss';
+    document.getElementById('butlerSummary').innerHTML = '这周过得不错，一起看看？';
+    document.getElementById('card1').style.display = 'none';
+    document.getElementById('card2').style.display = 'none';
+    document.getElementById('card3').style.display = 'none';
+    setTimeout(() => openReview(), 400);
+  } else if (name === 'task') {
+    switchView('task');
+    document.getElementById('icon-butler').classList.add('active');
+    document.getElementById('mainArea').style.background = 'var(--bg-base)';
+    document.getElementById('taskInput').placeholder = '比如：帮我准备明天的会议材料……';
+  }
+}
+
+// ===== TOAST =====
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2000);
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EgoSync UX Patterns Preview</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Noto+Sans+SC:wght@300;400;500;600&display=swap');
+  :root {
+    --bg-base:#F8F9FA; --bg-surface:#FFFFFF; --bg-elevated:#FAFAFA;
+    --text-primary:#1A1A2E; --text-secondary:#6B7280; --text-muted:#9CA3AF;
+    --border:#E5E7EB; --accent:#6366F1;
+    --success:#10B981; --info:#3B82F6; --warning:#F59E0B; --error:#EF4444;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{font-family:'Inter','Noto Sans SC',sans-serif;background:#F1F3F5;color:var(--text-primary);}
+
+  .nav{position:fixed;top:0;left:0;right:0;z-index:100;background:white;border-bottom:1px solid var(--border);padding:12px 24px;display:flex;align-items:center;gap:12px;box-shadow:0 1px 4px rgba(0,0,0,.06);flex-wrap:wrap;}
+  .nav h1{font-size:15px;font-weight:600;white-space:nowrap;}
+  .nav-tabs{display:flex;gap:4px;flex-wrap:wrap;}
+  .nav-tab{padding:5px 12px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:500;border:none;background:transparent;color:var(--text-secondary);font-family:inherit;}
+  .nav-tab:hover{background:#F3F4F6;}
+  .nav-tab.active{background:var(--accent);color:white;}
+
+  .container{margin-top:64px;padding:24px;max-width:820px;margin-left:auto;margin-right:auto;}
+  .section{display:none;} .section.active{display:block;}
+  .s-title{font-size:18px;font-weight:600;margin-bottom:4px;}
+  .s-desc{font-size:13px;color:var(--text-secondary);margin-bottom:20px;}
+  .frame{background:var(--bg-base);border:1px solid var(--border);border-radius:12px;padding:28px;margin-bottom:16px;box-shadow:0 2px 8px rgba(0,0,0,.04);}
+  .label{font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px;}
+  .sub-label{font-size:11px;font-weight:500;color:var(--text-secondary);margin:14px 0 8px;}
+
+  /* Buttons */
+  .btn-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px;}
+  .btn{padding:7px 18px;border-radius:6px;border:none;font-size:13px;font-weight:500;cursor:pointer;font-family:inherit;transition:all .15s;}
+  .btn-primary{background:var(--accent);color:white;}
+  .btn-primary:hover{background:#4F46E5;}
+  .btn-ghost{background:transparent;border:1px solid var(--border);color:var(--text-secondary);}
+  .btn-ghost:hover{border-color:#D1D5DB;color:var(--text-primary);}
+  .btn-text{background:transparent;border:none;color:var(--accent);padding:7px 10px;}
+  .btn-text:hover{text-decoration:underline;}
+  .btn-destructive{background:transparent;border:1px solid var(--error);color:var(--error);}
+  .btn-destructive:hover{background:rgba(239,68,68,.06);}
+  .btn-sm{padding:5px 12px;font-size:12px;}
+
+  /* Feedback */
+  .feedback-demo{display:flex;flex-direction:column;gap:12px;}
+  .fb-item{display:flex;align-items:flex-start;gap:12px;padding:14px;border-radius:10px;background:var(--bg-surface);border:1px solid var(--border);}
+  .fb-label{font-size:11px;font-weight:600;color:var(--text-muted);width:80px;flex-shrink:0;padding-top:2px;}
+  .fb-content{font-size:13px;line-height:1.6;color:#4B5563;flex:1;}
+  .fb-bubble{background:var(--bg-surface);border:1px solid var(--border);border-radius:12px;padding:10px 14px;font-size:13px;line-height:1.6;display:inline-block;}
+
+  /* Card states */
+  .card-states{display:flex;flex-direction:column;gap:10px;}
+  .state-card{background:var(--bg-surface);border:1px solid var(--border);border-radius:10px;padding:14px 18px;display:flex;justify-content:space-between;align-items:center;transition:all .2s;cursor:pointer;}
+  .state-card:hover{box-shadow:0 4px 12px rgba(0,0,0,.06);transform:translateY(-1px);}
+  .state-card.done{opacity:.5;}
+  .state-card.done:hover{transform:none;box-shadow:none;}
+  .sc-title{font-size:13px;font-weight:500;} .sc-meta{font-size:11px;color:var(--text-muted);margin-top:2px;}
+
+  /* Nav demo */
+  .nav-demo{display:flex;border:1px solid var(--border);border-radius:10px;overflow:hidden;height:280px;background:var(--bg-base);}
+  .nav-sidebar{width:56px;background:#F1F3F5;border-right:1px solid var(--border);display:flex;flex-direction:column;align-items:center;padding:12px 0;gap:6px;}
+  .nav-icon{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:16px;cursor:pointer;position:relative;transition:all .2s;}
+  .nav-icon:hover{background:#E5E7EB;}
+  .nav-icon.sel{background:var(--accent);color:white;box-shadow:0 2px 8px rgba(99,102,241,.3);}
+  .nav-icon .ndot{position:absolute;top:2px;right:2px;width:6px;height:6px;border-radius:50%;border:1.5px solid #F1F3F5;}
+  .ndot-g{background:var(--success);} .ndot-b{background:var(--info);}
+  .nav-main{flex:1;display:flex;align-items:center;justify-content:center;padding:20px;position:relative;overflow:hidden;}
+  .nav-view{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;opacity:0;transition:opacity .25s;pointer-events:none;}
+  .nav-view.vis{opacity:1;pointer-events:auto;}
+  .nv-greeting{font-size:22px;font-weight:300;margin-bottom:8px;}
+  .nv-text{font-size:13px;line-height:1.8;color:#4B5563;text-align:center;max-width:360px;}
+  .nv-role{padding:16px;width:100%;text-align:left;}
+  .nv-rh{display:flex;align-items:center;gap:12px;margin-bottom:12px;}
+  .nv-ricon{width:40px;height:40px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:20px;color:white;}
+  .nv-rname{font-size:16px;font-weight:600;}
+  .nv-rdesc{font-size:11px;color:var(--text-secondary);}
+  .nv-msg{font-size:12px;line-height:1.6;color:#4B5563;background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;padding:10px;margin-top:8px;}
+
+  /* Empty states */
+  .empty-demo{display:flex;flex-direction:column;gap:14px;}
+  .empty-card{background:var(--bg-surface);border:1px solid var(--border);border-radius:10px;padding:24px;text-align:center;}
+  .empty-text{font-size:14px;line-height:1.8;color:#4B5563;font-style:italic;}
+  .empty-ctx{font-size:10px;font-weight:600;color:var(--text-muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px;}
+
+  /* Loading */
+  .loading-demo{display:flex;flex-direction:column;gap:14px;}
+  .ld-item{display:flex;align-items:center;gap:12px;padding:14px;background:var(--bg-surface);border:1px solid var(--border);border-radius:10px;}
+  .ld-label{font-size:11px;font-weight:600;color:var(--text-muted);width:100px;flex-shrink:0;}
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+  @keyframes pulse{0%,100%{transform:scale(1);opacity:.7}50%{transform:scale(1.4);opacity:1}}
+  @keyframes breathe{0%,100%{opacity:.65}50%{opacity:1}}
+  .cursor-blink::after{content:'▊';color:var(--accent);animation:blink .8s infinite;}
+  .dot-pulse{width:8px;height:8px;border-radius:50%;background:var(--info);animation:pulse 1.5s ease-in-out infinite;display:inline-block;}
+  .icon-breathe{animation:breathe 3s ease-in-out infinite;display:inline-block;font-size:18px;}
+
+  /* Notification */
+  .notif-demo{display:flex;flex-direction:column;gap:12px;}
+  .notif-row{display:flex;align-items:center;gap:16px;padding:14px 18px;background:var(--bg-surface);border:1px solid var(--border);border-radius:10px;}
+  .notif-level{font-size:10px;font-weight:700;color:white;padding:3px 8px;border-radius:4px;width:32px;text-align:center;}
+  .nl1{background:#9CA3AF;} .nl2{background:var(--info);} .nl3{background:var(--warning);}
+  .notif-name{font-size:12px;font-weight:600;color:var(--text-secondary);width:50px;}
+  .notif-desc{font-size:13px;color:#4B5563;flex:1;}
+  .notif-visual{width:80px;display:flex;justify-content:center;align-items:center;}
+  .nv-dot{width:7px;height:7px;border-radius:50%;}
+  .side-mini{width:36px;height:36px;border-radius:10px;background:#F3F4F6;display:flex;align-items:center;justify-content:center;font-size:15px;position:relative;}
+  .side-mini .nv-dot{position:absolute;top:2px;right:2px;border:1.5px solid #F3F4F6;}
+
+  /* Transition */
+  .trans-demo{display:flex;flex-direction:column;gap:10px;}
+  .trans-row{display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;font-size:12px;}
+  .trans-trigger{font-weight:600;color:var(--text-primary);width:120px;flex-shrink:0;}
+  .trans-effect{color:#4B5563;flex:1;}
+  .trans-param{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--accent);background:rgba(99,102,241,.08);padding:2px 8px;border-radius:4px;}
+  .hover-card{background:var(--bg-surface);border:1px solid var(--border);border-radius:10px;padding:16px 20px;transition:all .2s;cursor:pointer;display:inline-block;font-size:13px;font-weight:500;}
+  .hover-card:hover{box-shadow:0 4px 12px rgba(0,0,0,.08);transform:translateY(-1px);}
+
+  @keyframes fadeSlideIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+  .anim-bubble{animation:fadeSlideIn .3s ease-out;}
+  @keyframes colorShift{0%{background:var(--bg-base)}50%{background:rgba(79,70,229,.03)}100%{background:var(--bg-base)}}
+  .color-shift-demo{padding:20px;border-radius:10px;text-align:center;font-size:13px;color:var(--text-secondary);animation:colorShift 3s ease infinite;border:1px solid var(--border);}
+</style>
+</head>
+<body>
+
+<div class="nav">
+  <h1>UX Patterns</h1>
+  <div class="nav-tabs">
+    <button class="nav-tab active" onclick="show('p1')">按钮层级</button>
+    <button class="nav-tab" onclick="show('p2')">反馈模式</button>
+    <button class="nav-tab" onclick="show('p3')">导航模式</button>
+    <button class="nav-tab" onclick="show('p4')">空状态</button>
+    <button class="nav-tab" onclick="show('p5')">加载状态</button>
+    <button class="nav-tab" onclick="show('p6')">通知层级</button>
+    <button class="nav-tab" onclick="show('p7')">过渡动效</button>
+  </div>
+</div>
+
+<div class="container">
+
+  <!-- 1. Button Hierarchy -->
+  <div class="section active" id="p1">
+    <div class="s-title">按钮层级</div>
+    <div class="s-desc">每个上下文最多1个Primary。Ghost在Primary左侧，Primary在最右（中文习惯）。圆角6px。</div>
+    <div class="frame">
+      <div class="label">四个层级</div>
+      <div class="btn-row">
+        <button class="btn btn-primary">确认</button>
+        <button class="btn btn-ghost">稍后</button>
+        <button class="btn btn-text">跳过</button>
+        <button class="btn btn-destructive">删除角色</button>
+      </div>
+      <div class="sub-label">操作卡片中的按钮组合</div>
+      <div class="card-states">
+        <div class="state-card">
+          <div><div class="sc-title">📋 产品评审准备就绪</div><div class="sc-meta">产品经理 · 2分钟前</div></div>
+          <div class="btn-row" style="margin:0">
+            <button class="btn btn-ghost btn-sm">稍后</button>
+            <button class="btn btn-primary btn-sm">查看</button>
+          </div>
+        </div>
+        <div class="state-card">
+          <div><div class="sc-title">💬 周末活动建议</div><div class="sc-meta">家庭 · 希望确认</div></div>
+          <div class="btn-row" style="margin:0">
+            <button class="btn btn-ghost btn-sm">稍后</button>
+            <button class="btn btn-primary btn-sm">聊聊</button>
+          </div>
+        </div>
+      </div>
+      <div class="sub-label">仲裁对话框底部</div>
+      <div class="btn-row">
+        <button class="btn btn-ghost btn-sm">延后决定</button>
+        <button class="btn btn-ghost btn-sm">自定义方案</button>
+        <button class="btn btn-primary btn-sm">采纳建议</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2. Feedback -->
+  <div class="section" id="p2">
+    <div class="s-title">反馈模式</div>
+    <div class="s-desc">所有反馈通过管家自然语言传达，不使用toast/snackbar。管家是唯一沟通渠道。</div>
+    <div class="frame">
+      <div class="feedback-demo">
+        <div class="fb-item">
+          <div class="fb-label">管家确认</div>
+          <div class="fb-content">
+            <div class="fb-bubble">好的，产品经理角色在准备了，完成后我告诉你。</div>
+          </div>
+        </div>
+        <div class="fb-item">
+          <div class="fb-label">操作成功</div>
+          <div class="fb-content">
+            <div class="state-card done" style="max-width:360px">
+              <div><div class="sc-title">✅ 竞品分析已查看</div><div class="sc-meta">产品经理 · 刚刚</div></div>
+              <div><button class="btn btn-ghost btn-sm" disabled>已完成</button></div>
+            </div>
+          </div>
+        </div>
+        <div class="fb-item">
+          <div class="fb-label">错误处理</div>
+          <div class="fb-content">
+            <div class="fb-bubble">抱歉boss，产品经理角色尝试获取竞品数据时遇到了问题。要不我换个方式试试？或者你可以稍后再让我重试。</div>
+          </div>
+        </div>
+        <div class="fb-item">
+          <div class="fb-label">后台完成</div>
+          <div class="fb-content">
+            <div style="display:flex;align-items:center;gap:12px;">
+              <div class="side-mini">💼<span class="nv-dot ndot-g" style="position:absolute;top:2px;right:2px;border:1.5px solid #F3F4F6"></span></div>
+              <span style="font-size:12px;color:var(--text-muted)">→</span>
+              <div class="fb-bubble" style="font-size:12px">产品经理已完成会议材料准备，要看看吗？</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3. Navigation -->
+  <div class="section" id="p3">
+    <div class="s-title">导航模式</div>
+    <div class="s-desc">最多2层深度：管家视角 ↔ 角色视图。点击侧边栏图标切换，色温+内容同步过渡。</div>
+    <div class="frame">
+      <div class="label">点击侧边栏图标切换视图（试试点击）</div>
+      <div class="nav-demo">
+        <div class="nav-sidebar">
+          <div class="nav-icon sel" onclick="switchView('butler')" title="管家">🏠</div>
+          <div style="width:28px;border-bottom:1px solid var(--border);margin:4px 0"></div>
+          <div class="nav-icon" onclick="switchView('pm')" title="产品经理">💼<span class="ndot ndot-g"></span></div>
+          <div class="nav-icon" onclick="switchView('family')" title="家庭">🏡<span class="ndot ndot-b"></span></div>
+          <div class="nav-icon" onclick="switchView('study')" title="学习">📚</div>
+        </div>
+        <div class="nav-main" id="navMain">
+          <div class="nav-view vis" id="view-butler">
+            <div class="nv-greeting">下午好，boss</div>
+            <div class="nv-text">今天最重要的是下午3点的产品评审。产品经理角色已经准备好演示材料。</div>
+          </div>
+          <div class="nav-view" id="view-pm" style="background:rgba(79,70,229,.03)">
+            <div class="nv-role">
+              <div class="nv-rh"><div class="nv-ricon" style="background:#4F46E5">💼</div><div><div class="nv-rname">产品经理</div><div class="nv-rdesc">产品规划 · 竞品分析 · 评审准备</div></div></div>
+              <div class="nv-msg">boss，评审材料准备好了。这次竞品分析包含三家公司的核心功能对比和定价策略。</div>
+            </div>
+          </div>
+          <div class="nav-view" id="view-family" style="background:rgba(217,119,6,.03)">
+            <div class="nv-role">
+              <div class="nv-rh"><div class="nv-ricon" style="background:#D97706">🏡</div><div><div class="nv-rname">家庭</div><div class="nv-rdesc">活动安排 · 亲子时间 · 生活品质</div></div></div>
+              <div class="nv-msg">boss，周末带孩子去科技馆怎么样？我查了一下周六上午人少，可以多玩几个项目。</div>
+            </div>
+          </div>
+          <div class="nav-view" id="view-study" style="background:rgba(124,58,237,.03)">
+            <div class="nv-role">
+              <div class="nv-rh"><div class="nv-ricon" style="background:#7C3AED">📚</div><div><div class="nv-rname">学习者</div><div class="nv-rdesc">阅读计划 · 知识管理 · 技能提升</div></div></div>
+              <div class="nv-msg">《系统思考》读到第四章了，核心概念整理好了。有什么想讨论的吗？</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4. Empty States -->
+  <div class="section" id="p4">
+    <div class="s-title">空状态模式</div>
+    <div class="s-desc">永远不显示"暂无数据"——用管家/角色自然语言代替。</div>
+    <div class="frame">
+      <div class="empty-demo">
+        <div class="empty-card">
+          <div class="empty-ctx">首次打开 · 无角色</div>
+          <div class="empty-text">你好boss，我是你的管家。聊聊你最近在忙什么？我来帮你安排。</div>
+        </div>
+        <div class="empty-card">
+          <div class="empty-ctx">管家无事可报</div>
+          <div class="empty-text">今天一切平稳，各个角色都在正常推进各自目标。需要我做什么随时说。</div>
+        </div>
+        <div class="empty-card">
+          <div class="empty-ctx">角色无对话历史</div>
+          <div class="empty-text">你好boss，我是你的产品经理角色。有什么产品方面的事情想聊的吗？</div>
+        </div>
+        <div class="empty-card">
+          <div class="empty-ctx">搜索无结果</div>
+          <div class="empty-text">没找到相关内容。换个关键词试试？</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 5. Loading States -->
+  <div class="section" id="p5">
+    <div class="s-title">加载状态模式</div>
+    <div class="s-desc">不使用全屏loading/spinner——流式输出本身就是进度指示。</div>
+    <div class="frame">
+      <div class="loading-demo">
+        <div class="ld-item">
+          <div class="ld-label">管家生成摘要</div>
+          <div style="font-size:13px;color:#4B5563;">
+            <div class="fb-bubble"><span>产品经理已经完成了会议材料</span><span class="cursor-blink"></span></div>
+          </div>
+        </div>
+        <div class="ld-item">
+          <div class="ld-label">角色执行任务</div>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <div class="side-mini">💼<span class="dot-pulse" style="position:absolute;top:2px;right:2px;"></span></div>
+            <span style="font-size:12px;color:var(--text-muted)">产品经理正在工作中…</span>
+          </div>
+        </div>
+        <div class="ld-item">
+          <div class="ld-label">侧边栏呼吸</div>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <span class="icon-breathe">📚</span>
+            <span style="font-size:12px;color:var(--text-muted)">正常待机状态 · opacity 0.65→1 循环</span>
+          </div>
+        </div>
+        <div class="ld-item">
+          <div class="ld-label">视图切换</div>
+          <div style="font-size:12px;color:var(--text-muted)">内容区 opacity 0→1 淡入，250ms ease（见导航模式tab演示）</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 6. Notification Levels -->
+  <div class="section" id="p6">
+    <div class="s-title">三级通知模式</div>
+    <div class="s-desc">绝不使用系统弹窗/红色badge数字。所有通知在EgoSync"世界观"内传达。</div>
+    <div class="frame">
+      <div class="notif-demo">
+        <div class="notif-row">
+          <div class="notif-level nl1">L1</div>
+          <div class="notif-name">耳语</div>
+          <div class="notif-desc">侧边栏图标绿点，不打断。用户自己发现。</div>
+          <div class="notif-visual"><div class="side-mini">💼<span class="nv-dot ndot-g" style="position:absolute;top:2px;right:2px;border:1.5px solid #F3F4F6"></span></div></div>
+        </div>
+        <div class="notif-row">
+          <div class="notif-level nl2">L2</div>
+          <div class="notif-name">轻触</div>
+          <div class="notif-desc">管家摘要中自然语言提及。轻度打断，"顺嘴说一句"。</div>
+          <div class="notif-visual" style="flex-direction:column;gap:4px;">
+            <div style="font-size:11px;color:#4B5563;background:#F3F4F6;padding:6px 10px;border-radius:6px;line-height:1.4;">另外，学习角色想跟你聊聊读书心得。</div>
+          </div>
+        </div>
+        <div class="notif-row">
+          <div class="notif-level nl3">L3</div>
+          <div class="notif-name">敲门</div>
+          <div class="notif-desc">ActionCard出现在管家视角。中度打断，需要用户决定。</div>
+          <div class="notif-visual" style="flex-direction:column;gap:4px;">
+            <div style="font-size:11px;background:var(--bg-surface);border:1px solid var(--border);padding:8px 10px;border-radius:8px;display:flex;align-items:center;gap:6px;">
+              <span>⚖️ 时间冲突</span>
+              <button class="btn btn-primary" style="padding:2px 8px;font-size:10px;">处理</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 7. Transitions -->
+  <div class="section" id="p7">
+    <div class="s-title">过渡动效模式</div>
+    <div class="s-desc">所有动效在 prefers-reduced-motion 时降为0ms。</div>
+    <div class="frame">
+      <div class="label">参数速查</div>
+      <div class="trans-demo">
+        <div class="trans-row"><span class="trans-trigger">卡片hover</span><span class="trans-effect">上浮+阴影加深</span><span class="trans-param">translateY(-1px) 200ms</span></div>
+        <div class="trans-row"><span class="trans-trigger">视图切换</span><span class="trans-effect">内容淡入淡出</span><span class="trans-param">opacity 250ms ease</span></div>
+        <div class="trans-row"><span class="trans-trigger">色温变化</span><span class="trans-effect">CSS变量过渡</span><span class="trans-param">300ms ease</span></div>
+        <div class="trans-row"><span class="trans-trigger">侧边栏呼吸</span><span class="trans-effect">透明度循环</span><span class="trans-param">0.65→1 3s ease-in-out</span></div>
+        <div class="trans-row"><span class="trans-trigger">角色涌现</span><span class="trans-effect">图标渐入+首次呼吸</span><span class="trans-param">opacity 400ms + breathe</span></div>
+        <div class="trans-row"><span class="trans-trigger">对话气泡</span><span class="trans-effect">底部滑入</span><span class="trans-param">translateY(8px)→0 200ms</span></div>
+      </div>
+      <div class="sub-label">实时演示</div>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center;">
+        <div class="hover-card">hover我 · 上浮效果</div>
+        <div class="color-shift-demo" style="flex:1;min-width:200px;">色温过渡模拟 · 300ms ease</div>
+      </div>
+      <div class="sub-label" style="margin-top:16px;">气泡滑入（点击触发）</div>
+      <div id="bubbleArea" style="min-height:50px;display:flex;flex-direction:column;gap:8px;">
+        <button class="btn btn-ghost btn-sm" onclick="addBubble()">+ 添加气泡</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+function show(id){
+  document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
+  document.querySelectorAll('.nav-tab').forEach(t=>t.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  const tabs=document.querySelectorAll('.nav-tab');
+  const idx=parseInt(id.replace('p',''))-1;
+  if(tabs[idx])tabs[idx].classList.add('active');
+}
+
+const views={butler:'view-butler',pm:'view-pm',family:'view-family',study:'view-study'};
+const icons={butler:0,pm:2,family:3,study:4};
+function switchView(key){
+  Object.values(views).forEach(v=>document.getElementById(v).classList.remove('vis'));
+  document.getElementById(views[key]).classList.add('vis');
+  const navIcons=document.querySelectorAll('.nav-icon');
+  navIcons.forEach(i=>i.classList.remove('sel'));
+  navIcons[icons[key]].classList.add('sel');
+}
+
+const msgs=['好的，产品经理角色在准备了。','评审材料已完成，要看看吗？','今天一切平稳。'];
+let msgIdx=0;
+function addBubble(){
+  const area=document.getElementById('bubbleArea');
+  const d=document.createElement('div');
+  d.className='fb-bubble anim-bubble';
+  d.style.fontSize='12px';
+  d.textContent=msgs[msgIdx%msgs.length];
+  msgIdx++;
+  area.appendChild(d);
+}
+</script>
+</body>
+</html>

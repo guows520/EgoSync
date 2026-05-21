@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EgoSync Component Preview</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Noto+Sans+SC:wght@300;400;500;600&display=swap');
+
+  :root {
+    --bg-base: #F8F9FA; --bg-surface: #FFFFFF; --bg-elevated: #FAFAFA;
+    --text-primary: #1A1A2E; --text-secondary: #6B7280; --text-muted: #9CA3AF;
+    --border: #E5E7EB; --accent: #6366F1; --sidebar-bg: #F1F3F5;
+    --success: #10B981; --info: #3B82F6; --warning: #F59E0B; --error: #EF4444;
+    --energy-high: #10B981; --energy-mid: #F59E0B; --energy-low: #9CA3AF;
+    --role-tint: transparent;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:'Inter','Noto Sans SC',sans-serif; background:#F1F3F5; color:var(--text-primary); }
+
+  .nav {
+    position:fixed; top:0; left:0; right:0; z-index:100;
+    background:white; border-bottom:1px solid var(--border);
+    padding:12px 32px; display:flex; align-items:center; gap:16px;
+    box-shadow:0 1px 4px rgba(0,0,0,0.06);
+  }
+  .nav h1 { font-size:15px; font-weight:600; }
+  .nav-tabs { display:flex; gap:4px; margin-left:16px; }
+  .nav-tab {
+    padding:6px 14px; border-radius:6px; cursor:pointer;
+    font-size:12px; font-weight:500; border:none;
+    background:transparent; color:var(--text-secondary); font-family:inherit;
+  }
+  .nav-tab:hover { background:#F3F4F6; }
+  .nav-tab.active { background:var(--accent); color:white; }
+
+  .container { margin-top:60px; padding:24px; max-width:900px; margin-left:auto; margin-right:auto; }
+  .section { display:none; }
+  .section.active { display:block; }
+  .section-title { font-size:18px; font-weight:600; margin-bottom:6px; }
+  .section-desc { font-size:13px; color:var(--text-secondary); margin-bottom:20px; }
+  .comp-frame {
+    background:var(--bg-base); border:1px solid var(--border);
+    border-radius:12px; padding:32px; margin-bottom:20px;
+    box-shadow:0 2px 8px rgba(0,0,0,0.04);
+  }
+  .comp-label {
+    font-size:11px; font-weight:600; color:var(--text-muted);
+    text-transform:uppercase; letter-spacing:0.5px; margin-bottom:12px;
+  }
+
+  /* ===== 1. ButlerSummary ===== */
+  .butler-summary { text-align:center; max-width:520px; margin:0 auto; }
+  .butler-greeting { font-size:26px; font-weight:300; letter-spacing:-0.5px; margin-bottom:16px; }
+  .butler-text { font-size:15px; line-height:2; color:#4B5563; }
+  .butler-text .role-link {
+    color:var(--accent); font-weight:500; cursor:pointer;
+    text-decoration:underline; text-decoration-style:dotted; text-underline-offset:3px;
+  }
+  .butler-empty { font-size:15px; color:var(--text-muted); font-style:italic; }
+
+  /* ===== 2. ActionCard ===== */
+  .action-cards { display:flex; flex-direction:column; gap:12px; max-width:440px; margin:0 auto; }
+  .action-card {
+    background:var(--bg-surface); border:1px solid var(--border);
+    border-radius:10px; padding:16px 20px;
+    display:flex; justify-content:space-between; align-items:center;
+    box-shadow:0 1px 4px rgba(0,0,0,0.03); transition:all 0.2s; cursor:pointer;
+  }
+  .action-card:hover { box-shadow:0 4px 12px rgba(0,0,0,0.06); transform:translateY(-1px); }
+  .action-card.done { opacity:0.5; }
+  .ac-title { font-size:14px; font-weight:500; margin-bottom:3px; }
+  .ac-meta { font-size:11px; color:var(--text-muted); }
+  .ac-btns { display:flex; gap:6px; }
+  .ac-btn {
+    padding:6px 16px; border-radius:6px; border:none;
+    font-size:12px; font-weight:500; cursor:pointer; font-family:inherit;
+  }
+  .ac-btn.primary { background:var(--accent); color:white; }
+  .ac-btn.ghost { background:transparent; border:1px solid var(--border); color:var(--text-muted); }
+
+  /* ===== 3. RoleSidebarIcon ===== */
+  .sidebar-demo { display:flex; gap:24px; align-items:flex-start; justify-content:center; flex-wrap:wrap; }
+  .sidebar-col { display:flex; flex-direction:column; align-items:center; gap:8px; }
+  .sidebar-col-label { font-size:10px; color:var(--text-muted); text-align:center; }
+  .side-icon {
+    width:40px; height:40px; border-radius:10px;
+    display:flex; align-items:center; justify-content:center;
+    font-size:18px; position:relative; transition:all 0.2s; cursor:pointer;
+  }
+  .side-icon:hover { background:#E5E7EB; }
+  .side-icon.active { background:var(--accent); color:white; box-shadow:0 2px 8px rgba(99,102,241,0.3); }
+  .side-icon .dot {
+    position:absolute; top:3px; right:3px;
+    width:7px; height:7px; border-radius:50%;
+    border:2px solid var(--bg-base);
+  }
+  .dot-green { background:var(--success); }
+  .dot-blue { background:var(--info); }
+  @keyframes breathe { 0%,100%{opacity:0.65;transform:scale(1)} 50%{opacity:1;transform:scale(1.04)} }
+  .breathing { animation:breathe 3s ease-in-out infinite; }
+  .dim { opacity:0.4; }
+
+  /* ===== 4. ChatStream ===== */
+  .chat-stream { display:flex; flex-direction:column; gap:14px; max-width:520px; }
+  .bubble { padding:12px 16px; border-radius:12px; font-size:14px; line-height:1.7; max-width:420px; }
+  .bubble .sender { font-size:11px; font-weight:500; color:var(--text-muted); margin-bottom:4px; display:block; }
+  .bubble.butler { background:var(--bg-surface); border:1px solid var(--border); align-self:flex-start; }
+  .bubble.role { background:#F0EDFF; border:1px solid #E0DAFA; align-self:flex-start; }
+  .bubble.user { background:var(--accent); color:white; align-self:flex-end; border:none; }
+  .bubble.user .sender { color:rgba(255,255,255,0.7); }
+  .bubble.streaming .text::after {
+    content:'▊'; animation:blink 0.8s infinite; color:var(--accent);
+  }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+
+  /* ===== 5. ChatInput ===== */
+  .chat-input-demo { max-width:520px; margin:0 auto; }
+  .chat-input-wrap {
+    background:#F3F4F6; border:1px solid var(--border);
+    border-radius:24px; padding:12px 20px;
+    display:flex; align-items:center; gap:12px;
+    transition:border-color 0.2s;
+  }
+  .chat-input-wrap:focus-within { border-color:var(--accent); }
+  .chat-input-wrap input {
+    flex:1; border:none; background:transparent;
+    font-size:14px; color:var(--text-primary); outline:none; font-family:inherit;
+  }
+  .chat-input-wrap input::placeholder { color:var(--text-muted); }
+  .send-btn {
+    width:32px; height:32px; border-radius:50%;
+    background:var(--accent); color:white; border:none;
+    cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:14px;
+  }
+
+  /* ===== 6. ArbitrationDialog ===== */
+  .arb-dialog {
+    background:var(--bg-surface); border:1px solid var(--border);
+    border-radius:10px; max-width:560px; margin:0 auto;
+    box-shadow:0 8px 24px rgba(0,0,0,0.08); overflow:hidden;
+  }
+  .arb-header {
+    padding:16px 20px; border-bottom:1px solid var(--border);
+    font-size:14px; font-weight:600; display:flex; align-items:center; gap:8px;
+  }
+  .arb-steps { display:flex; padding:12px 20px; gap:8px; border-bottom:1px solid var(--border); }
+  .arb-step {
+    padding:4px 12px; border-radius:4px; font-size:11px; font-weight:500;
+    background:#F3F4F6; color:var(--text-muted);
+  }
+  .arb-step.active { background:var(--accent); color:white; }
+  .arb-step.done { background:var(--success); color:white; }
+  .arb-body { padding:20px; }
+  .arb-compare { display:flex; gap:16px; }
+  .arb-side {
+    flex:1; background:#FAFAFA; border:1px solid var(--border);
+    border-radius:8px; padding:14px;
+  }
+  .arb-side-title { font-size:12px; font-weight:600; margin-bottom:6px; display:flex; align-items:center; gap:6px; }
+  .arb-side-text { font-size:13px; line-height:1.6; color:#4B5563; }
+  .arb-footer { padding:16px 20px; border-top:1px solid var(--border); display:flex; justify-content:flex-end; gap:8px; }
+
+  /* ===== 7. WeeklyReview ===== */
+  .review { max-width:560px; margin:0 auto; text-align:center; }
+  .review-title { font-size:20px; font-weight:600; margin-bottom:8px; }
+  .review-narrative { font-size:14px; line-height:1.8; color:#4B5563; margin-bottom:24px; text-align:left; }
+  .review-chart {
+    background:var(--bg-surface); border:1px solid var(--border);
+    border-radius:10px; padding:20px; margin-bottom:20px; text-align:left;
+  }
+  .review-chart-title { font-size:12px; font-weight:600; color:var(--text-muted); margin-bottom:12px; }
+  .chart-bars { display:flex; gap:12px; align-items:flex-end; height:80px; }
+  .chart-bar { flex:1; border-radius:4px 4px 0 0; min-width:40px; position:relative; transition:height 0.5s; }
+  .chart-bar-label { position:absolute; bottom:-20px; left:50%; transform:translateX(-50%); font-size:10px; color:var(--text-muted); white-space:nowrap; }
+  .review-stones { text-align:left; margin-bottom:20px; }
+  .review-stones-title { font-size:12px; font-weight:600; color:var(--text-muted); margin-bottom:8px; }
+  .stone { display:flex; align-items:center; gap:8px; padding:6px 0; font-size:13px; }
+  .stone-done { color:var(--success); }
+  .stone-cont { color:var(--warning); }
+
+  /* ===== 8. EnergyIndicator ===== */
+  .energy-demo { display:flex; gap:32px; align-items:center; justify-content:center; flex-wrap:wrap; }
+  .energy-item { display:flex; flex-direction:column; align-items:center; gap:8px; }
+  .energy-bar-wrap { width:120px; height:6px; border-radius:3px; background:var(--border); overflow:hidden; }
+  .energy-fill { height:100%; border-radius:3px; transition:width 0.5s; }
+  .energy-label { font-size:11px; color:var(--text-muted); }
+  .energy-dot { width:8px; height:8px; border-radius:50%; }
+
+  /* ===== 9. RoleHeader ===== */
+  .role-header-demo {
+    display:flex; align-items:center; gap:16px;
+    padding:20px; background:rgba(79,70,229,0.03);
+    border-radius:10px; border:1px solid rgba(79,70,229,0.1);
+  }
+  .rh-icon {
+    width:52px; height:52px; border-radius:14px;
+    background:#4F46E5; color:white;
+    display:flex; align-items:center; justify-content:center; font-size:26px;
+  }
+  .rh-info h2 { font-size:18px; font-weight:600; margin-bottom:2px; }
+  .rh-info .rh-desc { font-size:12px; color:var(--text-secondary); margin-bottom:6px; }
+</style>
+</head>
+<body>
+
+<div class="nav">
+  <h1>EgoSync 组件预览</h1>
+  <div class="nav-tabs">
+    <button class="nav-tab active" onclick="show('s1')">ButlerSummary</button>
+    <button class="nav-tab" onclick="show('s2')">ActionCard</button>
+    <button class="nav-tab" onclick="show('s3')">SidebarIcon</button>
+    <button class="nav-tab" onclick="show('s4')">ChatStream</button>
+    <button class="nav-tab" onclick="show('s5')">ChatInput</button>
+    <button class="nav-tab" onclick="show('s6')">Arbitration</button>
+    <button class="nav-tab" onclick="show('s7')">WeeklyReview</button>
+    <button class="nav-tab" onclick="show('s8')">Energy</button>
+    <button class="nav-tab" onclick="show('s9')">RoleHeader</button>
+  </div>
+</div>
+
+<div class="container">
+
+  <!-- 1. ButlerSummary -->
+  <div class="section active" id="s1">
+    <div class="section-title">ButlerSummary · 管家摘要</div>
+    <div class="section-desc">管家视角首屏核心，居中展示今日摘要。角色名可点击。</div>
+    <div class="comp-frame">
+      <div class="comp-label">正常状态</div>
+      <div class="butler-summary">
+        <div class="butler-greeting">早上好，boss</div>
+        <div class="butler-text">
+          今天最重要的一件事是下午3点的产品评审。<span class="role-link">产品经理角色</span>已经准备好了演示文稿摘要，你可以点进去查看。另外，<span class="role-link">家庭角色</span>想跟你聊一下周末的活动安排。
+        </div>
+      </div>
+    </div>
+    <div class="comp-frame">
+      <div class="comp-label">空状态 · 一切平稳</div>
+      <div class="butler-summary">
+        <div class="butler-greeting">下午好，boss</div>
+        <div class="butler-empty">今天一切平稳，各个角色都在正常推进各自目标。需要我做什么随时说。</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2. ActionCard -->
+  <div class="section" id="s2">
+    <div class="section-title">ActionCard · 操作卡片</div>
+    <div class="section-desc">管家视角的待处理事项。支持单操作和双操作变体。</div>
+    <div class="comp-frame">
+      <div class="action-cards">
+        <div class="comp-label">待处理</div>
+        <div class="action-card">
+          <div><div class="ac-title">📋 产品评审准备就绪</div><div class="ac-meta">产品经理 · 2分钟前完成</div></div>
+          <div class="ac-btns"><button class="ac-btn primary">查看</button></div>
+        </div>
+        <div class="action-card">
+          <div><div class="ac-title">💬 周末活动建议</div><div class="ac-meta">家庭 · 希望跟你确认</div></div>
+          <div class="ac-btns"><button class="ac-btn primary">聊聊</button><button class="ac-btn ghost">稍后</button></div>
+        </div>
+        <div class="comp-label" style="margin-top:16px">已处理</div>
+        <div class="action-card done">
+          <div><div class="ac-title">✅ 竞品分析已查看</div><div class="ac-meta">产品经理 · 10分钟前</div></div>
+          <div class="ac-btns"><button class="ac-btn ghost">已完成</button></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3. RoleSidebarIcon -->
+  <div class="section" id="s3">
+    <div class="section-title">RoleSidebarIcon · 角色侧边栏图标</div>
+    <div class="section-desc">56px侧边栏内的角色存在感。呼吸动效、状态点、暗淡等状态。</div>
+    <div class="comp-frame">
+      <div class="sidebar-demo">
+        <div class="sidebar-col">
+          <div class="side-icon active">🏠</div>
+          <div class="sidebar-col-label">选中<br/>(管家)</div>
+        </div>
+        <div class="sidebar-col">
+          <div class="side-icon breathing">💼<span class="dot dot-green"></span></div>
+          <div class="sidebar-col-label">呼吸+绿点<br/>(有就绪内容)</div>
+        </div>
+        <div class="sidebar-col">
+          <div class="side-icon breathing">🏡<span class="dot dot-blue"></span></div>
+          <div class="sidebar-col-label">呼吸+蓝点<br/>(想对话)</div>
+        </div>
+        <div class="sidebar-col">
+          <div class="side-icon breathing">📚</div>
+          <div class="sidebar-col-label">正常呼吸<br/>(无通知)</div>
+        </div>
+        <div class="sidebar-col">
+          <div class="side-icon dim">🏃</div>
+          <div class="sidebar-col-label">暗淡<br/>(低能量)</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4. ChatStream -->
+  <div class="section" id="s4">
+    <div class="section-title">ChatStream · 流式对话组件</div>
+    <div class="section-desc">管家/角色/用户三种气泡样式。支持流式输出和Markdown渲染。</div>
+    <div class="comp-frame">
+      <div class="chat-stream">
+        <div class="bubble butler">
+          <span class="sender">管家</span>
+          boss，明天的产品评审对吧？我让产品经理角色去准备核心功能对比和数据摘要。
+        </div>
+        <div class="bubble user">
+          <span class="sender">boss</span>
+          好的，再加上竞品定价策略分析
+        </div>
+        <div class="bubble butler">
+          <span class="sender">管家</span>
+          收到，已经补充了定价策略的要求。产品经理角色在准备了，完成后我告诉你。
+        </div>
+        <div class="bubble role">
+          <span class="sender">产品经理</span>
+          boss，上次我们聊到竞品分析的事情，材料已经准备好了。这次参考了三个竞品的核心功能对比，包括定价策略和用户增长数据。
+        </div>
+        <div class="comp-label" style="margin-top:16px">流式输出中</div>
+        <div class="bubble butler streaming">
+          <span class="sender">管家</span>
+          <span class="text">产品经理已经完成了会议材料准备，包含三份竞品分析</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 5. ChatInput -->
+  <div class="section" id="s5">
+    <div class="section-title">ChatInput · 对话输入区</div>
+    <div class="section-desc">底部固定，圆角24px，placeholder随视角变化。</div>
+    <div class="comp-frame">
+      <div class="comp-label">管家视角</div>
+      <div class="chat-input-demo" style="margin-bottom:20px">
+        <div class="chat-input-wrap">
+          <input type="text" placeholder="跟管家说点什么……">
+          <button class="send-btn">↑</button>
+        </div>
+      </div>
+      <div class="comp-label">角色视角 (产品经理)</div>
+      <div class="chat-input-demo">
+        <div class="chat-input-wrap" style="border-color:rgba(79,70,229,0.3)">
+          <input type="text" placeholder="跟产品经理说点什么……">
+          <button class="send-btn" style="background:#4F46E5">↑</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 6. ArbitrationDialog -->
+  <div class="section" id="s6">
+    <div class="section-title">ArbitrationDialog · 冲突仲裁对话框</div>
+    <div class="section-desc">三步渐进式仲裁。结构化呈现 → 管家分析 → 用户决定。</div>
+    <div class="comp-frame">
+      <div class="arb-dialog">
+        <div class="arb-header">⚖️ 时间冲突仲裁</div>
+        <div class="arb-steps">
+          <span class="arb-step done">✓ 诉求呈现</span>
+          <span class="arb-step active">方案建议</span>
+          <span class="arb-step">你来决定</span>
+        </div>
+        <div class="arb-body">
+          <div class="arb-compare">
+            <div class="arb-side">
+              <div class="arb-side-title">💼 产品经理</div>
+              <div class="arb-side-text">下午3点需要进行产品评审，预计1.5小时。已准备好演示材料。</div>
+            </div>
+            <div class="arb-side">
+              <div class="arb-side-title">🏡 家庭</div>
+              <div class="arb-side-text">下午3点半需要去学校接孩子，车程约20分钟。</div>
+            </div>
+          </div>
+          <div style="margin-top:16px; padding:14px; background:#F0EDFF; border-radius:8px; font-size:13px; line-height:1.7; color:#4B5563;">
+            💡 <strong>管家建议</strong>：如果把评审提前到2点开始，3点半结束后刚好可以出发去接孩子。我已经确认会议室2点有空。
+          </div>
+        </div>
+        <div class="arb-footer">
+          <button class="ac-btn ghost">延后决定</button>
+          <button class="ac-btn ghost">自定义方案</button>
+          <button class="ac-btn primary">采纳建议</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 7. WeeklyReview -->
+  <div class="section" id="s7">
+    <div class="section-title">WeeklyReview · 周复盘组件</div>
+    <div class="section-desc">正向叙事 + 趋势图 + 大石头完成情况。</div>
+    <div class="comp-frame">
+      <div class="review">
+        <div class="review-title">本周回顾 · 5月12日-18日</div>
+        <div class="review-narrative">
+          这周你在3个维度都有进展。产品经理角色完成了竞品分析和两次评审准备，效率很高。家庭角色帮你安排了周末科技馆活动，孩子们很开心。学习者角色稳步推进《系统思考》的阅读，已经到了第四章。健身教练角色这周比较安静，但不急，下周可以重新启动。
+        </div>
+        <div class="review-chart">
+          <div class="review-chart-title">各角色能量变化趋势</div>
+          <div class="chart-bars">
+            <div class="chart-bar" style="height:85%;background:var(--energy-high)"><span class="chart-bar-label">💼 85%</span></div>
+            <div class="chart-bar" style="height:60%;background:var(--energy-mid)"><span class="chart-bar-label">🏡 60%</span></div>
+            <div class="chart-bar" style="height:70%;background:var(--energy-mid)"><span class="chart-bar-label">📚 70%</span></div>
+            <div class="chart-bar" style="height:30%;background:var(--energy-low)"><span class="chart-bar-label">🏃 30%</span></div>
+          </div>
+        </div>
+        <div class="review-stones">
+          <div class="review-stones-title">本周大石头</div>
+          <div class="stone"><span class="stone-done">✓</span> 竞品分析报告完成</div>
+          <div class="stone"><span class="stone-done">✓</span> 周末家庭活动安排</div>
+          <div class="stone"><span class="stone-cont">→</span> 《系统思考》阅读（继续推进）</div>
+          <div class="stone"><span class="stone-cont">→</span> 本周运动计划（下周重启）</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 8. EnergyIndicator -->
+  <div class="section" id="s8">
+    <div class="section-title">EnergyIndicator · 能量指示器</div>
+    <div class="section-desc">标准（进度条）和小型（仅小点）两种变体。</div>
+    <div class="comp-frame">
+      <div class="comp-label">标准变体（角色Header用）</div>
+      <div class="energy-demo" style="margin-bottom:24px">
+        <div class="energy-item">
+          <div class="energy-bar-wrap"><div class="energy-fill" style="width:85%;background:var(--energy-high)"></div></div>
+          <div class="energy-label">高能量 85%</div>
+        </div>
+        <div class="energy-item">
+          <div class="energy-bar-wrap"><div class="energy-fill" style="width:55%;background:var(--energy-mid)"></div></div>
+          <div class="energy-label">中能量 55%</div>
+        </div>
+        <div class="energy-item">
+          <div class="energy-bar-wrap"><div class="energy-fill" style="width:25%;background:var(--energy-low)"></div></div>
+          <div class="energy-label">低能量 25%</div>
+        </div>
+      </div>
+      <div class="comp-label">小型变体（侧边栏用）</div>
+      <div class="energy-demo">
+        <div class="energy-item">
+          <div class="energy-dot" style="background:var(--energy-high)"></div>
+          <div class="energy-label">高</div>
+        </div>
+        <div class="energy-item">
+          <div class="energy-dot" style="background:var(--energy-mid)"></div>
+          <div class="energy-label">中</div>
+        </div>
+        <div class="energy-item">
+          <div class="energy-dot" style="background:var(--energy-low)"></div>
+          <div class="energy-label">低</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 9. RoleHeader -->
+  <div class="section" id="s9">
+    <div class="section-title">RoleHeader · 角色视图头部</div>
+    <div class="section-desc">进入角色后的顶部区域，带色温tint背景。</div>
+    <div class="comp-frame">
+      <div class="role-header-demo" style="background:rgba(79,70,229,0.04); border-color:rgba(79,70,229,0.1);">
+        <div class="rh-icon" style="background:#4F46E5">💼</div>
+        <div class="rh-info">
+          <h2>产品经理</h2>
+          <div class="rh-desc">负责产品规划、竞品分析和评审准备</div>
+          <div class="energy-bar-wrap"><div class="energy-fill" style="width:85%;background:var(--energy-high)"></div></div>
+        </div>
+      </div>
+      <div style="height:16px"></div>
+      <div class="role-header-demo" style="background:rgba(217,119,6,0.04); border-color:rgba(217,119,6,0.1);">
+        <div class="rh-icon" style="background:#D97706">🏡</div>
+        <div class="rh-info">
+          <h2>家庭</h2>
+          <div class="rh-desc">负责家庭活动安排、亲子时间和生活品质</div>
+          <div class="energy-bar-wrap"><div class="energy-fill" style="width:60%;background:var(--energy-mid)"></div></div>
+        </div>
+      </div>
+      <div style="height:16px"></div>
+      <div class="role-header-demo" style="background:rgba(5,150,105,0.04); border-color:rgba(5,150,105,0.1);">
+        <div class="rh-icon" style="background:#059669">🏃</div>
+        <div class="rh-info">
+          <h2>健身教练</h2>
+          <div class="rh-desc">负责运动计划、健康目标和体能管理</div>
+          <div class="energy-bar-wrap"><div class="energy-fill" style="width:25%;background:var(--energy-low)"></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+function show(id) {
+  document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  const tabs = document.querySelectorAll('.nav-tab');
+  const idx = parseInt(id.replace('s','')) - 1;
+  if (tabs[idx]) tabs[idx].classList.add('active');
+}
+</script>
+</body>
+</html>

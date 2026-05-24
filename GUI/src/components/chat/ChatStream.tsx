@@ -19,7 +19,9 @@ export function ChatStream({ role }: ChatStreamProps) {
   const [conversation, setConversation] = useState<Conversation | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
-  const [streamContent, setStreamContent] = useState('');
+  // Story 2.3 P1b: 流式期间可能产生多个气泡（管家委派两段式：先「稍等，我让 X 看一下」，
+  // 后「来自 X 的反馈…」）。按后端 messageId 分桶，messageId 缺省（普通单段）落到 id=null 桶。
+  const [streamBubbles, setStreamBubbles] = useState<{ id: string | null; content: string }[]>([]);
   const [thinkingContent, setThinkingContent] = useState('');
   const [isThinking, setIsThinking] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -36,7 +38,7 @@ export function ChatStream({ role }: ChatStreamProps) {
   const switchToConversation = useCallback(async (conv: Conversation) => {
     setConversation(conv);
     setMessages([]);
-    setStreamContent('');
+    setStreamBubbles([]);
     setThinkingContent('');
     setIsThinking(false);
     try {
@@ -52,7 +54,7 @@ export function ChatStream({ role }: ChatStreamProps) {
       // 切换 role/butler 时立即清空当前消息，避免上一会话的内容短暂泄漏到新视图
       setConversation(null);
       setMessages([]);
-      setStreamContent('');
+      setStreamBubbles([]);
       setThinkingContent('');
       setIsThinking(false);
       try {
@@ -74,15 +76,20 @@ export function ChatStream({ role }: ChatStreamProps) {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages, streamContent, thinkingContent]);
+  }, [messages, streamBubbles, thinkingContent]);
 
   const handleStreamEvent = useCallback((payload: StreamPayload) => {
     if (conversation && payload.conversationId !== conversation.id) return;
 
+    const bucketKey = payload.messageId ?? null;
+
     if (payload.done) {
+      // 委派路径下 done 会发两次：第一段（带 assistant_message_id）与最终段（带 followup_id）。
+      // 简化处理：任意一次 done 都清空所有流桶并从 DB 重拉历史；DB 是两条独立消息，UI 自然显示两条气泡。
+      // 这避免了在前端维护"哪段已结束"的状态。
       setIsStreaming(false);
       setIsThinking(false);
-      setStreamContent('');
+      setStreamBubbles([]);
       setThinkingContent('');
       if (conversation) {
         chatService.getHistory(conversation.id).then(setMessages).catch(console.error);
@@ -92,7 +99,16 @@ export function ChatStream({ role }: ChatStreamProps) {
       setThinkingContent(prev => prev + payload.token);
     } else {
       if (isThinking) setIsThinking(false);
-      setStreamContent(prev => prev + payload.token);
+      setStreamBubbles(prev => {
+        const idx = prev.findIndex(b => b.id === bucketKey);
+        if (idx === -1) {
+          // 新气泡（包括 messageId=null 默认桶第一次出现、或后端发空 token 唤醒第二个气泡）
+          return [...prev, { id: bucketKey, content: payload.token }];
+        }
+        const next = prev.slice();
+        next[idx] = { ...next[idx], content: next[idx].content + payload.token };
+        return next;
+      });
     }
   }, [conversation, isThinking]);
 
@@ -130,7 +146,7 @@ export function ChatStream({ role }: ChatStreamProps) {
       const newConv = await chatService.newConversation(conversation?.id, roleId ?? undefined);
       setConversation(newConv);
       setMessages([]);
-      setStreamContent('');
+      setStreamBubbles([]);
       setThinkingContent('');
       setIsThinking(false);
       await loadConversations();
@@ -152,7 +168,7 @@ export function ChatStream({ role }: ChatStreamProps) {
     if (!conversation) return;
 
     setIsStreaming(true);
-    setStreamContent('');
+    setStreamBubbles([]);
     setThinkingContent('');
     setIsThinking(false);
 
@@ -180,18 +196,33 @@ export function ChatStream({ role }: ChatStreamProps) {
   const assistantIcon = role ? getRoleIconComponent(role.icon) : undefined;
   const assistantColor = role ? normalizeColorHex(role.color) : undefined;
 
-  const streamingMessage: ChatMessage | null = isStreaming
-    ? {
-        id: '__streaming__',
+  // Story 2.3 P1b: 流式期间渲染所有活跃气泡。空 content + isStreaming 时 ChatBubble 自动显示弹跳点。
+  // thinking 仅挂在首个气泡上（与改动前单气泡时同等语义），避免在每段都重复 thinking 标签。
+  const streamingMessages: ChatMessage[] = isStreaming
+    ? streamBubbles.map((b, idx) => ({
+        id: `__streaming__${b.id ?? 'default'}__${idx}`,
         conversationId: conversation?.id ?? '',
         role: 'assistant',
-        content: streamContent,
+        content: b.content,
         thinkingContent: '',
         isComplete: false,
         createdAt: new Date().toISOString(),
         routingMetadata: null,
-      }
-    : null;
+      }))
+    : [];
+  // 边界情况：isStreaming=true 但还没收到任何 token（首气泡尚未建立）也要显示弹跳点占位。
+  if (isStreaming && streamingMessages.length === 0) {
+    streamingMessages.push({
+      id: '__streaming__pending__',
+      conversationId: conversation?.id ?? '',
+      role: 'assistant',
+      content: '',
+      thinkingContent: '',
+      isComplete: false,
+      createdAt: new Date().toISOString(),
+      routingMetadata: null,
+    });
+  }
 
   return (
     <div className="flex flex-col h-full">
@@ -215,17 +246,18 @@ export function ChatStream({ role }: ChatStreamProps) {
                 assistantColor={assistantColor}
               />
             ))}
-          {streamingMessage && (
+          {streamingMessages.map((m, idx) => (
             <ChatBubble
-              message={streamingMessage}
+              key={m.id}
+              message={m}
               isStreaming
-              streamingThinking={thinkingContent || undefined}
-              isThinkingPhase={isThinking}
+              streamingThinking={idx === 0 && thinkingContent ? thinkingContent : undefined}
+              isThinkingPhase={idx === 0 && isThinking}
               assistantName={role?.name}
               assistantIcon={assistantIcon}
               assistantColor={assistantColor}
             />
-          )}
+          ))}
         </div>
       </div>
 

@@ -703,6 +703,40 @@ pub async fn run_stream(
 
                 // Handle tool calls if any
                 if !tool_calls_received.is_empty() {
+                    // Story 2.3 P1b: 先冻结第一段（管家「稍等，我让 X 看一下」）—
+                    // 否则 follow-up 累加进同一变量会让两段在同一气泡里拼接显示。
+                    let first_bubble_text = accumulated.clone();
+                    conversations::update_message_content(
+                        &conv_pool,
+                        &assistant_message_id,
+                        &first_bubble_text,
+                    )
+                    .await
+                    .ok();
+                    if !accumulated_thinking.is_empty() {
+                        conversations::update_message_thinking(
+                            &conv_pool,
+                            &assistant_message_id,
+                            &accumulated_thinking,
+                        )
+                        .await
+                        .ok();
+                    }
+                    conversations::mark_message_complete(&conv_pool, &assistant_message_id)
+                        .await
+                        .ok();
+                    // 通知前端第一气泡 done（仍带其 message_id，便于前端定型这桶）。
+                    let _ = app_handle.emit(
+                        "llm:stream",
+                        StreamPayload {
+                            conversation_id: conversation_id.clone(),
+                            token: String::new(),
+                            done: true,
+                            thinking: false,
+                            message_id: Some(assistant_message_id.clone()),
+                        },
+                    );
+
                     let tool_results = execute_tool_calls(
                         &app_handle,
                         &main_pool,
@@ -718,7 +752,7 @@ pub async fn run_stream(
                     // Add the assistant message with tool_calls
                     followup_messages.push(ChatCompletionMessage {
                         role: "assistant".to_string(),
-                        content: accumulated.clone(),
+                        content: first_bubble_text,
                         tool_calls: Some(tool_calls_received.clone()),
                         tool_call_id: None,
                     });
@@ -731,6 +765,34 @@ pub async fn run_stream(
                             tool_call_id: Some(tc.id.clone()),
                         });
                     }
+
+                    // 第二段独立消息：先建 DB 占位，再唤醒前端第二气泡（空 token + 该 id）。
+                    let followup_msg = match conversations::insert_message(
+                        &conv_pool,
+                        &conversation_id,
+                        "assistant",
+                        "",
+                        false,
+                    )
+                    .await
+                    {
+                        Ok(m) => m,
+                        Err(e) => {
+                            tracing::error!("[delegate] 创建 follow-up 消息失败: {}", e);
+                            break;
+                        }
+                    };
+                    let followup_id = followup_msg.id.clone();
+                    let _ = app_handle.emit(
+                        "llm:stream",
+                        StreamPayload {
+                            conversation_id: conversation_id.clone(),
+                            token: String::new(),
+                            done: false,
+                            thinking: false,
+                            message_id: Some(followup_id.clone()),
+                        },
+                    );
 
                     // Stream the follow-up response (LLM will generate text after seeing tool results)
                     let (tx2, mut rx2) = mpsc::channel::<StreamEvent>(128);
@@ -754,11 +816,12 @@ pub async fn run_stream(
                         }
                     });
 
-                    // Stream the follow-up tokens
+                    // Stream follow-up tokens into the second bubble
+                    let mut followup_accumulated = String::new();
                     while let Some(event2) = rx2.recv().await {
                         match event2 {
                             StreamEvent::Token(token) => {
-                                accumulated.push_str(&token);
+                                followup_accumulated.push_str(&token);
                                 let _ = app_handle.emit(
                                     "llm:stream",
                                     StreamPayload {
@@ -766,7 +829,7 @@ pub async fn run_stream(
                                         token,
                                         done: false,
                                         thinking: false,
-                                        message_id: None,
+                                        message_id: Some(followup_id.clone()),
                                     },
                                 );
                             }
@@ -778,6 +841,29 @@ pub async fn run_stream(
                             _ => {}
                         }
                     }
+
+                    // 落库第二段 + 通知 done（带 followup id 让前端定型这桶并触发历史回拉）。
+                    conversations::update_message_content(
+                        &conv_pool,
+                        &followup_id,
+                        &followup_accumulated,
+                    )
+                    .await
+                    .ok();
+                    conversations::mark_message_complete(&conv_pool, &followup_id)
+                        .await
+                        .ok();
+                    let _ = app_handle.emit(
+                        "llm:stream",
+                        StreamPayload {
+                            conversation_id: conversation_id.clone(),
+                            token: String::new(),
+                            done: true,
+                            thinking: false,
+                            message_id: Some(followup_id),
+                        },
+                    );
+                    break;
                 } else if onboarding_step.is_some() && looks_like_fake_role_creation(&accumulated) {
                     // ========== 方案 A 兜底：模型伪装了"角色创建成功"但实际没发 tool_calls ==========
                     tracing::warn!(

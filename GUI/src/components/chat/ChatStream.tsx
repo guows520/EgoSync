@@ -84,21 +84,29 @@ export function ChatStream({ role }: ChatStreamProps) {
     const bucketKey = payload.messageId ?? null;
 
     if (payload.done) {
-      // 委派路径下 done 会发两次：第一段（带 assistant_message_id）与最终段（带 followup_id）。
-      // 简化处理：任意一次 done 都清空所有流桶并从 DB 重拉历史；DB 是两条独立消息，UI 自然显示两条气泡。
-      // 这避免了在前端维护"哪段已结束"的状态。
-      setIsStreaming(false);
+      // 委派路径下 done 会发两次：第一段（带 messageId）与最终段（带 followup messageId）。
+      // 中间 done（有 messageId 且桶里仍有其他活跃气泡）仅刷新历史，不结束 streaming——
+      // 否则后续 follow-up token 因 isStreaming=false 而不渲染。
       setIsThinking(false);
-      setStreamBubbles([]);
       setThinkingContent('');
       if (conversation) {
         chatService.getHistory(conversation.id).then(setMessages).catch(console.error);
       }
+      // 移除已完成的气泡桶 + 无 messageId 的 null 桶（初始流式阶段，done 到达即已入库）。
+      // 所有桶清空后才真正结束 streaming，保证 follow-up 气泡仍可渲染。
+      setStreamBubbles(prev => {
+        const remaining = prev.filter(b => b.id !== bucketKey && b.id !== null);
+        if (remaining.length === 0) {
+          setIsStreaming(false);
+        }
+        return remaining;
+      });
     } else if (payload.thinking) {
       setIsThinking(true);
       setThinkingContent(prev => prev + payload.token);
     } else {
       if (isThinking) setIsThinking(false);
+      setIsStreaming(true);
       setStreamBubbles(prev => {
         const idx = prev.findIndex(b => b.id === bucketKey);
         if (idx === -1) {
@@ -236,7 +244,7 @@ export function ChatStream({ role }: ChatStreamProps) {
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-8 scroll-smooth">
         <div className="mx-auto max-w-3xl space-y-3">
           {messages
-            .filter(m => m.role !== 'system')
+            .filter(m => m.role !== 'system' && (m.isComplete || m.content))
             .map(msg => (
               <ChatBubble
                 key={msg.id}

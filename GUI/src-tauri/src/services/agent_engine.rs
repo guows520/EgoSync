@@ -130,7 +130,7 @@ pub async fn build_butler_messages(
         // 行为指南只在有可委派角色时才有意义；零角色时不要诱导 LLM 调用工具。
         system_prompt.push_str(
             "\n\n[行为指南]\n\
-            - 当用户的需求清晰指向某个角色时：先用一句话告诉用户你要委派给谁（如『稍等，我让产品经理看一下』），再调用 delegate_to_role 工具。\n\
+            - 当用户的需求清晰指向某个角色时：先用一句话告诉用户你要委派给谁（如『稍等，我让产品经理看一下』），然后**必须**在同一轮回复中调用 delegate_to_role 工具。绝不可以只在文字中描述委派意图而不实际调用工具。\n\
             - 用户一句话同时涉及多个角色时：可以在同一轮内调用多个 delegate_to_role（并行委派）。\n\
             - 意图模糊或没有合适角色时：不要调用工具，用一句话主动追问用户希望由谁来处理。\n\
             - 收到角色回复（tool result）后：用自己的话向用户转述结果，必要时显式说明这是来自哪个角色的反馈。"
@@ -737,6 +737,35 @@ pub async fn run_stream(
                         },
                     );
 
+                    // 第二段独立消息：先建 DB 占位 + 唤醒前端弹跳点，再执行耗时的委派调用。
+                    // 这样用户在委派期间就能看到等待提示，而不是干等十几秒。
+                    let followup_msg = match conversations::insert_message(
+                        &conv_pool,
+                        &conversation_id,
+                        "assistant",
+                        "",
+                        false,
+                    )
+                    .await
+                    {
+                        Ok(m) => m,
+                        Err(e) => {
+                            tracing::error!("[delegate] 创建 follow-up 消息失败: {}", e);
+                            break;
+                        }
+                    };
+                    let followup_id = followup_msg.id.clone();
+                    let _ = app_handle.emit(
+                        "llm:stream",
+                        StreamPayload {
+                            conversation_id: conversation_id.clone(),
+                            token: String::new(),
+                            done: false,
+                            thinking: false,
+                            message_id: Some(followup_id.clone()),
+                        },
+                    );
+
                     let tool_results = execute_tool_calls(
                         &app_handle,
                         &main_pool,
@@ -765,34 +794,6 @@ pub async fn run_stream(
                             tool_call_id: Some(tc.id.clone()),
                         });
                     }
-
-                    // 第二段独立消息：先建 DB 占位，再唤醒前端第二气泡（空 token + 该 id）。
-                    let followup_msg = match conversations::insert_message(
-                        &conv_pool,
-                        &conversation_id,
-                        "assistant",
-                        "",
-                        false,
-                    )
-                    .await
-                    {
-                        Ok(m) => m,
-                        Err(e) => {
-                            tracing::error!("[delegate] 创建 follow-up 消息失败: {}", e);
-                            break;
-                        }
-                    };
-                    let followup_id = followup_msg.id.clone();
-                    let _ = app_handle.emit(
-                        "llm:stream",
-                        StreamPayload {
-                            conversation_id: conversation_id.clone(),
-                            token: String::new(),
-                            done: false,
-                            thinking: false,
-                            message_id: Some(followup_id.clone()),
-                        },
-                    );
 
                     // Stream the follow-up response (LLM will generate text after seeing tool results)
                     let (tx2, mut rx2) = mpsc::channel::<StreamEvent>(128);

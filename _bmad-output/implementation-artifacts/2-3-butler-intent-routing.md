@@ -1,6 +1,6 @@
 # Story 2.3: 管家把任务委派给对应角色，再把结果转述给用户
 
-Status: review
+Status: done
 
 ## Story
 

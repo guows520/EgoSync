@@ -591,6 +591,7 @@ pub async fn run_stream(
                             token: batch,
                             done: false,
                             thinking: true,
+                            message_id: None,
                         },
                     );
                     last_emit = Instant::now();
@@ -604,6 +605,7 @@ pub async fn run_stream(
                             token: batch,
                             done: false,
                             thinking: false,
+                            message_id: None,
                         },
                     );
                     last_emit = Instant::now();
@@ -630,6 +632,7 @@ pub async fn run_stream(
                             token: batch,
                             done: false,
                             thinking: true,
+                            message_id: None,
                         },
                     );
                     last_emit = Instant::now();
@@ -654,6 +657,7 @@ pub async fn run_stream(
                             token: batch,
                             done: false,
                             thinking: false,
+                            message_id: None,
                         },
                     );
                     last_emit = Instant::now();
@@ -679,6 +683,7 @@ pub async fn run_stream(
                             token: batch,
                             done: false,
                             thinking: true,
+                            message_id: None,
                         },
                     );
                 }
@@ -691,6 +696,7 @@ pub async fn run_stream(
                             token: batch,
                             done: false,
                             thinking: false,
+                            message_id: None,
                         },
                     );
                 }
@@ -760,6 +766,7 @@ pub async fn run_stream(
                                         token,
                                         done: false,
                                         thinking: false,
+                                        message_id: None,
                                     },
                                 );
                             }
@@ -857,6 +864,7 @@ pub async fn run_stream(
                         token: String::new(),
                         done: true,
                         thinking: false,
+                        message_id: None,
                     },
                 );
                 break;
@@ -881,6 +889,7 @@ pub async fn run_stream(
                         token: friendly,
                         done: true,
                         thinking: false,
+                        message_id: None,
                     },
                 );
                 break;
@@ -895,6 +904,7 @@ pub async fn run_stream(
                             token: batch,
                             done: false,
                             thinking: false,
+                            message_id: None,
                         },
                     );
                 }
@@ -926,6 +936,7 @@ pub async fn run_stream(
                         token: String::new(),
                         done: true,
                         thinking: false,
+                        message_id: None,
                     },
                 );
                 break;

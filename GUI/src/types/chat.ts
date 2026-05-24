@@ -35,4 +35,6 @@ export interface StreamPayload {
   token: string;
   done: boolean;
   thinking: boolean;
+  /** Story 2.3: 后端切换到新 assistant 气泡时携带其 id；普通单段流式不带。 */
+  messageId?: string | null;
 }

@@ -38,6 +38,10 @@ pub struct StreamPayload {
     pub token: String,
     pub done: bool,
     pub thinking: bool,
+    /// Story 2.3: 切换到新 assistant 气泡时携带其 id；
+    /// 普通单段流式不带（None），前端落到默认气泡桶。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

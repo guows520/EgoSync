@@ -1,34 +1,153 @@
-import { useState } from 'react';
-import { Plus, X, Download, Trash2 } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { Plus, X, Download, Trash2, Loader2, Check, AlertCircle, ArchiveRestore } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { llmConfigService } from '../../services/llmConfigService';
+import { roleService } from '../../services/roleService';
+import type { LlmConfig, CreateLlmConfigInput, UpdateLlmConfigInput } from '../../types/settings';
+import type { Role } from '../../types/role';
+import { getRoleIconComponent } from '../../lib/roleIcons';
 
-export function GlobalSettingsModal({ onClose }: any) {
+type TestStatus = 'idle' | 'testing' | 'success' | 'error';
+
+export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRoles = [], onRestoreRole, onRefreshRoles }: any) {
   const [tab, setTab] = useState('llm');
-  const [configs, setConfigs] = useState([
-    { id: '1', name: 'OpenAI 官方', provider: 'OpenAI 兼容 (OpenAI, DeepSeek, Ollama...)', baseUrl: 'https://api.openai.com/v1', apiKey: 'sk-xxxxxxxx', model: 'gpt-4o' },
-    { id: '2', name: '本地 Ollama', provider: 'OpenAI 兼容 (OpenAI, DeepSeek, Ollama...)', baseUrl: 'http://localhost:11434/v1', apiKey: 'none', model: 'llama3' }
-  ]);
-  const [activeId, setActiveId] = useState('1');
+  const [configs, setConfigs] = useState<LlmConfig[]>([]);
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState<any>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [testStatus, setTestStatus] = useState<TestStatus>('idle');
+  const [testError, setTestError] = useState('');
+  const [testingConfigId, setTestingConfigId] = useState<string | null>(null);
+  const [lastTestedConfigId, setLastTestedConfigId] = useState<string | null>(null);
+  const [archivedRoles, setArchivedRoles] = useState<Role[]>(initialArchivedRoles);
+  const [archiveError, setArchiveError] = useState('');
+  const [restoringRoleId, setRestoringRoleId] = useState<string | null>(null);
 
-  const handleEdit = (conf: any) => {
-    setEditForm(conf);
+  const loadConfigs = useCallback(async () => {
+    try {
+      const data = await llmConfigService.list();
+      setConfigs(data);
+    } catch (e) {
+      console.error('加载 LLM 配置失败:', e);
+    }
+  }, []);
+
+  const loadArchivedRoles = useCallback(async () => {
+    setArchiveError('');
+    try {
+      const archived = await roleService.listArchived();
+      setArchivedRoles(archived);
+    } catch (e) {
+      console.error('加载归档角色失败:', e);
+      setArchiveError('归档角色加载失败，请稍后重试');
+    }
+  }, []);
+
+  useEffect(() => {
+    loadConfigs();
+    loadArchivedRoles();
+  }, [loadArchivedRoles, loadConfigs]);
+
+  const handleEdit = (conf: LlmConfig) => {
+    setEditForm({ name: conf.name, provider: conf.provider, baseUrl: conf.baseUrl, model: conf.model, apiKey: '' });
+    setEditingId(conf.id);
     setIsEditing(true);
+    setTestStatus('idle');
+    setTestError('');
   };
 
   const handleNew = () => {
-    setEditForm({ id: Date.now().toString(), name: '新配置', provider: 'OpenAI 兼容 (OpenAI, DeepSeek, Ollama...)', baseUrl: '', apiKey: '', model: '' });
+    setEditForm({ name: '新配置', provider: 'openai_compatible', baseUrl: '', apiKey: '', model: '' });
+    setEditingId(null);
     setIsEditing(true);
+    setTestStatus('idle');
+    setTestError('');
   };
 
-  const handleSave = () => {
-    if (configs.find(c => c.id === editForm.id)) {
-      setConfigs(configs.map(c => c.id === editForm.id ? editForm : c));
-    } else {
-      setConfigs([...configs, editForm]);
+  const handleSave = async () => {
+    setIsSaving(true);
+    try {
+      if (editingId) {
+        const input: UpdateLlmConfigInput = {
+          name: editForm.name,
+          provider: editForm.provider,
+          baseUrl: editForm.baseUrl,
+          model: editForm.model,
+        };
+        if (editForm.apiKey) input.apiKey = editForm.apiKey;
+        await llmConfigService.update(editingId, input);
+      } else {
+        const input: CreateLlmConfigInput = {
+          name: editForm.name,
+          provider: editForm.provider,
+          baseUrl: editForm.baseUrl,
+          model: editForm.model,
+          apiKey: editForm.apiKey,
+        };
+        await llmConfigService.create(input);
+      }
+      await loadConfigs();
+      setIsEditing(false);
+    } catch (e: any) {
+      console.error('保存失败:', e);
+    } finally {
+      setIsSaving(false);
     }
-    setIsEditing(false);
+  };
+
+  const handleDelete = async (id: string) => {
+    try {
+      await llmConfigService.delete(id);
+      await loadConfigs();
+    } catch (e) {
+      console.error('删除失败:', e);
+    }
+  };
+
+  const handleSetDefault = async (id: string) => {
+    try {
+      await llmConfigService.setDefault(id);
+      await loadConfigs();
+    } catch (e) {
+      console.error('设置默认失败:', e);
+    }
+  };
+
+  const handleTestConnection = async (id: string) => {
+    setTestingConfigId(id);
+    setLastTestedConfigId(id);
+    setTestStatus('testing');
+    setTestError('');
+    try {
+      await llmConfigService.testConnection(id);
+      setTestStatus('success');
+    } catch (e: any) {
+      setTestStatus('error');
+      const errMsg = typeof e === 'string' ? e : (e?.message || JSON.stringify(e));
+      setTestError(errMsg);
+    } finally {
+      setTestingConfigId(null);
+    }
+  };
+
+  const handleRestoreArchivedRole = async (id: string) => {
+    setRestoringRoleId(id);
+    setArchiveError('');
+    try {
+      if (onRestoreRole) {
+        await onRestoreRole(id);
+      } else {
+        await roleService.restore(id);
+        await onRefreshRoles?.();
+      }
+      await loadArchivedRoles();
+    } catch (e) {
+      console.error('恢复归档角色失败:', e);
+      setArchiveError('恢复失败，请稍后重试');
+    } finally {
+      setRestoringRoleId(null);
+    }
   };
 
   return (
@@ -57,22 +176,31 @@ export function GlobalSettingsModal({ onClose }: any) {
               {!isEditing ? (
                 <div className="space-y-4">
                   {configs.map((conf) => (
-                    <div key={conf.id} className={cn("border rounded-xl p-4 transition-all", activeId === conf.id ? "bg-indigo-50/30 border-indigo-200 shadow-sm" : "bg-white border-slate-200 hover:border-slate-300")}>
+                    <div key={conf.id} className={cn("border rounded-xl p-4 transition-all", conf.isDefault ? "bg-indigo-50/30 border-indigo-200 shadow-sm" : "bg-white border-slate-200 hover:border-slate-300")}>
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
-                          <input type="radio" id={`conf-${conf.id}`} name="activeConfig" checked={activeId === conf.id} onChange={() => setActiveId(conf.id)} className="w-4 h-4 text-indigo-600 accent-indigo-600" />
+                          <input type="radio" id={`conf-${conf.id}`} name="activeConfig" checked={conf.isDefault} onChange={() => handleSetDefault(conf.id)} className="w-4 h-4 text-indigo-600 accent-indigo-600" />
                           <label htmlFor={`conf-${conf.id}`} className="font-medium text-[15px] text-slate-800 cursor-pointer">{conf.name}</label>
-                          {activeId === conf.id && <span className="px-2 py-0.5 rounded text-[11px] font-medium bg-indigo-100 text-indigo-700">当前启用</span>}
+                          {conf.isDefault && <span className="px-2 py-0.5 rounded text-[11px] font-medium bg-indigo-100 text-indigo-700">当前启用</span>}
                         </div>
                         <div className="flex items-center gap-2">
+                          <button onClick={() => handleTestConnection(conf.id)} disabled={testingConfigId === conf.id} className="px-3 py-1.5 text-[13px] font-medium text-slate-600 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors disabled:opacity-50">
+                            {testingConfigId === conf.id ? <Loader2 size={14} className="animate-spin" /> : '测试连接'}
+                          </button>
                           <button onClick={() => handleEdit(conf)} className="px-3 py-1.5 text-[13px] font-medium text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors">编辑</button>
-                          <button onClick={() => setConfigs(configs.filter(c => c.id !== conf.id))} className="px-3 py-1.5 text-[13px] font-medium text-slate-600 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">删除</button>
+                          <button onClick={() => handleDelete(conf.id)} className="px-3 py-1.5 text-[13px] font-medium text-slate-600 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">删除</button>
                         </div>
                       </div>
                       <div className="mt-3 pl-7 grid grid-cols-2 gap-y-2 text-[13px] text-slate-500">
                         <div><span className="text-slate-400 mr-2">模型:</span>{conf.model || '-'}</div>
-                        <div><span className="text-slate-400 mr-2">标准:</span>{conf.provider}</div>
+                        <div><span className="text-slate-400 mr-2">标准:</span>{conf.provider === 'anthropic' ? 'Anthropic (Claude)' : 'OpenAI 兼容'}</div>
                       </div>
+                      {testStatus !== 'idle' && testingConfigId === null && lastTestedConfigId === conf.id && (
+                        <div className={cn("mt-3 pl-7 text-[13px] flex items-center gap-1.5", testStatus === 'success' ? 'text-green-600' : testStatus === 'error' ? 'text-red-600' : 'text-slate-500')}>
+                          {testStatus === 'success' && <><Check size={14} /> 连接成功</>}
+                          {testStatus === 'error' && <><AlertCircle size={14} /> {testError}</>}
+                        </div>
+                      )}
                     </div>
                   ))}
                   <button onClick={handleNew} className="w-full py-4 border-2 border-dashed border-slate-200 rounded-xl text-[14px] font-medium text-slate-500 hover:border-indigo-300 hover:text-indigo-600 hover:bg-indigo-50/50 transition-all flex items-center justify-center gap-2">
@@ -82,7 +210,7 @@ export function GlobalSettingsModal({ onClose }: any) {
               ) : (
                 <div className="bg-slate-50 border border-slate-200 rounded-xl p-6 animate-in slide-in-from-bottom-2">
                   <div className="flex justify-between items-center mb-6">
-                    <h4 className="text-[16px] font-medium text-slate-800">{editForm.id && configs.find(c=>c.id === editForm.id) ? '编辑配置' : '新建配置'}</h4>
+                    <h4 className="text-[16px] font-medium text-slate-800">{editingId ? '编辑配置' : '新建配置'}</h4>
                   </div>
                   <div className="space-y-4">
                     <div>
@@ -92,17 +220,17 @@ export function GlobalSettingsModal({ onClose }: any) {
                     <div>
                       <label className="block text-[13px] font-medium text-slate-700 mb-1.5">Provider 标准</label>
                       <select value={editForm.provider} onChange={e => setEditForm({...editForm, provider: e.target.value})} className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none">
-                        <option>OpenAI 兼容 (OpenAI, DeepSeek, Ollama...)</option>
-                        <option>Anthropic (Claude)</option>
+                        <option value="openai_compatible">OpenAI 兼容 (OpenAI, DeepSeek, Ollama...)</option>
+                        <option value="anthropic">Anthropic (Claude)</option>
                       </select>
                     </div>
                     <div>
                       <label className="block text-[13px] font-medium text-slate-700 mb-1.5">Base URL</label>
-                      <input type="text" value={editForm.baseUrl} onChange={e => setEditForm({...editForm, baseUrl: e.target.value})} placeholder="https://api.openai.com/v1" className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none font-mono" />
+                      <input type="text" value={editForm.baseUrl} onChange={e => setEditForm({...editForm, baseUrl: e.target.value})} placeholder={editForm.provider === 'anthropic' ? 'https://api.anthropic.com' : 'https://api.openai.com/v1'} className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none font-mono" />
                     </div>
                     <div>
-                      <label className="block text-[13px] font-medium text-slate-700 mb-1.5">API Key</label>
-                      <input type="password" value={editForm.apiKey} onChange={e => setEditForm({...editForm, apiKey: e.target.value})} placeholder="sk-..." className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none font-mono" />
+                      <label className="block text-[13px] font-medium text-slate-700 mb-1.5">API Key{editingId ? ' (留空则不修改)' : ''}</label>
+                      <input type="password" value={editForm.apiKey} onChange={e => setEditForm({...editForm, apiKey: e.target.value})} placeholder={editingId ? '••••••••' : 'sk-...'} className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none font-mono" />
                     </div>
                     <div>
                       <label className="block text-[13px] font-medium text-slate-700 mb-1.5">Model Name</label>
@@ -111,7 +239,10 @@ export function GlobalSettingsModal({ onClose }: any) {
                   </div>
                   <div className="mt-6 flex justify-end gap-3">
                     <button onClick={() => setIsEditing(false)} className="px-5 py-2.5 border border-slate-300 rounded-lg text-[13px] font-medium text-slate-700 hover:bg-slate-100 transition-colors">取消</button>
-                    <button onClick={handleSave} className="px-5 py-2.5 bg-indigo-600 text-white rounded-lg text-[13px] font-medium hover:bg-indigo-700 transition-colors shadow-sm">保存配置</button>
+                    <button onClick={handleSave} disabled={isSaving} className="px-5 py-2.5 bg-indigo-600 text-white rounded-lg text-[13px] font-medium hover:bg-indigo-700 transition-colors shadow-sm disabled:opacity-50">
+                      {isSaving ? <Loader2 size={14} className="animate-spin inline mr-1" /> : null}
+                      保存配置
+                    </button>
                   </div>
                 </div>
               )}
@@ -127,6 +258,44 @@ export function GlobalSettingsModal({ onClose }: any) {
                   <Download size={16}/> 导出存档
                 </button>
               </div>
+              <div>
+                <h4 className="text-[15px] font-medium text-slate-800 mb-2">归档角色</h4>
+                <p className="text-[13px] text-slate-500 mb-4">恢复后角色会重新出现在侧边栏，历史数据保持不变。</p>
+                {archiveError && (
+                  <div className="mb-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-[13px] text-red-600 flex items-center gap-2">
+                    <AlertCircle size={14} /> {archiveError}
+                  </div>
+                )}
+                <div className="space-y-2.5">
+                  {archivedRoles.length === 0 ? (
+                    <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center text-[13px] text-slate-400">暂无归档角色</div>
+                  ) : archivedRoles.map(role => {
+                    const Icon = getRoleIconComponent(role.icon);
+                    return (
+                      <div key={role.id} className="bg-white border border-slate-200 rounded-xl p-4 flex items-center justify-between shadow-sm">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="w-10 h-10 rounded-lg flex items-center justify-center text-white shrink-0" style={{ backgroundColor: role.color }}>
+                            <Icon size={18} strokeWidth={2} />
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-[14px] font-medium text-slate-700 truncate">{role.name}</p>
+                            <p className="text-[12px] text-slate-400 truncate">{role.goal || '无目标描述'}</p>
+                            <p className="text-[11px] text-slate-400 mt-0.5">归档时间：{formatDateTime(role.archivedAt)}</p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => handleRestoreArchivedRole(role.id)}
+                          disabled={restoringRoleId === role.id}
+                          className="px-4 py-2 rounded-lg text-[13px] font-medium text-indigo-600 hover:bg-indigo-50 border border-indigo-200 transition-colors disabled:opacity-60 flex items-center gap-1.5"
+                        >
+                          <ArchiveRestore size={14} /> {restoringRoleId === role.id ? '恢复中...' : '恢复'}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
               <div className="pt-6 border-t border-slate-200">
                 <h4 className="text-[15px] font-medium text-red-600 mb-2 flex items-center gap-2">危险区域</h4>
                 <p className="text-[13px] text-slate-500 mb-4">永久销毁本地数据库中的所有数据。此操作不可逆！</p>
@@ -140,4 +309,17 @@ export function GlobalSettingsModal({ onClose }: any) {
       </div>
     </div>
   );
+}
+
+function formatDateTime(value: string | null) {
+  if (!value) return '未知';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }

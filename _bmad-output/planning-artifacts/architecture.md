@@ -211,8 +211,8 @@ EgoSync/
 ├── app_settings   — 全局设置（key TEXT PRIMARY KEY, value TEXT, updated_at TEXT）
 
 对话日志库 (conversations.db):
-├── conversations  — 对话会话（role_id, started_at）
-├── messages       — 消息（conversation_id, role[user/assistant], content, created_at）
+├── conversations  — 对话会话（role_id, title, started_at, updated_at）
+├── messages       — 消息（conversation_id, role[user/assistant], content, thinking, is_complete, created_at）
 ```
 
 ### Authentication & Security
@@ -263,9 +263,12 @@ pub trait LlmProvider: Send + Sync {
         &self,
         messages: Vec<ChatMessage>,
         on_token: tokio::sync::mpsc::Sender<StreamEvent>,
+        options: ChatOptions,
     ) -> Result<(), LlmError>;
     async fn test_connection(&self) -> Result<(), LlmError>;
 }
+// StreamEvent variants: Token(String), Thinking(String), ToolCall(String, String), Done, Error(String)
+// ChatOptions: { disable_thinking: Option<bool>, tools: Option<Vec<Value>>, tool_choice: Option<String> }
 ```
 - OpenAiProvider（覆盖OpenAI/DeepSeek/Groq/Ollama/LM Studio）
 - AnthropicProvider（覆盖Claude）
@@ -371,6 +374,7 @@ export const roleService = {
 
 **Tauri Event Naming Conventions:**
 - 格式：`{domain}:{verb_past}` — `role:created`, `role:updated`, `role:deleted`
+- 角色提议：`role:proposed` — payload: `{ name, icon, color, goal }`（引导中 LLM 提议角色，前端弹出确认 modal）
 - LLM流：`llm:stream` — payload: `{ roleId, token, done }`
 - LLM完成：`llm:complete` — payload: `{ roleId, fullContent }`
 - 通知：`notification:new` — payload: `{ id, roleId, level, content }`
@@ -497,9 +501,10 @@ pub struct RoleModel {
 ### Communication Patterns
 
 **Event System Patterns:**
-- 命名：`{domain}:{verb_past}` — 如 `role:created`, `task:updated`
-- Payload结构：始终包含 `id` 字段 + 变更相关数据
+- 命名：`{domain}:{verb_past}` — 如 `role:created`, `role:proposed`, `task:updated`
+- Payload结构：始终包含 `id` 字段 + 变更相关数据（`role:proposed` 含 `name/icon/color/goal`）
 - 流式事件：`llm:stream` payload 含 `{ roleId, token, done }` 三字段
+- 角色提议事件：`role:proposed` — 引导中 LLM Function Calling 触发，前端弹 `RoleConfirmModal`
 - 前端监听：统一通过 `useTauriEvent` hook 注册/清理
 
 **State Update Patterns:**
@@ -619,6 +624,7 @@ EgoSync/探索/
 │   │   │   │   └── NotificationItem.tsx
 │   │   │   ├── onboarding/
 │   │   │   │   ├── OnboardingView.tsx
+│   │   │   │   ├── RoleConfirmModal.tsx
 │   │   │   │   └── OnboardingStep.tsx
 │   │   │   └── settings/
 │   │   │       ├── SettingsModal.tsx
@@ -636,6 +642,7 @@ EgoSync/探索/
 │   │   ├── services/
 │   │   │   ├── chatService.ts
 │   │   │   ├── roleService.ts
+│   │   │   ├── appService.ts
 │   │   │   ├── memoryService.ts
 │   │   │   ├── taskService.ts
 │   │   │   ├── notificationService.ts
@@ -653,6 +660,9 @@ EgoSync/探索/
 │   │   └── utils/
 │   │       ├── cn.ts
 │   │       └── format.ts
+│   │
+│   │   ├── lib/
+│   │   │   └── roleIcons.ts            # Lucide icon whitelist + color whitelist
 │   │
 │   └── src-tauri/                      # Rust 后端
 │       ├── Cargo.toml
@@ -675,6 +685,7 @@ EgoSync/探索/
 │       │   │   ├── mod.rs
 │       │   │   ├── chat.rs
 │       │   │   ├── role.rs
+│       │   │   ├── app.rs
 │       │   │   ├── memory.rs
 │       │   │   ├── task.rs
 │       │   │   ├── notification.rs
@@ -703,6 +714,7 @@ EgoSync/探索/
 │       │   │   ├── memories.rs
 │       │   │   ├── tasks.rs
 │       │   │   ├── conversations.rs
+│       │   │   ├── app_settings.rs
 │       │   │   ├── suggestions.rs
 │       │   │   ├── notifications.rs
 │       │   │   └── settings.rs
@@ -796,9 +808,14 @@ EgoSync/探索/
 用户输入 → ChatInput → invoke('chat_send_message')
     → commands/chat.rs → services/agent_engine.rs
     → [组装上下文: system_prompt + memories + history]
-    → llm/openai.rs::chat_stream()
-    → [每个token] → app.emit("llm:stream", {token})
+    → llm/openai.rs::chat_stream(messages, tx, options)
+    → [每个token] → app.emit("llm:stream", {token, thinking, done})
     → 前端 useTauriEvent → StreamingText 实时渲染
+    → [用户点停止] → invoke('chat_stop_streaming') → CancellationToken.cancel()
+    → [完成/中断后] → 内容持久化 + emit done
+    → [ToolCall: create_role] → execute_create_role → app.emit("role:proposed", {name, icon, color, goal})
+    → 前端 useTauriEvent("role:proposed") → RoleConfirmModal → 用户确认 → roleService.create()
+    → [首次消息后] → 异步生成标题 → emit("llm:title-updated")
     → [完成后] → memory_pipeline.rs 提炼记忆
     → db/memories.rs 持久化
     → app.emit("memory:changed")

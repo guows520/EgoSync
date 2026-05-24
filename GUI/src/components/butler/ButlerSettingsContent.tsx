@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { cn } from '../../lib/utils';
+import { getRoleIconComponent, normalizeColorHex } from '../../lib/roleIcons';
 
 export function ButlerSettingsContent({ archivedRoles = [], onRestoreRole }: any) {
   const [mission, setMission] = useState('');
@@ -55,11 +55,14 @@ export function ButlerSettingsContent({ archivedRoles = [], onRestoreRole }: any
         <div className="pt-6 border-t border-slate-200/80">
           <label className="text-[14px] font-semibold text-slate-800 block mb-3">已归档角色</label>
           <div className="space-y-2.5">
-            {archivedRoles.map((role: any) => (
+            {archivedRoles.map((role: any) => {
+              const Icon = getRoleIconComponent(role.icon);
+              const roleColor = normalizeColorHex(role.color);
+              return (
               <div key={role.id} className="bg-white border border-slate-200 rounded-xl p-4 flex items-center justify-between shadow-sm">
                 <div className="flex items-center gap-3">
-                  <div className={cn("w-9 h-9 rounded-lg flex items-center justify-center text-white opacity-60", role.color)}>
-                    <role.icon size={18} />
+                  <div className="w-9 h-9 rounded-lg flex items-center justify-center text-white opacity-60" style={{ backgroundColor: roleColor }}>
+                    <Icon size={18} />
                   </div>
                   <div>
                     <p className="text-[14px] font-medium text-slate-700">{role.name}</p>
@@ -70,7 +73,8 @@ export function ButlerSettingsContent({ archivedRoles = [], onRestoreRole }: any
                   重新启用
                 </button>
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}

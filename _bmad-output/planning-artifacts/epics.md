@@ -250,7 +250,7 @@ user_name: boss
 - SQLite 双库 schema + migrations（主库 `egosync.db` + 对话日志库 `conversations.db`）
 - LLM Provider trait + OpenAi/Anthropic 策略实现 + keyring 安全存储
 - LLM 配置 UI 接通（GlobalSettingsModal LLM tab + 连接测试）
-- 管家 Agent 引擎 + System Prompt 分层 + Tauri Event 流式输出（`llm:stream`）
+- 管家 Agent 引擎 + System Prompt 分层 + Tauri Event 流式输出（`llm:stream`）+ 会话管理（新建/切换/删除）+ LLM 自动标题生成 + 流式中断（CancellationToken）
 - 冷启动引导对话（5 步：欢迎 → 自我介绍 → 痛点 → 第一个角色提议 → 创建确认）
 - 角色 Create 路径
 - 移除 Pitch Mode bar
@@ -624,13 +624,26 @@ So that 感受到 AI 正在实时思考并回应我。
 **When** 用户再次发送消息
 **Then** 新请求等待前一个完成或显示管家提示"我还在想上一个问题..."
 
+**Given** 流式进行中
+**When** 用户点击停止按钮
+**Then** 后端通过 CancellationToken 中断流式，已生成内容保留并持久化
+
+**Given** 用户发送首条消息
+**Then** 后端异步调用 LLM 生成对话标题（≤8字），通过 Event 通知前端更新
+
+**Given** 用户在对话界面
+**Then** 可新建对话、查看历史对话列表、切换对话、删除对话
+
 **Given** Rust 后端
 **Then** `migrations/002_conversations.sql` 创建 `conversations` + `messages` 表（对话日志库 `conversations.db`）
 **And** `agent_engine` 模块实现 System Prompt 分层（基础人格 + 当前上下文）
-**And** Tauri Event `llm:stream` payload: `{ conversationId, token, done }`
+**And** Tauri Event `llm:stream` payload: `{ conversationId, token, done, thinking }`
+**And** Tauri Event `llm:title-updated` payload: `{ conversationId, title }`
 
 **Given** 前端
 **Then** 新建 `components/chat/ChatStream.tsx` 替换 ButlerView 内 mock 消息列表
+**And** 新建 `components/chat/ChatHeader.tsx` + `ConversationList.tsx` 管理会话历史
+**And** `ChatInput.tsx` 支持流式中显示停止按钮
 **And** `useTauriEvent('llm:stream')` hook 处理流式更新
 
 ---
@@ -670,7 +683,14 @@ So that 不到 5 分钟就能创建第一个角色并理解 EgoSync 的核心概
 **And** `app::is_first_launch` 检测 `app_settings.onboarding_completed`
 
 **Given** 前端
-**Then** `OnboardingView` 接通真实状态机（替换原型 mock 步骤流程）
+**Then** `OnboardingView` 接通真实 LLM 对话（替换原型 mock 步骤流程）
+**And** 监听 `role:proposed` 事件，弹出 `RoleConfirmModal` 供用户确认/编辑角色（name/icon/color/goal）
+**And** 用户确认后调用 `roleService.create()` 实际写库
+
+**Given** Rust 后端（引导 step ≥ 3）
+**Then** 使用 Function Calling（`create_role` tool + `tool_choice="required"`）替代文本正则提取角色信息
+**And** `OnboardingConversations` HashMap 跟踪引导 conv_id → step 映射
+**And** `ChatRequest.onboarding_step: u8`（`#[serde(default)]`）驱动步骤切换
 
 ---
 

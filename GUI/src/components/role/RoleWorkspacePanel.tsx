@@ -4,7 +4,7 @@ import { TasksTab } from './TasksTab';
 import { MemoryTab } from './MemoryTab';
 import { SettingsTab } from './SettingsTab';
 
-export function RoleWorkspacePanel({ role, currentTab, setTab, onOpenTask, onUpdateRole }: any) {
+export function RoleWorkspacePanel({ role, currentTab, setTab, onOpenTask, onUpdateRole, onArchiveRole, onDeleteRole, activeRoleCount }: any) {
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center justify-between border-b border-slate-200/80 px-6 pt-4 bg-white/60 backdrop-blur-md shrink-0">
@@ -27,7 +27,15 @@ export function RoleWorkspacePanel({ role, currentTab, setTab, onOpenTask, onUpd
       <div className="flex-1 overflow-y-auto p-6 scroll-smooth">
         {currentTab === 'tasks' && <TasksTab role={role} onOpenTask={onOpenTask} />}
         {currentTab === 'memory' && <MemoryTab />}
-        {currentTab === 'settings' && <SettingsTab role={role} onUpdateRole={onUpdateRole} />}
+        {currentTab === 'settings' && (
+          <SettingsTab
+            role={role}
+            activeRoleCount={activeRoleCount}
+            onUpdateRole={onUpdateRole}
+            onArchiveRole={onArchiveRole}
+            onDeleteRole={onDeleteRole}
+          />
+        )}
       </div>
     </div>
   );

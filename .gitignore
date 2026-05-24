@@ -24,3 +24,6 @@ dist-ssr/
 *.sln
 *.sw?
 *.user.toml
+
+# Cursor IDE 本地配置（命令快捷方式等）
+.cursor/

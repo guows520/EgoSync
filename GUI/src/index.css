@@ -77,11 +77,25 @@
 /* Animations */
 .breathe {
   animation: breathe var(--duration-breath) ease-in-out infinite;
+  will-change: opacity;
 }
 
 @keyframes breathe {
   0%, 100% { opacity: 0.6; }
   50% { opacity: 1; }
+}
+
+@keyframes bounce {
+  0%, 80%, 100% { transform: translateY(0); }
+  40% { transform: translateY(-6px); }
+}
+
+.animate-bounce-forever {
+  animation-name: bounce !important;
+  animation-duration: 1.4s !important;
+  animation-timing-function: ease-in-out !important;
+  animation-iteration-count: infinite !important;
+  animation-fill-mode: both !important;
 }
 
 /* Accessibility: Reduced Motion */
@@ -92,5 +106,13 @@
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+  .animate-bounce-forever {
+    animation-duration: 1.4s !important;
+    animation-iteration-count: infinite !important;
+  }
+  .breathe {
+    animation-duration: 4s !important;
+    animation-iteration-count: infinite !important;
   }
 }

@@ -1,5 +1,6 @@
 import { ListTodo, Clock, AlertTriangle } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { getRoleIconComponent, normalizeColorHex } from '../../lib/roleIcons';
 
 export function DashboardTab({ roles, onViewChange }: any) {
   return (
@@ -10,6 +11,8 @@ export function DashboardTab({ roles, onViewChange }: any) {
       {roles.map((role: any) => {
         const isLow = role.energy < 40;
         const isUrgent = role.status === 'yellow';
+        const Icon = getRoleIconComponent(role.icon);
+        const roleColor = normalizeColorHex(role.color);
         return (
           <button
             key={role.id}
@@ -20,8 +23,8 @@ export function DashboardTab({ roles, onViewChange }: any) {
             )}
           >
             <div className="flex items-center gap-3.5">
-              <div className={cn("w-10 h-10 rounded-lg flex items-center justify-center text-white shadow-sm shrink-0", role.color)}>
-                <role.icon size={20} strokeWidth={2} />
+              <div className="w-10 h-10 rounded-lg flex items-center justify-center text-white shadow-sm shrink-0" style={{ backgroundColor: roleColor }}>
+                <Icon size={20} strokeWidth={2} />
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between mb-1.5">

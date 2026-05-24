@@ -85,8 +85,9 @@ _本文件包含 AI Agent 在本项目中实现代码时必须遵循的关键规
 **Tauri IPC:**
 - 前端 service 层封装所有 `invoke()` 调用，组件不直接调用 invoke
 - 事件监听统一通过 `useTauriEvent` hook，自动处理 cleanup
-- Event 命名：`{domain}:{verb_past}` — `role:created`, `task:updated`, `llm:stream`
+- Event 命名：`{domain}:{verb_past}` — `role:created`, `role:proposed`, `task:updated`, `llm:stream`
 - LLM 流式 payload：`{ roleId, token, done }`
+- `role:proposed` payload：`{ name, icon, color, goal }`（引导中 Function Calling 触发，前端弹确认 modal）
 - 写操作返回确认 + Event 推送变更通知，前端监听刷新
 
 **Tauri Rust 后端:**

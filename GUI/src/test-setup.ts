@@ -1,5 +1,30 @@
 import '@testing-library/jest-dom'
 
+;(window as any).__TAURI_INTERNALS__ = {
+  invoke: (cmd: string) => {
+    if (cmd === 'chat_get_butler_conversation') {
+      return Promise.resolve({ id: 'mock-conv', roleId: null, startedAt: '', updatedAt: '' });
+    }
+    if (cmd === 'chat_get_history') {
+      return Promise.resolve([]);
+    }
+    return Promise.resolve(null);
+  },
+  transformCallback: (cb: any) => {
+    const id = Math.random();
+    (window as any)[`_${id}`] = cb;
+    return id;
+  },
+  convertFileSrc: (src: string) => src,
+  metadata: { currentWebview: { label: 'main' }, currentWindow: { label: 'main' } },
+  plugins: {
+    event: {
+      registerListener: () => Promise.resolve(0),
+      unregisterListener: () => Promise.resolve(),
+    },
+  },
+}
+
 const localStorageMock = (() => {
   let store: Record<string, string> = {};
   return {

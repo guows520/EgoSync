@@ -8,14 +8,16 @@ fn validate_key(key: &str) -> Result<(), AppError> {
         return Err(AppError::ValidationError("密钥名称不能为空".to_string()));
     }
     if key.len() > 255 {
-        return Err(AppError::ValidationError(
-            format!("密钥名称过长: {} 字符（最大 255）", key.len()),
-        ));
+        return Err(AppError::ValidationError(format!(
+            "密钥名称过长: {} 字符（最大 255）",
+            key.len()
+        )));
     }
     if key.contains(':') {
-        return Err(AppError::ValidationError(
-            format!("密钥名称不能包含 ':' 字符: '{}'", key),
-        ));
+        return Err(AppError::ValidationError(format!(
+            "密钥名称不能包含 ':' 字符: '{}'",
+            key
+        )));
     }
     Ok(())
 }

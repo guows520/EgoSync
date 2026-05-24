@@ -1,25 +1,6 @@
 // TODO: 后续 Story 将替换为 Tauri invoke 真实数据
 
-import {
-  Briefcase, Heart, BookOpen, Dumbbell, Music, Palette,
-  Code, GraduationCap, Plane, Users, Stethoscope, Target
-} from 'lucide-react';
-
-export const ICON_OPTIONS = [
-  { icon: Briefcase, label: '公文包' }, { icon: Heart, label: '心' }, { icon: BookOpen, label: '书本' },
-  { icon: Dumbbell, label: '健身' }, { icon: Music, label: '音乐' }, { icon: Palette, label: '艺术' },
-  { icon: Code, label: '代码' }, { icon: GraduationCap, label: '学术' }, { icon: Plane, label: '旅行' },
-  { icon: Users, label: '社交' }, { icon: Stethoscope, label: '健康' }, { icon: Target, label: '目标' }
-];
-
-export const COLOR_OPTIONS = [
-  { color: 'bg-indigo-600', text: 'text-indigo-600', tint: 'bg-indigo-50/40', ring: 'ring-indigo-600' },
-  { color: 'bg-amber-600', text: 'text-amber-600', tint: 'bg-amber-50/40', ring: 'ring-amber-600' },
-  { color: 'bg-purple-600', text: 'text-purple-600', tint: 'bg-purple-50/40', ring: 'ring-purple-600' },
-  { color: 'bg-emerald-600', text: 'text-emerald-600', tint: 'bg-emerald-50/40', ring: 'ring-emerald-600' },
-  { color: 'bg-rose-600', text: 'text-rose-600', tint: 'bg-rose-50/40', ring: 'ring-rose-600' },
-  { color: 'bg-cyan-600', text: 'text-cyan-600', tint: 'bg-cyan-50/40', ring: 'ring-cyan-600' },
-];
+import { Briefcase, Heart, BookOpen } from 'lucide-react';
 
 export const DEFAULT_ROLES = [
   { id: 'pm', name: '产品经理', icon: Briefcase, color: 'bg-indigo-600', text: 'text-indigo-600', tint: 'bg-indigo-50/40', energy: 85, status: 'green' },

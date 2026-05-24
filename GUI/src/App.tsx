@@ -1,6 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { cn } from './lib/utils';
-import { DEFAULT_ROLES } from './constants/mockData';
 import { Sidebar } from './components/layout/Sidebar';
 import { ButlerView } from './components/butler/ButlerView';
 import { RoleView } from './components/role/RoleView';
@@ -11,6 +10,12 @@ import { WeeklyReviewModal } from './components/modals/WeeklyReviewModal';
 import { TaskModal } from './components/modals/TaskModal';
 import { AddRoleModal } from './components/modals/AddRoleModal';
 import { NotificationPanel } from './components/notifications/NotificationPanel';
+import { appService } from './services/appService';
+import { roleService } from './services/roleService';
+import { normalizeColorHex } from './lib/roleIcons';
+import type { Role } from './types/role';
+
+const BUTLER_ACCENT = '#6366F1';
 
 export default function App() {
   const [currentView, setCurrentView] = useState('butler');
@@ -19,8 +24,9 @@ export default function App() {
   const [isReviewOpen, setIsReviewOpen] = useState(false);
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
   const [isAddRoleOpen, setIsAddRoleOpen] = useState(false);
-  const [roles, setRoles] = useState(DEFAULT_ROLES);
-  const [archivedRoles, setArchivedRoles] = useState<typeof DEFAULT_ROLES>([]);
+  const [roles, setRoles] = useState<Role[]>([]);
+  const [archivedRoles, setArchivedRoles] = useState<Role[]>([]);
+  const [, setIsLoadingRoles] = useState(true);
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     const stored = localStorage.getItem('egosync-theme');
     if (stored === 'light' || stored === 'dark') return stored;
@@ -29,40 +35,142 @@ export default function App() {
   const [roleInitialTab, setRoleInitialTab] = useState<string | null>(null);
   const [isNotifOpen, setIsNotifOpen] = useState(false);
 
-  const handleArchiveRole = (id: string) => {
-    const role = roles.find(r => r.id === id);
-    if (role) setArchivedRoles(prev => [...prev, role]);
-    setRoles(roles.filter(r => r.id !== id));
+  const refreshRoles = useCallback(async () => {
+    const realRoles = await roleService.list();
+    setRoles(realRoles);
+    return realRoles;
+  }, []);
+
+  const refreshArchivedRoles = useCallback(async () => {
+    const archived = await roleService.listArchived();
+    setArchivedRoles(archived);
+    return archived;
+  }, []);
+
+  const refreshAllRoles = useCallback(async () => {
+    const [active, archived] = await Promise.all([refreshRoles(), refreshArchivedRoles()]);
+    return { active, archived };
+  }, [refreshArchivedRoles, refreshRoles]);
+
+  useEffect(() => {
+    appService.isFirstLaunch().then(isFirst => {
+      if (isFirst) {
+        setCurrentView('onboard');
+        setIsLoadingRoles(false);
+      } else {
+        refreshAllRoles().catch(() => {}).finally(() => {
+          setIsLoadingRoles(false);
+        });
+      }
+    }).catch(() => {
+      setIsLoadingRoles(false);
+    });
+  }, [refreshAllRoles]);
+
+  const handleOnboardingComplete = () => {
+    refreshAllRoles().catch(() => {});
+    setCurrentView('butler');
+  };
+
+  const handleArchiveRole = async (id: string) => {
+    await roleService.archive(id);
+    await refreshAllRoles();
     if (currentView === id) setCurrentView('butler');
   };
-  const handleRestoreRole = (id: string) => {
-    const role = archivedRoles.find(r => r.id === id);
-    if (role) setRoles(prev => [...prev, role]);
-    setArchivedRoles(archivedRoles.filter(r => r.id !== id));
+
+  const handleRestoreRole = async (id: string) => {
+    await roleService.restore(id);
+    await refreshAllRoles();
   };
-  const handleDeleteRole = (id: string) => {
-    setRoles(roles.filter(r => r.id !== id));
+
+  const handleDeleteRole = async (id: string) => {
+    await roleService.delete(id);
+    await refreshAllRoles();
     if (currentView === id) setCurrentView('butler');
   };
+
+  const handleUpdateRole = (updated: Role) => {
+    setRoles(prev => prev.map(role => role.id === updated.id ? updated : role));
+  };
+
+  const toggleTheme = () => {
+    setTheme(t => {
+      const next = t === 'light' ? 'dark' : 'light';
+      localStorage.setItem('egosync-theme', next);
+      document.documentElement.classList.toggle('dark', next === 'dark');
+      return next;
+    });
+  };
+
+  // AC-1 / AC-3: 主区色温由当前视图驱动。butler/onboard 走默认靛蓝；
+  // 进入角色时切到 role.color，并叠 6% alpha 作为背景 tint。
+  // 子元素只要挂 transition-colors，CSS 变量切换就会自动 300ms 过渡。
+  const mainTint = useMemo(() => {
+    const activeRole = roles.find(r => r.id === currentView);
+    if (!activeRole) {
+      return { '--role-accent': BUTLER_ACCENT, '--role-bg-tint': 'transparent' } as React.CSSProperties;
+    }
+    const accent = normalizeColorHex(activeRole.color);
+    return {
+      '--role-accent': accent,
+      '--role-bg-tint': `${accent}0F`, // 6% alpha
+    } as React.CSSProperties;
+  }, [roles, currentView]);
 
   return (
     <div className={cn("flex flex-col h-screen font-sans transition-colors duration-300 bg-[#F8F9FA] text-slate-900 selection:bg-indigo-100 dark:bg-slate-900 dark:text-slate-100 dark:selection:bg-indigo-900", theme === 'dark' && "dark")}>
       <div className="flex-1 flex overflow-hidden relative">
-        <Sidebar roles={roles} currentView={currentView} onViewChange={setCurrentView} isSettingsOpen={isSettingsOpen} onOpenSettings={() => setIsSettingsOpen(true)} onCloseSettings={() => setIsSettingsOpen(false)} onAddRole={() => setIsAddRoleOpen(true)} onArchiveRole={handleArchiveRole} onDeleteRole={handleDeleteRole} theme={theme} onToggleTheme={() => setTheme(t => { const next = t === 'light' ? 'dark' : 'light'; localStorage.setItem('egosync-theme', next); document.documentElement.classList.toggle('dark', next === 'dark'); return next; })} onEditRole={(id: string) => { setCurrentView(id); setRoleInitialTab('settings'); setIsSettingsOpen(false); }} isNotifOpen={isNotifOpen} onToggleNotif={() => setIsNotifOpen(v => !v)} />
+        <Sidebar
+          roles={roles}
+          currentView={currentView}
+          isSettingsOpen={isSettingsOpen}
+          onViewChange={setCurrentView}
+          onOpenSettings={() => setIsSettingsOpen(true)}
+          onCloseSettings={() => setIsSettingsOpen(false)}
+          onAddRole={() => setIsAddRoleOpen(true)}
+          onArchiveRole={handleArchiveRole}
+          onDeleteRole={handleDeleteRole}
+          theme={theme}
+          onToggleTheme={toggleTheme}
+          onEditRole={(id: string) => { setCurrentView(id); setRoleInitialTab('settings'); setIsSettingsOpen(false); }}
+          isNotifOpen={isNotifOpen}
+          onToggleNotif={() => setIsNotifOpen(v => !v)}
+        />
         
-        <main className="flex-1 relative overflow-hidden bg-white/30 dark:bg-slate-900/50 backdrop-blur-3xl shadow-[inset_1px_0_10px_rgba(0,0,0,0.02)]">
-          {currentView === 'onboard' && <OnboardingView onComplete={() => setCurrentView('butler')} />}
+        <main
+          className="flex-1 relative overflow-hidden backdrop-blur-3xl shadow-[inset_1px_0_10px_rgba(0,0,0,0.02)] transition-colors duration-300"
+          style={{ ...mainTint, backgroundColor: 'var(--role-bg-tint)' }}
+        >
+          {currentView === 'onboard' && <OnboardingView onComplete={handleOnboardingComplete} onOpenSettings={() => setIsSettingsOpen(true)} />}
           {currentView === 'butler' && <ButlerView roles={roles} onViewChange={setCurrentView} archivedRoles={archivedRoles} onRestoreRole={handleRestoreRole} />}
-          {roles.map(r => r.id === currentView && <RoleView key={r.id} role={r} onOpenTask={() => setIsTaskModalOpen(true)} initialTab={roleInitialTab} onTabConsumed={() => setRoleInitialTab(null)} onUpdateRole={(updated: any) => setRoles(roles.map(x => x.id === updated.id ? {...x, ...updated} : x))} />)}
+          {roles.map(r => r.id === currentView && (
+            <RoleView
+              key={r.id}
+              role={r}
+              onOpenTask={() => setIsTaskModalOpen(true)}
+              initialTab={roleInitialTab}
+              onTabConsumed={() => setRoleInitialTab(null)}
+              onUpdateRole={handleUpdateRole}
+              onArchiveRole={handleArchiveRole}
+              onDeleteRole={handleDeleteRole}
+              activeRoleCount={roles.length}
+            />
+          ))}
         </main>
       </div>
 
-      {/* OVERLAYS */}
-      {isSettingsOpen && <GlobalSettingsModal onClose={() => setIsSettingsOpen(false)} />}
+      {isSettingsOpen && (
+        <GlobalSettingsModal
+          onClose={() => setIsSettingsOpen(false)}
+          archivedRoles={archivedRoles}
+          onRestoreRole={handleRestoreRole}
+          onRefreshRoles={refreshAllRoles}
+        />
+      )}
       {isArbOpen && <ArbitrationModal onClose={() => setIsArbOpen(false)} />}
       {isReviewOpen && <WeeklyReviewModal roles={roles} onClose={() => setIsReviewOpen(false)} />}
       {isTaskModalOpen && <TaskModal onClose={() => setIsTaskModalOpen(false)} />}
-      {isAddRoleOpen && <AddRoleModal onClose={() => setIsAddRoleOpen(false)} onAdd={(role: any) => { setRoles([...roles, role]); setIsAddRoleOpen(false); }} />}
+      {isAddRoleOpen && <AddRoleModal onClose={() => setIsAddRoleOpen(false)} onAdd={(role: Role) => { setRoles(prev => [...prev, role]); setIsAddRoleOpen(false); }} />}
       {isNotifOpen && <NotificationPanel onClose={() => setIsNotifOpen(false)} />}
     </div>
   );

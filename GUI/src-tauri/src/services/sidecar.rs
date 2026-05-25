@@ -82,15 +82,30 @@ impl SidecarManager {
             binary.display()
         );
 
-        let child = Command::new(&binary)
-            .arg("server")
-            .arg("--port")
-            .arg(self.port.to_string())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(|e| {
+        // On Windows, npm installs a .cmd shim which can't be executed directly
+        // by CreateProcessW — must go through cmd.exe.
+        let child = if cfg!(target_os = "windows") {
+            Command::new("cmd")
+                .arg("/c")
+                .arg(&binary)
+                .arg("serve")
+                .arg("--port")
+                .arg(self.port.to_string())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .kill_on_drop(true)
+                .spawn()
+        } else {
+            Command::new(&binary)
+                .arg("serve")
+                .arg("--port")
+                .arg(self.port.to_string())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .kill_on_drop(true)
+                .spawn()
+        }
+        .map_err(|e| {
                 AppError::SidecarError(format!(
                     "Failed to spawn opencode process ({}): {}",
                     binary.display(),

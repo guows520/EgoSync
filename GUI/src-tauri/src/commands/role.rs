@@ -4,16 +4,27 @@ use crate::db::pool::{ConversationsPool, DbPool};
 use crate::db::roles;
 use crate::error::AppError;
 use crate::models::role::{CreateRoleInput, Role, UpdateRoleInput};
+use crate::services::agent_config::AgentConfigService;
 
 const MIN_ACTIVE_ROLE_ERROR: &str = "至少保留一个角色";
+
+/// Best-effort sync to opencode.json — warn on failure, never block CRUD.
+fn sync_warn(result: Result<(), AppError>, action: &str) {
+    if let Err(e) = result {
+        tracing::warn!("opencode sync ({}) failed: {}", action, e);
+    }
+}
 
 #[tauri::command]
 pub async fn role_create(
     input: CreateRoleInput,
     pool: State<'_, DbPool>,
+    agent_config: State<'_, AgentConfigService>,
 ) -> Result<Role, AppError> {
     validate_role_name(input.name.as_str())?;
-    roles::create_role(&pool, &input).await
+    let role = roles::create_role(&pool, &input).await?;
+    sync_warn(agent_config.sync_role_created(&role), "create");
+    Ok(role)
 }
 
 #[tauri::command]
@@ -31,23 +42,38 @@ pub async fn role_update(
     id: String,
     input: UpdateRoleInput,
     pool: State<'_, DbPool>,
+    agent_config: State<'_, AgentConfigService>,
 ) -> Result<Role, AppError> {
     if let Some(name) = input.name.as_deref() {
         validate_role_name(name)?;
     }
 
-    roles::update_role(&pool, &id, &input).await
+    let role = roles::update_role(&pool, &id, &input).await?;
+    sync_warn(agent_config.sync_role_updated(&role), "update");
+    Ok(role)
 }
 
 #[tauri::command]
-pub async fn role_archive(id: String, pool: State<'_, DbPool>) -> Result<Role, AppError> {
+pub async fn role_archive(
+    id: String,
+    pool: State<'_, DbPool>,
+    agent_config: State<'_, AgentConfigService>,
+) -> Result<Role, AppError> {
     ensure_can_remove_active_role(&pool).await?;
-    roles::archive_role(&pool, &id).await
+    let role = roles::archive_role(&pool, &id).await?;
+    sync_warn(agent_config.sync_role_archived(&role.id), "archive");
+    Ok(role)
 }
 
 #[tauri::command]
-pub async fn role_restore(id: String, pool: State<'_, DbPool>) -> Result<Role, AppError> {
-    roles::restore_role(&pool, &id).await
+pub async fn role_restore(
+    id: String,
+    pool: State<'_, DbPool>,
+    agent_config: State<'_, AgentConfigService>,
+) -> Result<Role, AppError> {
+    let role = roles::restore_role(&pool, &id).await?;
+    sync_warn(agent_config.sync_role_created(&role), "restore");
+    Ok(role)
 }
 
 #[tauri::command]
@@ -55,13 +81,16 @@ pub async fn role_delete(
     id: String,
     pool: State<'_, DbPool>,
     conv_pool: State<'_, ConversationsPool>,
+    agent_config: State<'_, AgentConfigService>,
 ) -> Result<(), AppError> {
     let role = roles::get_role(&pool, &id).await?;
     if role.status == "active" {
         ensure_can_remove_active_role(&pool).await?;
     }
 
-    roles::delete_role(&pool, &conv_pool, &id).await
+    roles::delete_role(&pool, &conv_pool, &id).await?;
+    sync_warn(agent_config.sync_role_deleted(&id), "delete");
+    Ok(())
 }
 
 fn validate_role_name(name: &str) -> Result<(), AppError> {

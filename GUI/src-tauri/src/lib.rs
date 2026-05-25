@@ -43,6 +43,28 @@ pub fn run() {
             app.manage(commands::chat::CancelTokens::default());
             app.manage(commands::chat::OnboardingConversations::default());
 
+            // ── AgentConfig: sync roles → opencode.json (non-blocking) ──
+            let opencode_config_path = app_data_dir.join("opencode.json");
+            let agent_config =
+                services::agent_config::AgentConfigService::new(opencode_config_path);
+            {
+                let pool_ref: &sqlx::SqlitePool = app.state::<db::pool::DbPool>().inner();
+                let all_roles = tauri::async_runtime::block_on(async {
+                    db::roles::list_all_roles(pool_ref).await
+                });
+                match all_roles {
+                    Ok(roles) => {
+                        if let Err(e) = agent_config.full_sync(&roles) {
+                            tracing::warn!("opencode.json full sync failed (degraded): {}", e);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to load roles for opencode sync: {}", e);
+                    }
+                }
+            }
+            app.manage(agent_config);
+
             // ── Sidecar: start opencode server (non-blocking, graceful degradation) ──
             let resource_dir = app.path().resource_dir().ok();
             let mut sidecar = services::sidecar::SidecarManager::new(resource_dir, None);

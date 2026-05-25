@@ -38,6 +38,19 @@ pub async fn list_archived_roles(pool: &SqlitePool) -> Result<Vec<Role>, AppErro
     list_roles_by_status(pool, "archived", "archived_at DESC, updated_at DESC").await
 }
 
+/// All roles regardless of status — used for full sync to opencode.json.
+pub async fn list_all_roles(pool: &SqlitePool) -> Result<Vec<Role>, AppError> {
+    let roles = sqlx::query_as::<_, Role>(&format!(
+        "SELECT {} FROM roles ORDER BY created_at ASC",
+        ROLE_SELECT_COLUMNS
+    ))
+    .fetch_all(pool)
+    .await
+    .map_err(|e| AppError::DbError(format!("查询全部角色失败: {}", e)))?;
+
+    Ok(roles)
+}
+
 async fn list_roles_by_status(
     pool: &SqlitePool,
     status: &str,

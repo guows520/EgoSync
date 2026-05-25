@@ -9,9 +9,12 @@ import { ArbitrationModal } from './components/modals/ArbitrationModal';
 import { WeeklyReviewModal } from './components/modals/WeeklyReviewModal';
 import { TaskModal } from './components/modals/TaskModal';
 import { AddRoleModal } from './components/modals/AddRoleModal';
+import { RoleConfirmModal } from './components/onboarding/RoleConfirmModal';
+import type { RoleProposal } from './components/onboarding/RoleConfirmModal';
 import { NotificationPanel } from './components/notifications/NotificationPanel';
 import { appService } from './services/appService';
 import { roleService } from './services/roleService';
+import { useTauriEvent } from './hooks/useTauriEvent';
 import { normalizeColorHex } from './lib/roleIcons';
 import type { Role } from './types/role';
 
@@ -35,6 +38,11 @@ export default function App() {
   const [roleInitialTab, setRoleInitialTab] = useState<string | null>(null);
   const [isNotifOpen, setIsNotifOpen] = useState(false);
 
+  // Story 2.5: 管家涌现角色提议（非 onboarding 模式）
+  const [butlerProposal, setButlerProposal] = useState<RoleProposal | null>(null);
+  const [isButlerProposalOpen, setIsButlerProposalOpen] = useState(false);
+  const [isButlerProposalBusy, setIsButlerProposalBusy] = useState(false);
+
   const refreshRoles = useCallback(async () => {
     const realRoles = await roleService.list();
     setRoles(realRoles);
@@ -51,6 +59,56 @@ export default function App() {
     const [active, archived] = await Promise.all([refreshRoles(), refreshArchivedRoles()]);
     return { active, archived };
   }, [refreshArchivedRoles, refreshRoles]);
+
+  // Story 2.5 AC-6: 管家模式下 role:proposed 事件监听
+  // onboarding 模式下跳过（OnboardingView 自己处理）
+  interface RoleProposedPayload {
+    conversationId: string;
+    name: string;
+    icon: string | null;
+    color: string | null;
+    goal: string | null;
+  }
+  useTauriEvent<RoleProposedPayload>('role:proposed', useCallback((payload: RoleProposedPayload) => {
+    if (currentView === 'onboard') return; // OnboardingView 自己处理
+    console.info('[App] 收到管家角色提议:', payload.name);
+    setButlerProposal({
+      name: payload.name,
+      icon: payload.icon,
+      color: payload.color,
+      goal: payload.goal,
+    });
+    setIsButlerProposalOpen(true);
+  }, [currentView]), [currentView]);
+
+  const handleButlerProposalConfirm = useCallback(
+    async (values: { name: string; icon: string; color: string; goal: string }) => {
+      if (isButlerProposalBusy) return;
+      setIsButlerProposalBusy(true);
+      try {
+        const role = await roleService.create({
+          name: values.name,
+          icon: values.icon,
+          color: values.color,
+          goal: values.goal || undefined,
+        });
+        console.info('[App] 涌现角色创建成功:', role.name, role.id);
+        setRoles(prev => [...prev, role]);
+        setIsButlerProposalOpen(false);
+        setButlerProposal(null);
+      } catch (e) {
+        console.error('[App] 涌现角色创建失败:', e);
+      } finally {
+        setIsButlerProposalBusy(false);
+      }
+    },
+    [isButlerProposalBusy],
+  );
+
+  const handleButlerProposalCancel = useCallback(() => {
+    setIsButlerProposalOpen(false);
+    setButlerProposal(null);
+  }, []);
 
   useEffect(() => {
     appService.isFirstLaunch().then(isFirst => {
@@ -172,6 +230,13 @@ export default function App() {
       {isTaskModalOpen && <TaskModal onClose={() => setIsTaskModalOpen(false)} />}
       {isAddRoleOpen && <AddRoleModal onClose={() => setIsAddRoleOpen(false)} onAdd={(role: Role) => { setRoles(prev => [...prev, role]); setIsAddRoleOpen(false); }} />}
       {isNotifOpen && <NotificationPanel onClose={() => setIsNotifOpen(false)} />}
+      <RoleConfirmModal
+        open={isButlerProposalOpen}
+        proposal={butlerProposal}
+        onConfirm={handleButlerProposalConfirm}
+        onCancel={handleButlerProposalCancel}
+        busy={isButlerProposalBusy}
+      />
     </div>
   );
 }

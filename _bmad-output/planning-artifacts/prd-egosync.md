@@ -2,7 +2,7 @@
 title: EgoSync
 status: draft
 created: 2026-05-18
-updated: 2026-05-19
+updated: 2026-05-25
 ---
 
 # PRD: EgoSync
@@ -10,7 +10,9 @@ updated: 2026-05-19
 
 ## 0. Document Purpose
 
-本PRD面向产品负责人、技术架构师和开发团队，定义EgoSync V1的产品范围、功能需求和实施约束。文档基于头脑风暴会话（79个创意、形态分析矩阵、第一性原理审视、决策树映射）的系统化产出。功能需求按Feature分组，FR全局编号；术语锚定于§3 Glossary；假设以 `[ASSUMPTION]` 内联标注并在§9汇总。UX设计和技术架构文档待后续产出，本PRD为其上游输入。
+本PRD面向产品负责人、技术架构师和开发团队，定义EgoSync V1的产品范围、功能需求和实施约束。文档基于头脑风暴会话（79个创意、形态分析矩阵、第一性原理审视、决策树映射）的系统化产出。功能需求按Feature分组，FR全局编号（FR-1至FR-36）；术语锚定于§3 Glossary；假设以 `[ASSUMPTION]` 内联标注并在§9汇总。UX设计和技术架构文档待后续产出，本PRD为其上游输入。
+
+**2026-05-25更新**：新增§4.12 Agent引擎集成（FR-31至FR-36），将opencode作为底层Agent执行引擎，从根本上升级管家和角色的能力边界——从单轮tool-use升级为完整Agent Loop，支持复杂多步骤任务执行、内置工具系统、Skill体系和MCP扩展。同步更新了FR-4b（Skill）、FR-28（LLM配置）以对齐opencode体系。此变更作为Epic 2基础设施变更立即引入。
 
 ## 1. Vision
 
@@ -95,6 +97,11 @@ EgoSync与现有AI助手的根本区别在于：助手用完消失，分身持�
 - **四象限（Quadrant Matrix）** — 柯维的紧急-重要矩阵。系统基于角色目标和上下文自动为任务分类，特别保护Q2（重要不紧急）任务不被Q1挤掉。
 - **BYOK（Bring Your Own Key）** — 用户自带LLM API Key调用云端模型，EgoSync不做中间商。支持OpenAI兼容格式和Anthropic格式两种标准，通过配置base_url+api_key+model_name接入任何兼容Provider。
 - **原始对话日志（Raw Conversation Log）** — 角色与用户每次对话的完整原始记录。独立于结构化记忆存储，不参与日常推理，仅在溯源追问时按需检索引用，确保记忆提炼的可审计性。
+- **Agent Engine（opencode）** — EgoSync底层的AI Agent执行引擎。opencode是一个开源的AI编码Agent，提供完整的Agent Loop（多轮工具调用循环）、内置工具系统（bash/文件读写/grep/web搜索等20+工具）、Skill系统（SKILL.md按需加载的可复用指令）、Subagent（子Agent并行委派）、MCP协议支持和权限控制。EgoSync以sidecar进程方式集成opencode，将其作为管家和角色的执行引擎。
+- **Agent Loop** — Agent的核心运行机制。区别于单轮tool-use（请求→工具调用→响应），Agent Loop允许LLM自主决策下一步行动——循环调用工具直到任务完成或需要用户输入。这使角色能够执行复杂的多步骤任务（如代码编写、竞品研究报告等）。
+- **Sidecar进程** — opencode以独立进程方式运行在用户设备上，由Tauri后端管理其生命周期（启动/停止/健康检查）。Rust后端通过HTTP API与opencode server通信，UI层无感知。
+- **Skill（SKILL.md）** — opencode原生的可复用指令格式。每个Skill是一个SKILL.md文件，包含frontmatter（name/description）和markdown正文。Agent可自动发现可用Skills并在需要时按需加载。EgoSync的角色可绑定专属Skills，管家和角色也可拥有内置Skills。
+- **MCP（Model Context Protocol）** — 标准化的AI工具扩展协议。角色可通过MCP接入外部工具服务（日历、邮件、代码仓库等），每个角色可配置独立的MCP server列表。
 
 ## 4. Features
 
@@ -148,13 +155,15 @@ EgoSync与现有AI助手的根本区别在于：助手用完消失，分身持�
 
 #### FR-4b: 角色Skill配置
 
-用户可以为角色配置Skill（可选，非必需）。Skill为角色提供额外能力。V1支持的Skill类型：Web搜索（需用户提供搜索API Key）、文件读写（本地文件系统）。代码执行、邮件发送等高权限Skill延期至V2（需安全审批机制）。角色在执行任务时，若发现缺少所需Skill，应明确提示用户配置。实现UJ-5。
+用户可以为角色配置Skill（可选，非必需）。Skill基于opencode的SKILL.md格式，为角色提供额外能力。Skill可来自三个来源：①EgoSync内置Skills（任务管理、日程管理等）②用户自定义SKILL.md文件 ③opencode生态中的第三方Skills。角色在执行任务时，Agent Engine可自动发现并按需加载可用Skills。角色在需要未配置的Skill时，应明确提示用户配置。通过MCP协议，角色还可接入外部工具服务。实现UJ-5。
 
 **Consequences (testable):**
 - 角色可在无任何Skill的情况下正常运行（纯对话+记忆+建议）
-- 用户可在角色设置中添加/移除Skill
+- 用户可在角色设置中添加/移除Skill（SKILL.md格式）
+- Agent Engine自动发现项目目录和全局目录下的SKILL.md文件
 - 角色在任务需要未配置的Skill时，明确提示缺少什么及如何配置
 - 配置Skill后角色可在后续任务中自动使用
+- 用户可为角色配置MCP server列表以接入外部工具
 
 #### FR-5: 角色从对话自然涌现
 
@@ -427,15 +436,15 @@ EgoSync与现有AI助手的根本区别在于：助手用完消失，分身持�
 
 #### FR-28: LLM模型配置
 
-支持两种标准API格式（OpenAI兼容格式和Anthropic格式），用户配置base_url、api_key和model_name即可接入任何兼容Provider（OpenAI、DeepSeek、Groq、Azure等均为OpenAI格式；Claude为Anthropic格式）。同时支持本地模型：Ollama和LM Studio。EgoSync不存储API调用内容。
+LLM Provider配置由opencode Agent Engine统一管理。opencode原生支持30+个Provider（OpenAI、Anthropic、Google Gemini、DeepSeek、Groq、Azure、Amazon Bedrock、Ollama、LM Studio等），用户在opencode.json中配置Provider即可。EgoSync UI提供友好的配置界面，底层写入opencode配置。用户可为不同角色指定不同的模型。EgoSync不存储API调用内容。
 
 **Consequences (testable):**
-- 用户可在设置中配置Provider（选择OpenAI格式或Anthropic格式）+ base_url + api_key + model_name
+- 用户可在设置中配置LLM Provider，支持opencode原生的所有Provider
 - 用户可配置多个Provider，为不同角色指定不同的模型
-- 支持Ollama本地模型连接（OpenAI兼容格式，base_url指向localhost）
-- 支持LM Studio本地模型连接（OpenAI兼容格式，base_url指向localhost）
+- 支持Ollama/LM Studio等本地模型
 - 未配置任何模型时，提示用户配置
 - 连接测试：配置后可一键验证连通性
+- Provider配置持久化为opencode.json格式，可手动编辑
 
 ### 4.11 透明审计与不确定性表达
 
@@ -459,6 +468,77 @@ EgoSync与现有AI助手的根本区别在于：助手用完消失，分身持�
 - 系统不在信心不足时给出过于确定的建议
 - 不确定性表达出现频率合理（非每条都加限定词）
 
+### 4.12 Agent引擎集成（opencode）
+
+**Description：** EgoSync集成opencode作为底层Agent执行引擎，将管家和角色从"单轮tool-use"升级为"完整Agent Loop"。opencode以Tauri sidecar binary方式打包进安装包，由Rust后端管理进程生命周期，通过HTTP API通信。此集成从根本上解决当前架构无法支撑复杂任务（代码编写、多步骤研究、文件操作等）的问题，并为后续持续演进（MCP扩展、Skill生态、Subagent协作）打下基础。
+
+**Functional Requirements：**
+
+#### FR-31: opencode Sidecar进程管理
+
+Tauri后端负责opencode server的完整生命周期管理：应用启动时自动拉起opencode server进程，应用退出时优雅停止。opencode binary作为Tauri sidecar打包在安装包中，无需用户额外安装。
+
+**Consequences (testable):**
+- 应用启动后，opencode server进程自动运行并监听本地端口
+- 应用退出后，opencode server进程优雅终止，无孤儿进程
+- Rust后端可通过HTTP调用opencode API（session/message/agent等）
+- opencode进程异常退出时，Rust后端自动重启并恢复连接
+- opencode binary包含在Tauri安装包中（Windows/macOS/Linux三平台）
+
+#### FR-32: 角色→opencode Agent动态映射
+
+每个EgoSync角色在opencode中注册为一个独立的Agent配置（subagent模式），拥有专属system prompt、model配置、permission规则和skill绑定。管家作为primary agent注册。角色创建/编辑/归档/删除时，同步更新opencode agent配置。
+
+**Consequences (testable):**
+- 创建EgoSync角色后，opencode agent配置中新增对应agent条目
+- 角色的prompt/goal/skill变更同步到opencode agent配置
+- 归档角色后，对应opencode agent被disable
+- 删除角色后，对应opencode agent被移除
+- 管家作为primary agent始终存在，拥有最高权限级别
+
+#### FR-33: Agent Loop对话升级
+
+管家和角色的对话从单轮tool-use升级为完整Agent Loop。Agent可自主决策调用哪些工具、执行多少步骤、何时需要用户确认。支持复杂的多步骤任务执行（代码编写、竞品研究、文件操作等）。
+
+**Consequences (testable):**
+- 用户下达复杂任务后，Agent自主执行多步工具调用直到完成
+- Agent loop过程中，流式输出中间步骤和思考过程
+- 任务执行过程可被用户中断（abort）
+- Agent在单次loop中可调用多个不同工具（bash、read、write、grep等）
+
+#### FR-34: 可配置权限模型
+
+每个角色的操作权限可独立配置。默认行为为自主执行（allow），用户可将特定操作类型设置为需确认（ask）或禁止（deny）。权限粒度覆盖：文件编辑、bash命令执行、外部目录访问、Web搜索等。管家拥有全局最高权限。
+
+**Consequences (testable):**
+- 默认状态下，角色可自主执行任务，无需逐步确认
+- 用户可在角色设置中将特定操作类型设为"需确认"（ask）
+- 设为ask的操作触发时，UI弹出确认请求，用户批准后继续
+- 设为deny的操作类型，Agent不会尝试调用
+- 权限变更即时生效，无需重启session
+- 管家的权限不可被降低到deny级别（保证管理能力）
+
+#### FR-35: opencode内置工具复用
+
+角色可使用opencode内置的工具系统，包括但不限于：文件读写（read/write/edit）、shell命令执行（bash）、代码搜索（grep/glob）、Web搜索（websearch）、网页抓取（webfetch）。工具的可用性受角色权限控制。
+
+**Consequences (testable):**
+- 角色在对话中可自主调用文件读写工具
+- 角色可执行bash命令（受权限控制）
+- 角色可搜索代码库（grep/glob）
+- 角色可进行Web搜索和网页抓取（如已配置）
+- 未授权的工具调用被拒绝并返回明确提示
+
+#### FR-36: Session持久化与上下文管理
+
+每个角色的对话映射为opencode session，支持上下文持久化、自动压缩（compaction）和历史消息分页。opencode的上下文管理确保长对话不丢失重要信息。
+
+**Consequences (testable):**
+- 角色对话跨应用重启后保留历史上下文
+- 长对话自动触发上下文压缩，避免token溢出
+- 用户可查看角色的完整对话历史（分页加载）
+- 每个角色维持独立session，互不干扰
+
 ## 5. Non-Goals (Explicit)
 
 - **不是通用AI聊天机器人**——不处理与用户角色无关的通用问答
@@ -473,8 +553,10 @@ EgoSync与现有AI助手的根本区别在于：助手用完消失，分身持�
 
 ### 6.1 In Scope
 
+- **Agent引擎集成**（FR-31, FR-32, FR-33, FR-34, FR-35, FR-36）— 基础设施，所有其他功能的执行引擎
 - 管家对话与意图路由（FR-1, FR-2, FR-3）
 - 角色CRUD与对话涌现创建（FR-4, FR-5, FR-6）
+- 角色Skill配置与MCP扩展（FR-4b）
 - 结构化记忆提炼与查询（FR-7, FR-8）
 - 选择性遗忘（FR-9, 简化版）
 - 角色后台工作循环与主动建议（FR-10, FR-11, FR-12）
@@ -486,9 +568,9 @@ EgoSync与现有AI助手的根本区别在于：助手用完消失，分身持�
 - 三级通知（FR-22）
 - 智能四象限（FR-23, FR-24）
 - 本地优先存储 + 数据导出/销毁（FR-25, FR-26, FR-27）
-- LLM模型配置：OpenAI/Anthropic格式 + Ollama + LM Studio（FR-28）
+- LLM模型配置：opencode多Provider体系（FR-28）
 - 推理溯源与不确定性表达（FR-29, FR-30）
-- 桌面端（Tauri）
+- 桌面端（Tauri + opencode sidecar）
 
 ### 6.2 Out of Scope for MVP
 
@@ -505,6 +587,8 @@ EgoSync与现有AI助手的根本区别在于：助手用完消失，分身持�
 - **B2B企业版** — V2+
 - **端到端加密云端** — V2
 - **多语言支持** — V2 `[NOTE FOR PM: V1默认中文，英文作为快速跟进]`
+- **opencode TUI/Desktop App** — 仅使用opencode server API，不暴露opencode自身UI `[NON-GOAL for MVP]`
+- **opencode云端企业功能** — 仅使用本地开源核心 `[NON-GOAL for MVP]`
 
 ## 7. Success Metrics
 
@@ -537,7 +621,10 @@ EgoSync与现有AI助手的根本区别在于：助手用完消失，分身持�
 | 5 | 工作循环频率？ | **默认每日2次**（早晨app启动时 + 晚间设定时间）。用户可调范围：每日1次~每日4次。应用未运行时不执行。 |
 | 6 | 四象限分类准确率阈值？ | **80%**。低于80%置信度时，展示系统分类建议但明确标记"不确定"，允许用户一键修正。 |
 | 7 | 跨OS LLM流式输出一致性？ | **必须保持一致体验**。通过统一的流式渲染层抽象WebView差异，QA覆盖三平台。 |
-| 8 | LLM Provider最小集？ | **两种标准格式**：OpenAI兼容格式（覆盖OpenAI/DeepSeek/Groq/Azure/Ollama/LM Studio）+ Anthropic格式（覆盖Claude）。用户配置base_url + api_key + model_name。 |
+| 8 | LLM Provider最小集？ | **opencode原生多Provider**：opencode内置支持30+个Provider（OpenAI/Anthropic/Google/DeepSeek/Groq/Azure/Bedrock/Ollama/LM Studio等），用户通过opencode.json配置，EgoSync UI提供友好配置界面。 |
+| 9 | Agent引擎选型？ | **opencode作为sidecar**。opencode提供完整Agent Loop、20+内置工具、Skill系统、Subagent、MCP支持和权限控制，以sidecar binary打包进Tauri安装包。 |
+| 10 | 任务执行的交互模式？ | **可配置权限**。默认自主执行（allow），用户可将特定操作类型设为需确认（ask）或禁止（deny）。 |
+| 11 | Agent引擎引入时机？ | **立即作为Epic 2基础设施变更**。Agent引擎是所有角色能力的基础，越早引入越早解锁后续功能。 |
 
 ## 9. Assumptions Index
 
@@ -545,7 +632,11 @@ EgoSync与现有AI助手的根本区别在于：助手用完消失，分身持�
 - `[ASSUMPTION]` §4.3 FR-9: V1的遗忘实现为删除记忆条目+重新运行依赖推理，完美认知回溯清除延期至V2
 - `[ASSUMPTION]` §4.4 FR-10: V1的工作循环在应用运行时执行，不支持系统后台服务/daemon常驻
 - `[ASSUMPTION]` §4.3 FR-8: 原始对话日志保留用于溯源，存储空间随使用时长线性增长，V2考虑归档/压缩策略
-- `[ASSUMPTION]` §4.2 FR-4b: V1的Skill为用户手动配置，角色自主构建Skill延期至V2
+- `[ASSUMPTION]` §4.2 FR-4b: Skill基于opencode SKILL.md格式，角色自主构建Skill延期至V2
+- `[ASSUMPTION]` §4.12 FR-31: opencode binary以Tauri sidecar方式分发，安装包体积将增加约50-80MB（opencode compiled binary size）
+- `[ASSUMPTION]` §4.12 FR-31: opencode server占用一个本地端口（默认4096），与其他本地开发工具可能冲突时需可配置
+- `[ASSUMPTION]` §4.12 FR-32: 角色→Agent映射通过修改opencode.json配置实现，运行时热加载，不需要重启opencode进程
+- `[ASSUMPTION]` §4.12 FR-36: opencode自身使用SQLite存储session/message数据，与EgoSync主数据库独立，数据一致性通过Rust后端编排层保证
 
 ---
 
@@ -590,6 +681,6 @@ EgoSync与现有AI助手的根本区别在于：助手用完消失，分身持�
 
 ## Adapt-In: Platform
 
-- **V1**：桌面端（Tauri），Windows/macOS/Linux
+- **V1**：桌面端（Tauri + opencode sidecar），Windows/macOS/Linux
 - **V2**：移动端（React Native或Flutter），iOS/Android
 - **V2**：云端同步层（端到端加密）

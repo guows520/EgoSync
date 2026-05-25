@@ -1,7 +1,7 @@
 ---
 project_name: '探索 (EgoSync)'
 user_name: 'boss'
-date: '2026-05-20'
+date: '2026-05-25'
 sections_completed: ['technology_stack', 'language_rules', 'framework_rules', 'testing_rules', 'code_quality', 'dev_workflow', 'critical_rules']
 status: 'complete'
 rule_count: 100
@@ -31,10 +31,21 @@ _本文件包含 AI Agent 在本项目中实现代码时必须遵循的关键规
 - **SQLx** 0.8+ (SQLite, 编译时 SQL 校验)
 - **serde** (JSON 序列化, `rename_all = "camelCase"`)
 - **keyring** 3.x (跨平台密钥管理)
+- **reqwest** (HTTP 客户端，与 opencode server 通信)
 - **tracing** (结构化日志)
+
+### Agent 引擎 (opencode sidecar)
+- **opencode** (开源 AI coding agent，作为 Tauri sidecar binary 打包)
+- **运行方式**: 独立进程，由 Rust 后端管理生命周期（spawn/kill/health check/restart）
+- **通信**: HTTP API (localhost:4096)，Rust 后端通过 `agent_bridge.rs` 封装调用
+- **能力**: 完整 Agent Loop、20+ 内置工具（read/write/edit/bash/grep/glob/websearch 等）、SKILL.md 技能系统、Subagent 并行委派、MCP 协议、细粒度权限控制
+- **LLM Provider**: opencode 原生支持 30+ Provider（OpenAI/Anthropic/Google/DeepSeek/Groq/Azure/Bedrock/Ollama/LM Studio 等）
+- **数据**: opencode 自身 SQLite 存储 session/message，独立于 EgoSync 主 DB
+- **配置**: `opencode.json`（由 Rust 后端 `agent_config.rs` 动态管理，角色 CRUD 时同步）
 
 ### 构建与分发
 - **Tauri bundler**: MSI (Windows) / DMG (macOS) / AppImage (Linux)
+- **Tauri sidecar**: opencode binary 打包在 `src-tauri/resources/`（平台特定）
 - **CI/CD**: GitHub Actions 三平台并行
 
 ### 版本约束
@@ -90,13 +101,17 @@ _本文件包含 AI Agent 在本项目中实现代码时必须遵循的关键规
 - `role:proposed` payload：`{ name, icon, color, goal }`（引导中 Function Calling 触发，前端弹确认 modal）
 - 写操作返回确认 + Event 推送变更通知，前端监听刷新
 
-**Tauri Rust 后端:**
+**Tauri Rust 后端（三层架构：UI ↔ Rust 编排 ↔ opencode 执行）:**
 - Command 层只做参数解析 → 调 Service → 返回结果，禁止含业务逻辑
-- Service 层拥有所有业务逻辑，可调 db/ 和 llm/
-- db/ 只做 SQL 执行，不含业务判断
-- llm/ 只做 HTTP 请求和流式解析，不含业务逻辑
-- 并发模型：每次对话独立 `tokio::spawn`
-- 上下文管理：后端全权负责 system prompt + 记忆 + 上下文裁剪 + token 计数
+- Service 层拥有所有业务逻辑，通过 agent_bridge 调 opencode，通过 db/ 读写 EgoSync 数据
+- `sidecar.rs` 只管 opencode 进程生命周期（spawn/kill/health check/restart）
+- `agent_bridge.rs` 只做 HTTP 请求封装和 SSE 流解析（opencode server API）
+- `agent_config.rs` 管理 opencode.json（角色 CRUD 时同步 agent 配置）
+- db/ 只做 SQL 执行（EgoSync 自身数据），不含业务判断
+- opencode server 全权管理 LLM 调用、工具执行、session/message 持久化
+- 并发模型：每次对话通过 agent_bridge 创建 opencode session
+- LLM 流式：opencode SSE stream → agent_bridge 解析 → Tauri Event (`llm:stream`) → 前端
+- API Key 由 EgoSync keyring 管理，启动时注入 opencode 环境变量
 
 ### 测试规则
 
@@ -172,6 +187,7 @@ _本文件包含 AI Agent 在本项目中实现代码时必须遵循的关键规
 4. TS: `types/{domain}.ts` 中定义类型
 5. TS: `services/{domain}Service.ts` 中封装 invoke
 6. TS: `hooks/use{Domain}.ts` 中封装 hook（如需）
+7. 若涉及角色变更：`agent_config.rs` 同步更新 opencode.json
 
 ### 关键禁止事项
 
@@ -182,8 +198,10 @@ _本文件包含 AI Agent 在本项目中实现代码时必须遵循的关键规
 - ❌ 使用 `.unwrap()` 处理可能失败的操作（用 `Result` + `?`）
 - ❌ 混用 camelCase 和 snake_case（遵守各层约定：TS=camelCase, Rust/DB=snake_case, serde 自动桥接）
 - ❌ 在前端写自定义 CSS class（使用 Tailwind utility）
-- ❌ 前端直接调用 LLM API（必须走 Rust 后端）
+- ❌ 前端直接调用 LLM API 或 opencode API（必须走 Rust 后端）
 - ❌ 在 App.tsx 中新增组件定义（拆分到对应域文件夹）
+- ❌ 绕过 agent_bridge 直接从 service 层调 opencode HTTP API（统一走 agent_bridge 封装）
+- ❌ 手动编辑 opencode.json（通过 agent_config.rs 程序化管理）
 
 **安全规则:**
 - API Key 存储使用 keyring crate（Windows Credential Manager / macOS Keychain / Linux Secret Service）
@@ -191,14 +209,17 @@ _本文件包含 AI Agent 在本项目中实现代码时必须遵循的关键规
 - LLM 调用不在服务端存储用户对话内容
 
 **性能注意:**
-- LLM 流式传输必须用 Tauri Event（`app.emit`），不轮询
+- LLM 流式传输：opencode SSE → agent_bridge 解析 → Tauri Event（`app.emit`）→ 前端，不轮询
 - 前端状态更新用增量方式，骨架屏仅首次加载使用
 - 60fps 动效依赖 Tailwind + CSS transition，避免 JS 动画阻塞渲染
+- opencode server 进程常驻内存（约 50-100MB），应用退出时优雅终止
 
 **数据边界:**
-- 主数据库 `egosync.db`：所有 services 可读写
+- 主数据库 `egosync.db`：所有 services 可读写（角色元数据/记忆/任务/设置等）
 - 对话日志库 `conversations.db`：仅 `db/conversations.rs` 直接访问，其他模块通过 service 层
-- 前端永远不直接访问 DB 或 LLM API
+- opencode SQLite：由 opencode server 独立管理（session/message），EgoSync 通过 agent_bridge HTTP API 访问
+- opencode 配置 `opencode.json`：由 `agent_config.rs` 程序化管理，角色 CRUD 时自动同步
+- 前端永远不直接访问 DB、LLM API 或 opencode server
 
 ---
 
@@ -215,4 +236,4 @@ _本文件包含 AI Agent 在本项目中实现代码时必须遵循的关键规
 - 定期审查，移除过时规则
 - 保持精简，聚焦 Agent 容易遗漏的细节
 
-最后更新：2026-05-20
+最后更新：2026-05-25

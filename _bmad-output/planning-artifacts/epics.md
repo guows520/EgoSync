@@ -6,7 +6,7 @@ inputDocuments:
   - ux-design-specification.md
   - GUI/src/App.tsx
 project_name: EgoSync
-date: 2026-05-20
+date: 2026-05-25
 user_name: boss
 ---
 
@@ -14,7 +14,7 @@ user_name: boss
 
 ## Overview
 
-本文档基于 PRD（30 个 FR）、Architecture（Tauri 2.x + React 18 + Rust 后端架构）、UX Design Specification（"宁静书房"布局 + shadcn/ui 设计系统）和**已实现的高保真前端原型 `GUI/src/App.tsx`（1458 行，21 个组件）**，将需求分解为可由开发者执行的 Epic 和 Story 列表。
+本文档基于 PRD（36 个 FR）、Architecture（Tauri 2.x + React 18 + Rust 后端 + opencode sidecar 架构）、UX Design Specification（"宁静书房"布局 + shadcn/ui 设计系统）和**已实现的高保真前端原型 `GUI/src/App.tsx`（1458 行，21 个组件）**，将需求分解为可由开发者执行的 Epic 和 Story 列表。
 
 ## ⚠️ 关键实现约束（影响所有 Story 设计）
 
@@ -42,7 +42,7 @@ user_name: boss
 
 **4.2 角色管理**
 - **FR-4**: 角色 CRUD — 创建/编辑/归档/永久删除角色；归档保留记忆可恢复；永久删除需二次确认
-- **FR-4b**: 角色 Skill 配置 — 用户可为角色配置 Skill（V1 支持 Web 搜索/文件读写；代码执行/邮件发送延期至 V2）；角色缺 Skill 时主动提示
+- **FR-4b**: 角色 Skill 配置 — 基于 opencode SKILL.md 格式；三来源（内置/用户自定义/opencode 生态）；Agent 自动发现；MCP 外部工具接入；角色缺 Skill 时主动提示
 - **FR-5**: 角色从对话自然涌现 — 管家从对话中识别角色需求并建议创建（2-3 轮引导）；同时提供手动表单创建入口
 - **FR-6**: 角色个性化语调 — 不同角色用符合身份的语调（产品经理简洁、父亲温暖、学习者好奇）
 
@@ -82,11 +82,19 @@ user_name: boss
 - **FR-25**: 本地优先存储 — 所有数据本地 SQLite；断网完整可用；无内容数据上传（LLM API 除外）
 - **FR-26**: 完整数据导出 — 一键导出全部数据为 JSON/Markdown；30 秒内完成
 - **FR-27**: 数据销毁 — 一键销毁，二次确认；销毁后应用回到初始状态
-- **FR-28**: LLM 模型配置 — 支持 OpenAI 兼容格式 + Anthropic 格式；用户配置 base_url + api_key + model_name；支持 Ollama/LM Studio 本地模型；多 Provider 配置；连接测试
+- **FR-28**: LLM 模型配置 — 由 opencode Agent Engine 统一管理，原生支持 30+ Provider；EgoSync UI 提供友好配置界面写入 opencode.json；支持 Ollama/LM Studio 本地模型；多 Provider 配置；连接测试
 
 **4.11 透明审计与不确定性表达**
 - **FR-29**: 推理溯源 — "为什么"追问返回引用的记忆条目和规则推理链
 - **FR-30**: 不确定性表达 — 信心不足时主动表达"我不太确定，建议你自己评估"
+
+**4.12 Agent 引擎集成（opencode）**
+- **FR-31**: opencode Sidecar 进程管理 — Tauri 后端管理 opencode server 生命周期（启动/停止/健康检查/异常重启）；opencode binary 作为 Tauri sidecar 打包，无需用户安装
+- **FR-32**: 角色→opencode Agent 动态映射 — 每个角色注册为 opencode subagent（专属 prompt/model/permission/skill）；管家作为 primary agent；角色 CRUD 时同步更新 opencode agent 配置
+- **FR-33**: Agent Loop 对话升级 — 从单轮 tool-use 升级为完整 Agent Loop；Agent 自主决策工具调用和步骤数；支持复杂多步任务（代码编写/研究/文件操作）；可中断
+- **FR-34**: 可配置权限模型 — 默认自主执行(allow)，用户可设特定操作为需确认(ask)或禁止(deny)；权限粒度覆盖文件编辑/bash/外部目录/Web 搜索
+- **FR-35**: opencode 内置工具复用 — 角色可用 read/write/edit/bash/grep/glob/websearch/webfetch/skill/task 等 20+ 内置工具；工具可用性受权限控制
+- **FR-36**: Session 持久化与上下文管理 — 角色对话映射为 opencode session；支持上下文自动压缩(compaction)和历史消息分页；跨应用重启保留
 
 ### NonFunctional Requirements
 
@@ -120,17 +128,22 @@ user_name: boss
 - SQLx migration 文件版本化（`{seq}_{description}.sql`）
 - 主 DB 与对话日志 DB 分离
 
-**LLM 集成层（共用层，被多服务依赖）：**
-- LlmProvider trait + 策略模式：`OpenAiProvider`（覆盖 OpenAI/DeepSeek/Groq/Ollama/LM Studio）+ `AnthropicProvider`（覆盖 Claude）
-- Tauri Event 流式传输（`llm:stream` payload: `{ roleId, token, done }`）
-- Token 计数与上下文裁剪（V1 简单截断）
-- 后端全权管理上下文（system prompt 注入 + 记忆注入 + 历史拼接）
-- 每次对话独立 `tokio::spawn`
+**LLM 集成层（由 opencode 统一管理）：**
+- opencode 原生支持 30+ Provider（OpenAI/Anthropic/Google/DeepSeek/Groq/Azure/Bedrock/Ollama/LM Studio 等）
+- EgoSync 通过写入 opencode.json 配置 Provider，opencode 热加载
+- API Key 由 EgoSync keyring 管理，启动时注入 opencode 环境变量
+- LLM 流式输出：opencode SSE stream → Rust AgentBridge 解析 → Tauri Event (`llm:stream`)
+- 保留 LlmProvider trait 作为降级兼容层（连接测试、opencode 不可用时的基础对话）
 
-**Agent 引擎：**
-- 统一执行引擎（管家 + 所有角色共用）
-- System Prompt 分层组合（基础人格 + 角色定义 + 当前上下文）
-- 配置驱动（不为每个角色硬编码逻辑）
+**Agent 引擎（opencode sidecar）：**
+- opencode binary 作为 Tauri sidecar 打包（`resources/opencode`），三平台
+- Rust 后端 `sidecar.rs` 管理进程生命周期（spawn/health check/restart/kill）
+- Rust 后端 `agent_bridge.rs` 封装 opencode HTTP API（session/message/agent/config）
+- 管家映射为 opencode primary agent，角色映射为 subagent
+- `agent_config.rs` 动态管理 opencode.json（角色 CRUD 时同步）
+- 权限模型：EgoSync UI 配置 → opencode permission 规则（allow/ask/deny）
+- opencode 内置工具（read/write/edit/bash/grep/glob/websearch 等）直接可用
+- Skill 体系：opencode SKILL.md 格式，EgoSync 内置 skills + 用户自定义 skills
 
 **调度器：**
 - `tokio::interval` 实现工作循环
@@ -229,8 +242,14 @@ user_name: boss
 | FR-28 | E1 | — | LLM 模型配置 |
 | FR-29 | E2 | — | 推理溯源 |
 | FR-30 | E2 | — | 不确定性表达 |
+| FR-31 | E2 | — | opencode Sidecar 进程管理 |
+| FR-32 | E2 | — | 角色→opencode Agent 动态映射 |
+| FR-33 | E2 | — | Agent Loop 对话升级 |
+| FR-34 | E2 | — | 可配置权限模型 |
+| FR-35 | E2 | — | opencode 内置工具复用 |
+| FR-36 | E2 | — | Session 持久化与上下文管理 |
 
-✅ **30 个 FR 全部映射，无孤儿。**
+✅ **36 个 FR 全部映射，无孤儿。**
 
 ## Epic List
 
@@ -257,18 +276,23 @@ user_name: boss
 
 ---
 
-### Epic 2: 角色对话、记忆与可信度（Role Engagement, Memory & Trust）
+### Epic 2: Agent 引擎集成、角色对话与记忆（Agent Engine, Role Engagement, Memory & Trust）
 
-用户能在多个角色间切换对话，每个角色用符合身份的语调回应，系统从对话中提炼记忆，用户可查询、追溯、删除记忆，并随时追问"为什么"获得透明推理。完成后是一个完整的多角色个性化助手。
+用户能在多个角色间切换对话，每个角色通过 opencode Agent Loop 执行复杂多步任务，用符合身份的语调回应，系统从对话中提炼记忆，用户可查询、追溯、删除记忆，并随时追问"为什么"获得透明推理。底层由 opencode sidecar 提供完整 Agent 能力（工具调用、Skill、权限控制）。完成后是一个完整的多角色个性化 AI Agent 系统。
 
-**FRs covered:** FR-1（完整路由）, FR-2, FR-4（U/D/Archive）, FR-4b, FR-5（持续涌现）, FR-6, FR-7, FR-8, FR-9, FR-12（UI 层）, FR-20, FR-29, FR-30
+**FRs covered:** FR-1（完整路由）, FR-2, FR-4（U/D/Archive）, FR-4b, FR-5（持续涌现）, FR-6, FR-7, FR-8, FR-9, FR-12（UI 层）, FR-20, FR-29, FR-30, **FR-31, FR-32, FR-33, FR-34, FR-35, FR-36**
 
 **UX-DRs covered:** UX-DR9, UX-DR13, UX-DR14（含 Memory tab）
 
 **核心交付：**
+- **opencode sidecar 进程管理**（`sidecar.rs`：spawn/kill/health check/restart）
+- **AgentBridge HTTP 客户端**（`agent_bridge.rs`：session/message/agent API 封装 + SSE 流解析）
+- **角色→opencode Agent 动态映射**（`agent_config.rs`：角色 CRUD 同步 opencode.json agent 配置）
+- **Agent Loop 对话核心回路**（替代原 tool-use：用户消息→opencode session→Agent 自主多步执行→SSE→Tauri Event→前端）
+- **可配置权限模型**（UI 配置 allow/ask/deny → opencode permission 规则）
 - 角色 CRUD 完整版（编辑、归档可恢复、永久删除二次确认、Skill 配置 UI）
 - 完整路由引擎（管家分发 ↔ 角色直接对话双通道）
-- 角色个性化 System Prompt 模板
+- 角色个性化 System Prompt 模板（注入 opencode agent prompt）
 - 记忆提炼 pipeline（对话后台 LLM 提炼 → memories 表，标签化偏好/任务/状态/认知更新）
 - 记忆查询/溯源 UI（MemoryTab 接通真实数据，可追溯到原始对话日志）
 - 选择性遗忘（V1 简化版：仅删除条目，不重跑推理）
@@ -385,7 +409,7 @@ user_name: boss
 
 **核心交付：**
 - GitHub Actions 三平台并行 CI（Windows/macOS/Linux）
-- Tauri bundler MSI/DMG/AppImage 自动产物
+- Tauri bundler MSI/DMG/AppImage 自动产物（含 opencode sidecar binary）
 - E2E 测试套件（Tauri driver / WebDriver）覆盖：冷启动引导、管家对话、角色 CRUD、LLM 流式响应、任务管理、仲裁、简报复盘
 - WCAG 2.1 AA 无障碍审计 & 修复（对比度、键盘导航、aria-label、屏幕阅读器）
 - 性能基准验证（60fps 动效、首次体验 ≤ 5 分钟、流式输出延迟）
@@ -396,16 +420,16 @@ user_name: boss
 ## Epic 依赖图
 
 ```
-E1 (基础) ─┬─→ E2 (角色+记忆) ─┬─→ E5 (使命+仲裁)
-           │                    ├─→ E6 (简报+复盘)
-           ├─→ E3 (任务+四象限) ─┴─→ E4 (主动+仪表盘)
+E1 (基础) ─┬─→ E2 (Agent引擎+角色+记忆) ─┬─→ E5 (使命+仲裁)
+           │                               ├─→ E6 (简报+复盘)
+           ├─→ E3 (任务+四象限) ────────────┴─→ E4 (主动+仪表盘)
            │
            └─→ E7 (数据主权) [E1 之后任意时机]
 
 E8 (V1 加固) ← 所有 Epic 完成后
 ```
 
-每个 Epic 都自包含、可独立验收。E2 与 E3 可并行，E4 需要 E3，E5/E6 需要 E2+E3+E4。
+每个 Epic 都自包含、可独立验收。E2 包含 Agent Engine 基础设施（opencode sidecar）作为首要 story，后续角色/记忆 story 依赖于此。E2 与 E3 可并行，E4 需要 E3，E5/E6 需要 E2+E3+E4。
 
 ---
 
@@ -727,9 +751,78 @@ So that 能感受到角色是"活的"实体。
 
 ---
 
-## Epic 2: 角色对话、记忆与可信度（Role Conversation, Memory & Trustworthiness）
+## Epic 2: Agent 引擎集成、角色对话与记忆（Agent Engine, Role Conversation, Memory & Trustworthiness）
 
-用户能与多个角色分别对话，每个角色有独特语调；系统自动从对话中提炼记忆，用户能查看、溯源和遗忘记忆；AI 做出建议时提供推理透明度，不确定时主动声明。
+用户能与多个角色分别对话，每个角色通过 opencode Agent Loop 执行复杂任务，有独特语调；系统自动从对话中提炼记忆，用户能查看、溯源和遗忘记忆；AI 做出建议时提供推理透明度，不确定时主动声明。底层由 opencode sidecar 提供完整 Agent 能力。
+
+### Story 2.0: opencode Sidecar 进程管理与 AgentBridge HTTP 客户端
+
+As a 开发者,
+I want Tauri 应用启动时自动拉起 opencode server 并通过 HTTP API 通信,
+So that 后续所有 Agent 对话和工具调用有执行引擎支撑。
+
+**Acceptance Criteria:**
+
+**Given** 开发者执行 `npm run tauri dev`
+**When** 应用启动完成
+**Then** opencode server 进程已在后台运行，监听 `127.0.0.1:4096`（或可配置端口）
+
+**Given** opencode server 正在运行
+**When** Rust 后端调用 `agent_bridge.get_providers()`
+**Then** 返回当前已配置的 Provider 列表（JSON）
+
+**Given** 应用退出（关闭窗口或 Cmd+Q）
+**When** 检查进程列表
+**Then** opencode server 进程已终止，无孤儿进程
+
+**Given** opencode server 意外崩溃
+**When** 健康检查失败
+**Then** Rust 后端在 3 秒内自动重启 opencode 进程
+
+**Given** `src-tauri/resources/` 目录
+**Then** 包含当前平台的 opencode binary（Windows: `opencode.exe`, macOS/Linux: `opencode`）
+
+**Given** Rust 后端代码
+**Then** 存在 `services/sidecar.rs`（进程管理：spawn/kill/health_check/restart）
+**And** 存在 `services/agent_bridge.rs`（HTTP 客户端：create_session/send_message/abort/get_messages/get_config/get_providers）
+
+---
+
+### Story 2.0b: 角色→opencode Agent 动态映射与权限配置
+
+As a 开发者,
+I want EgoSync 角色 CRUD 时自动同步为 opencode agent 配置,
+So that 每个角色都有独立的 Agent 身份（prompt/model/permission）在 opencode 中运行。
+
+**Acceptance Criteria:**
+
+**Given** 用户创建一个新角色（name="产品经理", goal="..."）
+**When** 角色写入 EgoSync DB
+**Then** opencode.json 的 `agent` 段新增对应条目（mode: "subagent", prompt 含角色 goal）
+
+**Given** 用户编辑角色 prompt/goal
+**When** 保存成功
+**Then** opencode.json 对应 agent 的 prompt 字段同步更新
+
+**Given** 用户归档角色
+**When** 归档成功
+**Then** opencode.json 对应 agent 设为 `disable: true`
+
+**Given** 用户永久删除角色
+**When** 删除成功
+**Then** opencode.json 中对应 agent 条目被移除
+
+**Given** 用户在角色设置中将 "bash" 权限从 "allow" 改为 "ask"
+**When** 保存成功
+**Then** opencode.json 对应 agent 的 permission 段更新为 `{ "bash": "ask" }`
+
+**Given** 管家（Butler）
+**Then** 始终作为 primary agent 存在于 opencode.json，permission 为 `{ "*": "allow" }`
+
+**Given** Rust 后端代码
+**Then** 存在 `services/agent_config.rs`（read/write opencode.json agent 段、同步逻辑）
+
+---
 
 ### Story 2.1: 用户能编辑角色名称/图标/颜色，归档和恢复角色，永久删除角色
 

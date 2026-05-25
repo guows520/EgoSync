@@ -11,6 +11,8 @@ pub enum AppError {
     ValidationError(String),
     #[error("Keyring error: {0}")]
     KeyringError(String),
+    #[error("Sidecar error: {0}")]
+    SidecarError(String),
 }
 
 impl serde::Serialize for AppError {
@@ -26,6 +28,7 @@ impl serde::Serialize for AppError {
             AppError::DbError(msg) => map.serialize_entry("DbError", msg)?,
             AppError::ValidationError(msg) => map.serialize_entry("ValidationError", msg)?,
             AppError::KeyringError(msg) => map.serialize_entry("KeyringError", msg)?,
+            AppError::SidecarError(msg) => map.serialize_entry("SidecarError", msg)?,
         }
         map.end()
     }
@@ -51,6 +54,7 @@ mod tests {
             AppError::DbError("x".into()),
             AppError::ValidationError("x".into()),
             AppError::KeyringError("x".into()),
+            AppError::SidecarError("x".into()),
         ];
         for err in cases {
             let json = serde_json::to_string(&err).expect("serialize should succeed");

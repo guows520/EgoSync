@@ -4,10 +4,10 @@ inputDocuments: ['prd-egosync.md', 'ux-design-specification.md', 'brainstorming-
 workflowType: 'architecture'
 lastStep: 8
 status: 'complete'
-completedAt: '2026-05-20'
+completedAt: '2026-05-25'
 project_name: '探索'
 user_name: 'boss'
-date: '2026-05-19'
+date: '2026-05-25'
 ---
 
 # Architecture Decision Document
@@ -18,7 +18,7 @@ _This document builds collaboratively through step-by-step discovery. Sections a
 
 ### Requirements Overview
 
-**Functional Requirements (30 FRs across 11 domains):**
+**Functional Requirements (36 FRs across 12 domains):**
 
 | 功能域 | FR范围 | 架构影响 |
 |--------|--------|----------|
@@ -32,13 +32,15 @@ _This document builds collaboratively through step-by-step discovery. Sections a
 | 三级通知 | FR-22 | 通知分级引擎、频率限制 |
 | 智能四象限 | FR-23~24 | 自动分类模型、Q2保护规则 |
 | 数据主权 | FR-25~27 | 本地SQLite、导出/销毁机制 |
-| LLM配置 | FR-28 | 多Provider适配层（OpenAI兼容+Anthropic） |
+| LLM配置 | FR-28 | opencode多Provider体系（30+原生支持） |
+| **Agent引擎集成** | **FR-31~36** | **opencode sidecar进程、Agent Loop、权限模型、工具复用、Session持久化** |
 
 **Non-Functional Requirements (Architecture Drivers):**
 
 - **本地优先**：零云端依赖，断网完整可用
-- **Tauri 桌面应用**：Rust后端 + WebView前端
-- **BYOK模式**：用户自带 API Key，支持 Ollama/LM Studio 本地模型
+- **Tauri 桌面应用**：Rust后端 + WebView前端 + opencode sidecar
+- **BYOK模式**：用户自带 API Key，opencode原生支持30+ Provider
+- **Agent引擎**：opencode sidecar提供完整Agent Loop、内置工具、Skill系统、Subagent、MCP
 - **性能**：WebView渲染60fps动效、LLM流式输出实时渲染
 - **数据隐私**：所有数据本地SQLite，LLM调用不存储内容
 - **跨平台**：Windows/macOS/Linux 一致体验
@@ -55,18 +57,23 @@ _This document builds collaboratively through step-by-step discovery. Sections a
 |------|------|----------|
 | 前端已固定 | GUI/App.tsx 1458行原型 | React 18 + TS + Vite + Tailwind，只接API |
 | Tauri框架 | PRD §Platform | Rust后端处理业务逻辑，通过IPC与前端通信 |
+| opencode sidecar | PRD §4.12 FR-31 | opencode binary打包进安装包，Rust管理其生命周期，通过HTTP API通信 |
 | 本地SQLite | FR-25 | 所有持久化走SQLite，需设计schema |
-| LLM流式 | UX Spec | 必须支持SSE/流式token渲染 |
+| opencode SQLite | FR-36 | opencode自身session/message存储独立于EgoSync主DB |
+| LLM流式 | UX Spec | 必须支持SSE/流式token渲染（通过opencode Event stream） |
 | 无后台daemon | FR-10 Assumption | 工作循环仅在应用运行时执行 |
 | 应用运行时执行 | PRD §Assumption | 后台任务 = 应用内定时器，非系统服务 |
+| opencode端口 | FR-31 Assumption | opencode server占用本地端口（默认4096），需可配置 |
 
 ### Cross-Cutting Concerns Identified
 
-1. **LLM集成层** — 所有Agent共用，需统一的Provider适配、流式处理、Token计费、错误重试
-2. **记忆管线** — 对话→结构化提炼→存储→检索→溯源，贯穿管家和所有角色
-3. **Tauri IPC通道** — 前端每个操作都需要通过IPC调用Rust后端，需设计统一的命令协议
-4. **角色生命周期管理** — 创建/归档/删除/恢复跨越UI、存储、工作循环调度
-5. **通知与建议状态** — 从工作循环产生→分级→呈现→用户响应→反馈学习
+1. **opencode Sidecar管理** — 进程生命周期（启动/停止/重启/健康检查）、端口分配、配置同步
+2. **Agent引擎通信层** — Rust后端通过HTTP API调用opencode server，封装为统一的AgentBridge服务
+3. **记忆管线** — 对话→结构化提炼→存储→检索→溯源，贯穿管家和所有角色
+4. **Tauri IPC通道** — 前端每个操作都需要通过IPC调用Rust后端，需设计统一的命令协议
+5. **角色生命周期管理** — 创建/归档/删除/恢复跨越UI、EgoSync DB、opencode agent config
+6. **通知与建议状态** — 从工作循环产生→分级→呈现→用户响应→反馈学习
+7. **权限同步** — EgoSync角色权限配置 ↔ opencode permission规则的双向映射
 
 ## Starter Template Evaluation
 
@@ -145,13 +152,21 @@ EgoSync/
 │       ├── src/
 │       │   ├── commands/   # Tauri IPC 命令处理
 │       │   ├── agents/     # Agent 引擎（管家+角色）
-│       │   ├── llm/        # LLM Provider 适配层
+│       │   ├── agent_bridge/ # opencode HTTP API 客户端
+│       │   ├── sidecar/    # opencode 进程管理（启动/停止/健康检查）
+│       │   ├── llm/        # LLM Provider 兼容层（降级方案）
 │       │   ├── memory/     # 结构化记忆管线
 │       │   ├── scheduler/  # 工作循环调度器
 │       │   ├── db/         # SQLx 数据访问层
 │       │   └── models/     # 数据模型
 │       ├── migrations/     # SQLx 数据库迁移
+│       ├── resources/      # Tauri sidecar资源
+│       │   └── opencode    # opencode binary (平台特定)
 │       └── Cargo.toml
+├── skills/                 # EgoSync内置Skills (SKILL.md格式)
+│   ├── task-management/SKILL.md
+│   ├── daily-briefing/SKILL.md
+│   └── weekly-review/SKILL.md
 └── docs/
 ```
 
@@ -162,19 +177,21 @@ EgoSync/
 ### Decision Priority Analysis
 
 **Critical Decisions (Block Implementation):**
-- 数据架构：单一DB + 对话日志分离
-- LLM集成：Trait抽象 + Tauri Event流式
-- IPC协议：按域分模块 + 类型化错误
+- Agent引擎集成：opencode sidecar + HTTP API bridge
+- 数据架构：EgoSync DB（角色元数据/记忆/任务）+ opencode DB（session/message）
+- IPC协议：前端 ↔ Rust ↔ opencode 三层通信
 
 **Important Decisions (Shape Architecture):**
-- Agent引擎：配置驱动 + 统一执行引擎
-- System Prompt：分层组合模式
+- 角色→Agent映射：EgoSync角色配置同步为opencode agent config
+- 权限模型：opencode permission系统 + EgoSync UI配置
+- Skill体系：opencode SKILL.md格式 + EgoSync内置Skills
 - 状态同步：事件驱动增量更新
 
 **Deferred Decisions (Post-MVP):**
 - DB加密（V2可选SQLCipher）
 - 前端状态管理升级（V2视复杂度引入Zustand）
 - Actor模型（V2角色数量增长后评估）
+- opencode多workspace支持
 
 ### Data Architecture
 
@@ -214,6 +231,131 @@ EgoSync/
 ├── conversations  — 对话会话（role_id, title, started_at, updated_at）
 ├── messages       — 消息（conversation_id, role[user/assistant], content, thinking, is_complete, created_at）
 ```
+
+### Agent Engine Integration (opencode Sidecar)
+
+**架构决策：opencode作为Sidecar进程**
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│                    EgoSync Desktop (Tauri)                          │
+├────────────────────────────────────────────────────────────────────┤
+│  React UI ←── Tauri IPC ──→ Rust Backend (编排层)                  │
+│                                    │                               │
+│                          ┌─────────▼──────────┐                    │
+│                          │  AgentBridge       │                    │
+│                          │  (HTTP Client)     │                    │
+│                          └─────────┬──────────┘                    │
+│                                    │ HTTP API (localhost:4096)      │
+│                          ┌─────────▼──────────┐                    │
+│                          │  opencode server   │                    │
+│                          │  (sidecar process) │                    │
+│                          │  ├─ Butler Agent   │                    │
+│                          │  ├─ Role Agents    │                    │
+│                          │  ├─ Tools (20+)    │                    │
+│                          │  ├─ Skills         │                    │
+│                          │  └─ MCP Servers    │                    │
+│                          └────────────────────┘                    │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+**进程生命周期管理：**
+- Tauri应用启动 → Rust后端spawn opencode server子进程
+- 健康检查：定时HTTP ping（`GET /`），失败时自动重启
+- 应用退出 → 发送SIGTERM → 等待优雅退出 → 超时SIGKILL
+- opencode binary位置：Tauri sidecar目录（`resources/opencode` 或 `resources/opencode.exe`）
+
+**通信协议（AgentBridge → opencode HTTP API）：**
+```rust
+// services/agent_bridge.rs — 核心接口
+pub struct AgentBridge {
+    base_url: String,        // http://127.0.0.1:4096
+    project_id: String,      // opencode project ID
+    http_client: reqwest::Client,
+}
+
+impl AgentBridge {
+    // Session管理
+    pub async fn create_session(&self, agent: &str, directory: &str) -> Result<SessionInfo>;
+    pub async fn send_message(&self, session_id: &str, content: &str) -> Result<MessageStream>;
+    pub async fn abort_session(&self, session_id: &str) -> Result<()>;
+    pub async fn get_messages(&self, session_id: &str) -> Result<Vec<Message>>;
+    pub async fn compact_session(&self, session_id: &str) -> Result<()>;
+
+    // 配置管理
+    pub async fn get_config(&self) -> Result<OpencodeConfig>;
+    pub async fn get_providers(&self) -> Result<Vec<Provider>>;
+    pub async fn get_agents(&self) -> Result<Vec<AgentInfo>>;
+}
+```
+
+**角色→Agent映射策略：**
+- EgoSync角色创建 → 写入 `opencode.json` 的 `agent` 配置段
+- 每个角色映射为一个opencode agent（mode: "subagent"）
+- 管家映射为primary agent（mode: "primary"）
+- 配置变更通过修改 `opencode.json` 实现，opencode热加载
+
+**opencode.json 配置示例（由Rust后端动态管理）：**
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    // 用户通过EgoSync UI配置的Provider
+  },
+  "agent": {
+    "butler": {
+      "name": "管家",
+      "mode": "primary",
+      "prompt": "你是EgoSync管家...",
+      "permission": { "*": "allow" }
+    },
+    "role-product-manager": {
+      "name": "产品经理",
+      "mode": "subagent",
+      "description": "产品经理角色Agent",
+      "prompt": "你是用户的产品经理分身...",
+      "permission": {
+        "*": "allow",
+        "bash": "ask"
+      }
+    }
+  }
+}
+```
+
+**权限模型映射（EgoSync UI → opencode permission）：**
+| EgoSync UI设置 | opencode permission值 | 行为 |
+|---------------|---------------------|------|
+| 自主执行 | `"allow"` | Agent直接执行，无需确认 |
+| 需确认 | `"ask"` | 触发时暂停，通过Rust→前端弹确认 |
+| 禁止 | `"deny"` | Agent不会尝试调用 |
+
+**opencode内置工具复用（Agent可用工具集）：**
+- `read` — 读取文件
+- `write` — 写入文件
+- `edit` — 编辑文件（搜索替换）
+- `bash` — 执行shell命令
+- `grep` — 搜索代码
+- `glob` — 文件模式匹配
+- `websearch` — Web搜索
+- `webfetch` — 网页抓取
+- `skill` — 加载SKILL.md
+- `task` — 子Agent委派
+- `todo` — 待办管理
+- 自定义EgoSync工具（通过opencode custom tool机制注册）
+
+**Skill体系（SKILL.md格式）：**
+- 位置：`.opencode/skills/<name>/SKILL.md`（项目级）或 `~/.config/opencode/skills/`（全局）
+- EgoSync内置Skills存放于sidecar资源目录，启动时复制到opencode skills路径
+- 角色可通过配置绑定特定skills
+
+**流式响应桥接：**
+```
+opencode SSE stream → AgentBridge (Rust) → Tauri Event → 前端渲染
+```
+- opencode的消息流通过HTTP SSE返回
+- Rust AgentBridge解析SSE，转发为Tauri Event（`llm:stream`）
+- 前端监听逻辑不变（useTauriEvent）
 
 ### Authentication & Security
 
@@ -255,7 +397,13 @@ pub enum AppError {
 - 前端 `listen("llm-stream")` 实时渲染
 - 零额外依赖，原生支持
 
-**LLM Provider适配：Trait抽象 + 策略模式**
+**LLM Provider适配：由opencode统一管理**
+- opencode原生支持30+ Provider（OpenAI/Anthropic/Google/DeepSeek/Groq/Azure/Bedrock/Ollama等）
+- 用户通过EgoSync UI配置 → Rust后端写入opencode.json → opencode热加载
+- EgoSync不再自行实现LLM HTTP调用，全部委托opencode
+- API Key存储仍由EgoSync管理（keyring），启动时注入环境变量给opencode进程
+
+**原有LlmProvider Trait保留为兼容层（降级方案）：**
 ```rust
 #[async_trait]
 pub trait LlmProvider: Send + Sync {
@@ -267,11 +415,8 @@ pub trait LlmProvider: Send + Sync {
     ) -> Result<(), LlmError>;
     async fn test_connection(&self) -> Result<(), LlmError>;
 }
-// StreamEvent variants: Token(String), Thinking(String), ToolCall(String, String), Done, Error(String)
-// ChatOptions: { disable_thinking: Option<bool>, tools: Option<Vec<Value>>, tool_choice: Option<String> }
+// 保留用于：连接测试、opencode不可用时的降级对话
 ```
-- OpenAiProvider（覆盖OpenAI/DeepSeek/Groq/Ollama/LM Studio）
-- AnthropicProvider（覆盖Claude）
 
 **并发模型：每次对话独立 tokio task**
 - `tokio::spawn` 处理对话，V1角色少(<10)，简单直观
@@ -325,18 +470,20 @@ export const roleService = {
 
 **Implementation Sequence:**
 1. Tauri 项目初始化 + SQLite schema 迁移
-2. LLM Provider 适配层 + Tauri Event 流式通信
-3. Agent 执行引擎（对话核心回路）
-4. 前端 IPC service 层 + App.tsx 组件拆分 + mock→real 替换
-5. 记忆提炼管线
-6. 工作循环调度器 + 建议系统
-7. 通知系统 + 仲裁引擎
-8. 晨间简报 + 周复盘生成器
+2. **opencode sidecar集成（进程管理 + AgentBridge HTTP客户端）**
+3. **角色→opencode Agent映射（opencode.json动态管理）**
+4. Agent Loop对话核心回路（通过AgentBridge → opencode session/message API）
+5. 前端 IPC service 层 + App.tsx 组件拆分 + mock→real 替换
+6. 记忆提炼管线
+7. 工作循环调度器 + 建议系统
+8. 通知系统 + 仲裁引擎
+9. 晨间简报 + 周复盘生成器
 
 **Cross-Component Dependencies:**
-- LLM层 → 被 Agent引擎、记忆提炼、工作循环 三者共用
-- SQLite schema → 被所有后端模块依赖
-- Tauri Event → 被 LLM流式、状态同步、通知 三者共用
+- **opencode sidecar → 被 AgentBridge、所有Agent对话、Skill加载 依赖（最高优先级）**
+- AgentBridge → 被 Agent引擎、记忆提炼（对话触发）共用
+- SQLite schema → 被所有后端模块依赖（EgoSync自身数据）
+- Tauri Event → 被 LLM流式（桥接自opencode SSE）、状态同步、通知 三者共用
 - 前端 service 层 → 所有 UI 组件的数据来源
 
 ## Implementation Patterns & Consistency Rules
@@ -434,11 +581,14 @@ src-tauri/src/
 ├── services/                # 业务逻辑层
 │   ├── mod.rs
 │   ├── agent_engine.rs
+│   ├── agent_bridge.rs      # opencode HTTP API 客户端
+│   ├── sidecar.rs           # opencode 进程管理
+│   ├── agent_config.rs      # 角色→opencode Agent映射
 │   ├── memory_pipeline.rs
 │   ├── arbitration.rs
 │   ├── scheduler.rs
 │   └── briefing.rs
-├── llm/                     # LLM Provider 适配层
+├── llm/                     # LLM Provider 兼容层（降级方案）
 │   ├── mod.rs
 │   ├── traits.rs
 │   ├── openai.rs
@@ -694,13 +844,16 @@ EgoSync/探索/
 │       │   ├── services/
 │       │   │   ├── mod.rs
 │       │   │   ├── agent_engine.rs
+│       │   │   ├── agent_bridge.rs      # opencode HTTP API 客户端
+│       │   │   ├── sidecar.rs           # opencode 进程生命周期
+│       │   │   ├── agent_config.rs      # 角色→opencode Agent映射
 │       │   │   ├── memory_pipeline.rs
 │       │   │   ├── arbitration.rs
 │       │   │   ├── scheduler.rs
 │       │   │   ├── briefing.rs
 │       │   │   └── suggestion.rs
 │       │   │
-│       │   ├── llm/
+│       │   ├── llm/                         # LLM Provider 兼容层
 │       │   │   ├── mod.rs
 │       │   │   ├── traits.rs
 │       │   │   ├── openai.rs
@@ -748,7 +901,7 @@ EgoSync/探索/
 
 ### Architectural Boundaries
 
-**IPC Boundary (前端 ↔ Rust):**
+**IPC Boundary (前端 ↔ Rust ↔ opencode):**
 ```
 ┌─────────────────┐     Tauri invoke()      ┌─────────────────┐
 │   React 前端    │ ─────────────────────→  │   commands/     │
@@ -756,26 +909,41 @@ EgoSync/探索/
 │                 │ ←─────────────────────   │                 │
 │   hooks/        │     Result<T, E>         └───────┬─────────┘
 │   (listen)      │                                  │
-│                 │ ←── Tauri Event ──────  services/ │ (业务逻辑)
+│                 │ ←── Tauri Event ──────  services/ │ (编排层)
 └─────────────────┘     (llm:stream,                 │
-                         role:updated...)     ┌───────┴─────────┐
-                                             │   db/ + llm/     │
-                                             │   (数据+外部)    │
+                         role:updated...)    ┌───────┴─────────┐
+                                             │  agent_bridge   │
+                                             │  + sidecar      │
+                                             └───────┬─────────┘
+                                                     │ HTTP API
+                                             ┌───────▼─────────┐
+                                             │  opencode       │
+                                             │  server         │
+                                             │  (Agent Loop +  │
+                                             │   Tools + LLM)  │
+                                             └───────┬─────────┘
+                                                     │
+                                             ┌───────▼─────────┐
+                                             │  db/ (EgoSync)  │
+                                             │  + opencode DB  │
                                              └─────────────────┘
 ```
 
 **Layer Rules:**
-- 前端 **永远不** 直接访问 DB 或 LLM API
+- 前端 **永远不** 直接访问 DB、LLM API 或 opencode server
 - commands/ **只做** 参数校验 + 调 services + 返回结果
-- services/ **拥有** 所有业务逻辑，可调 db/ 和 llm/
-- db/ **只做** SQL 执行，不含业务判断
-- llm/ **只做** HTTP 请求和流式解析，不含业务逻辑
+- services/ **拥有** 所有业务逻辑，通过 agent_bridge 调 opencode，通过 db/ 读写EgoSync数据
+- agent_bridge/ **只做** HTTP请求封装和SSE流解析，不含业务判断
+- sidecar/ **只管** opencode进程生命周期，不含业务逻辑
+- db/ **只做** SQL 执行（EgoSync自身数据），不含业务判断
+- opencode server **全权管理** LLM调用、工具执行、session/message持久化
 
 **Data Boundaries:**
 | 数据库 | 所属 | 访问规则 |
 |--------|------|----------|
-| `egosync.db` | 主数据 | 所有 services 可读写；前端通过 IPC 间接访问 |
-| `conversations.db` | 对话日志 | 仅 `db/conversations.rs` 访问；其他模块通过 service 层接口读取 |
+| `egosync.db` | EgoSync主数据（角色/记忆/任务） | 所有 services 可读写；前端通过 IPC 间接访问 |
+| `conversations.db` | EgoSync对话日志 | 仅 `db/conversations.rs` 访问；其他模块通过 service 层接口读取 |
+| opencode SQLite | opencode session/message | 由opencode server独立管理；EgoSync通过AgentBridge HTTP API访问 |
 
 **Component Communication:**
 | 通信方向 | 机制 | 示例 |
@@ -799,32 +967,31 @@ EgoSync/探索/
 | FR-22 通知 | `notifications/` | `commands/notification.rs` | `notifications` |
 | FR-23~24 四象限 | `tasks/QuadrantView` | `commands/task.rs` | `tasks` |
 | FR-25~27 数据主权 | `settings/` | `commands/settings.rs` | 全部（导出/销毁） |
-| FR-28 LLM配置 | `settings/LlmConfigPanel` | `commands/settings.rs`, `llm/` | `llm_configs` |
+| FR-28 LLM配置 | `settings/LlmConfigPanel` | `commands/settings.rs`, `agent_config.rs` | `llm_configs` + opencode.json |
+| FR-31~36 Agent引擎 | — (透明) | `sidecar.rs`, `agent_bridge.rs`, `agent_config.rs` | opencode DB (session/message) |
 
 ### Integration Points
 
-**Internal Data Flow (对话核心回路):**
+**Internal Data Flow (对话核心回路 — 通过opencode Agent Loop):**
 ```
 用户输入 → ChatInput → invoke('chat_send_message')
     → commands/chat.rs → services/agent_engine.rs
-    → [组装上下文: system_prompt + memories + history]
-    → llm/openai.rs::chat_stream(messages, tx, options)
-    → [每个token] → app.emit("llm:stream", {token, thinking, done})
+    → agent_bridge.rs::send_message(session_id, content)
+    → [HTTP POST] opencode /project/:id/session/:sid/message
+    → opencode Agent Loop（自主决策工具调用、多步执行）
+    → [SSE stream] → agent_bridge 解析 → app.emit("llm:stream", {token, thinking, tool_call, done})
     → 前端 useTauriEvent → StreamingText 实时渲染
-    → [用户点停止] → invoke('chat_stop_streaming') → CancellationToken.cancel()
-    → [完成/中断后] → 内容持久化 + emit done
-    → [ToolCall: create_role] → execute_create_role → app.emit("role:proposed", {name, icon, color, goal})
-    → 前端 useTauriEvent("role:proposed") → RoleConfirmModal → 用户确认 → roleService.create()
-    → [首次消息后] → 异步生成标题 → emit("llm:title-updated")
-    → [完成后] → memory_pipeline.rs 提炼记忆
-    → db/memories.rs 持久化
+    → [用户点停止] → invoke('chat_stop_streaming') → agent_bridge::abort_session()
+    → [完成后] → memory_pipeline.rs 提炼记忆（从opencode messages提取）
+    → db/memories.rs 持久化到EgoSync DB
     → app.emit("memory:changed")
 ```
 
 **External Integrations:**
-- LLM API (OpenAI/Anthropic/Ollama/LM Studio) — 通过 `llm/` 模块统一调用
-- 系统钥匙串 (keyring) — 通过 `services/` 层读写 API Key
-- 无其他外部服务依赖（本地优先）
+- opencode server (sidecar进程) — 通过 `agent_bridge/` HTTP API通信
+- LLM API (OpenAI/Anthropic/Google/等) — 由opencode统一管理，EgoSync不直接调用
+- MCP Servers — 由opencode管理，角色可配置
+- 系统钥匙串 (keyring) — 通过 `services/` 层读写 API Key，启动时注入opencode环境变量
 
 ### Development Workflow
 
@@ -889,15 +1056,17 @@ npm run test:all   # package.json script 组合以上两者
 | FR-22 通知 | notification commands + 三级枚举 | ✅ |
 | FR-23~24 四象限 | task commands + quadrant 字段 | ✅ |
 | FR-25~27 数据主权 | settings commands + 本地SQLite + 导出/销毁 | ✅ |
-| FR-28 LLM配置 | llm/ + settings commands + keyring | ✅ |
+| FR-28 LLM配置 | agent_config + opencode.json + keyring | ✅ |
 | FR-29~30 透明审计 | agent_engine 上下文组装可溯源 | ✅ |
+| FR-31~36 Agent引擎集成 | sidecar + agent_bridge + agent_config + opencode | ✅ |
 
 **Non-Functional Requirements Coverage:**
-- ✅ 本地优先：SQLite + 无云端依赖
-- ✅ BYOK：keyring + llm_configs 表 + 多Provider
-- ✅ 性能：Tauri Event流式 + 增量状态更新 + 60fps(Tailwind动效)
+- ✅ 本地优先：SQLite + 无云端依赖 + opencode本地运行
+- ✅ BYOK：keyring + opencode多Provider原生支持
+- ✅ Agent能力：opencode Agent Loop + 20+内置工具 + Skill + MCP
+- ✅ 性能：Tauri Event流式（桥接opencode SSE）+ 增量状态更新 + 60fps(Tailwind动效)
 - ✅ 数据隐私：本地存储 + 不加密(V1, OS权限)
-- ✅ 跨平台：Tauri bundler 三平台
+- ✅ 跨平台：Tauri bundler 三平台 + opencode sidecar三平台binary
 
 ### Implementation Readiness Validation ✅
 
@@ -918,13 +1087,15 @@ npm run test:all   # package.json script 组合以上两者
 **Critical Gaps:** 无
 
 **Important Gaps (不阻塞实现):**
-1. Token 计数策略未细化 — `llm/context.rs` 需实现时定义裁剪算法（V1可用简单截断）
-2. 记忆提炼 prompt 未定义 — memory_pipeline 的具体 prompt 需实现时设计
-3. System Prompt 分层模板内容 — 三层的具体文本需实现时完善
+1. opencode sidecar binary的构建/打包流程 — 需确定如何从opencode源码编译三平台binary并集成到Tauri资源
+2. opencode SSE → Tauri Event桥接的具体解析逻辑 — opencode message/part格式需实现时适配
+3. Token 计数策略未细化 — opencode自身管理上下文压缩（compaction），EgoSync需决定何时触发
+4. 记忆提炼 prompt 未定义 — memory_pipeline 的具体 prompt 需实现时设计
+5. System Prompt 分层模板内容 — 角色system prompt如何注入opencode agent config
 
 **Nice-to-Have Gaps:**
 - 性能基准测试定义
-- 错误恢复重试的具体参数
+- opencode进程异常时的降级策略具体参数
 
 **V1 必需（已从 Nice-to-Have 提升）:**
 - E2E 测试：使用 Tauri driver (WebDriver 协议)，覆盖核心用户旅程（冷启动引导、管家对话、角色 CRUD、LLM 流式响应、任务管理），确保应用启动→基本交互→数据持久化的端到端可用性
@@ -967,8 +1138,9 @@ npm run test:all   # package.json script 组合以上两者
 
 **Key Strengths:**
 - 前端已有高保真原型，只需接 API
-- 技术栈高度约束，决策空间小，实现一致性好
-- 分层清晰（commands → services → db/llm），职责无歧义
+- opencode提供完整Agent执行引擎，EgoSync专注编排层和领域逻辑
+- 三层架构职责清晰：UI(React) → 编排(Rust) → 执行(opencode)
+- opencode原生支持30+ LLM Provider，无需自行实现适配层
 - 完整 FR 映射，无遗漏
 - 丰富代码示例和反模式，AI Agent 可直接参照
 
@@ -992,7 +1164,13 @@ npm run test:all   # package.json script 组合以上两者
 cd GUI
 npm install -D @tauri-apps/cli@latest @tauri-apps/api@latest
 npx tauri init
-# 配置 Cargo.toml 依赖: tauri, serde, sqlx, tokio, uuid, keyring
+# 配置 Cargo.toml 依赖: tauri, serde, sqlx, tokio, uuid, keyring, reqwest
 # 创建 migrations/001_initial_schema.sql
 # 运行 npm run tauri dev 验证基础连通
+
+# Story 2: opencode Sidecar集成 (NEW - 最高优先级)
+# 将 opencode binary 放入 src-tauri/resources/
+# 实现 sidecar.rs (spawn/kill/health check)
+# 实现 agent_bridge.rs (HTTP client → opencode API)
+# 验证: 应用启动后opencode server可访问，退出后进程清理
 ```

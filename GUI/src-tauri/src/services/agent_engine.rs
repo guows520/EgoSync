@@ -135,6 +135,33 @@ pub async fn build_butler_messages(
             - 意图模糊或没有合适角色时：不要调用工具，用一句话主动追问用户希望由谁来处理。\n\
             - 收到角色回复（tool result）后：用自己的话向用户转述结果，必要时显式说明这是来自哪个角色的反馈。"
         );
+
+        // Story 2.5: 角色涌现行为指令
+        let cooldowns = crate::db::app_settings::get_emergence_cooldowns(main_pool).await.unwrap_or_default();
+        let now = chrono::Utc::now();
+        let active_cooldowns: Vec<String> = cooldowns.into_iter().filter(|(_, ts)| {
+            chrono::DateTime::parse_from_rfc3339(ts)
+                .map(|dt| now.signed_duration_since(dt).num_days() < 7)
+                .unwrap_or(false)
+        }).map(|(domain, _)| domain).collect();
+
+        let mut emergence_prompt = String::from(
+            "\n\n[角色涌现行为]\n\
+            - 当你发现用户在最近几轮对话中反复提到某个尚未被任何 active 角色覆盖的领域时，可以用自然对话的方式建议创建一个新角色。\n\
+            - 不要在第一轮就建议，至少观察到用户 2-3 次提及同一领域后再提议。\n\
+            - 建议时用自然口吻，例如：「我注意到你最近经常聊到 X，要不要创建一个专门的角色来帮你？」\n\
+            - 用户同意后：调用 create_role 工具发起角色提议。\n\
+            - 用户拒绝后：调用 record_emergence_rejection 工具记录被拒领域，然后自然地继续对话。"
+        );
+
+        if !active_cooldowns.is_empty() {
+            emergence_prompt.push_str(&format!(
+                "\n- 最近被拒绝的领域（7天内不要再建议）：{}",
+                active_cooldowns.join("、")
+            ));
+        }
+
+        system_prompt.push_str(&emergence_prompt);
     }
 
     result.push(ChatCompletionMessage {
@@ -403,6 +430,25 @@ const SUPPORTED_COLORS: &[&str] = &[
 /// LLM 在管家视图判断用户意图明确指向某个 active 角色时调用；
 /// 单轮可并行触发多个 tool_calls（一次回合内同时委派多个角色）。
 /// follow-up（看到 tool_results 后的回合）必须 tools=None，禁止嵌套。
+/// Story 2.5: 涌现拒绝记录工具。
+/// 管家在用户拒绝创建角色建议后调用，写入冷却记录避免短期内重复建议同一领域。
+fn record_emergence_rejection_tool_definition() -> ToolDefinition {
+    ToolDefinition {
+        name: "record_emergence_rejection".to_string(),
+        description: "当用户明确拒绝了你提出的创建新角色建议时调用此工具，记录被拒领域。同一领域短期内不会再次建议。".to_string(),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "domain": {
+                    "type": "string",
+                    "description": "被用户拒绝的角色领域描述，简短中文，如「健身/运动」「摄影」「理财」"
+                }
+            },
+            "required": ["domain"]
+        }),
+    }
+}
+
 fn delegate_to_role_tool_definition() -> ToolDefinition {
     ToolDefinition {
         name: "delegate_to_role".to_string(),
@@ -551,10 +597,15 @@ pub async fn run_stream(
         (Some(step), _) => get_onboarding_chat_options(step),
         // 角色视图：不挂任何工具（Story 2.3 AC-4：角色私聊不再触发跨角色委派）
         (None, Some(_)) => ChatOptions::default(),
-        // 管家视图：挂 delegate_to_role；tool_choice=None 让 LLM 自主决定（意图模糊时追问）
+        // 管家视图：挂 delegate_to_role + create_role + record_emergence_rejection
+        // tool_choice=None 让 LLM 自主决定（意图模糊时追问）
         (None, None) => ChatOptions {
             disable_thinking: false,
-            tools: Some(vec![delegate_to_role_tool_definition()]),
+            tools: Some(vec![
+                delegate_to_role_tool_definition(),
+                create_role_tool_definition(),
+                record_emergence_rejection_tool_definition(),
+            ]),
             tool_choice: None,
         },
     };
@@ -1069,6 +1120,9 @@ async fn execute_tool_calls(
                 delegations.push(record);
                 text
             }
+            "record_emergence_rejection" => {
+                execute_record_emergence_rejection(main_pool, &tc.arguments).await
+            }
             _ => {
                 tracing::warn!("未知工具调用: {}", tc.name);
                 format!("错误：未知工具 {}", tc.name)
@@ -1424,6 +1478,42 @@ async fn execute_create_role(
          不要说\"已创建\"或\"创建成功\"。",
         args.name
     )
+}
+
+/// Story 2.5: 记录用户拒绝了涌现角色建议，写入冷却。
+async fn execute_record_emergence_rejection(
+    main_pool: &DbPool,
+    arguments: &str,
+) -> String {
+    #[derive(serde::Deserialize)]
+    struct RejectArgs {
+        domain: String,
+    }
+
+    let args: RejectArgs = match serde_json::from_str(arguments) {
+        Ok(a) => a,
+        Err(e) => {
+            tracing::error!("[emergence] 解析 rejection 参数失败: {} (原始: {})", e, arguments);
+            return format!("参数解析失败: {}", e);
+        }
+    };
+
+    let domain = args.domain.trim();
+    if domain.is_empty() {
+        return "领域描述为空，未记录冷却。".to_string();
+    }
+
+    let now = chrono::Utc::now().to_rfc3339();
+    if let Err(e) = crate::db::app_settings::set_emergence_cooldown(main_pool, domain, &now).await {
+        tracing::error!("[emergence] 写入冷却记录失败: {}", e);
+        return "已记录用户拒绝（存储失败但不影响对话）。".to_string();
+    }
+
+    // 顺带清理过期记录
+    let _ = crate::db::app_settings::clear_expired_cooldowns(main_pool, 7).await;
+
+    tracing::info!("[emergence] 记录涌现拒绝: domain={}", domain);
+    format!("已记录：用户拒绝了「{}」领域的角色建议，7天内不再提议此领域。请自然地继续对话。", domain)
 }
 
 // ========== 方案 A：后备文本检测 + 二次提取 ==========
@@ -2216,5 +2306,126 @@ mod tests {
         let (text, record) = execute_delegate_to_role(&main_pool, &conv_pool, "not-json").await;
         assert_eq!(record.status, "parse_error");
         assert!(text.contains("参数解析失败"));
+    }
+
+    // ===== Story 2.5: 涌现工具与 prompt 增强 =====
+
+    #[test]
+    fn test_record_emergence_rejection_tool_definition() {
+        let tool = record_emergence_rejection_tool_definition();
+        assert_eq!(tool.name, "record_emergence_rejection");
+        assert!(tool.description.contains("拒绝"));
+        let params = tool.parameters;
+        let required = params["required"].as_array().expect("required 应为数组");
+        let required_strs: Vec<&str> = required.iter().filter_map(|v| v.as_str()).collect();
+        assert!(required_strs.contains(&"domain"), "domain 必填");
+    }
+
+    /// Story 2.5 AC-1: butler prompt 在有 active 角色时必须含涌现行为指令，
+    /// 否则 LLM 不知道可以建议创建新角色。
+    #[tokio::test]
+    async fn test_build_butler_messages_includes_emergence_prompt() {
+        let main_pool = setup_test_main_pool().await;
+        let conv_pool = setup_test_conv_pool().await;
+
+        // 需要 app_settings 表用于冷却查询
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY NOT NULL,
+                value TEXT,
+                updated_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00Z'
+            )",
+        )
+        .execute(&main_pool)
+        .await
+        .expect("failed to create app_settings table");
+
+        crate::db::roles::create_role(
+            &main_pool,
+            &CreateRoleInput {
+                name: "产品经理".to_string(),
+                icon: None,
+                color: None,
+                goal: Some("打磨产品".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+
+        let conv = crate::db::conversations::get_or_create_butler_conversation(&conv_pool)
+            .await
+            .unwrap();
+
+        let msgs = build_butler_messages(&conv_pool, &main_pool, &conv.id, "最近想健身")
+            .await
+            .unwrap();
+        let system = &msgs.first().unwrap().content;
+
+        assert!(
+            system.contains("[角色涌现行为]"),
+            "butler prompt 必须含涌现行为段落"
+        );
+        assert!(
+            system.contains("create_role"),
+            "涌现段落须提及 create_role 工具"
+        );
+        assert!(
+            system.contains("record_emergence_rejection"),
+            "涌现段落须提及 rejection 工具"
+        );
+    }
+
+    /// Story 2.5 AC-3: 冷却列表注入 butler prompt
+    #[tokio::test]
+    async fn test_build_butler_messages_includes_cooldown_list() {
+        let main_pool = setup_test_main_pool().await;
+        let conv_pool = setup_test_conv_pool().await;
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY NOT NULL,
+                value TEXT,
+                updated_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00Z'
+            )",
+        )
+        .execute(&main_pool)
+        .await
+        .unwrap();
+
+        // 写入一条冷却记录（1 天前，在 7 天内）
+        let recent = (chrono::Utc::now() - chrono::Duration::days(1)).to_rfc3339();
+        crate::db::app_settings::set_emergence_cooldown(&main_pool, "健身/运动", &recent)
+            .await
+            .unwrap();
+
+        crate::db::roles::create_role(
+            &main_pool,
+            &CreateRoleInput {
+                name: "产品经理".to_string(),
+                icon: None,
+                color: None,
+                goal: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let conv = crate::db::conversations::get_or_create_butler_conversation(&conv_pool)
+            .await
+            .unwrap();
+
+        let msgs = build_butler_messages(&conv_pool, &main_pool, &conv.id, "想健身")
+            .await
+            .unwrap();
+        let system = &msgs.first().unwrap().content;
+
+        assert!(
+            system.contains("健身/运动"),
+            "冷却中的领域必须出现在 prompt 中"
+        );
+        assert!(
+            system.contains("被拒绝的领域"),
+            "冷却列表应有说明文案"
+        );
     }
 }

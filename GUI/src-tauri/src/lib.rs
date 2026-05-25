@@ -1,4 +1,8 @@
+use std::sync::Arc;
+
 use tauri::Manager;
+use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
 mod commands;
 mod db;
@@ -38,6 +42,42 @@ pub fn run() {
             app.manage(commands::chat::StreamingState::default());
             app.manage(commands::chat::CancelTokens::default());
             app.manage(commands::chat::OnboardingConversations::default());
+
+            // ── Sidecar: start opencode server (non-blocking, graceful degradation) ──
+            let resource_dir = app.path().resource_dir().ok();
+            let mut sidecar = services::sidecar::SidecarManager::new(resource_dir, None);
+
+            let sidecar_started = tauri::async_runtime::block_on(async {
+                match sidecar.start().await {
+                    Ok(()) => {
+                        tracing::info!("opencode sidecar started on port {}", sidecar.port());
+                        true
+                    }
+                    Err(e) => {
+                        tracing::warn!("opencode sidecar failed to start (degraded mode): {}", e);
+                        false
+                    }
+                }
+            });
+
+            let sidecar_port = sidecar.port();
+            let sidecar_state = Arc::new(Mutex::new(sidecar));
+            app.manage(sidecar_state.clone());
+
+            let agent_bridge = services::agent_bridge::AgentBridge::new(sidecar_port);
+            app.manage(agent_bridge);
+
+            // Start watchdog only if sidecar started successfully
+            let watchdog_cancel = CancellationToken::new();
+            if sidecar_started {
+                let cancel_clone = watchdog_cancel.clone();
+                let mgr_clone = sidecar_state.clone();
+                tauri::async_runtime::spawn(async move {
+                    services::sidecar::start_watchdog(mgr_clone, cancel_clone).await;
+                });
+            }
+            app.manage(watchdog_cancel);
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -68,9 +108,23 @@ pub fn run() {
             commands::app::app_is_first_launch,
             commands::app::app_complete_onboarding,
             commands::app::app_is_llm_configured,
+            commands::app::app_sidecar_status,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                tracing::info!("Tauri exiting — stopping opencode sidecar");
+                let cancel = app_handle.state::<CancellationToken>();
+                cancel.cancel();
+                let sidecar = app_handle.state::<Arc<Mutex<services::sidecar::SidecarManager>>>();
+                tauri::async_runtime::block_on(async {
+                    if let Err(e) = sidecar.lock().await.stop().await {
+                        tracing::warn!("Failed to stop opencode sidecar cleanly: {}", e);
+                    }
+                });
+            }
+        });
 }
 
 #[cfg(test)]

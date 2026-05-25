@@ -81,13 +81,15 @@ pub async fn update_role(
              icon = COALESCE(?2, icon),
              color = COALESCE(?3, color),
              goal = COALESCE(?4, goal),
-             updated_at = ?5
-         WHERE id = ?6",
+             personality_prompt = COALESCE(?5, personality_prompt),
+             updated_at = ?6
+         WHERE id = ?7",
     )
     .bind(input.name.as_deref())
     .bind(input.icon.as_deref())
     .bind(input.color.as_deref())
     .bind(input.goal.as_deref())
+    .bind(input.personality_prompt.as_deref())
     .bind(&now)
     .bind(id)
     .execute(pool)
@@ -286,6 +288,7 @@ mod tests {
                 icon: Some("book-open".to_string()),
                 color: Some("#10B981".to_string()),
                 goal: Some("保持学习节奏".to_string()),
+                personality_prompt: Some("用好奇、鼓励的语气回应".to_string()),
             },
         )
         .await
@@ -295,6 +298,7 @@ mod tests {
         assert_eq!(updated.icon, "book-open");
         assert_eq!(updated.color, "#10B981");
         assert_eq!(updated.goal, "保持学习节奏");
+        assert_eq!(updated.personality_prompt, "用好奇、鼓励的语气回应");
         assert_eq!(updated.status, "active");
         assert_ne!(updated.updated_at, "2026-01-01T00:00:00Z");
     }

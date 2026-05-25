@@ -21,7 +21,7 @@ const BUTLER_SYSTEM_PROMPT: &str = "\
 你是 EgoSync 的数字管家，用户的私人助理和生活协调者。\
 你的语调稳重、可靠、有温度，像一位值得信赖的英式管家。\
 你帮助用户管理角色、任务和日程，但决定权永远在用户手中。\
-用简洁自然的中文回复，不用 emoji，不用 markdown 格式化。";
+用简洁自然的中文回复，不用 emoji。";
 
 const HISTORY_LIMIT: i64 = 20;
 
@@ -175,13 +175,33 @@ pub async fn build_butler_messages(
     Ok(result)
 }
 
-/// 角色 system prompt 的基线。注意：这里不再以 BUTLER_SYSTEM_PROMPT 为基础。
-/// 原因：管家与角色是两种互斥身份。如果在角色 prompt 里先建立"我是管家"，
-/// 模型会因为先入为主自报为管家（Story 2.2 修复后线上观察到的真实问题）。
-const ROLE_SYSTEM_PROMPT_PREFIX: &str = "\
-你是用户在 EgoSync 中的「{name}」角色，是 TA 自己的一个内在维度。\
-你不是数字管家、不是通用助理；你只代表「{name}」这个身份说话，遇到自我介绍务必使用该身份。\
-你的语调稳重、可靠、有温度，用简洁自然的中文回复，不用 emoji，不用 markdown 格式化。";
+const ROLE_BASE_PERSONA_PROMPT: &str = "\
+你是用户的「{name}」分身——用户在这个身份维度下的 AI 助手。\
+用户自己就是「{name}」，你帮助 TA 以这个身份思考、规划和执行相关目标与任务。\
+你不是独立于用户的另一个人，你是用户作为「{name}」时的延伸。\
+用简洁自然的中文回复，不用 emoji。";
+
+fn build_role_system_prompt(role: &crate::models::role::Role) -> String {
+    let mut sections = vec![ROLE_BASE_PERSONA_PROMPT.replace("{name}", &role.name)];
+
+    let mut role_definition = format!("[role_definition]\n角色名称：{}", role.name);
+    if !role.goal.trim().is_empty() {
+        role_definition.push_str("\n核心目标：");
+        role_definition.push_str(role.goal.trim());
+    }
+
+    let personality = role.personality_prompt.trim();
+    if !personality.is_empty() {
+        role_definition.push_str("\n个性描述：");
+        role_definition.push_str(personality);
+    } else {
+        role_definition.push_str("\n默认语调：根据角色名称与核心目标选择自然语气；产品/工作类偏简洁专业，家庭/生活类偏温暖关怀，学习/成长类偏好奇探索。");
+    }
+    sections.push(role_definition);
+
+    sections.push("[context_injection]\n以下历史消息是当前对话上下文；不要引入未提供的记忆。".to_string());
+    sections.join("\n\n")
+}
 
 /// 构建角色对话上下文。system prompt 完全独立于管家基线，
 /// 让 LLM 知道当前在扮演谁。这是 Story 2.2 AC-2 / AC-6 的核心：
@@ -195,17 +215,7 @@ pub async fn build_role_messages(
 ) -> Result<Vec<ChatCompletionMessage>, AppError> {
     let role = crate::db::roles::get_role(main_pool, role_id).await?;
 
-    let mut system_prompt = ROLE_SYSTEM_PROMPT_PREFIX.replace("{name}", &role.name);
-    if !role.goal.trim().is_empty() {
-        system_prompt.push_str("\n该角色的核心目标是：");
-        system_prompt.push_str(role.goal.trim());
-        system_prompt.push('。');
-    }
-    let personality = role.personality_prompt.trim();
-    if !personality.is_empty() {
-        system_prompt.push('\n');
-        system_prompt.push_str(personality);
-    }
+    let system_prompt = build_role_system_prompt(&role);
 
     let mut result = Vec::new();
     result.push(ChatCompletionMessage {
@@ -277,7 +287,7 @@ create_role 工具不会立即创建角色。它只是【向用户发起一个�
 - 绝对不要变成通用助理（不帮列清单、不帮做规划、不回答知识问题）。\n\
 - 如果用户跑题，一句话拉回来：\"这个我之后可以帮你，现在我们先把你的第一个角色定下来。\"\n\
 - 每次回复不超过 2 句话。\n\
-- 语调温暖简洁，不用 emoji，不用 markdown。\n\
+- 语调温暖简洁，不用 emoji。\n\
 - 不要问用户喜欢什么图标、颜色 —— 你自己从白名单选最合适的。\n\n\
 【工具使用规则】\n\
 你有一个 create_role 工具。识别到合适的身份维度后【直接】调用：\n\
@@ -1795,7 +1805,7 @@ mod tests {
     /// 这是 FR-6 「角色个性化语调」的载体。如果 prompt 没有这些字段，
     /// LLM 会退化成通用管家口吻，用户切换角色就感觉不到差异。
     #[tokio::test]
-    async fn test_build_role_messages_injects_name_and_goal() {
+    async fn test_build_role_messages_injects_name_goal_and_personality_layers() {
         let main_pool = setup_test_main_pool().await;
         let conv_pool = setup_test_conv_pool().await;
 
@@ -1806,6 +1816,19 @@ mod tests {
                 icon: Some("briefcase".to_string()),
                 color: Some("#4F46E5".to_string()),
                 goal: Some("打磨产品节奏".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+        let role = crate::db::roles::update_role(
+            &main_pool,
+            &role.id,
+            &crate::models::role::UpdateRoleInput {
+                name: None,
+                icon: None,
+                color: None,
+                goal: None,
+                personality_prompt: Some("简洁专业，先判断优先级再给建议".to_string()),
             },
         )
         .await
@@ -1829,12 +1852,19 @@ mod tests {
             system.content.contains("打磨产品节奏"),
             "system prompt 必须含角色目标"
         );
-        // 角色身份必须独立于管家身份，不能拷贝管家 prompt 的开头去建立"我是数字管家"，
-        // 否则模型会因先入为主自报为管家。这是真实线上观察到的退化模式。
-        // 注意：允许 prompt 用反向句式（如"你不是数字管家"），所以匹配的是建立身份的句首。
+        assert!(
+            system.content.contains("简洁专业，先判断优先级再给建议"),
+            "system prompt 必须含个性描述"
+        );
+        assert!(system.content.contains("[role_definition]"));
+        assert!(system.content.contains("[context_injection]"));
         assert!(
             !system.content.contains("你是 EgoSync 的数字管家"),
-            "角色 prompt 不应以管家基线建立身份"
+            "角色 prompt 不应含管家身份"
+        );
+        assert!(
+            system.content.contains("分身"),
+            "角色 prompt 必须明确是用户的分身"
         );
     }
 
@@ -1866,10 +1896,13 @@ mod tests {
             .unwrap();
 
         let system = &msgs.first().unwrap().content;
-        assert!(!system.ends_with('\n'), "prompt 末尾不应有空行");
         assert!(
-            !system.contains("personality"),
-            "personality_prompt 为空时不应出现该词的英文残留"
+            system.contains("默认语调"),
+            "personality_prompt 为空时应提供轻量默认语调方向"
+        );
+        assert!(
+            system.contains("[context_injection]"),
+            "prompt 应保留三层结构中的上下文注入边界"
         );
     }
 

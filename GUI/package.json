@@ -12,11 +12,13 @@
     "test:all": "vitest run && cd src-tauri && cargo test"
   },
   "dependencies": {
+    "@tailwindcss/typography": "^0.5.19",
     "@tauri-apps/api": "^2.11.0",
     "clsx": "^2.0.0",
     "lucide-react": "^0.292.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
+    "react-markdown": "^10.1.0",
     "tailwind-merge": "^2.0.0",
     "tailwindcss-animate": "^1.0.7"
   },

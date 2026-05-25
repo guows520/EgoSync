@@ -1,4 +1,5 @@
 import { useState, memo } from 'react';
+import ReactMarkdown from 'react-markdown';
 import { cn } from '../../lib/utils';
 import { Home, ChevronRight, type LucideIcon } from 'lucide-react';
 import type { ChatMessage } from '../../types/chat';
@@ -106,7 +107,13 @@ export function ChatBubble({
           <BounceDots />
         ) : (
           <>
-            <span>{message.content}</span>
+            {isUser ? (
+              <span>{message.content}</span>
+            ) : (
+              <div className="prose prose-sm prose-slate dark:prose-invert max-w-none">
+                <ReactMarkdown>{message.content}</ReactMarkdown>
+              </div>
+            )}
             {isStreaming && (
               <span className="inline-block w-0.5 h-4 bg-slate-600 dark:bg-slate-300 ml-0.5 animate-pulse" />
             )}

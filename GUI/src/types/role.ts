@@ -26,4 +26,5 @@ export interface UpdateRoleInput {
   icon?: string;
   color?: string;
   goal?: string;
+  personalityPrompt?: string;
 }

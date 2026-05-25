@@ -32,4 +32,5 @@ pub struct UpdateRoleInput {
     pub icon: Option<String>,
     pub color: Option<String>,
     pub goal: Option<String>,
+    pub personality_prompt: Option<String>,
 }

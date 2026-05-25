@@ -27,6 +27,7 @@ export function SettingsTab({
 }: SettingsTabProps) {
   const [roleName, setRoleName] = useState(role.name);
   const [roleGoal, setRoleGoal] = useState(role.goal);
+  const [rolePersonalityPrompt, setRolePersonalityPrompt] = useState(role.personalityPrompt);
   const [roleIcon, setRoleIcon] = useState(normalizeIconId(role.icon));
   const [roleColor, setRoleColor] = useState(normalizeColorHex(role.color));
   const [saved, setSaved] = useState(false);
@@ -43,13 +44,14 @@ export function SettingsTab({
   useEffect(() => {
     setRoleName(role.name);
     setRoleGoal(role.goal);
+    setRolePersonalityPrompt(role.personalityPrompt);
     setRoleIcon(normalizeIconId(role.icon));
     setRoleColor(normalizeColorHex(role.color));
     setSaved(false);
     setError('');
     setDangerAction(null);
     setDeleteConfirmName('');
-  }, [role.id, role.name, role.goal, role.icon, role.color]);
+  }, [role.id, role.name, role.goal, role.personalityPrompt, role.icon, role.color]);
 
   const handleSave = async () => {
     const name = roleName.trim();
@@ -66,6 +68,7 @@ export function SettingsTab({
         icon: roleIcon,
         color: roleColor,
         goal: roleGoal.trim(),
+        personalityPrompt: rolePersonalityPrompt.trim(),
       });
       onUpdateRole?.(updated);
       setSaved(true);
@@ -166,6 +169,24 @@ export function SettingsTab({
           <div>
             <label htmlFor="role-goal" className="block text-[13px] font-medium text-slate-600 mb-1.5">目标</label>
             <textarea id="role-goal" value={roleGoal} onChange={e => setRoleGoal(e.target.value)} placeholder="这个角色要达成的核心目标..." rows={2} className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none resize-none" />
+          </div>
+
+          <div>
+            <label htmlFor="role-personality" className="block text-[13px] font-medium text-slate-600 mb-1.5">角色个性描述</label>
+            <textarea
+              id="role-personality"
+              value={rolePersonalityPrompt}
+              onChange={e => setRolePersonalityPrompt(e.target.value)}
+              placeholder="描述这个角色下次回复时应采用的语气、判断方式和表达习惯..."
+              rows={4}
+              className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none resize-none"
+            />
+            <div className="mt-2 rounded-lg bg-slate-50 border border-slate-100 px-3 py-2 text-[12px] leading-relaxed text-slate-500">
+              <div>模板参考：</div>
+              <div>产品经理：简洁专业，偏结构化表达，先判断优先级再给建议。</div>
+              <div>家庭：温暖关怀，偏情感支持，先回应感受再给建议。</div>
+              <div>学习者：好奇探索，偏启发式提问，鼓励持续尝试。</div>
+            </div>
           </div>
         </div>
       </div>

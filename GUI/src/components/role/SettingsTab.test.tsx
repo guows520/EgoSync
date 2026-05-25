@@ -64,6 +64,7 @@ describe('SettingsTab role CRUD actions', () => {
         icon: 'graduation-cap',
         color: '#10B981',
         goal: '保持学习节奏',
+        personalityPrompt: '',
       });
     });
     expect(onUpdateRole).toHaveBeenCalledWith(updatedRole);

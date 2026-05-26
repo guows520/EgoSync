@@ -63,6 +63,7 @@ development_status:
   epic-2: in-progress
   2-0-opencode-sidecar-agent-bridge: done
   2-0b-role-agent-mapping-permissions: done
+  2-0c-dialog-engine-switch-to-opencode: backlog
   2-1-role-crud-archive-delete: done
   2-2-role-view-switch-butler: done
   2-3-butler-intent-routing: done

@@ -22,6 +22,8 @@ serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+dirs = "5"
 async-trait = "0.1"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 thiserror = "1"

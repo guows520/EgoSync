@@ -243,7 +243,11 @@ export function ChatStream({ role }: ChatStreamProps) {
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-8 scroll-smooth">
         <div className="mx-auto max-w-3xl space-y-3">
           {messages
-            .filter(m => m.role !== 'system' && (m.isComplete || m.content))
+            .filter(m =>
+              m.role !== 'system'
+              && (m.role !== 'assistant' || m.content.trim().length > 0)
+              && Boolean(m.isComplete || m.content)
+            )
             .map(msg => (
               <ChatBubble
                 key={msg.id}

@@ -101,6 +101,15 @@ pub async fn update_message_content(
     Ok(())
 }
 
+pub async fn delete_message(pool: &ConversationsPool, id: &str) -> Result<(), AppError> {
+    sqlx::query("DELETE FROM messages WHERE id = ?")
+        .bind(id)
+        .execute(&**pool)
+        .await
+        .map_err(|e| AppError::DbError(format!("删除消息失败: {}", e)))?;
+    Ok(())
+}
+
 pub async fn update_conversation_updated_at(
     pool: &ConversationsPool,
     id: &str,

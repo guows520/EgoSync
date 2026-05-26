@@ -3,6 +3,8 @@ use std::sync::Arc;
 use tauri::Manager;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 mod commands;
 mod db;
@@ -13,11 +15,25 @@ mod services;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
+    // 日志同时输出到 stderr 和 app_data_dir/egosync.log
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+
+    let fmt_stderr = tracing_subscriber::fmt::layer();
+
+    let log_dir = dirs::config_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("com.egosync.app");
+    let _ = std::fs::create_dir_all(&log_dir);
+    let file_appender = tracing_appender::rolling::never(&log_dir, "egosync.log");
+    let fmt_file = tracing_subscriber::fmt::layer()
+        .with_ansi(false)
+        .with_writer(file_appender);
+
+    let _ = tracing_subscriber::registry()
+        .with(env_filter)
+        .with(fmt_stderr)
+        .with(fmt_file)
         .try_init();
 
     tauri::Builder::default()

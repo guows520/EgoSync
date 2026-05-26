@@ -824,6 +824,57 @@ So that 每个角色都有独立的 Agent 身份（prompt/model/permission）在
 
 ---
 
+### Story 2.0c: 对话引擎切换 — agent_engine 路由到 opencode AgentBridge
+
+As a 用户,
+I want 管家和角色的对话通过 opencode Agent Loop 执行,
+So that 我能获得完整的多步工具调用能力（代码编写、文件操作、Web搜索等），而不仅仅是单轮文本回复。
+
+**Acceptance Criteria:**
+
+**Given** 用户在管家对话区输入消息
+**When** 按 Enter 发送
+**Then** 消息通过 AgentBridge → opencode session/message API 发送，而非直调 LlmProvider
+**And** opencode Agent Loop 自主决策工具调用，流式返回
+
+**Given** opencode Agent Loop 执行中
+**When** 产生流式 token / thinking / tool_call
+**Then** AgentBridge 解析 SSE，转发为 Tauri Event（`llm:stream`），前端实时渲染
+**And** 前端 ChatStream 组件无需修改（Event payload 格式兼容）
+
+**Given** 用户在角色对话区输入消息
+**When** 该角色已映射为 opencode subagent（由 2-0b 完成）
+**Then** 消息路由到该角色对应的 opencode agent session
+
+**Given** 流式进行中
+**When** 用户点击停止按钮
+**Then** 调用 `agent_bridge.abort_session()` 中断 opencode 执行
+
+**Given** 用户通过管家发送意图消息（如"帮我写个竞品分析"）
+**When** 管家 agent 路由到目标角色
+**Then** 路由逻辑仍然有效（意图解析通过 opencode Agent 完成，无需独立 LLM 调用）
+
+**Given** 角色的 system prompt 已在 opencode agent config 中设定（由 2-0b 完成）
+**Then** 每个角色对话自动使用其个性化语调，无需 agent_engine 手动注入 prompt
+
+**Given** 引导中管家建议创建角色（Function Calling `create_role`）
+**When** opencode Agent Loop 触发 tool use
+**Then** EgoSync 通过自定义 tool 或 Event 机制捕获 `role:proposed`，弹出确认 modal
+
+**Given** 角色 CRUD 操作（创建/编辑/归档/删除）
+**When** 操作成功写入 EgoSync DB
+**Then** 调用现有 AgentConfigService 生命周期同步方法更新 opencode.json（create/update/archive/restore/delete 对应同步）
+
+**Given** opencode server 不可用（进程未启动或崩溃）
+**When** 用户发送消息
+**Then** 降级到 LlmProvider 直调路径，并在对话中以管家语调提示"Agent 引擎暂时不可用，当前为基础对话模式"
+
+**Given** 切换完成后
+**Then** 所有已有功能（对话流式、角色切换、意图路由、个性化语调、角色涌现建议）保持可用
+**And** LlmProvider trait 保留为降级兼容层，不删除
+
+---
+
 ### Story 2.1: 用户能编辑角色名称/图标/颜色，归档和恢复角色，永久删除角色
 
 As a 用户,

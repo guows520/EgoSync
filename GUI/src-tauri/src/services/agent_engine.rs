@@ -150,7 +150,7 @@ pub async fn build_butler_messages(
             - 当你发现用户在最近几轮对话中反复提到某个尚未被任何 active 角色覆盖的领域时，可以用自然对话的方式建议创建一个新角色。\n\
             - 不要在第一轮就建议，至少观察到用户 2-3 次提及同一领域后再提议。\n\
             - 建议时用自然口吻，例如：「我注意到你最近经常聊到 X，要不要创建一个专门的角色来帮你？」\n\
-            - 用户同意后：调用 create_role 工具发起角色提议。\n\
+            - 用户同意后：先用一句话说明你会准备角色提议、用户可在弹窗里确认或调整，然后调用 create_role 工具发起角色提议；不要在工具调用后再追加确认话术。\n\
             - 用户拒绝后：调用 record_emergence_rejection 工具记录被拒领域，然后自然地继续对话。"
         );
 
@@ -734,6 +734,14 @@ pub async fn run_stream(
                 tool_calls_received.push(tc);
             }
             Some(StreamEvent::Done) => {
+                tracing::info!(
+                    "[run_stream] done: conv={} assistant_msg={} accumulated_len={} thinking_len={} tool_calls={}",
+                    conversation_id,
+                    assistant_message_id,
+                    accumulated.len(),
+                    accumulated_thinking.len(),
+                    tool_calls_received.len()
+                );
                 // Flush pending tokens
                 if !pending_thinking.is_empty() {
                     let batch = std::mem::take(&mut pending_thinking);
@@ -767,36 +775,109 @@ pub async fn run_stream(
                     // Story 2.3 P1b: 先冻结第一段（管家「稍等，我让 X 看一下」）—
                     // 否则 follow-up 累加进同一变量会让两段在同一气泡里拼接显示。
                     let first_bubble_text = accumulated.clone();
-                    conversations::update_message_content(
-                        &conv_pool,
-                        &assistant_message_id,
-                        &first_bubble_text,
-                    )
-                    .await
-                    .ok();
-                    if !accumulated_thinking.is_empty() {
-                        conversations::update_message_thinking(
+                    tracing::info!(
+                        "[run_stream] handling_tools: conv={} assistant_msg={} first_bubble_len={} thinking_len={} tool_calls={}",
+                        conversation_id,
+                        assistant_message_id,
+                        first_bubble_text.len(),
+                        accumulated_thinking.len(),
+                        tool_calls_received.len()
+                    );
+                    let first_bubble_visible = !first_bubble_text.trim().is_empty();
+                    if first_bubble_visible {
+                        conversations::update_message_content(
                             &conv_pool,
                             &assistant_message_id,
-                            &accumulated_thinking,
+                            &first_bubble_text,
                         )
                         .await
                         .ok();
+                        if !accumulated_thinking.is_empty() {
+                            conversations::update_message_thinking(
+                                &conv_pool,
+                                &assistant_message_id,
+                                &accumulated_thinking,
+                            )
+                            .await
+                            .ok();
+                        }
+                        conversations::mark_message_complete(&conv_pool, &assistant_message_id)
+                            .await
+                            .ok();
+                        // 通知前端第一气泡 done（仍带其 message_id，便于前端定型这桶）。
+                        let _ = app_handle.emit(
+                            "llm:stream",
+                            StreamPayload {
+                                conversation_id: conversation_id.clone(),
+                                token: String::new(),
+                                done: true,
+                                thinking: false,
+                                message_id: Some(assistant_message_id.clone()),
+                            },
+                        );
+                    } else {
+                        tracing::warn!(
+                            "[run_stream] empty_first_bubble_deleted: conv={} assistant_msg={} tool_calls={}",
+                            conversation_id,
+                            assistant_message_id,
+                            tool_calls_received.len()
+                        );
+                        conversations::delete_message(&conv_pool, &assistant_message_id)
+                            .await
+                            .ok();
                     }
-                    conversations::mark_message_complete(&conv_pool, &assistant_message_id)
-                        .await
-                        .ok();
-                    // 通知前端第一气泡 done（仍带其 message_id，便于前端定型这桶）。
-                    let _ = app_handle.emit(
-                        "llm:stream",
-                        StreamPayload {
-                            conversation_id: conversation_id.clone(),
-                            token: String::new(),
-                            done: true,
-                            thinking: false,
-                            message_id: Some(assistant_message_id.clone()),
-                        },
-                    );
+
+                    let only_create_role_tool = tool_calls_received.len() == 1
+                        && tool_calls_received
+                            .first()
+                            .map(|tc| tc.name == "create_role")
+                            .unwrap_or(false);
+
+                    let mut precomputed_tool_results: Option<Vec<String>> = None;
+                    if only_create_role_tool {
+                        let tool_results = execute_tool_calls(
+                            &app_handle,
+                            &main_pool,
+                            &conv_pool,
+                            &conversation_id,
+                            &user_message_id,
+                            &tool_calls_received,
+                        )
+                        .await;
+                        let proposal_emitted = tool_results
+                            .first()
+                            .map(|result| result.starts_with("role_proposal_emitted:"))
+                            .unwrap_or(false);
+
+                        if proposal_emitted {
+                            tracing::info!(
+                                "[run_stream] create_role_followup_skipped: conv={} assistant_msg={}",
+                                conversation_id,
+                                assistant_message_id
+                            );
+                            if !first_bubble_visible {
+                                let _ = app_handle.emit(
+                                    "llm:stream",
+                                    StreamPayload {
+                                        conversation_id: conversation_id.clone(),
+                                        token: String::new(),
+                                        done: true,
+                                        thinking: false,
+                                        message_id: None,
+                                    },
+                                );
+                            }
+                            break;
+                        }
+
+                        tracing::warn!(
+                            "[run_stream] create_role_followup_retained: conv={} assistant_msg={} result={:?}",
+                            conversation_id,
+                            assistant_message_id,
+                            tool_results.first()
+                        );
+                        precomputed_tool_results = Some(tool_results);
+                    }
 
                     // 第二段独立消息：先建 DB 占位 + 唤醒前端弹跳点，再执行耗时的委派调用。
                     // 这样用户在委派期间就能看到等待提示，而不是干等十几秒。
@@ -827,15 +908,20 @@ pub async fn run_stream(
                         },
                     );
 
-                    let tool_results = execute_tool_calls(
-                        &app_handle,
-                        &main_pool,
-                        &conv_pool,
-                        &conversation_id,
-                        &user_message_id,
-                        &tool_calls_received,
-                    )
-                    .await;
+                    let tool_results = match precomputed_tool_results {
+                        Some(results) => results,
+                        None => {
+                            execute_tool_calls(
+                                &app_handle,
+                                &main_pool,
+                                &conv_pool,
+                                &conversation_id,
+                                &user_message_id,
+                                &tool_calls_received,
+                            )
+                            .await
+                        }
+                    };
 
                     // Build follow-up messages with tool results for continuation
                     let mut followup_messages = messages.clone();
@@ -848,9 +934,17 @@ pub async fn run_stream(
                     });
                     // Add tool results
                     for (tc, result_text) in tool_calls_received.iter().zip(tool_results.iter()) {
+                        let content = if tc.name == "create_role"
+                            && result_text.starts_with("role_proposal_emitted:")
+                        {
+                            "角色提议已发送给用户，等待用户在弹窗中确认或修改。不要宣布创建成功。"
+                                .to_string()
+                        } else {
+                            result_text.clone()
+                        };
                         followup_messages.push(ChatCompletionMessage {
                             role: "tool".to_string(),
-                            content: result_text.clone(),
+                            content,
                             tool_calls: None,
                             tool_call_id: Some(tc.id.clone()),
                         });
@@ -905,6 +999,20 @@ pub async fn run_stream(
                     }
 
                     // 落库第二段 + 通知 done（带 followup id 让前端定型这桶并触发历史回拉）。
+                    tracing::info!(
+                        "[run_stream] followup_done: conv={} followup_msg={} followup_len={}",
+                        conversation_id,
+                        followup_id,
+                        followup_accumulated.len()
+                    );
+                    if followup_accumulated.trim().is_empty() {
+                        tracing::warn!(
+                            "[run_stream] empty_followup: conv={} followup_msg={} tool_calls={}",
+                            conversation_id,
+                            followup_id,
+                            tool_calls_received.len()
+                        );
+                    }
                     conversations::update_message_content(
                         &conv_pool,
                         &followup_id,
@@ -1109,6 +1217,14 @@ async fn execute_tool_calls(
     let mut delegations: Vec<DelegationRecord> = Vec::new();
 
     for tc in tool_calls {
+        tracing::info!(
+            "[tool] executing: conv={} user_msg={} name={} id={} args_len={}",
+            conversation_id,
+            butler_user_message_id,
+            tc.name,
+            tc.id,
+            tc.arguments.len()
+        );
         let result = match tc.name.as_str() {
             "create_role" => {
                 execute_create_role(app_handle, main_pool, conversation_id, &tc.arguments).await
@@ -1460,7 +1576,7 @@ async fn execute_create_role(
     );
 
     // 不写库，仅向前端发提议事件；前端弹窗由用户确认后再调 roleService.create()
-    let _ = app_handle.emit(
+    match app_handle.emit(
         "role:proposed",
         RoleProposedPayload {
             conversation_id: conversation_id.to_string(),
@@ -1469,15 +1585,25 @@ async fn execute_create_role(
             color: normalized_color,
             goal: args.goal.clone(),
         },
-    );
-
-    // 返回给模型的 tool result：明确告知"提议已发给用户，等待确认"，
-    // 让模型在后续 follow-up 中用提议语气而不是宣布"创建成功"。
-    format!(
-        "已向用户发送角色提议「{}」，等待用户在弹窗中确认或修改。请在后续回复中只用提议语气（如\"已经准备好提议，等你确认\"），\
-         不要说\"已创建\"或\"创建成功\"。",
-        args.name
-    )
+    ) {
+        Ok(()) => {
+            tracing::info!(
+                "[propose] role_proposed_emitted: conv={} name={}",
+                conversation_id,
+                args.name
+            );
+            format!("role_proposal_emitted:{}", args.name)
+        }
+        Err(e) => {
+            tracing::error!(
+                "[propose] role_proposed_emit_failed: conv={} name={} error={}",
+                conversation_id,
+                args.name,
+                e
+            );
+            format!("角色提议发送失败：{}", e)
+        }
+    }
 }
 
 /// Story 2.5: 记录用户拒绝了涌现角色建议，写入冷却。

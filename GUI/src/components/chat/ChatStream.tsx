@@ -13,17 +13,91 @@ interface ChatStreamProps {
   role?: Role | null;
 }
 
+function isLikelyPersistedLocalUser(historyMsg: ChatMessage, localMsg: ChatMessage) {
+  if (!localMsg.id.startsWith('__local_user__') || historyMsg.role !== 'user' || localMsg.content !== historyMsg.content) {
+    return false;
+  }
+
+  const historyTime = Date.parse(historyMsg.createdAt);
+  const localTime = Date.parse(localMsg.createdAt);
+  return Number.isFinite(historyTime) && Number.isFinite(localTime) && historyTime >= localTime - 60_000;
+}
+
+function mergeHistoryWithLocalMessages(history: ChatMessage[], current: ChatMessage[]) {
+  if (history.length === 0) return current;
+
+  const remainingCurrent = current.slice();
+  const mergedHistory = history.map((historyMsg) => {
+    const sameIdIndex = remainingCurrent.findIndex(m => m.id === historyMsg.id);
+    if (sameIdIndex !== -1) {
+      remainingCurrent.splice(sameIdIndex, 1);
+      return historyMsg;
+    }
+
+    const localUserIndex = remainingCurrent.findIndex(m => isLikelyPersistedLocalUser(historyMsg, m));
+    if (localUserIndex !== -1) {
+      remainingCurrent.splice(localUserIndex, 1);
+      return historyMsg;
+    }
+
+    const completedAssistantIndex = remainingCurrent.findIndex(m =>
+      m.id.startsWith('__completed__') && historyMsg.role === 'assistant' && m.content.trim() === historyMsg.content.trim()
+    );
+    if (completedAssistantIndex !== -1) {
+      remainingCurrent.splice(completedAssistantIndex, 1);
+      return historyMsg;
+    }
+
+    const sameMessageIndex = remainingCurrent.findIndex(m =>
+      m.role === historyMsg.role
+      && m.content === historyMsg.content
+      && m.createdAt === historyMsg.createdAt
+    );
+    if (sameMessageIndex !== -1) {
+      remainingCurrent.splice(sameMessageIndex, 1);
+    }
+
+    return historyMsg;
+  });
+
+  return [...mergedHistory, ...remainingCurrent];
+}
+
 export function ChatStream({ role }: ChatStreamProps) {
   const roleId = role?.id ?? null;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [conversation, setConversation] = useState<Conversation | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [isInputLocked, setIsInputLocked] = useState(false);
   // Story 2.3 P1b: 流式期间可能产生多个气泡（管家委派两段式：先「稍等，我让 X 看一下」，
   // 后「来自 X 的反馈…」）。按后端 messageId 分桶，messageId 缺省（普通单段）落到 id=null 桶。
   const [streamBubbles, setStreamBubbles] = useState<{ id: string | null; content: string }[]>([]);
+  const streamBubblesRef = useRef<{ id: string | null; content: string }[]>([]);
+  const streamGenerationRef = useRef(0);
+  const conversationLoadGenerationRef = useRef(0);
+  const localMessageSequenceRef = useRef(0);
+  const conversationIdRef = useRef<string | null>(null);
   const [thinkingContent, setThinkingContent] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  const updateStreamBubbles = useCallback((updater: (prev: { id: string | null; content: string }[]) => { id: string | null; content: string }[]) => {
+    const next = updater(streamBubblesRef.current);
+    streamBubblesRef.current = next;
+    setStreamBubbles(next);
+  }, []);
+
+  useEffect(() => {
+    conversationIdRef.current = conversation?.id ?? null;
+  }, [conversation?.id]);
+
+  const resetStreamingState = useCallback(() => {
+    streamGenerationRef.current += 1;
+    updateStreamBubbles(() => []);
+    setIsStreaming(false);
+    setIsInputLocked(false);
+    setThinkingContent('');
+  }, [updateStreamBubbles]);
 
   const loadConversations = useCallback(async () => {
     try {
@@ -35,39 +109,45 @@ export function ChatStream({ role }: ChatStreamProps) {
   }, [roleId]);
 
   const switchToConversation = useCallback(async (conv: Conversation) => {
+    const loadGeneration = ++conversationLoadGenerationRef.current;
+    conversationIdRef.current = conv.id;
     setConversation(conv);
     setMessages([]);
-    setStreamBubbles([]);
-    setThinkingContent('');
+    resetStreamingState();
     try {
       const history = await chatService.getHistory(conv.id);
+      if (conversationIdRef.current !== conv.id || conversationLoadGenerationRef.current !== loadGeneration) return;
       setMessages(history);
     } catch (e) {
       console.error('加载对话历史失败:', e);
     }
-  }, []);
+  }, [resetStreamingState]);
 
   useEffect(() => {
     const init = async () => {
+      const loadGeneration = ++conversationLoadGenerationRef.current;
       // 切换 role/butler 时立即清空当前消息，避免上一会话的内容短暂泄漏到新视图
       setConversation(null);
+      conversationIdRef.current = null;
       setMessages([]);
-      setStreamBubbles([]);
-      setThinkingContent('');
+      resetStreamingState();
         try {
         const conv = roleId
           ? await chatService.getRoleConversation(roleId)
           : await chatService.getButlerConversation();
+        if (conversationLoadGenerationRef.current !== loadGeneration) return;
+        conversationIdRef.current = conv.id;
         setConversation(conv);
         const history = await chatService.getHistory(conv.id);
-        setMessages(history);
+        if (conversationIdRef.current !== conv.id || conversationLoadGenerationRef.current !== loadGeneration) return;
+        setMessages(prev => mergeHistoryWithLocalMessages(history, prev));
         await loadConversations();
       } catch (e) {
         console.error('加载对话失败:', e);
       }
     };
     init();
-  }, [loadConversations, roleId]);
+  }, [loadConversations, resetStreamingState, roleId]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -77,6 +157,7 @@ export function ChatStream({ role }: ChatStreamProps) {
 
   const handleStreamEvent = useCallback((payload: StreamPayload) => {
     if (conversation && payload.conversationId !== conversation.id) return;
+    if (!conversation) return;
 
     const bucketKey = payload.messageId ?? null;
 
@@ -85,10 +166,39 @@ export function ChatStream({ role }: ChatStreamProps) {
       // 中间 done（有 messageId 且桶里仍有其他活跃气泡）仅刷新历史，不结束 streaming——
       // 否则后续 follow-up token 因 isStreaming=false 而不渲染。
         setThinkingContent('');
+      const currentBubbles = streamBubblesRef.current;
+      const doneMatchesActiveBucket = currentBubbles.some(b => b.id === bucketKey);
+      const isDelegationSegmentDone = bucketKey !== null
+        && currentBubbles.some(b => b.id === null)
+        && !doneMatchesActiveBucket;
+      const remainingAfterDone = currentBubbles.filter(b => b.id !== bucketKey && b.id !== null);
+      const isFinalDone = !isDelegationSegmentDone && remainingAfterDone.length === 0;
+      const streamGeneration = streamGenerationRef.current;
+      if (isFinalDone) {
+        setIsInputLocked(false);
+        const completedMessages: ChatMessage[] = currentBubbles
+          .filter(b => b.content.trim().length > 0)
+          .map((b, idx) => ({
+            id: b.id ? `__completed__${b.id}` : `__completed__${streamGeneration}_${idx}`,
+            conversationId: conversation?.id ?? payload.conversationId,
+            role: 'assistant',
+            content: b.content,
+            thinkingContent: '',
+            isComplete: true,
+            createdAt: new Date().toISOString(),
+            routingMetadata: null,
+          }));
+        if (completedMessages.length > 0) {
+          setMessages(prev => [...prev, ...completedMessages]);
+        }
+        updateStreamBubbles(() => []);
+        setIsStreaming(false);
+      }
       // 清桶逻辑封装——先算出 remaining，但延迟到 getHistory 返回后执行，
       // 避免清桶→历史未到位之间的渲染间隙导致气泡闪烁。
       const applyBucketClear = () => {
-        setStreamBubbles(prev => {
+        if (isFinalDone || isDelegationSegmentDone) return;
+        updateStreamBubbles(prev => {
           const remaining = prev.filter(b => b.id !== bucketKey && b.id !== null);
           if (remaining.length === 0) {
             setIsStreaming(false);
@@ -97,8 +207,23 @@ export function ChatStream({ role }: ChatStreamProps) {
         });
       };
       if (conversation) {
-        chatService.getHistory(conversation.id).then(history => {
-          setMessages(history);
+        const conversationId = conversation.id;
+        chatService.getHistory(conversationId).then(history => {
+          if (conversationIdRef.current !== conversationId || streamGenerationRef.current !== streamGeneration) return;
+          if (isDelegationSegmentDone) {
+            if (streamGenerationRef.current !== streamGeneration || !streamBubblesRef.current.some(b => b.id === null)) return;
+            setMessages(prev => mergeHistoryWithLocalMessages(history, prev));
+            const persistedContents = new Set(
+              history
+                .filter(m => m.role === 'assistant')
+                .map(m => m.content.trim())
+                .filter(Boolean),
+            );
+            updateStreamBubbles(prev => prev.filter(b => b.id !== null || !persistedContents.has(b.content.trim())));
+            setIsStreaming(true);
+            return;
+          }
+          setMessages(prev => mergeHistoryWithLocalMessages(history, prev));
           applyBucketClear();
         }).catch(console.error);
       } else {
@@ -108,7 +233,8 @@ export function ChatStream({ role }: ChatStreamProps) {
       setThinkingContent(prev => prev + payload.token);
     } else {
       setIsStreaming(true);
-      setStreamBubbles(prev => {
+      setIsInputLocked(true);
+      updateStreamBubbles(prev => {
         const idx = prev.findIndex(b => b.id === bucketKey);
         if (idx === -1) {
           // 新气泡（包括 messageId=null 默认桶第一次出现、或后端发空 token 唤醒第二个气泡）
@@ -153,10 +279,10 @@ export function ChatStream({ role }: ChatStreamProps) {
     if (isStreaming) return;
     try {
       const newConv = await chatService.newConversation(conversation?.id, roleId ?? undefined);
+      conversationIdRef.current = newConv.id;
       setConversation(newConv);
       setMessages([]);
-      setStreamBubbles([]);
-      setThinkingContent('');
+      resetStreamingState();
         await loadConversations();
     } catch (e) {
       console.error('创建新对话失败:', e);
@@ -176,7 +302,21 @@ export function ChatStream({ role }: ChatStreamProps) {
     if (!conversation) return;
 
     setIsStreaming(true);
-    setStreamBubbles([]);
+    setIsInputLocked(true);
+    streamGenerationRef.current += 1;
+    const sendGeneration = streamGenerationRef.current;
+    const localUserMessageId = `__local_user__${sendGeneration}_${localMessageSequenceRef.current++}`;
+    setMessages(prev => [...prev, {
+      id: localUserMessageId,
+      conversationId: conversation.id,
+      role: 'user',
+      content,
+      thinkingContent: '',
+      isComplete: true,
+      createdAt: new Date().toISOString(),
+      routingMetadata: null,
+    }]);
+    updateStreamBubbles(() => []);
     setThinkingContent('');
 
     try {
@@ -187,15 +327,21 @@ export function ChatStream({ role }: ChatStreamProps) {
       });
 
       if (userMsg.role === 'assistant') {
-        setMessages(prev => [...prev, userMsg]);
+        if (streamGenerationRef.current !== sendGeneration) return;
+        setMessages(prev => [...prev.filter(m => m.id !== localUserMessageId), userMsg]);
         setIsStreaming(false);
+        setIsInputLocked(false);
         return;
       }
 
-      setMessages(prev => [...prev, userMsg]);
+      setMessages(prev => prev.map(m => m.id === localUserMessageId ? userMsg : m));
     } catch (e) {
       console.error('发送消息失败:', e);
-      setIsStreaming(false);
+      setMessages(prev => prev.filter(m => m.id !== localUserMessageId));
+      if (streamGenerationRef.current === sendGeneration) {
+        setIsStreaming(false);
+        setIsInputLocked(false);
+      }
     }
   };
 
@@ -277,8 +423,8 @@ export function ChatStream({ role }: ChatStreamProps) {
           <ChatInput
             onSend={handleSend}
             onStop={handleStop}
-            isStreaming={isStreaming}
-            disabled={isStreaming}
+            isStreaming={isInputLocked}
+            disabled={isInputLocked}
             useRoleAccent={Boolean(role)}
             placeholder={role ? `跟 ${role.name} 说点什么...` : undefined}
           />

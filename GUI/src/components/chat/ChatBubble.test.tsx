@@ -37,4 +37,18 @@ describe('ChatBubble assistant identity', () => {
     expect(screen.getByText('产品经理')).toBeInTheDocument();
     expect(screen.queryByText('管家')).not.toBeInTheDocument();
   });
+
+  it('已有文本的流式助手气泡不显示尾部光标', () => {
+    const { container } = render(<ChatBubble message={{ ...assistantMsg, isComplete: false }} isStreaming />);
+
+    expect(container.querySelector('span.inline-block.animate-pulse')).not.toBeInTheDocument();
+  });
+
+  it('空文本的流式助手气泡仍显示等待点', () => {
+    const { container } = render(
+      <ChatBubble message={{ ...assistantMsg, content: '', isComplete: false }} isStreaming />,
+    );
+
+    expect(container.querySelectorAll('.animate-bounce-forever')).toHaveLength(3);
+  });
 });

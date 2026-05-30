@@ -114,9 +114,6 @@ export function ChatBubble({
                 <ReactMarkdown>{message.content}</ReactMarkdown>
               </div>
             )}
-            {isStreaming && (
-              <span className="inline-block w-0.5 h-4 bg-slate-600 dark:bg-slate-300 ml-0.5 animate-pulse" />
-            )}
           </>
         )}
       </div>

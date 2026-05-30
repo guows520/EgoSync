@@ -127,8 +127,8 @@ so that 我只需要面对一个稳定的"助理"，不必在不同身份之间�
   - [x] `build_butler_messages` 在有 active 角色时含可委派清单+行为指南；零 active 时省略
   - [x] `execute_delegate_to_role` 合约级单测：ghost role_id 返回 role_not_found 且不污染对话；archived role 拒绝；无效 JSON 走 parse_error
 - [x] T6.3 前端类型回归：7 处 `ChatMessage` 字面量补 `routingMetadata: null`（ChatStream / ChatBubble.test / OnboardingView ×5）
-- [x] T6.4 验证命令：tsc / npm test / cargo test 全绿（tsc 无错误 / vitest 28 passed / cargo 77 passed）
-- [ ] T6.5 端到端 `tauri dev`：留 boss 在桌面手动验证三条剧本：
+- [x] T6.4 验证命令：tsc / npm test / cargo test 全绿（原 Story 验证：tsc 无错误 / vitest 28 passed / cargo 77 passed；同步桥接与前端流式加固后：cargo test --lib 155 passed、`npm run test:frontend` 46 passed、`npm run build` 通过）
+- [ ] T6.5 端到端 `tauri dev`：应用已能启动到 Vite + Tauri 后端 + opencode sidecar + delegate bridge 就绪；以下业务剧本仍留 boss 在桌面手动验证：
   1. 「帮我跟进本周 OKR」→ 管家文字过渡 + 委派产品经理 + 转述结果
   2. 「帮我安排今天的工作和健身」→ 一次涉及 2 角色（产品经理 + 健康教练）
   3. 主动切到产品经理私聊后回管家说「我刚才跟产品经理聊了什么」→ 管家能从摘要里复述
@@ -147,20 +147,35 @@ so that 我只需要面对一个稳定的"助理"，不必在不同身份之间�
 | Q5 跨角色全局同步 | 管家 system prompt 注入各角色近况摘要 | 用户主动私聊后管家自动掌握，无需手动同步 |
 | D-confidence | 不硬编码阈值，prompt 引导 LLM 自评 | LLM API 不返回 confidence，硬编码会变 dead code |
 
-### 角色 LLM stream **不** emit 到 `llm:stream` —— 关键设计
+### 当前委派实现：opencode custom tool → 本地 delegate bridge → 真实角色回复
 
-理由：
-1. **避免污染管家 conversation 流**。`llm:stream` payload 含 `conversation_id`，前端 ChatStream 按 conversation_id 路由。如果 emit 角色 stream，前端要么误显示在管家气泡里，要么需要新前端逻辑分辨。
-2. **简化 UI**。用户感知到的就是"管家说了稍等 → stream 暂停几秒 → 管家恢复 stream 说结果"。这就是 Q3=B 的本意。
-3. 角色 LLM 调用仍走完整 `chat_stream` 通路，事件 channel 只用于本地 drain 累积，**不**调 `app_handle.emit`。
+当前运行路径已经从原始“Rust 内部本地 drain 角色 LLM”演进为 opencode 主路径：
 
-代码实现：复制现有 follow-up 段（`provider_clone2.chat_stream + while rx2.recv` 那段）的精神，但完全本地化处理，不 emit。
+1. `agent_config.rs` 写入全局 opencode custom tool `delegate_to_role.ts`。
+2. custom tool 通过 `EGOSYNC_DELEGATE_BRIDGE_PORT` + `EGOSYNC_DELEGATE_BRIDGE_TOKEN` 调用 `127.0.0.1:{port}/delegate-to-role`。
+3. `delegate_bridge.rs` 绑定随机本地端口、校验 Bearer token、按 opencode sessionID 找到触发本轮的管家 user message，并同步调用 `execute_delegate_to_role(...)`。
+4. `execute_delegate_to_role(...)` 将 `[管家委派] ...` 写入目标角色会话，调用目标角色模型并持久化真实角色回复，再把该真实回复作为 tool result 返回给 opencode 管家会话。
+5. 管家 follow-up 基于 tool result 转述给用户；`routing_metadata.delegations[]` 由 bridge 追加到触发本轮的管家 user message。
+
+该路径修复了旧 custom tool 只返回 JSON 元数据、导致管家自行生成“已收到/会帮你处理”伪确认的问题。
+
+### 前端流式呈现：两气泡委派与即时解锁
+
+`llm:stream` 仍以管家 conversationId 为路由边界，但 payload 现在可携带 `messageId`：
+
+- 第一段管家过渡语（如“稍等，我让产品经理看一下”）落在默认桶；
+- `delegate_to_role` 进入活动态时，后端冻结第一段并创建 follow-up assistant message，用空 token 唤醒第二个气泡等待点；
+- 第二段管家转述真实角色回复时按 follow-up `messageId` 进入第二个气泡；
+- 前端 `ChatStream` 用 `streamBubbles` 按 `messageId` 分桶渲染，并用独立的 `isInputLocked` 控制输入框。最终 done 到达后立即解锁输入框，历史刷新异步合并。
+
+因此，旧文档中的“角色 LLM 不 emit 到 `llm:stream`、前端无需结构性改动”仅代表原始 Story 实施方式，不再代表当前代码现状。
 
 ### 嵌套调用与签名贯通
 
-- 当前 `run_stream` 不持有 user_msg_id → 加签名参数 `user_message_id: String`（仅 butler 委派路径使用，其他忽略）
-- 当前 `chat_send_message` 唯一调用 `run_stream`，单点改造，无 fan-out 风险
-- `execute_tool_calls` 现签名 `(app_handle, main_pool, conversation_id, tool_calls)` —— `execute_delegate_to_role` 还需要 `conv_pool` 和 `butler_user_message_id`。改 `execute_tool_calls` 签名 → 新增 `conv_pool: &ConversationsPool, butler_user_message_id: &str` 两个参数。`execute_create_role` 不使用这两个，但接收无副作用。
+- 当前 opencode 主路径下，`run_stream` 以 conversation_id 复用/创建 opencode session，并在 butler 会话中用 `DelegateBridge::register_session(session_id, user_message_id)` 建立 sessionID → 管家 user message 映射。
+- opencode custom tool `delegate_to_role.ts` 执行时把 `context.sessionID` POST 给本地 bridge，bridge 据此找到本轮触发消息并追加 `routing_metadata`。
+- 委派 tool 执行完成后，opencode 会继续当前 assistant message；后端用 `messageId` 将第一段过渡语和第二段转述拆成两个可独立完成的前端气泡。
+- `event_router.rs` 订阅 opencode 全局 `/event` stream 后按 sessionID 分发，避免不同 conversation 的 tokens 互相污染。
 
 ### Story 2.2 已奠定的能复用资产（**不要**重新发明）
 
@@ -183,7 +198,7 @@ so that 我只需要面对一个稳定的"助理"，不必在不同身份之间�
 
 | 风险 | 缓解 |
 |---|---|
-| 角色 LLM 调用慢导致管家 stream 看起来"卡住" | Q3=B 的文字过渡是用户预期管理；超过 30s 后续 story 加超时；本 story 不做 |
+| 角色 LLM 调用慢导致管家 stream 看起来“卡住” | 当前两气泡实现会在委派 tool 进入活动态时立即创建第二个等待气泡；bridge 侧有 120s 委派超时和并发限制，最终 done 到达后前端立即解锁输入框 |
 | 多委派串行下总延迟 = Σ 各角色 | V1 接受；并行扩展点已留注释 |
 | 跨角色摘要长 prompt 拖慢首 token | V1 限上限 ~2000 字；超长可加 token 上限截断；本 story 用 chars 软截断够用 |
 | LLM 在 follow-up 仍想委派但被 tools=None 拒绝 | LLM 会自然降级为文字描述；不会报错 |
@@ -208,7 +223,8 @@ so that 我只需要面对一个稳定的"助理"，不必在不同身份之间�
 
 ### 新建文件
 
-无（schema 走 raw_sql 容错路径）
+- `GUI/src-tauri/src/services/delegate_bridge.rs` — 本地回环 HTTP bridge，供 opencode custom tool 同步调用后端委派逻辑并返回真实角色回复
+- `GUI/src-tauri/src/services/event_router.rs` — opencode 全局事件流按 sessionID 分发，避免跨会话 token 污染
 
 ### 修改文件
 
@@ -218,9 +234,17 @@ so that 我只需要面对一个稳定的"助理"，不必在不同身份之间�
 | `GUI/src-tauri/src/db/conversations.rs` | UPDATE | `Message` 列清单加 `routing_metadata`；新增 `update_message_routing_metadata` |
 | `GUI/src-tauri/src/db/roles.rs` | UPDATE（如需） | 若无 `list_active_roles` 则新增（status='active' ORDER BY created_at） |
 | `GUI/src-tauri/src/models/chat.rs` | UPDATE | `Message` 加 `routing_metadata: Option<String>` |
-| `GUI/src-tauri/src/services/agent_engine.rs` | UPDATE | 新增 `delegate_to_role_tool_definition` / `build_cross_role_summary` / `execute_delegate_to_role`；`build_butler_messages` 末尾追加 3 段；`run_stream` 签名追加 `user_message_id`，butler 分支挂 tools；`execute_tool_calls` 新增 case 与签名（追加 `conv_pool` + `butler_user_message_id`） |
+| `GUI/src-tauri/src/services/agent_engine.rs` | UPDATE | opencode session 复用/事件订阅；sessionID 注册到 delegate bridge；delegate tool 活动态拆分两气泡；`messageId` 路由；`append_delegation_metadata` / `execute_delegate_to_role` 等委派核心逻辑 |
+| `GUI/src-tauri/src/services/agent_config.rs` | UPDATE | 写入 `delegate_to_role.ts` custom tool；工具通过本地 bridge 返回 `role_response` 给管家 |
+| `GUI/src-tauri/src/services/sidecar.rs` | UPDATE | 支持向 opencode 子进程注入 bridge token/port 环境变量 |
+| `GUI/src-tauri/src/services/mod.rs` | UPDATE | 注册 `delegate_bridge` / `event_router` 模块 |
+| `GUI/src-tauri/src/lib.rs` | UPDATE | 启动 delegate bridge、注入 sidecar env、启动 event router |
 | `GUI/src-tauri/src/commands/chat.rs` | UPDATE | `chat_send_message` 把 `user_msg.id` 透传 `run_stream` |
-| `GUI/src/types/chat.ts` | UPDATE | `ChatMessage` 加 `routingMetadata: string \| null` |
+| `GUI/src/types/chat.ts` | UPDATE | `ChatMessage.routingMetadata` 与 `StreamPayload.messageId` 支持当前流式协议 |
+| `GUI/src/components/chat/ChatStream.tsx` | UPDATE | 多流式气泡分桶、done 后输入框即时解锁、late history/sendMessage 竞态合并 |
+| `GUI/src/components/chat/ChatBubble.tsx` | UPDATE | 去除已有文本流式气泡尾部光标，保留空内容等待点 |
+| `GUI/src/components/chat/*.test.tsx` | UPDATE | 覆盖两气泡委派、即时解锁、历史合并、尾部光标移除等回归 |
+| `GUI/src/components/onboarding/OnboardingView.tsx` | UPDATE | ChatMessage 字面量补 `routingMetadata` 字段 |
 
 ### 不动的文件
 
@@ -228,8 +252,7 @@ so that 我只需要面对一个稳定的"助理"，不必在不同身份之间�
 - `GUI/src/App.tsx` — 不挂 modal，不监听 routing 事件
 - `GUI/src/components/role/*` — Story 2.2 路径完全保留
 - `GUI/src/components/butler/ButlerView.tsx` — 无需改
-- `GUI/src/components/chat/ChatStream.tsx` — 委派对用户而言是透明的，stream 协议不变
-- `GUI/src/components/onboarding/*` — onboarding 路径不变
+- `GUI/src/components/onboarding/*` — onboarding 业务路径不变；仅类型字段补齐
 - `GUI/src/components/modals/*` — 不新增 RouteConfirmModal（已废弃方案）
 
 ## References
@@ -263,6 +286,14 @@ Claude Sonnet 4.5
 - 与 Story 2.2 完全互补：用户既可被动接受管家自动委派，也可主动私聊角色；后者通过跨角色摘要让管家持续掌握全局
 - 端到端验证留 boss 在桌面手动跑三条剧本（Phase 6 T6.5）
 
+**后续同步桥接与前端流式加固记录（2026-05-30）：**
+
+- `delegate_to_role` opencode custom tool 已改为同步调用本地 delegate bridge，并把真实 `role_response` 作为 tool result 返回给管家，避免管家基于空 JSON 元数据生成伪确认。
+- `delegate_bridge.rs` 增加随机本地端口、运行时 token、Bearer 鉴权、请求体限制、连接/委派并发限制和 120s 委派超时；`lib.rs` 在 sidecar 启动前注入 bridge token/port。
+- `agent_engine.rs` 通过 `EventRouter` 按 opencode sessionID 分发全局事件流；butler 会话注册到 delegate bridge，`delegate_to_role` 活动态会冻结第一段气泡并唤醒 follow-up 气泡。
+- `ChatStream.tsx` 支持按 `messageId` 分桶渲染多流式气泡；`isInputLocked` 与流式气泡渲染状态拆分，最终 done 到达后立即解锁输入框，并加固 late history / late sendMessage / assistant busy / 重复内容等竞态。
+- `ChatBubble.tsx` 去除已有文本流式气泡尾部光标；空内容流式气泡继续显示等待点。
+
 **实施增量记录 (2026-05-24)：**
 
 - **Phase 1**：`run_conversations_migrations` 与 `db::conversations` 测试 setup 都追加 `ALTER TABLE messages ADD COLUMN routing_metadata TEXT` 容错。`Message.routing_metadata: Option<String>` 加在结构体末尾保持向后兼容。`agent_engine::tests::setup_test_conv_pool` 同步补 ALTER 防止 SELECT 列缺失。
@@ -280,9 +311,12 @@ Claude Sonnet 4.5
 
 **验证证据：**
 
-- `cd GUI/src-tauri && cargo test --lib` = **77 passed**（含本 story 12 个新增）
+- `cd GUI/src-tauri && cargo test --lib` = **77 passed**（原 Story 2.3 实施，含本 story 12 个新增）
 - `cd GUI && npx tsc --noEmit` 无错误
-- `cd GUI && npm run test:frontend` = **28 passed / 8 files**
+- `cd GUI && npm run test:frontend` = **28 passed / 8 files**（原 Story 2.3 实施）
+- 后续同步桥接加固：`cargo test --lib` = **155 passed**
+- 后续前端流式加固：`npm run test:frontend -- ChatStream.test.tsx` = **20 passed**；`npm run test:frontend` = **46 passed**；`npm run build` 通过
+- `npm run tauri dev` 已启动到 Vite + Tauri 后端 + opencode sidecar(4096) + delegate bridge 就绪；业务剧本仍需 boss 人工发送真实 LLM 请求确认
 
 ### File List
 
@@ -291,16 +325,27 @@ Claude Sonnet 4.5
 - `GUI/src-tauri/src/db/pool.rs` — 追加 routing_metadata 容错 ALTER
 - `GUI/src-tauri/src/db/conversations.rs` — Message SELECT 加列、insert_message 默认 None、新增 `update_message_routing_metadata`、测试 setup ALTER + 2 个新单测
 - `GUI/src-tauri/src/models/chat.rs` — Message 加 `routing_metadata: Option<String>`
-- `GUI/src-tauri/src/services/agent_engine.rs` — `build_cross_role_summary` / `delegate_to_role_tool_definition` / `build_butler_messages` 签名扩展+三段拼接 / `run_stream` 签名加 `user_message_id` + butler 分支挂 tools / `execute_tool_calls` 签名扩展+delegate case / `execute_delegate_to_role` / `DelegationRecord` struct / 测试 setup ALTER + 10 个新单测
+- `GUI/src-tauri/src/services/agent_engine.rs` — `build_cross_role_summary` / `delegate_to_role_tool_definition` / `execute_delegate_to_role`；opencode session/event 路由；delegate tool 活动态拆分两气泡；`append_delegation_metadata`；相关单测
+- `GUI/src-tauri/src/services/agent_config.rs` — 写入 `delegate_to_role.ts` custom tool；通过本地 bridge 返回真实角色回复
+- `GUI/src-tauri/src/services/sidecar.rs` — 注入 bridge token/port 环境变量
+- `GUI/src-tauri/src/services/mod.rs` — 注册 `delegate_bridge` / `event_router`
+- `GUI/src-tauri/src/services/delegate_bridge.rs` — 新增本地 bridge，承接 opencode custom tool 并调用 `execute_delegate_to_role`
+- `GUI/src-tauri/src/services/event_router.rs` — 新增 opencode 全局事件流 sessionID 分发器
+- `GUI/src-tauri/src/lib.rs` — 启动 delegate bridge、event router，并在 sidecar 启动前注入 bridge 环境变量
 - `GUI/src-tauri/src/commands/chat.rs` — `chat_send_message` 把 `user_msg.id` 透传 `run_stream`
 - `GUI/src/types/chat.ts` — `ChatMessage` 加 `routingMetadata: string | null`
-- `GUI/src/components/chat/ChatStream.tsx` — `streamingMessage` 补 `routingMetadata: null`
-- `GUI/src/components/chat/ChatBubble.test.tsx` — assistantMsg 字面量补字段
+- `GUI/src/components/chat/ChatStream.tsx` — 多气泡分桶、done 后即时解锁、late history/sendMessage 竞态保护
+- `GUI/src/components/chat/ChatBubble.tsx` — 已有文本流式气泡不再显示尾部光标；空内容仍显示等待点
+- `GUI/src/components/chat/ChatStream.test.tsx` — 覆盖委派两段式、即时解锁、history 合并、busy/assistant 返回、重复内容等回归
+- `GUI/src/components/chat/ChatBubble.test.tsx` — assistantMsg 字面量补字段；覆盖尾部光标移除与空等待点
 - `GUI/src/components/onboarding/OnboardingView.tsx` — 5 处 ChatMessage 字面量补字段
 - `_bmad-output/implementation-artifacts/2-3-butler-intent-routing.md` — Tasks 勾选/Completion Notes/File List/Change Log/状态推进
 - `_bmad-output/implementation-artifacts/sprint-status.yaml` — 状态推进与 last_updated
 
-**新建文件：** 无
+**新建文件：**
+
+- `GUI/src-tauri/src/services/delegate_bridge.rs`
+- `GUI/src-tauri/src/services/event_router.rs`
 
 ### Change Log
 
@@ -309,3 +354,4 @@ Claude Sonnet 4.5
 | 2026-05-24 | Story 2.3 上下文创建（原方案：弹窗切视图）|
 | 2026-05-24 | 设计模型重写为「管家委派 → 角色处理 → 管家转述」（Q1-Q5 全部锁定）；AC 1-9 / Tasks Phase 1-6 全部重新生成；状态保持 ready-for-dev |
 | 2026-05-24 | Phase 1-5 实施完成：schema 列 / 跨角色摘要 / `delegate_to_role` 工具 / butler prompt 三段扩展 / 嵌套 `execute_delegate_to_role` / `chat_send_message` 签名贯通。Phase 6 自动化验证全绿：cargo 77 passed（+12 新增）、tsc 无错误、vitest 28 passed。T6.5 桌面端到端待 boss 手动验证。状态推进到 review |
+| 2026-05-30 | 同步桥接与前端流式加固：`delegate_to_role` custom tool 经本地 bridge 返回真实角色回复；新增 delegate bridge / event router；前端支持委派两气泡、去除尾部光标、done 后即时解锁输入框。验证：cargo test --lib 155 passed、ChatStream 20 passed、frontend 46 passed、build 通过；应用已启动到 sidecar + bridge 就绪。 |

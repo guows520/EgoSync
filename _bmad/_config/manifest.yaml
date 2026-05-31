@@ -1,21 +1,23 @@
 installation:
-  version: 6.7.0
+  version: 6.8.0
   installDate: 2026-05-18T01:32:33.048Z
-  lastUpdated: 2026-05-18T01:32:33.048Z
+  lastUpdated: 2026-05-27T08:24:28.798Z
 modules:
   - name: core
-    version: 6.7.0
+    version: 6.8.0
     installDate: 2026-05-18T01:32:32.892Z
-    lastUpdated: 2026-05-18T01:32:33.046Z
+    lastUpdated: 2026-05-27T08:24:28.795Z
     source: built-in
     npmPackage: null
     repoUrl: null
   - name: bmm
-    version: 6.7.0
+    version: 6.8.0
     installDate: 2026-05-18T01:32:32.784Z
-    lastUpdated: 2026-05-18T01:32:33.048Z
+    lastUpdated: 2026-05-27T08:24:28.798Z
     source: built-in
     npmPackage: null
     repoUrl: null
 ides:
   - windsurf
+  - claude-code
+  - cursor

@@ -26,7 +26,7 @@ export function RoleWorkspacePanel({ role, currentTab, setTab, onOpenTask, onUpd
 
       <div className="flex-1 overflow-y-auto p-6 scroll-smooth">
         {currentTab === 'tasks' && <TasksTab role={role} onOpenTask={onOpenTask} />}
-        {currentTab === 'memory' && <MemoryTab />}
+        {currentTab === 'memory' && <MemoryTab roleId={role.id} />}
         {currentTab === 'settings' && (
           <SettingsTab
             role={role}

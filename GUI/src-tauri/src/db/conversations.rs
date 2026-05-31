@@ -173,6 +173,19 @@ pub async fn delete_conversations_by_role(
     Ok(())
 }
 
+pub async fn get_conversation(
+    pool: &ConversationsPool,
+    conversation_id: &str,
+) -> Result<Option<Conversation>, AppError> {
+    sqlx::query_as::<_, Conversation>(
+        "SELECT id, role_id, title, started_at, updated_at FROM conversations WHERE id = ?",
+    )
+    .bind(conversation_id)
+    .fetch_optional(&**pool)
+    .await
+    .map_err(|e| AppError::DbError(format!("查询对话失败: {}", e)))
+}
+
 pub async fn get_or_create_conversation_by_role(
     pool: &ConversationsPool,
     role_id: &str,
@@ -507,6 +520,27 @@ mod tests {
 
         assert_eq!(pm_list.len(), 1);
         assert_eq!(pm_list[0].id, pm_conv.id);
+    }
+
+    #[tokio::test]
+    async fn test_get_conversation_returns_existing_row_without_creating() {
+        let pool = setup_test_pool().await;
+        let conv = create_conversation(&pool, Some("role-pm")).await.unwrap();
+
+        let found = get_conversation(&pool, &conv.id).await.unwrap();
+        let missing = get_conversation(&pool, "missing-conv").await.unwrap();
+        let all = list_all_conversations(&pool).await.unwrap();
+
+        assert_eq!(
+            found.as_ref().map(|c| c.id.as_str()),
+            Some(conv.id.as_str())
+        );
+        assert_eq!(
+            found.as_ref().and_then(|c| c.role_id.as_deref()),
+            Some("role-pm")
+        );
+        assert!(missing.is_none());
+        assert_eq!(all.len(), 1);
     }
 
     /// AC-7: 管家视角 ChatHeader 历史下拉只能看到管家自己的对话；

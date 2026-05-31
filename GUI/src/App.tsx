@@ -93,7 +93,7 @@ export default function App() {
           goal: values.goal || undefined,
         });
         console.info('[App] 涌现角色创建成功:', role.name, role.id);
-        setRoles(prev => [...prev, role]);
+        await refreshRoles();
         setIsButlerProposalOpen(false);
         setButlerProposal(null);
       } catch (e) {
@@ -102,7 +102,7 @@ export default function App() {
         setIsButlerProposalBusy(false);
       }
     },
-    [isButlerProposalBusy],
+    [isButlerProposalBusy, refreshRoles],
   );
 
   const handleButlerProposalCancel = useCallback(() => {

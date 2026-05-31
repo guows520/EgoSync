@@ -44,13 +44,12 @@ pub async fn set_emergence_cooldown(
 pub async fn get_emergence_cooldowns(
     pool: &SqlitePool,
 ) -> Result<HashMap<String, String>, AppError> {
-    let rows: Vec<(String, Option<String>)> = sqlx::query_as(
-        "SELECT key, value FROM app_settings WHERE key LIKE ?1",
-    )
-    .bind(format!("{}%", EMERGENCE_COOLDOWN_PREFIX))
-    .fetch_all(pool)
-    .await
-    .map_err(|e| AppError::DbError(format!("读取涌现冷却失败: {}", e)))?;
+    let rows: Vec<(String, Option<String>)> =
+        sqlx::query_as("SELECT key, value FROM app_settings WHERE key LIKE ?1")
+            .bind(format!("{}%", EMERGENCE_COOLDOWN_PREFIX))
+            .fetch_all(pool)
+            .await
+            .map_err(|e| AppError::DbError(format!("读取涌现冷却失败: {}", e)))?;
 
     let prefix_len = EMERGENCE_COOLDOWN_PREFIX.len();
     let mut map = HashMap::new();
@@ -65,22 +64,17 @@ pub async fn get_emergence_cooldowns(
 }
 
 /// 清理过期的涌现冷却记录（超过 days 天的）。
-pub async fn clear_expired_cooldowns(
-    pool: &SqlitePool,
-    days: i64,
-) -> Result<u64, AppError> {
+pub async fn clear_expired_cooldowns(pool: &SqlitePool, days: i64) -> Result<u64, AppError> {
     // 计算截止时间：当前时间 - days 天
     let cutoff = chrono::Utc::now() - chrono::Duration::days(days);
     let cutoff_str = cutoff.to_rfc3339();
 
-    let result = sqlx::query(
-        "DELETE FROM app_settings WHERE key LIKE ?1 AND value < ?2",
-    )
-    .bind(format!("{}%", EMERGENCE_COOLDOWN_PREFIX))
-    .bind(&cutoff_str)
-    .execute(pool)
-    .await
-    .map_err(|e| AppError::DbError(format!("清理过期冷却失败: {}", e)))?;
+    let result = sqlx::query("DELETE FROM app_settings WHERE key LIKE ?1 AND value < ?2")
+        .bind(format!("{}%", EMERGENCE_COOLDOWN_PREFIX))
+        .bind(&cutoff_str)
+        .execute(pool)
+        .await
+        .map_err(|e| AppError::DbError(format!("清理过期冷却失败: {}", e)))?;
 
     Ok(result.rows_affected())
 }
@@ -172,7 +166,9 @@ mod tests {
         let old = (chrono::Utc::now() - chrono::Duration::days(10)).to_rfc3339();
         let recent = (chrono::Utc::now() - chrono::Duration::days(1)).to_rfc3339();
         set_emergence_cooldown(&pool, "旧领域", &old).await.unwrap();
-        set_emergence_cooldown(&pool, "新领域", &recent).await.unwrap();
+        set_emergence_cooldown(&pool, "新领域", &recent)
+            .await
+            .unwrap();
 
         let deleted = clear_expired_cooldowns(&pool, 7).await.unwrap();
         assert_eq!(deleted, 1);

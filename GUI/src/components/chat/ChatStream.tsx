@@ -13,6 +13,27 @@ interface ChatStreamProps {
   role?: Role | null;
 }
 
+type StreamBubbleState = { id: string | null; content: string };
+
+function completedAssistantMessagesFromBubbles(
+  bubbles: Array<StreamBubbleState & { generation?: number }>,
+  conversationId: string,
+  fallbackGeneration: number,
+): ChatMessage[] {
+  return bubbles
+    .filter(b => b.content.trim().length > 0)
+    .map((b, idx) => ({
+      id: b.id ? `__completed__${b.id}` : `__completed__${b.generation ?? fallbackGeneration}_${idx}`,
+      conversationId,
+      role: 'assistant',
+      content: b.content,
+      thinkingContent: '',
+      isComplete: true,
+      createdAt: new Date().toISOString(),
+      routingMetadata: null,
+    }));
+}
+
 function isLikelyPersistedLocalUser(historyMsg: ChatMessage, localMsg: ChatMessage) {
   if (!localMsg.id.startsWith('__local_user__') || historyMsg.role !== 'user' || localMsg.content !== historyMsg.content) {
     return false;
@@ -23,11 +44,69 @@ function isLikelyPersistedLocalUser(historyMsg: ChatMessage, localMsg: ChatMessa
   return Number.isFinite(historyTime) && Number.isFinite(localTime) && historyTime >= localTime - 60_000;
 }
 
+function hasPersistedCompletedAssistantId(historyMsg: ChatMessage, localMsg: ChatMessage) {
+  return localMsg.id.startsWith('__completed__')
+    && historyMsg.role === 'assistant'
+    && localMsg.id === `__completed__${historyMsg.id}`;
+}
+
+function previousUserContent(messages: ChatMessage[], index: number) {
+  for (let i = index - 1; i >= 0; i -= 1) {
+    if (messages[i].role === 'user') return messages[i].content;
+  }
+  return null;
+}
+
+function isLikelyPersistedCompletedAssistant(
+  history: ChatMessage[],
+  historyIndex: number,
+  current: ChatMessage[],
+  localMsg: ChatMessage,
+) {
+  const historyMsg = history[historyIndex];
+  if (!localMsg.id.startsWith('__completed__') || historyMsg.role !== 'assistant') {
+    return false;
+  }
+
+  if (hasPersistedCompletedAssistantId(historyMsg, localMsg)) {
+    return true;
+  }
+
+  if (localMsg.content.trim() !== historyMsg.content.trim()) {
+    return false;
+  }
+
+  const localIndex = current.findIndex(m => m.id === localMsg.id);
+  if (localIndex === -1) return false;
+
+  const historyUserContent = previousUserContent(history, historyIndex);
+  const localUserContent = previousUserContent(current, localIndex);
+  return historyUserContent !== null
+    && localUserContent !== null
+    && historyUserContent === localUserContent;
+}
+
+function appendLocalMessages(current: ChatMessage[], localMessages: ChatMessage[]) {
+  const next = current.slice();
+  for (const message of localMessages) {
+    const candidateCurrent = [...next, message];
+    const exists = next.some((existing, index) =>
+      existing.id === message.id
+      || (!existing.id.startsWith('__completed__')
+        && isLikelyPersistedCompletedAssistant(next, index, candidateCurrent, message))
+    );
+    if (!exists) {
+      next.push(message);
+    }
+  }
+  return next;
+}
+
 function mergeHistoryWithLocalMessages(history: ChatMessage[], current: ChatMessage[]) {
   if (history.length === 0) return current;
 
   const remainingCurrent = current.slice();
-  const mergedHistory = history.map((historyMsg) => {
+  const mergedHistory = history.map((historyMsg, historyIndex) => {
     const sameIdIndex = remainingCurrent.findIndex(m => m.id === historyMsg.id);
     if (sameIdIndex !== -1) {
       remainingCurrent.splice(sameIdIndex, 1);
@@ -41,7 +120,7 @@ function mergeHistoryWithLocalMessages(history: ChatMessage[], current: ChatMess
     }
 
     const completedAssistantIndex = remainingCurrent.findIndex(m =>
-      m.id.startsWith('__completed__') && historyMsg.role === 'assistant' && m.content.trim() === historyMsg.content.trim()
+      isLikelyPersistedCompletedAssistant(history, historyIndex, current, m)
     );
     if (completedAssistantIndex !== -1) {
       remainingCurrent.splice(completedAssistantIndex, 1);
@@ -72,8 +151,8 @@ export function ChatStream({ role }: ChatStreamProps) {
   const [isInputLocked, setIsInputLocked] = useState(false);
   // Story 2.3 P1b: 流式期间可能产生多个气泡（管家委派两段式：先「稍等，我让 X 看一下」，
   // 后「来自 X 的反馈…」）。按后端 messageId 分桶，messageId 缺省（普通单段）落到 id=null 桶。
-  const [streamBubbles, setStreamBubbles] = useState<{ id: string | null; content: string }[]>([]);
-  const streamBubblesRef = useRef<{ id: string | null; content: string }[]>([]);
+  const [streamBubbles, setStreamBubbles] = useState<StreamBubbleState[]>([]);
+  const streamBubblesRef = useRef<StreamBubbleState[]>([]);
   const streamGenerationRef = useRef(0);
   const conversationLoadGenerationRef = useRef(0);
   const localMessageSequenceRef = useRef(0);
@@ -81,7 +160,7 @@ export function ChatStream({ role }: ChatStreamProps) {
   const [thinkingContent, setThinkingContent] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  const updateStreamBubbles = useCallback((updater: (prev: { id: string | null; content: string }[]) => { id: string | null; content: string }[]) => {
+  const updateStreamBubbles = useCallback((updater: (prev: StreamBubbleState[]) => StreamBubbleState[]) => {
     const next = updater(streamBubblesRef.current);
     streamBubblesRef.current = next;
     setStreamBubbles(next);
@@ -176,28 +255,20 @@ export function ChatStream({ role }: ChatStreamProps) {
       const streamGeneration = streamGenerationRef.current;
       if (isFinalDone) {
         setIsInputLocked(false);
-        const completedMessages: ChatMessage[] = currentBubbles
-          .filter(b => b.content.trim().length > 0)
-          .map((b, idx) => ({
-            id: b.id ? `__completed__${b.id}` : `__completed__${streamGeneration}_${idx}`,
-            conversationId: conversation?.id ?? payload.conversationId,
-            role: 'assistant',
-            content: b.content,
-            thinkingContent: '',
-            isComplete: true,
-            createdAt: new Date().toISOString(),
-            routingMetadata: null,
-          }));
+        const completedMessages = completedAssistantMessagesFromBubbles(
+          currentBubbles,
+          conversation.id,
+          streamGeneration,
+        );
         if (completedMessages.length > 0) {
-          setMessages(prev => [...prev, ...completedMessages]);
+          setMessages(prev => appendLocalMessages(prev, completedMessages));
         }
         updateStreamBubbles(() => []);
         setIsStreaming(false);
       }
-      // 清桶逻辑封装——先算出 remaining，但延迟到 getHistory 返回后执行，
-      // 避免清桶→历史未到位之间的渲染间隙导致气泡闪烁。
       const applyBucketClear = () => {
-        if (isFinalDone || isDelegationSegmentDone) return;
+        if (isDelegationSegmentDone || isFinalDone) return;
+        if (streamGenerationRef.current !== streamGeneration) return;
         updateStreamBubbles(prev => {
           const remaining = prev.filter(b => b.id !== bucketKey && b.id !== null);
           if (remaining.length === 0) {
@@ -209,7 +280,7 @@ export function ChatStream({ role }: ChatStreamProps) {
       if (conversation) {
         const conversationId = conversation.id;
         chatService.getHistory(conversationId).then(history => {
-          if (conversationIdRef.current !== conversationId || streamGenerationRef.current !== streamGeneration) return;
+          if (conversationIdRef.current !== conversationId) return;
           if (isDelegationSegmentDone) {
             if (streamGenerationRef.current !== streamGeneration || !streamBubblesRef.current.some(b => b.id === null)) return;
             setMessages(prev => mergeHistoryWithLocalMessages(history, prev));
@@ -225,7 +296,11 @@ export function ChatStream({ role }: ChatStreamProps) {
           }
           setMessages(prev => mergeHistoryWithLocalMessages(history, prev));
           applyBucketClear();
-        }).catch(console.error);
+        }).catch(error => {
+          console.error(error);
+          if (conversationIdRef.current !== conversationId) return;
+          applyBucketClear();
+        });
       } else {
         applyBucketClear();
       }

@@ -1,6 +1,9 @@
 pub mod agent_bridge;
 pub mod agent_config;
 pub mod agent_engine;
+pub mod delegate_bridge;
+pub mod event_router;
 pub mod llm_config;
+pub mod memory_pipeline;
 pub mod secret_store;
 pub mod sidecar;

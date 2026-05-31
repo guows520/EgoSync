@@ -26,7 +26,8 @@ pub async fn init_db(db_path: &Path) -> Result<DbPool, AppError> {
     let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
     let options = SqliteConnectOptions::from_str(&db_url)
         .map_err(|e| AppError::DbError(format!("数据库连接选项解析失败: {}", e)))?
-        .create_if_missing(true);
+        .create_if_missing(true)
+        .foreign_keys(true);
 
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
@@ -97,4 +98,74 @@ async fn run_conversations_migrations(pool: &SqlitePool) -> Result<(), AppError>
 
     tracing::info!("对话数据库迁移执行完成");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn init_db_runs_memories_migration_with_indexes() {
+        let dir = tempdir().expect("create temp dir");
+        let db_path = dir.path().join("egosync.db");
+        let pool = init_db(&db_path).await.expect("init db");
+
+        let table: Option<String> = sqlx::query_scalar(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memories'",
+        )
+        .fetch_optional(&pool)
+        .await
+        .expect("query memories table");
+        assert_eq!(table.as_deref(), Some("memories"));
+
+        let columns: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info('memories') ORDER BY cid")
+                .fetch_all(&pool)
+                .await
+                .expect("query memories columns");
+        assert_eq!(
+            columns,
+            vec![
+                "id",
+                "role_id",
+                "category",
+                "content",
+                "source_conversation_id",
+                "source_message_ids",
+                "created_at",
+            ]
+        );
+
+        let indexes: Vec<String> = sqlx::query_scalar(
+            "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'memories' AND name LIKE 'idx_memories_%' ORDER BY name",
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("query memories indexes");
+        assert_eq!(
+            indexes,
+            vec![
+                "idx_memories_category",
+                "idx_memories_created_at",
+                "idx_memories_role_id",
+                "idx_memories_source_conversation_id",
+                "idx_memories_source_dedupe",
+            ]
+        );
+
+        let dedupe_sql: String = sqlx::query_scalar(
+            "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_memories_source_dedupe'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("query memory dedupe index sql");
+        assert!(dedupe_sql.contains("COALESCE(role_id, '')"));
+
+        let foreign_keys: i64 = sqlx::query_scalar("PRAGMA foreign_keys")
+            .fetch_one(&pool)
+            .await
+            .expect("query foreign_keys pragma");
+        assert_eq!(foreign_keys, 1);
+    }
 }

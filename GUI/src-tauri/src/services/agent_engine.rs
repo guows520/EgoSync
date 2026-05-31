@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
 use tauri::Emitter;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex};
 use tokio::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
-use crate::db::conversations;
 use crate::db::pool::{ConversationsPool, DbPool};
+use crate::db::{conversations, memories};
 use crate::error::AppError;
 use crate::llm::anthropic::AnthropicProvider;
 use crate::llm::openai::OpenAiProvider;
@@ -16,6 +16,91 @@ use crate::llm::traits::{
 use crate::models::chat::{RoleProposedPayload, StreamPayload};
 use crate::models::role::CreateRoleInput;
 use crate::services::secret_store;
+
+const OPENCODE_FALLBACK_NOTICE: &str = "Agent 引擎暂时不可用，当前为基础对话模式。\n\n";
+
+/// Resolve the opencode project directory to a stable path outside the dev
+/// project tree. Using `"."` previously caused opencode to write `.opencode/`
+/// session files into the tauri/vite source directory, triggering cargo-watch
+/// or vite HMR full-page reloads during active sessions.
+fn resolve_opencode_project_dir(app_handle: &tauri::AppHandle) -> String {
+    use tauri::Manager;
+    if let Ok(dir) = app_handle.path().app_data_dir() {
+        let workspace = dir.join("opencode-workspace");
+        let _ = std::fs::create_dir_all(&workspace);
+        workspace.to_string_lossy().to_string()
+    } else {
+        // Fallback: use user home to avoid polluting source tree
+        dirs::home_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join(".egosync-workspace")
+            .to_string_lossy()
+            .to_string()
+    }
+}
+
+fn opencode_agent_key(role_id: Option<&str>) -> String {
+    match role_id {
+        Some(id) => crate::services::agent_config::AgentConfigService::role_to_agent_key(id),
+        None => "butler".to_string(), // butler agent has egosync* tools enabled
+    }
+}
+
+fn remember_opencode_session(
+    sessions: &mut std::collections::HashMap<String, String>,
+    conversation_id: &str,
+    session_id: &str,
+) -> String {
+    sessions
+        .entry(conversation_id.to_string())
+        .or_insert_with(|| session_id.to_string())
+        .clone()
+}
+
+fn stream_payload_from_sse(
+    conversation_id: &str,
+    message_id: Option<&str>,
+    event: crate::models::agent::SseEvent,
+) -> Option<StreamPayload> {
+    match event {
+        crate::models::agent::SseEvent::Text { content } => Some(StreamPayload {
+            conversation_id: conversation_id.to_string(),
+            token: content,
+            done: false,
+            thinking: false,
+            message_id: message_id.map(str::to_string),
+        }),
+        crate::models::agent::SseEvent::Thinking { content } => Some(StreamPayload {
+            conversation_id: conversation_id.to_string(),
+            token: content,
+            done: false,
+            thinking: true,
+            message_id: message_id.map(str::to_string),
+        }),
+        crate::models::agent::SseEvent::Done => Some(StreamPayload {
+            conversation_id: conversation_id.to_string(),
+            token: String::new(),
+            done: true,
+            thinking: false,
+            message_id: message_id.map(str::to_string),
+        }),
+        crate::models::agent::SseEvent::Error { message } => Some(StreamPayload {
+            conversation_id: conversation_id.to_string(),
+            token: format!("抱歉，Agent 引擎返回错误：{}", summarize_error(&message)),
+            done: true,
+            thinking: false,
+            message_id: message_id.map(str::to_string),
+        }),
+        crate::models::agent::SseEvent::ToolCall { name, arguments } => {
+            tracing::info!(
+                "[opencode] tool_call received: name={} args_len={}",
+                name,
+                arguments.len()
+            );
+            None
+        }
+    }
+}
 
 const BUTLER_SYSTEM_PROMPT: &str = "\
 你是 EgoSync 的数字管家，用户的私人助理和生活协调者。\
@@ -32,6 +117,67 @@ const HISTORY_LIMIT: i64 = 20;
 const CROSS_ROLE_SUMMARY_PER_ROLE: i64 = 4;
 const CROSS_ROLE_SUMMARY_PER_LINE_CHARS: usize = 40;
 const CROSS_ROLE_SUMMARY_TOTAL_CHARS: usize = 2000;
+const BUTLER_MEMORY_PER_ROLE: usize = 6;
+const BUTLER_MEMORY_PER_LINE_CHARS: usize = 90;
+const BUTLER_MEMORY_TOTAL_CHARS: usize = 3000;
+
+fn truncate_chars(value: &str, limit: usize) -> String {
+    value.chars().take(limit).collect()
+}
+
+pub async fn build_butler_memory_summary(main_pool: &DbPool) -> Result<String, AppError> {
+    let all_memories = memories::list_all_memories(main_pool).await?;
+    if all_memories.is_empty() {
+        return Ok(String::new());
+    }
+
+    let roles = crate::db::roles::list_active_roles(main_pool).await?;
+    let role_names = roles
+        .into_iter()
+        .map(|role| (role.id, role.name))
+        .collect::<std::collections::HashMap<_, _>>();
+
+    let mut global_lines = Vec::new();
+    let mut role_lines = std::collections::BTreeMap::<String, Vec<String>>::new();
+    for memory in all_memories {
+        let line = format!(
+            "- [{}] {}",
+            memory.category,
+            truncate_chars(memory.content.trim(), BUTLER_MEMORY_PER_LINE_CHARS)
+        );
+        if let Some(role_id) = memory.role_id {
+            let role_name = role_names
+                .get(&role_id)
+                .cloned()
+                .unwrap_or_else(|| role_id.clone());
+            let lines = role_lines.entry(role_name).or_default();
+            if lines.len() < BUTLER_MEMORY_PER_ROLE {
+                lines.push(line);
+            }
+        } else if global_lines.len() < BUTLER_MEMORY_PER_ROLE {
+            global_lines.push(line);
+        }
+    }
+
+    let mut sections = Vec::new();
+    if !global_lines.is_empty() {
+        sections.push(format!("全局记忆：\n{}", global_lines.join("\n")));
+    }
+    for (role_name, lines) in role_lines {
+        if !lines.is_empty() {
+            sections.push(format!("{}：\n{}", role_name, lines.join("\n")));
+        }
+    }
+    if sections.is_empty() {
+        return Ok(String::new());
+    }
+
+    let mut summary = format!("[已知记忆]\n{}", sections.join("\n"));
+    if summary.chars().count() > BUTLER_MEMORY_TOTAL_CHARS {
+        summary = truncate_chars(&summary, BUTLER_MEMORY_TOTAL_CHARS) + "…";
+    }
+    Ok(summary)
+}
 
 pub async fn build_cross_role_summary(
     conv_pool: &ConversationsPool,
@@ -66,11 +212,7 @@ pub async fn build_cross_role_summary(
                 "assistant" => "角色",
                 _ => continue, // system 类内部消息（如 onboarding 锚点）不进摘要
             };
-            let snippet: String = m
-                .content
-                .chars()
-                .take(CROSS_ROLE_SUMMARY_PER_LINE_CHARS)
-                .collect();
+            let snippet = truncate_chars(&m.content, CROSS_ROLE_SUMMARY_PER_LINE_CHARS);
             lines.push(format!("  {}: {}", speaker, snippet));
         }
         blocks.push(lines.join("\n"));
@@ -91,14 +233,13 @@ pub async fn build_cross_role_summary(
     Ok(joined)
 }
 
-pub async fn build_butler_messages(
+/// Build the full butler system prompt: baseline identity + role roster + cross-role summary
+/// + delegation guidelines + emergence instructions. Used by both the direct LLM path and
+/// the opencode path to ensure the butler persona is consistent regardless of backend.
+pub async fn build_butler_system_prompt(
     conv_pool: &ConversationsPool,
     main_pool: &DbPool,
-    conversation_id: &str,
-    user_message: &str,
-) -> Result<Vec<ChatCompletionMessage>, AppError> {
-    let mut result = Vec::new();
-
+) -> Result<String, AppError> {
     // Story 2.3: butler system prompt 拼接顺序：基线 + 可委派角色清单 + 各角色近况 + 行为指南。
     // 顺序固定，保证 LLM 先建立身份，再看到资源，最后被告诉怎么用资源。
     let mut system_prompt = String::from(BUTLER_SYSTEM_PROMPT);
@@ -120,6 +261,12 @@ pub async fn build_butler_messages(
         }
     }
 
+    let memory_summary = build_butler_memory_summary(main_pool).await?;
+    if !memory_summary.is_empty() {
+        system_prompt.push_str("\n\n");
+        system_prompt.push_str(&memory_summary);
+    }
+
     let cross_summary = build_cross_role_summary(conv_pool, main_pool).await?;
     if !cross_summary.is_empty() {
         system_prompt.push_str("\n\n");
@@ -130,20 +277,29 @@ pub async fn build_butler_messages(
         // 行为指南只在有可委派角色时才有意义；零角色时不要诱导 LLM 调用工具。
         system_prompt.push_str(
             "\n\n[行为指南]\n\
-            - 当用户的需求清晰指向某个角色时：先用一句话告诉用户你要委派给谁（如『稍等，我让产品经理看一下』），然后**必须**在同一轮回复中调用 delegate_to_role 工具。绝不可以只在文字中描述委派意图而不实际调用工具。\n\
-            - 用户一句话同时涉及多个角色时：可以在同一轮内调用多个 delegate_to_role（并行委派）。\n\
+            - 先判断用户是在陈述事实/偏好，还是在交代任务/安排/待办/需要后续行动。\n\
+            - 如果用户只是陈述某个角色相关事实或偏好（例如孩子叫什么、喜欢什么、学习表现如何），直接回应，不要委派；系统会把这类记忆同步到对应角色。\n\
+            - 如果用户交代的是某个角色相关任务、安排、日程、待办、规划或需要跟进的事项（例如家长会、约定、准备材料、制定练习计划），只要能匹配 active 角色，就调用 delegate_to_role。\n\
+            - 当用户只是询问已知事实（例如某个孩子喜欢什么、某个固定安排是什么）时，优先基于[已知记忆]回答，并可说明目前只知道这些。\n\
+            - 用户一句话同时涉及多个角色且需要角色处理时：可以在同一轮内调用多个 delegate_to_role（并行委派）。\n\
             - 意图模糊或没有合适角色时：不要调用工具，用一句话主动追问用户希望由谁来处理。\n\
             - 收到角色回复（tool result）后：用自己的话向用户转述结果，必要时显式说明这是来自哪个角色的反馈。"
         );
 
         // Story 2.5: 角色涌现行为指令
-        let cooldowns = crate::db::app_settings::get_emergence_cooldowns(main_pool).await.unwrap_or_default();
+        let cooldowns = crate::db::app_settings::get_emergence_cooldowns(main_pool)
+            .await
+            .unwrap_or_default();
         let now = chrono::Utc::now();
-        let active_cooldowns: Vec<String> = cooldowns.into_iter().filter(|(_, ts)| {
-            chrono::DateTime::parse_from_rfc3339(ts)
-                .map(|dt| now.signed_duration_since(dt).num_days() < 7)
-                .unwrap_or(false)
-        }).map(|(domain, _)| domain).collect();
+        let active_cooldowns: Vec<String> = cooldowns
+            .into_iter()
+            .filter(|(_, ts)| {
+                chrono::DateTime::parse_from_rfc3339(ts)
+                    .map(|dt| now.signed_duration_since(dt).num_days() < 7)
+                    .unwrap_or(false)
+            })
+            .map(|(domain, _)| domain)
+            .collect();
 
         let mut emergence_prompt = String::from(
             "\n\n[角色涌现行为]\n\
@@ -163,6 +319,19 @@ pub async fn build_butler_messages(
 
         system_prompt.push_str(&emergence_prompt);
     }
+
+    Ok(system_prompt)
+}
+
+pub async fn build_butler_messages(
+    conv_pool: &ConversationsPool,
+    main_pool: &DbPool,
+    conversation_id: &str,
+    user_message: &str,
+) -> Result<Vec<ChatCompletionMessage>, AppError> {
+    let mut result = Vec::new();
+
+    let system_prompt = build_butler_system_prompt(conv_pool, main_pool).await?;
 
     result.push(ChatCompletionMessage {
         role: "system".to_string(),
@@ -226,7 +395,9 @@ fn build_role_system_prompt(role: &crate::models::role::Role) -> String {
     }
     sections.push(role_definition);
 
-    sections.push("[context_injection]\n以下历史消息是当前对话上下文；不要引入未提供的记忆。".to_string());
+    sections.push(
+        "[context_injection]\n以下历史消息是当前对话上下文；不要引入未提供的记忆。".to_string(),
+    );
     sections.join("\n\n")
 }
 
@@ -564,6 +735,509 @@ pub async fn resolve_default_provider(
     Ok(provider)
 }
 
+async fn try_run_opencode_stream(
+    app_handle: &tauri::AppHandle,
+    conv_pool: &ConversationsPool,
+    main_pool: &DbPool,
+    conversation_id: &str,
+    assistant_message_id: &str,
+    user_message_id: &str,
+    user_message: &str,
+    cancel_token: &CancellationToken,
+    role_id: Option<&str>,
+    opencode_sessions: Arc<Mutex<std::collections::HashMap<String, String>>>,
+    agent_bridge: crate::services::agent_bridge::AgentBridge,
+    event_router: Arc<crate::services::event_router::EventRouter>,
+    delegate_bridge: crate::services::delegate_bridge::DelegateBridge,
+) -> Result<(), AppError> {
+    let session_id = {
+        let sessions = opencode_sessions.lock().await;
+        sessions.get(conversation_id).cloned()
+    };
+    let session_id = match session_id {
+        Some(id) => id,
+        None => {
+            let agent = opencode_agent_key(role_id);
+            let project_dir = resolve_opencode_project_dir(app_handle);
+            let session = agent_bridge.create_session(&agent, &project_dir).await?;
+            let mut sessions = opencode_sessions.lock().await;
+            remember_opencode_session(&mut sessions, conversation_id, &session.id);
+            session.id
+        }
+    };
+    let delegation_session_registered = role_id.is_none() && !user_message_id.is_empty();
+    if delegation_session_registered {
+        delegate_bridge
+            .register_session(&session_id, user_message_id)
+            .await;
+    }
+    tracing::debug!(
+        session_id,
+        ?role_id,
+        conversation_id,
+        "stream session resolved"
+    );
+
+    // Subscribe BEFORE triggering the prompt so we don't miss early events.
+    let mut event_rx = event_router.subscribe(&session_id).await;
+
+    // Build the message content — inject full system prompt prefix.
+    // For butler: includes role roster + emergence instructions (same as direct-LLM path).
+    // For roles: includes the role's personality/goal prompt.
+    let content = if let Some(rid) = role_id {
+        if let Ok(role) = crate::db::roles::get_role(main_pool, rid).await {
+            let role_prompt = build_role_system_prompt(&role);
+            format!("[系统指示]\n{}\n---\n{}", role_prompt, user_message)
+        } else {
+            user_message.to_string()
+        }
+    } else {
+        // Butler — full system prompt with roster + emergence (consistent with direct-LLM path)
+        let butler_prompt = build_butler_system_prompt(conv_pool, main_pool)
+            .await
+            .unwrap_or_else(|_| String::from(BUTLER_SYSTEM_PROMPT));
+        format!("[系统指示]\n{}\n---\n{}", butler_prompt, user_message)
+    };
+
+    // Trigger the prompt. POST /session/{id}/message is synchronous (returns
+    // the completed message as JSON). Live tokens stream via the event bus,
+    // so we run this in a side task and ignore its body.
+    let bridge = agent_bridge.clone();
+    let send_session_id = session_id.clone();
+    let (result_tx, mut result_rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        let result = bridge.send_message(&send_session_id, &content).await;
+        let _ = result_tx.send(result);
+    });
+
+    // Track the latest text per part so we can emit *deltas* to ChatStream
+    // (which appends each token to a bucket). opencode's part.updated event
+    // carries the full part text each time, so we diff locally.
+    let mut part_text: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut accumulated_text = String::new();
+    let mut accumulated_thinking = String::new();
+    let mut completed = false;
+    // Fix 2: messageID → role mapping. opencode sends message.part.updated for
+    // *both* user and assistant messages. We must learn each message's role from
+    // "message.updated" events and only stream assistant-role parts to the UI.
+    let mut message_roles: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    // Track which partIDs are reasoning (thinking) vs text
+    let mut reasoning_parts: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut processed_tool_parts: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    // 委派两气泡：第一段"稍等…"落 assistant_message_id；delegate_to_role 激活后，
+    // 第二段（委派回复）落新建的 followup 消息，并在激活瞬间唤醒前端弹跳点。
+    let mut bubble_state = DelegationBubbleState::default();
+    let mut followup_id: Option<String> = None;
+    let mut followup_text = String::new();
+    let mut delegate_workers: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+    let delegate_lock = Arc::new(Mutex::new(()));
+
+    loop {
+        tokio::select! {
+            biased;
+            _ = cancel_token.cancelled() => {
+                event_router.unsubscribe(&session_id).await;
+                if delegation_session_registered {
+                    delegate_bridge.unregister_session(&session_id).await;
+                }
+                if let Some(fid) = followup_id.clone() {
+                    // 委派已拆分：第一气泡在拆分时已冻结，这里收尾第二气泡，避免弹跳点卡住。
+                    conversations::update_message_content(conv_pool, &fid, &followup_text).await.ok();
+                    conversations::mark_message_complete(conv_pool, &fid).await.ok();
+                    let _ = app_handle.emit("llm:stream", StreamPayload {
+                        conversation_id: conversation_id.to_string(),
+                        token: String::new(),
+                        done: true,
+                        thinking: false,
+                        message_id: Some(fid),
+                    });
+                } else {
+                    conversations::update_message_content(conv_pool, assistant_message_id, &accumulated_text).await.ok();
+                    if !accumulated_thinking.is_empty() {
+                        conversations::update_message_thinking(conv_pool, assistant_message_id, &accumulated_thinking).await.ok();
+                    }
+                    conversations::mark_message_complete(conv_pool, assistant_message_id).await.ok();
+                    let _ = app_handle.emit("llm:stream", StreamPayload {
+                        conversation_id: conversation_id.to_string(),
+                        token: String::new(),
+                        done: true,
+                        thinking: false,
+                        message_id: None,
+                    });
+                }
+                return Ok(());
+            }
+            maybe_event = event_rx.recv() => {
+                let Some(event) = maybe_event else { break };
+                match event.event_type.as_str() {
+                    "message.part.delta" => {
+                        // Incremental text delta — the primary streaming path.
+                        let field = event.properties.get("field")
+                            .and_then(|v| v.as_str()).unwrap_or("");
+                        if field != "text" { continue; }
+                        let delta = event.properties.get("delta")
+                            .and_then(|v| v.as_str()).unwrap_or("");
+                        if delta.is_empty() { continue; }
+                        let msg_id = event.properties.get("messageID")
+                            .and_then(|v| v.as_str()).unwrap_or("");
+                        // Skip user-role deltas
+                        if !msg_id.is_empty() {
+                            match message_roles.get(msg_id).map(|s| s.as_str()) {
+                                Some("user") => continue,
+                                _ => {} // unknown or assistant — proceed
+                            }
+                        }
+                        // Determine thinking vs text by partID tracking
+                        let part_id = event.properties.get("partID")
+                            .and_then(|v| v.as_str()).unwrap_or("");
+                        let thinking = reasoning_parts.contains(part_id);
+                        // 委派两气泡路由：thinking 始终归第一气泡；text 按 messageID 分桶。
+                        let emit_message_id = if thinking {
+                            accumulated_thinking.push_str(delta);
+                            None
+                        } else {
+                            match bubble_state.classify_message(msg_id) {
+                                BubbleSlot::First => {
+                                    accumulated_text.push_str(delta);
+                                    None
+                                }
+                                BubbleSlot::Followup => {
+                                    followup_text.push_str(delta);
+                                    followup_id.clone()
+                                }
+                            }
+                        };
+                        // Update part_text so message.updated/part.updated won't re-emit
+                        if !part_id.is_empty() {
+                            let entry = part_text.entry(part_id.to_string()).or_default();
+                            entry.push_str(delta);
+                        }
+                        let _ = app_handle.emit("llm:stream", StreamPayload {
+                            conversation_id: conversation_id.to_string(),
+                            token: delta.to_string(),
+                            done: false,
+                            thinking,
+                            message_id: emit_message_id,
+                        });
+                    }
+                    "message.updated" => {
+                        // Learn messageID → role so we can filter parts later.
+                        // Also extract assistant text from completed messages (some
+                        // models/providers don't emit incremental message.part.updated
+                        // events — the full text arrives here directly).
+                        if let Some(info) = event.properties.get("info") {
+                            if let (Some(id), Some(role)) = (
+                                info.get("id").and_then(|v| v.as_str()),
+                                info.get("role").and_then(|v| v.as_str()),
+                            ) {
+                                message_roles.insert(id.to_string(), role.to_string());
+                                // Extract text from completed assistant messages
+                                if role == "assistant" {
+                                    if let Some(parts) = info.get("parts").and_then(|v| v.as_array()) {
+                                        for p in parts {
+                                            let ptype = p.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                                            let text = p.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                                            if !text.is_empty() {
+                                                // 委派两气泡路由：reasoning 归 thinking；text 按 messageID 分桶。
+                                                let (thinking, emit_message_id, accum): (bool, Option<String>, &mut String) = match ptype {
+                                                    "text" => match bubble_state.classify_message(id) {
+                                                        BubbleSlot::First => (false, None, &mut accumulated_text),
+                                                        BubbleSlot::Followup => (false, followup_id.clone(), &mut followup_text),
+                                                    },
+                                                    "reasoning" => (true, None, &mut accumulated_thinking),
+                                                    _ => continue,
+                                                };
+                                                let part_id = p.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                                                let prev = part_text.entry(part_id.to_string()).or_default();
+                                                if text.len() > prev.len() && text.starts_with(prev.as_str()) {
+                                                    let delta = text[prev.len()..].to_string();
+                                                    *prev = text.to_string();
+                                                    accum.push_str(&delta);
+                                                    let _ = app_handle.emit("llm:stream", StreamPayload {
+                                                        conversation_id: conversation_id.to_string(),
+                                                        token: delta,
+                                                        done: false,
+                                                        thinking,
+                                                        message_id: emit_message_id,
+                                                    });
+                                                } else if text != prev.as_str() {
+                                                    *prev = text.to_string();
+                                                    accum.clear();
+                                                    accum.push_str(text);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    "message.part.updated" => {
+                        let Some(part_raw) = event.properties.get("part") else { continue };
+                        let Ok(part) = serde_json::from_value::<crate::models::agent::BusPart>(part_raw.clone()) else { continue };
+                        tracing::debug!(part_type = %part.part_type, part_id = %part.id, msg_id = %part.message_id, text_len = part.text.len(), "stream part updated");
+                        // Register reasoning parts so delta handler knows to set thinking=true
+                        if part.part_type == "reasoning" {
+                            reasoning_parts.insert(part.id.clone());
+                        }
+                        // Skip user-role parts — they echo the user's own input.
+                        if !part.message_id.is_empty() {
+                            match message_roles.get(&part.message_id).map(|s| s.as_str()) {
+                                Some("user") => continue,
+                                _ => {} // unknown or assistant — proceed
+                            }
+                        }
+                        // Only stream user-visible content. Tool parts are intercepted
+                        // to trigger Tauri-side effects (role proposals, delegation, etc.)
+                        let (thinking, emit_message_id, accum): (bool, Option<String>, &mut String) = match part.part_type.as_str() {
+                            "text" => match bubble_state.classify_message(&part.message_id) {
+                                BubbleSlot::First => (false, None, &mut accumulated_text),
+                                BubbleSlot::Followup => (false, followup_id.clone(), &mut followup_text),
+                            },
+                            "reasoning" => (true, None, &mut accumulated_thinking),
+                            "tool" => {
+                                // Intercept custom tool results from opencode.
+                                // Tool part structure: { tool: "create_role", state: { status, output, input } }
+                                // We extract the output when status=completed and parse our JSON action.
+                                let tool_name = part_raw
+                                    .get("tool")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("");
+                                let tool_status = part_raw
+                                    .get("state")
+                                    .and_then(|s| s.get("status"))
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("");
+                                // 委派两气泡：delegate_to_role 进入活动态（running/completed，取最早一次）时，
+                                // 冻结第一气泡（"稍等…"）、新建 followup 气泡并发空 token 唤醒弹跳点，
+                                // 覆盖委派同步等待 PM 回复的 ~40s 窗口。仅 butler 路径启用。
+                                let delegate_active = tool_name == "delegate_to_role"
+                                    && (tool_status == "running" || tool_status == "completed");
+                                if delegate_active
+                                    && role_id.is_none()
+                                    && bubble_state.note_delegate_active()
+                                {
+                                    if !accumulated_text.trim().is_empty() {
+                                        conversations::update_message_content(
+                                            conv_pool,
+                                            assistant_message_id,
+                                            &accumulated_text,
+                                        )
+                                        .await
+                                        .ok();
+                                        if !accumulated_thinking.is_empty() {
+                                            conversations::update_message_thinking(
+                                                conv_pool,
+                                                assistant_message_id,
+                                                &accumulated_thinking,
+                                            )
+                                            .await
+                                            .ok();
+                                        }
+                                        conversations::mark_message_complete(
+                                            conv_pool,
+                                            assistant_message_id,
+                                        )
+                                        .await
+                                        .ok();
+                                        let _ = app_handle.emit("llm:stream", StreamPayload {
+                                            conversation_id: conversation_id.to_string(),
+                                            token: String::new(),
+                                            done: true,
+                                            thinking: false,
+                                            message_id: Some(assistant_message_id.to_string()),
+                                        });
+                                    }
+                                    match conversations::insert_message(
+                                        conv_pool,
+                                        conversation_id,
+                                        "assistant",
+                                        "",
+                                        false,
+                                    )
+                                    .await
+                                    {
+                                        Ok(m) => {
+                                            let new_id = m.id.clone();
+                                            // 空 token 唤醒第二气泡的弹跳点（等待期间持续可见）。
+                                            let _ = app_handle.emit("llm:stream", StreamPayload {
+                                                conversation_id: conversation_id.to_string(),
+                                                token: String::new(),
+                                                done: false,
+                                                thinking: false,
+                                                message_id: Some(new_id.clone()),
+                                            });
+                                            followup_id = Some(new_id);
+                                        }
+                                        Err(e) => {
+                                            tracing::error!("[delegate] 创建 follow-up 消息失败: {}", e);
+                                        }
+                                    }
+                                }
+                                if !claim_completed_tool_part(&mut processed_tool_parts, &part.id, part_raw) {
+                                    continue;
+                                }
+                                if let Some(worker) = handle_tool_part(
+                                    app_handle,
+                                    conv_pool,
+                                    main_pool,
+                                    conversation_id,
+                                    user_message_id,
+                                    part_raw,
+                                    delegate_lock.clone(),
+                                )
+                                .await
+                                {
+                                    delegate_workers.push(worker);
+                                }
+                                continue;
+                            }
+                            _ => continue,
+                        };
+                        let prev = part_text.entry(part.id.clone()).or_default();
+                        if part.text.len() > prev.len() && part.text.starts_with(prev.as_str()) {
+                            let delta = part.text[prev.len()..].to_string();
+                            *prev = part.text.clone();
+                            accum.push_str(&delta);
+                            let _ = app_handle.emit("llm:stream", StreamPayload {
+                                conversation_id: conversation_id.to_string(),
+                                token: delta,
+                                done: false,
+                                thinking,
+                                message_id: emit_message_id,
+                            });
+                        } else if part.text != *prev {
+                            // Non-monotonic update (replacement). Replay full text.
+                            *prev = part.text.clone();
+                            accum.clear();
+                            accum.push_str(&part.text);
+                        }
+                    }
+                    "session.idle" | "session.status" => {
+                        // session.status carries { status: { type: "idle" } }
+                        if event.event_type == "session.status" {
+                            let is_idle = event.properties.get("status")
+                                .and_then(|v| v.get("type"))
+                                .and_then(|v| v.as_str())
+                                == Some("idle");
+                            if !is_idle {
+                                continue;
+                            }
+                        }
+                        // One prompt round complete — finalize and exit.
+                        completed = true;
+                        break;
+                    }
+                    "session.error" => {
+                        let detail = event.properties.get("error")
+                            .and_then(|e| e.get("message"))
+                            .and_then(|m| m.as_str())
+                            .unwrap_or("opencode session error");
+                        let friendly = format!("抱歉，Agent 引擎返回错误：{}", summarize_error(detail));
+                        accumulated_text.push_str(&friendly);
+                        completed = true;
+                        break;
+                    }
+                    _ => { /* ignore unrelated events */ }
+                }
+            }
+            send_done = &mut result_rx => {
+                // The POST returned (success or failure). For success this just
+                // means the LLM finished; the closing `session.idle` event may
+                // or may not have arrived yet — keep draining briefly.
+                if let Ok(Err(e)) = send_done {
+                    event_router.unsubscribe(&session_id).await;
+                    if delegation_session_registered {
+                        delegate_bridge.unregister_session(&session_id).await;
+                    }
+                    if accumulated_text.is_empty() && accumulated_thinking.is_empty() {
+                        let mut sessions = opencode_sessions.lock().await;
+                        sessions.remove(conversation_id);
+                        return Err(e);
+                    }
+                    let friendly = format!("\n\n抱歉，Agent 引擎返回错误：{}", summarize_error(&e.to_string()));
+                    accumulated_text.push_str(&friendly);
+                    completed = true;
+                    break;
+                }
+                // POST success: the synchronous endpoint has returned,
+                // meaning LLM finished. All streaming deltas already arrived
+                // before POST returns (it waits for completion).
+                completed = true;
+                break;
+            }
+        }
+    }
+
+    event_router.unsubscribe(&session_id).await;
+    if delegation_session_registered {
+        delegate_bridge.unregister_session(&session_id).await;
+    }
+
+    for worker in delegate_workers {
+        if let Err(err) = worker.await {
+            tracing::warn!(error = %err, "delegate worker join failed");
+        }
+    }
+
+    if !completed {
+        // Stream ended without explicit completion (channel dropped, etc.) —
+        // still finalize so the UI doesn't get stuck.
+        completed = true;
+    }
+
+    if let Some(fid) = followup_id.clone() {
+        // 委派已拆分：第一气泡（"稍等…"）在拆分时已冻结+done，这里收尾第二气泡（委派回复）。
+        conversations::update_message_content(conv_pool, &fid, &followup_text)
+            .await
+            .ok();
+        conversations::mark_message_complete(conv_pool, &fid)
+            .await
+            .ok();
+        let _ = app_handle.emit(
+            "llm:stream",
+            StreamPayload {
+                conversation_id: conversation_id.to_string(),
+                token: String::new(),
+                done: true,
+                thinking: false,
+                message_id: Some(fid),
+            },
+        );
+    } else {
+        // 普通单段对话：单气泡收尾（改动前的原行为）。
+        conversations::update_message_content(conv_pool, assistant_message_id, &accumulated_text)
+            .await
+            .ok();
+        if !accumulated_thinking.is_empty() {
+            conversations::update_message_thinking(
+                conv_pool,
+                assistant_message_id,
+                &accumulated_thinking,
+            )
+            .await
+            .ok();
+        }
+        conversations::mark_message_complete(conv_pool, assistant_message_id)
+            .await
+            .ok();
+        let _ = app_handle.emit(
+            "llm:stream",
+            StreamPayload {
+                conversation_id: conversation_id.to_string(),
+                token: String::new(),
+                done: true,
+                thinking: false,
+                message_id: None,
+            },
+        );
+    }
+    let _ = completed;
+    Ok(())
+}
+
 pub async fn run_stream(
     app_handle: tauri::AppHandle,
     conv_pool: ConversationsPool,
@@ -577,7 +1251,36 @@ pub async fn run_stream(
     // Story 2.3: 触发本轮的 user message id —— 用于在 delegate 执行后把 routing_metadata
     // 写回触发这一轮的那条 user message。仅 butler 委派路径使用，其他路径忽略。
     user_message_id: String,
+    opencode_sessions: Arc<Mutex<std::collections::HashMap<String, String>>>,
+    agent_bridge: crate::services::agent_bridge::AgentBridge,
+    event_router: Arc<crate::services::event_router::EventRouter>,
+    delegate_bridge: crate::services::delegate_bridge::DelegateBridge,
 ) -> Result<(), AppError> {
+    if let Err(e) = try_run_opencode_stream(
+        &app_handle,
+        &conv_pool,
+        &main_pool,
+        &conversation_id,
+        &assistant_message_id,
+        &user_message_id,
+        &user_message,
+        &cancel_token,
+        role_id.as_deref(),
+        opencode_sessions.clone(),
+        agent_bridge,
+        event_router,
+        delegate_bridge,
+    )
+    .await
+    {
+        tracing::warn!(
+            "opencode stream unavailable, falling back to LlmProvider: {}",
+            e
+        );
+    } else {
+        return Ok(());
+    }
+
     let messages = match (onboarding_step, role_id.as_deref()) {
         (Some(step), _) => {
             build_onboarding_messages(&conv_pool, &conversation_id, &user_message, step).await?
@@ -625,7 +1328,7 @@ pub async fn run_stream(
         }
     });
 
-    let mut accumulated = String::new();
+    let mut accumulated = OPENCODE_FALLBACK_NOTICE.to_string();
     let mut accumulated_thinking = String::new();
     let mut pending = String::new();
     let mut pending_thinking = String::new();
@@ -1203,6 +1906,366 @@ pub async fn run_stream(
     Ok(())
 }
 
+/// 委派两气泡路由的纯状态机。
+///
+/// 实测时间线（运行时诊断确认）：管家委派会产生两条不同 messageID 的
+/// assistant 消息——第一段"稍等…"（msg_A）与委派回复"产品经理…"（msg_B），
+/// 中间 `delegate_to_role` 工具经历 pending→running→completed（约 40s 等待）。
+///
+/// 路由规则：
+/// - 委派激活前，所有 assistant 文本归第一气泡（`First`）。
+/// - `delegate_to_role` 进入活动态（running/completed，取最早一次）时切换，
+///   调用方据此冻结第一气泡、新建 followup 气泡并发空 token 唤醒弹跳点。
+/// - 委派激活后出现的**新** messageID 归 followup 气泡（`Followup`）；
+///   已知属于第一气泡的 messageID 仍保持 `First`（其残余 delta 不串桶）。
+///
+/// 不依赖具体 DB id，只做"该归哪个气泡"的决策，便于单测；I/O 留在调用方。
+#[derive(Default)]
+struct DelegationBubbleState {
+    delegated: bool,
+    first_message_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BubbleSlot {
+    First,
+    Followup,
+}
+
+impl DelegationBubbleState {
+    /// 判定某条 assistant messageID 的文本应落入哪个气泡。
+    fn classify_message(&mut self, message_id: &str) -> BubbleSlot {
+        if !self.delegated {
+            // 委派尚未激活：记住第一条 messageID，全部归第一气泡。
+            if self.first_message_id.is_none() {
+                self.first_message_id = Some(message_id.to_string());
+            }
+            return BubbleSlot::First;
+        }
+        // 委派已激活：第一气泡的原 messageID 仍归 First，其它新 messageID 归 Followup。
+        match &self.first_message_id {
+            Some(first) if first == message_id => BubbleSlot::First,
+            _ => BubbleSlot::Followup,
+        }
+    }
+
+    /// 标记 `delegate_to_role` 进入活动态。首次调用返回 true（调用方据此执行
+    /// 一次性的"切第二气泡 + 唤醒弹跳点"），后续重复上报返回 false。
+    fn note_delegate_active(&mut self) -> bool {
+        if self.delegated {
+            return false;
+        }
+        self.delegated = true;
+        true
+    }
+
+    /// 委派是否已激活（调用方用于决定 delta 是否需要路由到 followup 气泡）。
+    #[allow(dead_code)]
+    fn is_delegated(&self) -> bool {
+        self.delegated
+    }
+}
+
+fn claim_completed_tool_part(
+    processed_tool_parts: &mut std::collections::HashSet<String>,
+    part_id: &str,
+    part_raw: &serde_json::Value,
+) -> bool {
+    let status = part_raw
+        .get("state")
+        .and_then(|s| s.get("status"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let output = part_raw
+        .get("state")
+        .and_then(|s| s.get("output"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    status == "completed"
+        && !part_id.is_empty()
+        && !output.is_empty()
+        && processed_tool_parts.insert(part_id.to_string())
+}
+
+fn spawn_delegate_worker<F>(lock: Arc<Mutex<()>>, work: F) -> tokio::task::JoinHandle<()>
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    tokio::spawn(async move {
+        let _guard = lock.lock().await;
+        work.await;
+    })
+}
+
+fn non_json_tool_output_preview(output: &str) -> String {
+    output.chars().take(100).collect()
+}
+
+/// Handle a tool bus part from opencode's custom tools.
+/// opencode tool parts have this structure:
+/// ```json
+/// { "type": "tool", "tool": "create_role",
+///   "state": { "status": "completed", "output": "{\"action\":...}", "input": {...} } }
+/// ```
+/// We only act on status=completed parts where output contains our action JSON.
+async fn handle_tool_part<R: tauri::Runtime>(
+    app_handle: &tauri::AppHandle<R>,
+    conv_pool: &ConversationsPool,
+    main_pool: &DbPool,
+    conversation_id: &str,
+    butler_user_message_id: &str,
+    part_raw: &serde_json::Value,
+    delegate_lock: Arc<Mutex<()>>,
+) -> Option<tokio::task::JoinHandle<()>> {
+    // Only process completed tool calls
+    let status = part_raw
+        .get("state")
+        .and_then(|s| s.get("status"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if status != "completed" {
+        return None;
+    }
+
+    let tool_name = part_raw.get("tool").and_then(|v| v.as_str()).unwrap_or("");
+    let output = part_raw
+        .get("state")
+        .and_then(|s| s.get("output"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    if output.is_empty() {
+        return None;
+    }
+
+    tracing::info!(
+        "[opencode-tool] completed: tool={} output_len={}",
+        tool_name,
+        output.len()
+    );
+
+    // Parse the JSON result from our custom tool's execute()
+    let Ok(result_json) = serde_json::from_str::<serde_json::Value>(output) else {
+        tracing::debug!(
+            "[opencode-tool] non-JSON output, ignoring: {:?}",
+            non_json_tool_output_preview(output)
+        );
+        return None;
+    };
+
+    let action = result_json
+        .get("action")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    tracing::info!("[opencode-tool] action={} conv={}", action, conversation_id);
+
+    match action {
+        "create_role" => {
+            let name = result_json
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+            if name.is_empty() {
+                return None;
+            }
+            let goal = result_json
+                .get("goal")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            let icon = result_json
+                .get("icon")
+                .and_then(|v| v.as_str())
+                .and_then(|s| {
+                    let t = s.trim();
+                    if SUPPORTED_ICONS.contains(&t) {
+                        Some(t.to_string())
+                    } else {
+                        None
+                    }
+                });
+            let color = result_json
+                .get("color")
+                .and_then(|v| v.as_str())
+                .and_then(|s| {
+                    let t = s.trim().to_ascii_uppercase();
+                    if SUPPORTED_COLORS.iter().any(|c| c.eq_ignore_ascii_case(&t)) {
+                        Some(t)
+                    } else {
+                        None
+                    }
+                });
+
+            tracing::info!(
+                "[opencode-tool] create_role proposal: name={} icon={:?} color={:?}",
+                name,
+                icon,
+                color
+            );
+
+            let _ = app_handle.emit(
+                "role:proposed",
+                RoleProposedPayload {
+                    conversation_id: conversation_id.to_string(),
+                    name: name.to_string(),
+                    icon,
+                    color,
+                    goal,
+                },
+            );
+        }
+        "delegate_to_role" => {
+            let role_id = result_json
+                .get("target_role_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+            let task_summary = result_json
+                .get("task_summary")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+            if role_id.is_empty() || task_summary.is_empty() {
+                return None;
+            }
+            let conv_pool = conv_pool.clone();
+            let main_pool = main_pool.clone();
+            let butler_user_message_id = butler_user_message_id.to_string();
+            let result_json = result_json.clone();
+            let worker = spawn_delegate_worker(delegate_lock, async move {
+                let _ = handle_delegate_tool_result(
+                    &conv_pool,
+                    &main_pool,
+                    &butler_user_message_id,
+                    &result_json,
+                )
+                .await;
+            });
+            tracing::info!(
+                "[opencode-tool] delegate_to_role: role_id={} task={}",
+                role_id,
+                task_summary
+            );
+
+            let _ = app_handle.emit(
+                "role:delegated",
+                serde_json::json!({
+                    "roleId": role_id,
+                    "taskSummary": task_summary,
+                    "conversationId": conversation_id,
+                }),
+            );
+            return Some(worker);
+        }
+        "record_emergence_rejection" => {
+            let domain = result_json
+                .get("domain")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+            if domain.is_empty() {
+                return None;
+            }
+            let now = chrono::Utc::now().to_rfc3339();
+            if let Err(e) =
+                crate::db::app_settings::set_emergence_cooldown(main_pool, domain, &now).await
+            {
+                tracing::error!("[opencode-tool] emergence rejection write failed: {}", e);
+            }
+            let _ = crate::db::app_settings::clear_expired_cooldowns(main_pool, 7).await;
+            tracing::info!(
+                "[opencode-tool] emergence rejection recorded: domain={}",
+                domain
+            );
+        }
+        _ => {
+            tracing::debug!("[opencode-tool] unknown action={}, ignoring", action);
+        }
+    }
+    None
+}
+
+async fn handle_delegate_tool_result(
+    conv_pool: &ConversationsPool,
+    main_pool: &DbPool,
+    butler_user_message_id: &str,
+    result_json: &serde_json::Value,
+) -> Option<DelegationRecord> {
+    let role_id = result_json
+        .get("target_role_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    let task_summary = result_json
+        .get("task_summary")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    if role_id.is_empty() || task_summary.is_empty() {
+        return None;
+    }
+
+    let args = serde_json::json!({
+        "target_role_id": role_id,
+        "task_summary": task_summary,
+        "context": result_json
+            .get("context")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty()),
+    })
+    .to_string();
+    let (_text, record) = execute_delegate_to_role(main_pool, conv_pool, &args).await;
+    append_delegation_metadata(conv_pool, butler_user_message_id, &record).await;
+    Some(record)
+}
+
+pub async fn append_delegation_metadata(
+    conv_pool: &ConversationsPool,
+    butler_user_message_id: &str,
+    record: &DelegationRecord,
+) {
+    let mut delegations = existing_delegations(conv_pool, butler_user_message_id).await;
+    delegations.push(serde_json::to_value(record).unwrap_or_else(|_| serde_json::json!({})));
+    match serde_json::to_string(&serde_json::json!({ "delegations": delegations })) {
+        Ok(json) => {
+            if let Err(e) = crate::db::conversations::update_message_routing_metadata(
+                conv_pool,
+                butler_user_message_id,
+                &json,
+            )
+            .await
+            {
+                tracing::error!("[opencode-tool] 写入 routing_metadata 失败: {}", e);
+            }
+        }
+        Err(e) => tracing::error!("[opencode-tool] 序列化 routing_metadata 失败: {}", e),
+    }
+}
+
+async fn existing_delegations(
+    conv_pool: &ConversationsPool,
+    butler_user_message_id: &str,
+) -> Vec<serde_json::Value> {
+    if butler_user_message_id.is_empty() {
+        return Vec::new();
+    }
+    let row = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT routing_metadata FROM messages WHERE id = ? LIMIT 1",
+    )
+    .bind(butler_user_message_id)
+    .fetch_optional(&**conv_pool)
+    .await;
+    let Ok(Some(Some(metadata))) = row else {
+        return Vec::new();
+    };
+    serde_json::from_str::<serde_json::Value>(&metadata)
+        .ok()
+        .and_then(|v| v.get("delegations").and_then(|d| d.as_array()).cloned())
+        .unwrap_or_default()
+}
+
 /// Execute tool calls and return result strings for each
 async fn execute_tool_calls(
     app_handle: &tauri::AppHandle,
@@ -1271,9 +2334,11 @@ async fn execute_tool_calls(
 /// Story 2.3 AC-6: 单条委派的审计记录，多个合并进 routing_metadata.delegations[]。
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DelegationRecord {
+pub struct DelegationRecord {
     target_role_id: String,
     target_role_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_conversation_id: Option<String>,
     task_summary: String,
     /// "ok" / "role_not_found"
     status: String,
@@ -1284,7 +2349,7 @@ struct DelegationRecord {
 /// - 校验 role 存在且 status=active；否则走 AC-8 兜底，不污染角色对话
 /// - 角色 LLM 调用本地化 drain，**不** emit `llm:stream`（避免污染管家流，见 Dev Notes 设计决策）
 /// - 委派交互写入角色对话历史（AC-4：角色"记得"被委派）
-async fn execute_delegate_to_role(
+pub async fn execute_delegate_to_role(
     main_pool: &DbPool,
     conv_pool: &ConversationsPool,
     arguments: &str,
@@ -1309,6 +2374,7 @@ async fn execute_delegate_to_role(
                 DelegationRecord {
                     target_role_id: String::new(),
                     target_role_name: "未知".to_string(),
+                    target_conversation_id: None,
                     task_summary: String::new(),
                     status: "parse_error".to_string(),
                 },
@@ -1330,6 +2396,7 @@ async fn execute_delegate_to_role(
                 DelegationRecord {
                     target_role_id: args.target_role_id,
                     target_role_name: r.name,
+                    target_conversation_id: None,
                     task_summary: args.task_summary,
                     status: "role_not_found".to_string(),
                 },
@@ -1342,6 +2409,7 @@ async fn execute_delegate_to_role(
                 DelegationRecord {
                     target_role_id: args.target_role_id,
                     target_role_name: "未知".to_string(),
+                    target_conversation_id: None,
                     task_summary: args.task_summary,
                     status: "role_not_found".to_string(),
                 },
@@ -1372,6 +2440,7 @@ async fn execute_delegate_to_role(
                     DelegationRecord {
                         target_role_id: role.id,
                         target_role_name: role.name,
+                        target_conversation_id: None,
                         task_summary: args.task_summary,
                         status: "conv_init_error".to_string(),
                     },
@@ -1394,6 +2463,7 @@ async fn execute_delegate_to_role(
             DelegationRecord {
                 target_role_id: role.id,
                 target_role_name: role.name,
+                target_conversation_id: Some(role_conv.id.clone()),
                 task_summary: args.task_summary,
                 status: "user_msg_insert_error".to_string(),
             },
@@ -1409,6 +2479,7 @@ async fn execute_delegate_to_role(
                 DelegationRecord {
                     target_role_id: role.id,
                     target_role_name: role.name,
+                    target_conversation_id: Some(role_conv.id.clone()),
                     task_summary: args.task_summary,
                     status: "provider_error".to_string(),
                 },
@@ -1433,6 +2504,7 @@ async fn execute_delegate_to_role(
                 DelegationRecord {
                     target_role_id: role.id,
                     target_role_name: role.name,
+                    target_conversation_id: Some(role_conv.id.clone()),
                     task_summary: args.task_summary,
                     status: "assistant_msg_insert_error".to_string(),
                 },
@@ -1453,6 +2525,7 @@ async fn execute_delegate_to_role(
                     DelegationRecord {
                         target_role_id: role.id,
                         target_role_name: role.name,
+                        target_conversation_id: Some(role_conv.id.clone()),
                         task_summary: args.task_summary,
                         status: "build_messages_error".to_string(),
                     },
@@ -1462,34 +2535,38 @@ async fn execute_delegate_to_role(
 
     // 关键：本地化 drain，不 emit `llm:stream`（避免污染管家 conversation 流，见 Dev Notes）
     let (tx, mut rx) = mpsc::channel::<StreamEvent>(128);
-    let provider_clone = provider.clone();
-    tokio::spawn(async move {
-        if let Err(e) = provider_clone
-            .chat_stream(
-                role_messages,
-                tx,
-                ChatOptions {
-                    disable_thinking: true,
-                    tools: None,
-                    tool_choice: None,
-                },
-            )
-            .await
-        {
-            tracing::error!("[delegate] 角色流式调用失败: {}", e);
-        }
-    });
+    let stream_result = provider.chat_stream(
+        role_messages,
+        tx,
+        ChatOptions {
+            disable_thinking: true,
+            tools: None,
+            tool_choice: None,
+        },
+    );
+    tokio::pin!(stream_result);
 
     let mut role_reply = String::new();
-    while let Some(ev) = rx.recv().await {
-        match ev {
-            StreamEvent::Token(t) => role_reply.push_str(&t),
-            StreamEvent::Done => break,
-            StreamEvent::Error(e) => {
-                tracing::error!("[delegate] 角色流出错: {}", e);
+    loop {
+        tokio::select! {
+            result = &mut stream_result => {
+                if let Err(e) = result {
+                    tracing::error!("[delegate] 角色流式调用失败: {}", e);
+                }
                 break;
             }
-            _ => {}
+            event = rx.recv() => {
+                match event {
+                    Some(StreamEvent::Token(t)) => role_reply.push_str(&t),
+                    Some(StreamEvent::Done) => break,
+                    Some(StreamEvent::Error(e)) => {
+                        tracing::error!("[delegate] 角色流出错: {}", e);
+                        break;
+                    }
+                    Some(_) => {}
+                    None => break,
+                }
+            }
         }
     }
 
@@ -1519,6 +2596,7 @@ async fn execute_delegate_to_role(
         DelegationRecord {
             target_role_id: role.id,
             target_role_name: role.name,
+            target_conversation_id: Some(role_conv.id),
             task_summary: args.task_summary,
             status: "ok".to_string(),
         },
@@ -1607,10 +2685,7 @@ async fn execute_create_role(
 }
 
 /// Story 2.5: 记录用户拒绝了涌现角色建议，写入冷却。
-async fn execute_record_emergence_rejection(
-    main_pool: &DbPool,
-    arguments: &str,
-) -> String {
+async fn execute_record_emergence_rejection(main_pool: &DbPool, arguments: &str) -> String {
     #[derive(serde::Deserialize)]
     struct RejectArgs {
         domain: String,
@@ -1619,7 +2694,11 @@ async fn execute_record_emergence_rejection(
     let args: RejectArgs = match serde_json::from_str(arguments) {
         Ok(a) => a,
         Err(e) => {
-            tracing::error!("[emergence] 解析 rejection 参数失败: {} (原始: {})", e, arguments);
+            tracing::error!(
+                "[emergence] 解析 rejection 参数失败: {} (原始: {})",
+                e,
+                arguments
+            );
             return format!("参数解析失败: {}", e);
         }
     };
@@ -1639,7 +2718,10 @@ async fn execute_record_emergence_rejection(
     let _ = crate::db::app_settings::clear_expired_cooldowns(main_pool, 7).await;
 
     tracing::info!("[emergence] 记录涌现拒绝: domain={}", domain);
-    format!("已记录：用户拒绝了「{}」领域的角色建议，7天内不再提议此领域。请自然地继续对话。", domain)
+    format!(
+        "已记录：用户拒绝了「{}」领域的角色建议，7天内不再提议此领域。请自然地继续对话。",
+        domain
+    )
 }
 
 // ========== 方案 A：后备文本检测 + 二次提取 ==========
@@ -1804,6 +2886,135 @@ fn summarize_error(err: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_delegation_bubble_state_splits_into_two_bubbles() {
+        // WHY: 管家委派两段（"稍等…" / 委派回复）来自不同 opencode messageID，
+        // 必须路由到两个气泡。实测时间线：msg_A 先出现并产出第一段文本，
+        // delegate_to_role 进入 running 时切第二气泡（唤醒弹跳点），随后 msg_B 产出第二段。
+        let mut state = DelegationBubbleState::default();
+        // round1：第一条 assistant 消息的文本属于第一气泡
+        assert_eq!(state.classify_message("msg_A"), BubbleSlot::First);
+        assert_eq!(state.classify_message("msg_A"), BubbleSlot::First);
+        // delegate_to_role 进入 running → 第一次返回 true（调用方据此建 followup 气泡 + 发空 token 唤醒弹跳点）
+        assert!(state.note_delegate_active());
+        // completed 再次上报同一工具 → 不应再次触发 split
+        assert!(!state.note_delegate_active());
+        // round2：委派回复来自新的 messageID，路由到 followup 气泡
+        assert_eq!(state.classify_message("msg_B"), BubbleSlot::Followup);
+        assert_eq!(state.classify_message("msg_B"), BubbleSlot::Followup);
+    }
+
+    #[test]
+    fn test_delegation_bubble_state_no_split_without_delegation() {
+        // WHY: 普通单段对话（无委派）即使 opencode 偶发多条 assistant 消息，
+        // 也不得拆分气泡——保持改动前的单气泡语义，避免回归。
+        let mut state = DelegationBubbleState::default();
+        assert_eq!(state.classify_message("msg_X"), BubbleSlot::First);
+        assert_eq!(state.classify_message("msg_Y"), BubbleSlot::First);
+    }
+
+    #[test]
+    fn test_opencode_agent_key_routes_butler_and_roles() {
+        // WHY: butler sessions use the "butler" agent key so opencode enables
+        // egosync* MCP tools; roles use a prefixed key.
+        assert_eq!(opencode_agent_key(None), "butler");
+        assert_eq!(opencode_agent_key(Some("abc-123")), "role-abc-123");
+    }
+
+    #[test]
+    fn test_remember_opencode_session_reuses_existing_conversation_session() {
+        // WHY: one EgoSync conversation must keep one opencode session so the
+        // Agent Loop retains context across turns instead of starting fresh.
+        let mut sessions = std::collections::HashMap::new();
+        let first = remember_opencode_session(&mut sessions, "conv-1", "session-a");
+        let second = remember_opencode_session(&mut sessions, "conv-1", "session-b");
+
+        assert_eq!(first, "session-a");
+        assert_eq!(second, "session-a");
+        assert_eq!(
+            sessions.get("conv-1").map(String::as_str),
+            Some("session-a")
+        );
+    }
+
+    #[test]
+    fn test_sse_text_maps_to_stream_payload_contract() {
+        // WHY: ChatStream depends on this exact payload shape; changing it would
+        // break streaming without any frontend compile error.
+        let payload = stream_payload_from_sse(
+            "conv-1",
+            Some("msg-1"),
+            crate::models::agent::SseEvent::Text {
+                content: "hello".to_string(),
+            },
+        )
+        .expect("text should map to payload");
+
+        assert_eq!(payload.conversation_id, "conv-1");
+        assert_eq!(payload.token, "hello");
+        assert!(!payload.done);
+        assert!(!payload.thinking);
+        assert_eq!(payload.message_id.as_deref(), Some("msg-1"));
+    }
+
+    #[test]
+    fn test_sse_done_maps_to_stream_completion() {
+        // WHY: the frontend only unlocks the input after a done payload or
+        // history refresh; opencode completion must preserve that contract.
+        let payload = stream_payload_from_sse("conv-1", None, crate::models::agent::SseEvent::Done)
+            .expect("done should map to payload");
+
+        assert_eq!(payload.token, "");
+        assert!(payload.done);
+        assert!(!payload.thinking);
+        assert!(payload.message_id.is_none());
+    }
+
+    #[test]
+    fn test_sse_thinking_maps_to_thinking_payload() {
+        // WHY: opencode reasoning must stay visually separated from final text;
+        // otherwise ChatStream would render internal thinking as normal content.
+        let payload = stream_payload_from_sse(
+            "conv-1",
+            Some("msg-1"),
+            crate::models::agent::SseEvent::Thinking {
+                content: "plan".to_string(),
+            },
+        )
+        .expect("thinking should map to payload");
+
+        assert_eq!(payload.token, "plan");
+        assert!(!payload.done);
+        assert!(payload.thinking);
+        assert_eq!(payload.message_id.as_deref(), Some("msg-1"));
+    }
+
+    #[test]
+    fn test_sse_error_maps_to_done_payload() {
+        // WHY: opencode stream errors must still close the streaming UI so the
+        // user can recover and send the next message.
+        let payload = stream_payload_from_sse(
+            "conv-1",
+            None,
+            crate::models::agent::SseEvent::Error {
+                message: "timeout".to_string(),
+            },
+        )
+        .expect("error should map to payload");
+
+        assert!(payload.done);
+        assert!(!payload.thinking);
+        assert!(payload.token.contains("Agent 引擎返回错误"));
+    }
+
+    #[test]
+    fn non_json_tool_output_preview_truncates_on_char_boundary() {
+        let output = "产品经理已经收到委派任务，并给出了真实回复。";
+        let preview = non_json_tool_output_preview(output);
+
+        assert_eq!(preview, output);
+    }
 
     #[test]
     fn test_butler_system_prompt_not_empty() {
@@ -1986,6 +3197,11 @@ mod tests {
         .await
         .expect("failed to create roles table");
 
+        sqlx::raw_sql(include_str!("../../migrations/004_memories.sql"))
+            .execute(&pool)
+            .await
+            .expect("failed to create memories table");
+
         pool
     }
 
@@ -2142,6 +3358,85 @@ mod tests {
 
     /// AC-7 退化场景：无 active 角色时管家不应被拼一个空标题段误导。
     /// 返回空串是 caller 决定是否拼接的契约 —— 不能返回 `[各角色近况]\n`。
+    #[tokio::test]
+    async fn test_butler_memory_summary_includes_global_and_role_memories() {
+        let main_pool = setup_test_main_pool().await;
+        sqlx::query(
+            "INSERT INTO roles (id, name, icon, color, goal, status) VALUES ('role-1', '父亲', 'baby', '#EF4444', '成为小孩的榜样', 'active')",
+        )
+        .execute(&main_pool)
+        .await
+        .unwrap();
+        crate::db::memories::insert_memories(
+            &main_pool,
+            None,
+            "global-conv",
+            &[crate::models::memory::ExtractedMemory {
+                category: "preference".to_string(),
+                content: "用户希望用中文沟通".to_string(),
+                source_message_ids: vec!["global-msg".to_string()],
+            }],
+        )
+        .await
+        .unwrap();
+        crate::db::memories::insert_memories(
+            &main_pool,
+            Some("role-1"),
+            "role-conv",
+            &[crate::models::memory::ExtractedMemory {
+                category: "fact".to_string(),
+                content: "儿子喜欢书法课".to_string(),
+                source_message_ids: vec!["role-msg".to_string()],
+            }],
+        )
+        .await
+        .unwrap();
+
+        let summary = build_butler_memory_summary(&main_pool).await.unwrap();
+
+        assert!(summary.contains("[已知记忆]"));
+        assert!(summary.contains("全局记忆"));
+        assert!(summary.contains("用户希望用中文沟通"));
+        assert!(summary.contains("父亲"));
+        assert!(summary.contains("儿子喜欢书法课"));
+    }
+
+    #[tokio::test]
+    async fn test_butler_prompt_tells_model_to_answer_from_memory_before_delegation() {
+        let main_pool = setup_test_main_pool().await;
+        let conv_pool = setup_test_conv_pool().await;
+        sqlx::query(
+            "INSERT INTO roles (id, name, icon, color, goal, status) VALUES ('role-1', '父亲', 'baby', '#EF4444', '成为小孩的榜样', 'active')",
+        )
+        .execute(&main_pool)
+        .await
+        .unwrap();
+        crate::db::memories::insert_memories(
+            &main_pool,
+            Some("role-1"),
+            "role-conv",
+            &[crate::models::memory::ExtractedMemory {
+                category: "fact".to_string(),
+                content: "儿子喜欢书法课".to_string(),
+                source_message_ids: vec!["role-msg".to_string()],
+            }],
+        )
+        .await
+        .unwrap();
+
+        let prompt = build_butler_system_prompt(&conv_pool, &main_pool)
+            .await
+            .unwrap();
+
+        assert!(prompt.contains("儿子喜欢书法课"));
+        assert!(prompt.contains("陈述某个角色相关事实或偏好"));
+        assert!(prompt.contains("直接回应，不要委派"));
+        assert!(prompt.contains("系统会把这类记忆同步到对应角色"));
+        assert!(prompt.contains("角色相关任务、安排、日程、待办、规划或需要跟进"));
+        assert!(prompt.contains("只要能匹配 active 角色，就调用 delegate_to_role"));
+        assert!(!prompt.contains("当用户的需求清晰指向某个角色时"));
+    }
+
     #[tokio::test]
     async fn test_cross_role_summary_empty_when_no_roles() {
         let main_pool = setup_test_main_pool().await;
@@ -2434,6 +3729,307 @@ mod tests {
         assert!(text.contains("参数解析失败"));
     }
 
+    #[test]
+    fn test_completed_tool_part_is_claimed_once_by_part_id() {
+        let mut processed = std::collections::HashSet::new();
+        let part_raw = serde_json::json!({
+            "type": "tool",
+            "tool": "delegate_to_role",
+            "state": {
+                "status": "completed",
+                "output": "{}"
+            }
+        });
+
+        assert!(claim_completed_tool_part(
+            &mut processed,
+            "part-1",
+            &part_raw
+        ));
+        assert!(!claim_completed_tool_part(
+            &mut processed,
+            "part-1",
+            &part_raw
+        ));
+    }
+
+    #[test]
+    fn test_unfinished_tool_part_is_not_claimed() {
+        let mut processed = std::collections::HashSet::new();
+        let part_raw = serde_json::json!({
+            "type": "tool",
+            "tool": "delegate_to_role",
+            "state": {
+                "status": "running",
+                "output": "{}"
+            }
+        });
+
+        assert!(!claim_completed_tool_part(
+            &mut processed,
+            "part-1",
+            &part_raw
+        ));
+        assert!(processed.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_delegate_worker_runs_in_background_and_serializes() {
+        let lock = Arc::new(Mutex::new(()));
+        let (first_started_tx, first_started_rx) = tokio::sync::oneshot::channel();
+        let (release_first_tx, release_first_rx) = tokio::sync::oneshot::channel::<()>();
+        let second_ran = Arc::new(Mutex::new(false));
+
+        let first = spawn_delegate_worker(lock.clone(), async move {
+            let _ = first_started_tx.send(());
+            let _ = release_first_rx.await;
+        });
+        tokio::time::timeout(Duration::from_millis(100), first_started_rx)
+            .await
+            .expect("第一个后台委派任务应立即开始")
+            .expect("第一个后台委派任务应发送 started 信号");
+
+        let second_ran_for_task = second_ran.clone();
+        let second = spawn_delegate_worker(lock, async move {
+            *second_ran_for_task.lock().await = true;
+        });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(!*second_ran.lock().await, "第二个委派任务必须等待同一锁");
+        assert!(!first.is_finished(), "第一个委派任务不应阻塞调用方等待完成");
+
+        release_first_tx.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), first)
+            .await
+            .expect("第一个后台委派任务应完成")
+            .expect("第一个后台委派任务不应 panic");
+        tokio::time::timeout(Duration::from_secs(1), second)
+            .await
+            .expect("第二个后台委派任务应完成")
+            .expect("第二个后台委派任务不应 panic");
+        assert!(*second_ran.lock().await);
+    }
+
+    #[tokio::test]
+    async fn test_duplicate_completed_delegate_tool_part_persists_once() {
+        let main_pool = setup_test_main_pool().await;
+        let conv_pool = setup_test_conv_pool().await;
+        let pm = crate::db::roles::create_role(
+            &main_pool,
+            &CreateRoleInput {
+                name: "产品经理".to_string(),
+                icon: None,
+                color: None,
+                goal: None,
+            },
+        )
+        .await
+        .unwrap();
+        let butler_conv = crate::db::conversations::get_or_create_butler_conversation(&conv_pool)
+            .await
+            .unwrap();
+        let butler_user_msg = crate::db::conversations::insert_message(
+            &conv_pool,
+            &butler_conv.id,
+            "user",
+            "明天有产品设计评审",
+            true,
+        )
+        .await
+        .unwrap();
+        let output = serde_json::json!({
+            "action": "delegate_to_role",
+            "target_role_id": pm.id,
+            "task_summary": "准备明天的产品设计评审",
+        })
+        .to_string();
+        let part_raw = serde_json::json!({
+            "type": "tool",
+            "tool": "delegate_to_role",
+            "state": {
+                "status": "completed",
+                "output": output,
+            }
+        });
+        let result_json: serde_json::Value =
+            serde_json::from_str(part_raw["state"]["output"].as_str().unwrap()).unwrap();
+        let mut processed = std::collections::HashSet::new();
+
+        for _ in 0..2 {
+            if claim_completed_tool_part(&mut processed, "part-1", &part_raw) {
+                handle_delegate_tool_result(
+                    &conv_pool,
+                    &main_pool,
+                    &butler_user_msg.id,
+                    &result_json,
+                )
+                .await;
+            }
+        }
+
+        let role_convs = crate::db::conversations::list_conversations_by_role(&conv_pool, &pm.id)
+            .await
+            .unwrap();
+        let role_messages = crate::db::conversations::list_messages(&conv_pool, &role_convs[0].id)
+            .await
+            .unwrap();
+        let delegated_user_messages = role_messages
+            .iter()
+            .filter(|m| m.role == "user" && m.content.contains("[管家委派]"))
+            .count();
+        assert_eq!(delegated_user_messages, 1);
+
+        let messages = crate::db::conversations::list_messages(&conv_pool, &butler_conv.id)
+            .await
+            .unwrap();
+        let metadata = messages
+            .iter()
+            .find(|m| m.id == butler_user_msg.id)
+            .and_then(|m| m.routing_metadata.as_deref())
+            .expect("routing_metadata 应存在");
+        let parsed: serde_json::Value = serde_json::from_str(metadata).unwrap();
+        assert_eq!(parsed["delegations"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_opencode_delegate_tool_part_persists_role_history_and_routing_metadata() {
+        let main_pool = setup_test_main_pool().await;
+        let conv_pool = setup_test_conv_pool().await;
+
+        let pm = crate::db::roles::create_role(
+            &main_pool,
+            &CreateRoleInput {
+                name: "产品经理".to_string(),
+                icon: Some("briefcase".to_string()),
+                color: Some("#4F46E5".to_string()),
+                goal: Some("把控产品节奏".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+        let butler_conv = crate::db::conversations::get_or_create_butler_conversation(&conv_pool)
+            .await
+            .unwrap();
+        let butler_user_msg = crate::db::conversations::insert_message(
+            &conv_pool,
+            &butler_conv.id,
+            "user",
+            "明天有产品设计评审",
+            true,
+        )
+        .await
+        .unwrap();
+
+        let tool_output = serde_json::json!({
+            "action": "delegate_to_role",
+            "target_role_id": pm.id,
+            "task_summary": "准备明天的产品设计评审",
+            "context": "明天有产品设计评审"
+        })
+        .to_string();
+
+        handle_delegate_tool_result(
+            &conv_pool,
+            &main_pool,
+            &butler_user_msg.id,
+            &serde_json::from_str(&tool_output).unwrap(),
+        )
+        .await;
+
+        let role_convs = crate::db::conversations::list_conversations_by_role(&conv_pool, &pm.id)
+            .await
+            .unwrap();
+        assert_eq!(role_convs.len(), 1, "opencode 委派必须创建/复用角色对话");
+        let role_messages = crate::db::conversations::list_messages(&conv_pool, &role_convs[0].id)
+            .await
+            .unwrap();
+        assert!(
+            role_messages.iter().any(|m| {
+                m.role == "user" && m.content.contains("[管家委派] 准备明天的产品设计评审")
+            }),
+            "opencode 委派必须写入角色 user 消息"
+        );
+
+        let butler_messages = crate::db::conversations::list_messages(&conv_pool, &butler_conv.id)
+            .await
+            .unwrap();
+        let routed_user_msg = butler_messages
+            .iter()
+            .find(|m| m.id == butler_user_msg.id)
+            .expect("触发委派的 user message 应仍存在");
+        let metadata = routed_user_msg
+            .routing_metadata
+            .as_deref()
+            .expect("opencode 委派必须写 routing_metadata");
+        assert!(metadata.contains("\"targetRoleName\":\"产品经理\""));
+        assert!(metadata.contains("\"taskSummary\":\"准备明天的产品设计评审\""));
+        assert!(metadata.contains("\"status\":"));
+    }
+
+    #[tokio::test]
+    async fn test_opencode_delegate_tool_result_appends_routing_metadata() {
+        let main_pool = setup_test_main_pool().await;
+        let conv_pool = setup_test_conv_pool().await;
+        let butler_conv = crate::db::conversations::get_or_create_butler_conversation(&conv_pool)
+            .await
+            .unwrap();
+        let butler_user_msg = crate::db::conversations::insert_message(
+            &conv_pool,
+            &butler_conv.id,
+            "user",
+            "安排产品评审和学习计划",
+            true,
+        )
+        .await
+        .unwrap();
+
+        let pm = crate::db::roles::create_role(
+            &main_pool,
+            &CreateRoleInput {
+                name: "产品经理".to_string(),
+                icon: None,
+                color: None,
+                goal: None,
+            },
+        )
+        .await
+        .unwrap();
+        let learner = crate::db::roles::create_role(
+            &main_pool,
+            &CreateRoleInput {
+                name: "学习者".to_string(),
+                icon: None,
+                color: None,
+                goal: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        for (role_id, task_summary) in [(&pm.id, "准备产品评审"), (&learner.id, "安排学习计划")]
+        {
+            let result = serde_json::json!({
+                "action": "delegate_to_role",
+                "target_role_id": role_id,
+                "task_summary": task_summary,
+            });
+            handle_delegate_tool_result(&conv_pool, &main_pool, &butler_user_msg.id, &result).await;
+        }
+
+        let messages = crate::db::conversations::list_messages(&conv_pool, &butler_conv.id)
+            .await
+            .unwrap();
+        let metadata = messages
+            .iter()
+            .find(|m| m.id == butler_user_msg.id)
+            .and_then(|m| m.routing_metadata.as_deref())
+            .expect("routing_metadata 应存在");
+        let parsed: serde_json::Value = serde_json::from_str(metadata).unwrap();
+        let delegations = parsed["delegations"].as_array().unwrap();
+        assert_eq!(delegations.len(), 2);
+        assert_eq!(delegations[0]["targetRoleName"], "产品经理");
+        assert_eq!(delegations[1]["targetRoleName"], "学习者");
+    }
+
     // ===== Story 2.5: 涌现工具与 prompt 增强 =====
 
     #[test]
@@ -2549,9 +4145,6 @@ mod tests {
             system.contains("健身/运动"),
             "冷却中的领域必须出现在 prompt 中"
         );
-        assert!(
-            system.contains("被拒绝的领域"),
-            "冷却列表应有说明文案"
-        );
+        assert!(system.contains("被拒绝的领域"), "冷却列表应有说明文案");
     }
 }

@@ -54,6 +54,7 @@ describe('SettingsTab role CRUD actions', () => {
 
     fireEvent.change(screen.getByLabelText('名称'), { target: { value: '学习者' } });
     fireEvent.change(screen.getByLabelText('目标'), { target: { value: '保持学习节奏' } });
+    fireEvent.change(screen.getByLabelText('角色个性描述'), { target: { value: '简洁专业，先判断优先级再给建议' } });
     fireEvent.click(screen.getByTitle('学习'));
     fireEvent.click(screen.getByText('翠绿'));
     fireEvent.click(screen.getByRole('button', { name: '保存更改' }));
@@ -64,7 +65,7 @@ describe('SettingsTab role CRUD actions', () => {
         icon: 'graduation-cap',
         color: '#10B981',
         goal: '保持学习节奏',
-        personalityPrompt: '',
+        personalityPrompt: '简洁专业，先判断优先级再给建议',
       });
     });
     expect(onUpdateRole).toHaveBeenCalledWith(updatedRole);

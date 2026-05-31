@@ -49,7 +49,7 @@ export function ButlerWorkspacePanel({ roles, currentTab, setTab, archivedRoles,
             </div>
           </div>
         )}
-        {currentTab === 'memory' && <MemoryTab />}
+        {currentTab === 'memory' && <MemoryTab roleId={null} includeRoleMemories />}
         {currentTab === 'settings' && <ButlerSettingsContent archivedRoles={archivedRoles} onRestoreRole={onRestoreRole} />}
       </div>
     </div>

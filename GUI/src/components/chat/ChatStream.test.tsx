@@ -433,6 +433,265 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
     expect(screen.getByText('产品经理的真实回复')).toBeInTheDocument();
   });
 
+  it('委派最终历史返回后不重复显示 follow-up 回复', async () => {
+    vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
+    vi.mocked(chatService.sendMessage).mockResolvedValue(chatMessage({ id: 'user-1', content: '我明天要提交下个版本的PRD' }));
+    const getStreamHandler = captureStreamHandler();
+    let resolveSegmentHistoryRefresh!: () => void;
+    let resolveFinalHistoryRefresh!: () => void;
+    vi.mocked(chatService.getHistory)
+      .mockResolvedValueOnce([])
+      .mockImplementationOnce(() => new Promise(resolve => {
+        resolveSegmentHistoryRefresh = () => resolve([
+          chatMessage({ id: 'history-user-1', content: '我明天要提交下个版本的PRD' }),
+          chatMessage({ id: 'history-assistant-1', role: 'assistant', content: '稍等，我让产品经理来帮你准备。' }),
+        ]);
+      }))
+      .mockImplementationOnce(() => new Promise(resolve => {
+        resolveFinalHistoryRefresh = () => resolve([
+          chatMessage({ id: 'history-user-1', content: '我明天要提交下个版本的PRD' }),
+          chatMessage({ id: 'history-assistant-1', role: 'assistant', content: '稍等，我让产品经理来帮你准备。' }),
+          chatMessage({ id: 'history-assistant-2', role: 'assistant', content: '产品经理帮你整理了一份PRD框架清单。' }),
+        ]);
+      }));
+
+    render(<ChatStream role={null} />);
+
+    const input = await screen.findByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...');
+    fireEvent.change(input, { target: { value: '我明天要提交下个版本的PRD' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(input).toBeDisabled());
+
+    await act(async () => {
+      getStreamHandler()({ conversationId: 'conv-butler', token: '稍等，我让产品经理来帮你准备。', done: false, thinking: false });
+      getStreamHandler()({ conversationId: 'conv-butler', messageId: 'assistant-message-1', token: '', done: true, thinking: false });
+    });
+    await act(async () => {
+      resolveSegmentHistoryRefresh();
+    });
+
+    await act(async () => {
+      getStreamHandler()({ conversationId: 'conv-butler', messageId: 'followup-message-1', token: '产品经理帮你整理了一份PRD框架清单。', done: false, thinking: false });
+      getStreamHandler()({ conversationId: 'conv-butler', messageId: 'followup-message-1', token: '', done: true, thinking: false });
+    });
+
+    await waitFor(() => expect(input).not.toBeDisabled());
+    expect(screen.getByText('产品经理帮你整理了一份PRD框架清单。')).toBeInTheDocument();
+
+    await act(async () => {
+      resolveFinalHistoryRefresh();
+    });
+
+    expect(screen.getAllByText('产品经理帮你整理了一份PRD框架清单。')).toHaveLength(1);
+  });
+
+  it('最终历史返回前发送下一条时保留上一轮完成回复', async () => {
+    vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
+    vi.mocked(chatService.sendMessage)
+      .mockResolvedValueOnce(chatMessage({ id: 'user-1', content: '第一条' }))
+      .mockResolvedValueOnce(chatMessage({ id: 'user-2', content: '第二条' }));
+    const getStreamHandler = captureStreamHandler();
+    let resolveFirstHistoryRefresh!: () => void;
+    vi.mocked(chatService.getHistory)
+      .mockResolvedValueOnce([])
+      .mockImplementationOnce(() => new Promise(resolve => {
+        resolveFirstHistoryRefresh = () => resolve([
+          chatMessage({ id: 'history-user-1', content: '第一条' }),
+          chatMessage({ id: 'history-assistant-1', role: 'assistant', content: '第一条回复' }),
+        ]);
+      }));
+
+    render(<ChatStream role={null} />);
+
+    const input = await screen.findByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...');
+    fireEvent.change(input, { target: { value: '第一条' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(input).toBeDisabled());
+
+    await act(async () => {
+      getStreamHandler()({ conversationId: 'conv-butler', token: '第一条回复', done: false, thinking: false });
+      getStreamHandler()({ conversationId: 'conv-butler', token: '', done: true, thinking: false });
+    });
+    await waitFor(() => expect(input).not.toBeDisabled());
+    expect(screen.getByText('第一条回复')).toBeInTheDocument();
+
+    fireEvent.change(input, { target: { value: '第二条' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(input).toBeDisabled());
+    expect(screen.getByText('第一条回复')).toBeInTheDocument();
+
+    await act(async () => {
+      resolveFirstHistoryRefresh();
+    });
+    expect(screen.getAllByText('第一条回复')).toHaveLength(1);
+    const firstReply = screen.getByText('第一条回复');
+    const secondUser = screen.getByText('第二条');
+    expect(firstReply.compareDocumentPosition(secondUser) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('连续相同问答且历史未返回时保留每一轮完成回复', async () => {
+    vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
+    vi.mocked(chatService.sendMessage)
+      .mockResolvedValueOnce(chatMessage({ id: 'user-1', content: '继续' }))
+      .mockResolvedValueOnce(chatMessage({ id: 'user-2', content: '继续' }));
+    const getStreamHandler = captureStreamHandler();
+    vi.mocked(chatService.getHistory)
+      .mockResolvedValueOnce([])
+      .mockImplementationOnce(() => new Promise(() => undefined))
+      .mockRejectedValueOnce(new Error('history failed'));
+
+    render(<ChatStream role={null} />);
+
+    const input = await screen.findByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...');
+    fireEvent.change(input, { target: { value: '继续' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(input).toBeDisabled());
+
+    await act(async () => {
+      getStreamHandler()({ conversationId: 'conv-butler', token: '好的', done: false, thinking: false });
+      getStreamHandler()({ conversationId: 'conv-butler', token: '', done: true, thinking: false });
+    });
+    await waitFor(() => expect(input).not.toBeDisabled());
+
+    fireEvent.change(input, { target: { value: '继续' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(input).toBeDisabled());
+
+    await act(async () => {
+      getStreamHandler()({ conversationId: 'conv-butler', token: '好的', done: false, thinking: false });
+      getStreamHandler()({ conversationId: 'conv-butler', token: '', done: true, thinking: false });
+    });
+
+    await waitFor(() => expect(input).not.toBeDisabled());
+    expect(screen.getAllByText('继续')).toHaveLength(2);
+    expect(screen.getAllByText('好的')).toHaveLength(2);
+  });
+
+  it('后续全量历史返回时替换普通单段本地完成回复且不重复', async () => {
+    vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
+    vi.mocked(chatService.sendMessage)
+      .mockResolvedValueOnce(chatMessage({ id: 'user-1', content: '第一条' }))
+      .mockResolvedValueOnce(chatMessage({ id: 'user-2', content: '第二条' }));
+    const getStreamHandler = captureStreamHandler();
+    let resolveFirstHistoryRefresh!: () => void;
+    let resolveSecondHistoryRefresh!: () => void;
+    vi.mocked(chatService.getHistory)
+      .mockResolvedValueOnce([])
+      .mockImplementationOnce(() => new Promise(resolve => {
+        resolveFirstHistoryRefresh = () => resolve([
+          chatMessage({ id: 'history-user-1', content: '第一条' }),
+          chatMessage({ id: 'history-assistant-1', role: 'assistant', content: '第一条回复' }),
+        ]);
+      }))
+      .mockImplementationOnce(() => new Promise(resolve => {
+        resolveSecondHistoryRefresh = () => resolve([
+          chatMessage({ id: 'history-user-1', content: '第一条' }),
+          chatMessage({ id: 'history-assistant-1', role: 'assistant', content: '第一条回复' }),
+          chatMessage({ id: 'history-user-2', content: '第二条' }),
+          chatMessage({ id: 'history-assistant-2', role: 'assistant', content: '第二条回复' }),
+        ]);
+      }));
+
+    render(<ChatStream role={null} />);
+
+    const input = await screen.findByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...');
+    fireEvent.change(input, { target: { value: '第一条' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(input).toBeDisabled());
+
+    await act(async () => {
+      getStreamHandler()({ conversationId: 'conv-butler', token: '第一条回复', done: false, thinking: false });
+      getStreamHandler()({ conversationId: 'conv-butler', token: '', done: true, thinking: false });
+    });
+    await waitFor(() => expect(input).not.toBeDisabled());
+
+    fireEvent.change(input, { target: { value: '第二条' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(input).toBeDisabled());
+
+    await act(async () => {
+      getStreamHandler()({ conversationId: 'conv-butler', token: '第二条回复', done: false, thinking: false });
+      getStreamHandler()({ conversationId: 'conv-butler', token: '', done: true, thinking: false });
+    });
+    await waitFor(() => expect(input).not.toBeDisabled());
+
+    await act(async () => {
+      resolveSecondHistoryRefresh();
+    });
+    expect(screen.getAllByText('第一条回复')).toHaveLength(1);
+    expect(screen.getAllByText('第二条回复')).toHaveLength(1);
+    expect(screen.getByText('第一条').compareDocumentPosition(screen.getByText('第一条回复')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByText('第一条回复').compareDocumentPosition(screen.getByText('第二条')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByText('第二条').compareDocumentPosition(screen.getByText('第二条回复')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    await act(async () => {
+      resolveFirstHistoryRefresh();
+    });
+    expect(screen.getAllByText('第一条回复')).toHaveLength(1);
+    expect(screen.getAllByText('第二条回复')).toHaveLength(1);
+  });
+
+  it('历史里已有旧同内容回复时仍保留当前未落库完成回复', async () => {
+    vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
+    vi.mocked(chatService.sendMessage).mockResolvedValue(chatMessage({ id: 'user-1', content: '继续' }));
+    const getStreamHandler = captureStreamHandler();
+    let resolveHistoryRefresh!: () => void;
+    vi.mocked(chatService.getHistory)
+      .mockResolvedValueOnce([
+        chatMessage({ id: 'history-user-old', content: '旧问题' }),
+        chatMessage({ id: 'history-assistant-old', role: 'assistant', content: '好的' }),
+      ])
+      .mockImplementationOnce(() => new Promise(resolve => {
+        resolveHistoryRefresh = () => resolve([
+          chatMessage({ id: 'history-user-old', content: '旧问题' }),
+          chatMessage({ id: 'history-assistant-old', role: 'assistant', content: '好的' }),
+          chatMessage({ id: 'history-user-1', content: '继续' }),
+        ]);
+      }));
+
+    render(<ChatStream role={null} />);
+
+    const input = await screen.findByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...');
+    fireEvent.change(input, { target: { value: '继续' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(input).toBeDisabled());
+
+    await act(async () => {
+      getStreamHandler()({ conversationId: 'conv-butler', token: '好的', done: false, thinking: false });
+      getStreamHandler()({ conversationId: 'conv-butler', token: '', done: true, thinking: false });
+    });
+    await act(async () => {
+      resolveHistoryRefresh();
+    });
+
+    expect(screen.getAllByText('好的')).toHaveLength(2);
+  });
+
+  it('最终历史刷新失败时用本地完成回复保底并结束流式状态', async () => {
+    vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
+    vi.mocked(chatService.sendMessage).mockResolvedValue(chatMessage({ id: 'user-1', content: '继续' }));
+    const getStreamHandler = captureStreamHandler();
+    vi.mocked(chatService.getHistory)
+      .mockResolvedValueOnce([])
+      .mockRejectedValueOnce(new Error('history failed'));
+
+    render(<ChatStream role={null} />);
+
+    const input = await screen.findByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...');
+    fireEvent.change(input, { target: { value: '继续' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(input).toBeDisabled());
+
+    await act(async () => {
+      getStreamHandler()({ conversationId: 'conv-butler', token: '回复完成', done: false, thinking: false });
+      getStreamHandler()({ conversationId: 'conv-butler', token: '', done: true, thinking: false });
+    });
+
+    await waitFor(() => expect(input).not.toBeDisabled());
+    expect(screen.getByText('回复完成')).toBeInTheDocument();
+    expect(screen.getByText('新对话').closest('button')).not.toBeDisabled();
+  });
+
   it('sendMessage 返回 assistant 时移除未落库的本地用户占位消息', async () => {
     vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
     vi.mocked(chatService.sendMessage).mockResolvedValue(chatMessage({

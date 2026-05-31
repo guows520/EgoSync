@@ -5,7 +5,9 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub struct SessionInfo {
     pub id: String,
+    #[serde(default)]
     pub agent: String,
+    #[serde(default)]
     pub directory: String,
     pub created_at: Option<String>,
 }
@@ -27,9 +29,62 @@ pub struct AgentMessage {
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum SseEvent {
     Text { content: String },
+    Thinking { content: String },
     ToolCall { name: String, arguments: String },
     Done,
     Error { message: String },
+}
+
+/// A single opencode message part (text, reasoning, tool-invocation, etc.).
+/// We only consume the fields we route on; opencode may add more.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BusPart {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub part_type: String,
+    #[serde(default)]
+    pub text: String,
+    /// The message this part belongs to. Used to look up the message's role
+    /// (user vs assistant) so we can filter out user-echo parts.
+    #[serde(default, rename = "messageID")]
+    pub message_id: String,
+    /// For tool-invocation parts: the tool invocation details.
+    #[serde(default)]
+    pub tool_invocation: Option<BusToolInvocation>,
+}
+
+/// Tool invocation details within a message part.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BusToolInvocation {
+    #[serde(default)]
+    pub tool_name: String,
+    #[serde(default)]
+    pub args: serde_json::Value,
+    /// The tool result (output text from execute())
+    #[serde(default)]
+    pub result: Option<BusToolResult>,
+    #[serde(default)]
+    pub state: String,
+}
+
+/// Tool result within a tool invocation.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BusToolResult {
+    #[serde(default)]
+    pub output: String,
+}
+
+/// Raw bus event envelope from opencode `GET /event` SSE stream.
+/// Body is `{ type: <event-name>, properties: <event-payload> }`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct BusEvent {
+    #[serde(rename = "type")]
+    pub event_type: String,
+    #[serde(default)]
+    pub properties: serde_json::Value,
 }
 
 /// opencode configuration snapshot.

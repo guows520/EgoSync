@@ -2,9 +2,10 @@ use tokio::sync::mpsc;
 
 use crate::error::AppError;
 use crate::models::agent::{
-    AgentInfo, AgentMessage, OpencodeConfig, ProviderInfo, SessionInfo, SseEvent,
+    AgentInfo, AgentMessage, BusEvent, OpencodeConfig, ProviderInfo, SessionInfo, SseEvent,
 };
 
+#[derive(Clone)]
 /// HTTP client for communicating with the opencode server API.
 pub struct AgentBridge {
     base_url: String,
@@ -34,20 +35,23 @@ impl AgentBridge {
         directory: &str,
     ) -> Result<SessionInfo, AppError> {
         let url = format!("{}/session", self.base_url);
-        let body = serde_json::json!({
-            "agent": agent,
-            "directory": directory,
-        });
+        let body = serde_json::json!({});
+
+        let mut query_params: Vec<(&str, &str)> = vec![("directory", directory)];
+        if !agent.is_empty() {
+            query_params.push(("agent", agent));
+        }
 
         let resp = self
             .http_client
             .post(&url)
+            .query(&query_params)
             .json(&body)
             .send()
             .await
             .map_err(|e| AppError::SidecarError(format!("create_session request failed: {}", e)))?;
 
-        Self::ensure_success(&resp)?;
+        let resp = Self::ensure_success_with_body(resp).await?;
 
         resp.json::<SessionInfo>()
             .await
@@ -55,18 +59,13 @@ impl AgentBridge {
     }
 
     /// Get messages from a session.
-    pub async fn get_messages(
-        &self,
-        session_id: &str,
-    ) -> Result<Vec<AgentMessage>, AppError> {
+    pub async fn get_messages(&self, session_id: &str) -> Result<Vec<AgentMessage>, AppError> {
         let url = format!("{}/session/{}/messages", self.base_url, session_id);
 
-        let resp = self
-            .http_client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| AppError::SidecarError(format!("get_messages request failed: {}", e)))?;
+        let resp =
+            self.http_client.get(&url).send().await.map_err(|e| {
+                AppError::SidecarError(format!("get_messages request failed: {}", e))
+            })?;
 
         Self::ensure_success(&resp)?;
 
@@ -79,14 +78,12 @@ impl AgentBridge {
     pub async fn abort_session(&self, session_id: &str) -> Result<(), AppError> {
         let url = format!("{}/session/{}/abort", self.base_url, session_id);
 
-        let resp = self
-            .http_client
-            .post(&url)
-            .send()
-            .await
-            .map_err(|e| AppError::SidecarError(format!("abort_session request failed: {}", e)))?;
+        let resp =
+            self.http_client.post(&url).send().await.map_err(|e| {
+                AppError::SidecarError(format!("abort_session request failed: {}", e))
+            })?;
 
-        Self::ensure_success(&resp)?;
+        Self::ensure_success_with_body(resp).await?;
         Ok(())
     }
 
@@ -94,30 +91,27 @@ impl AgentBridge {
     pub async fn compact_session(&self, session_id: &str) -> Result<(), AppError> {
         let url = format!("{}/session/{}/compact", self.base_url, session_id);
 
-        let resp = self
-            .http_client
-            .post(&url)
-            .send()
-            .await
-            .map_err(|e| {
-                AppError::SidecarError(format!("compact_session request failed: {}", e))
-            })?;
+        let resp = self.http_client.post(&url).send().await.map_err(|e| {
+            AppError::SidecarError(format!("compact_session request failed: {}", e))
+        })?;
 
         Self::ensure_success(&resp)?;
         Ok(())
     }
 
-    // ── Messaging (SSE Stream) ──────────────────────────────────────
+    // ── Messaging ───────────────────────────────────────────────────
 
-    /// Send a message and stream SSE events back through the provided channel.
-    pub async fn send_message(
-        &self,
-        session_id: &str,
-        content: &str,
-        on_event: mpsc::Sender<SseEvent>,
-    ) -> Result<(), AppError> {
+    /// Trigger a prompt on a session. opencode's POST /session/{id}/message
+    /// is *synchronous* — it blocks until the LLM finishes and returns the
+    /// completed message as application/json. Streaming tokens are NOT here;
+    /// subscribe to `subscribe_events` instead for real-time updates.
+    /// The completed JSON response is discarded since live updates already
+    /// reached the caller via the event bus.
+    pub async fn send_message(&self, session_id: &str, content: &str) -> Result<(), AppError> {
         let url = format!("{}/session/{}/message", self.base_url, session_id);
-        let body = serde_json::json!({ "content": content });
+        let body = serde_json::json!({
+            "parts": [{ "type": "text", "text": content }]
+        });
 
         let resp = self
             .http_client
@@ -127,32 +121,36 @@ impl AgentBridge {
             .await
             .map_err(|e| AppError::SidecarError(format!("send_message request failed: {}", e)))?;
 
-        Self::ensure_success(&resp)?;
+        let _ = Self::ensure_success_with_body(resp).await?;
+        Ok(())
+    }
 
-        // Read SSE stream
+    /// Subscribe to opencode's global event stream (`GET /event`) as SSE.
+    /// Each event JSON `{ type, properties }` is forwarded as a BusEvent
+    /// until the stream closes or `tx` is dropped.
+    pub async fn subscribe_events(&self, tx: mpsc::Sender<BusEvent>) -> Result<(), AppError> {
+        let url = format!("{}/event", self.base_url);
+        let resp = self.http_client.get(&url).send().await.map_err(|e| {
+            AppError::SidecarError(format!("subscribe_events request failed: {}", e))
+        })?;
+        let resp = Self::ensure_success_with_body(resp).await?;
+
         let mut stream = resp.bytes_stream();
         let mut buffer = String::new();
 
         use futures::StreamExt;
         while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|e| {
-                AppError::SidecarError(format!("SSE stream read error: {}", e))
-            })?;
+            let chunk = chunk
+                .map_err(|e| AppError::SidecarError(format!("event stream read error: {}", e)))?;
             let text = String::from_utf8_lossy(&chunk);
-            buffer.push_str(&text);
+            buffer.push_str(&text.replace("\r\n", "\n"));
 
-            // Process complete SSE lines
             while let Some(pos) = buffer.find("\n\n") {
                 let event_block = buffer[..pos].to_string();
                 buffer = buffer[pos + 2..].to_string();
 
-                if let Some(event) = parse_sse_event(&event_block) {
-                    let is_done = matches!(event, SseEvent::Done);
-                    if on_event.send(event).await.is_err() {
-                        // Receiver dropped, stop streaming
-                        return Ok(());
-                    }
-                    if is_done {
+                if let Some(event) = parse_bus_event(&event_block) {
+                    if tx.send(event).await.is_err() {
                         return Ok(());
                     }
                 }
@@ -186,12 +184,8 @@ impl AgentBridge {
     pub async fn get_providers(&self) -> Result<Vec<ProviderInfo>, AppError> {
         let url = format!("{}/providers", self.base_url);
 
-        let resp = self
-            .http_client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| {
+        let resp =
+            self.http_client.get(&url).send().await.map_err(|e| {
                 AppError::SidecarError(format!("get_providers request failed: {}", e))
             })?;
 
@@ -227,6 +221,29 @@ impl AgentBridge {
         Self::check_status(resp.status())
     }
 
+    /// Like ensure_success but reads the response body on error for better diagnostics.
+    /// Consumes the response; returns it back on success for further use.
+    async fn ensure_success_with_body(
+        resp: reqwest::Response,
+    ) -> Result<reqwest::Response, AppError> {
+        if resp.status().is_success() {
+            Ok(resp)
+        } else {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            let detail = if body.is_empty() {
+                format!("opencode API returned HTTP {}", status)
+            } else {
+                format!(
+                    "opencode API returned HTTP {}: {}",
+                    status,
+                    &body[..body.len().min(256)]
+                )
+            };
+            Err(AppError::SidecarError(detail))
+        }
+    }
+
     /// Pure status-code-to-AppError mapping (extracted for testability).
     fn check_status(status: reqwest::StatusCode) -> Result<(), AppError> {
         if status.is_success() {
@@ -238,6 +255,24 @@ impl AgentBridge {
             )))
         }
     }
+}
+
+/// Parse a single bus-event SSE block from `GET /event`.
+/// Each block's `data:` line is JSON: `{ type: "...", properties: {...} }`.
+pub fn parse_bus_event(block: &str) -> Option<BusEvent> {
+    let mut data_lines: Vec<&str> = Vec::new();
+    for line in block.lines() {
+        if let Some(value) = line.strip_prefix("data: ") {
+            data_lines.push(value);
+        } else if line.starts_with("data:") {
+            data_lines.push(line.strip_prefix("data:").unwrap_or("").trim());
+        }
+    }
+    if data_lines.is_empty() {
+        return None;
+    }
+    let data = data_lines.join("\n");
+    serde_json::from_str::<BusEvent>(&data).ok()
 }
 
 /// Parse a single SSE event block (lines between double newlines).
@@ -269,9 +304,7 @@ pub fn parse_sse_event(block: &str) -> Option<SseEvent> {
     }
 
     // Fallback: treat as plain text content
-    Some(SseEvent::Text {
-        content: data,
-    })
+    Some(SseEvent::Text { content: data })
 }
 
 #[cfg(test)]
@@ -326,7 +359,8 @@ mod tests {
 
     #[test]
     fn test_parse_sse_event_tool_call() {
-        let block = r#"data: {"type":"toolCall","name":"read","arguments":"{\"path\":\"test.rs\"}"}"#;
+        let block =
+            r#"data: {"type":"toolCall","name":"read","arguments":"{\"path\":\"test.rs\"}"}"#;
         let event = parse_sse_event(block).unwrap();
         match event {
             SseEvent::ToolCall { name, arguments } => {
@@ -376,7 +410,11 @@ mod tests {
         let result = AgentBridge::check_status(reqwest::StatusCode::UNAUTHORIZED);
         match result {
             Err(AppError::SidecarError(msg)) => {
-                assert!(msg.contains("401"), "error must include status code: {}", msg);
+                assert!(
+                    msg.contains("401"),
+                    "error must include status code: {}",
+                    msg
+                );
             }
             other => panic!("expected SidecarError, got {:?}", other),
         }

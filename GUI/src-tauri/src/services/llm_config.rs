@@ -6,6 +6,7 @@ use crate::llm::anthropic::AnthropicProvider;
 use crate::llm::openai::OpenAiProvider;
 use crate::llm::traits::LlmProvider;
 use crate::models::settings::{CreateLlmConfigInput, LlmConfig, UpdateLlmConfigInput};
+use crate::services::agent_config::AgentConfigService;
 use crate::services::secret_store;
 
 pub async fn list_configs(pool: &SqlitePool) -> Result<Vec<LlmConfig>, AppError> {
@@ -115,6 +116,84 @@ pub async fn test_connection(pool: &SqlitePool, id: String) -> Result<(), AppErr
     provider.test_connection().await?;
     tracing::info!(config_id = %id, "LLM 连接测试成功");
     Ok(())
+}
+
+/// Sync the current default LLM config (provider + model + API key) into
+/// the same opencode.json that AgentConfigService manages. This ensures
+/// a single config file contains agents, MCP, tools AND provider/model —
+/// eliminating project-vs-global config conflicts.
+/// Best-effort: logs on failure.
+pub async fn sync_default_to_opencode(pool: &SqlitePool, agent_config: &AgentConfigService) {
+    let result: Result<(), AppError> = (|| async {
+        let config = db::get_default_llm_config(pool).await?;
+        let api_key = secret_store::load_secret(&config.api_key_ref)?.ok_or_else(|| {
+            AppError::KeyringError(format!("未找到配置 '{}' 的 API Key", config.name))
+        })?;
+
+        // Map EgoSync provider IDs to opencode-recognized provider IDs.
+        let opencode_provider = match config.provider.as_str() {
+            "openai_compatible" | "openai" => "openai",
+            other => other,
+        };
+
+        let mut options = serde_json::Map::new();
+        options.insert("apiKey".to_string(), serde_json::json!(api_key));
+        if !config.base_url.is_empty() {
+            options.insert("baseURL".to_string(), serde_json::json!(config.base_url));
+        }
+        // Force Chat Completions API (not OpenAI Responses API) for
+        // non-native OpenAI providers (e.g. 京东云, DeepSeek, etc.)
+        if opencode_provider == "openai" && !config.base_url.is_empty() {
+            options.insert("compatibility".to_string(), serde_json::json!("compatible"));
+        }
+
+        let model_str = format!("{}/{}", opencode_provider, config.model);
+        // Build provider entry with npm hint for compatible endpoints
+        let mut provider_obj = serde_json::json!({
+            "options": options,
+            "models": { &config.model: {} }
+        });
+        if opencode_provider == "openai" && !config.base_url.is_empty() {
+            provider_obj.as_object_mut().unwrap().insert(
+                "npm".to_string(),
+                serde_json::json!("@ai-sdk/openai-compatible"),
+            );
+        }
+
+        // Merge into the same opencode.json that AgentConfigService manages.
+        let mut opencode_json = agent_config.load()?;
+
+        let root = opencode_json
+            .as_object_mut()
+            .ok_or_else(|| AppError::SidecarError("opencode.json 不是 object".to_string()))?;
+        root.insert(
+            "$schema".to_string(),
+            serde_json::json!("https://opencode.ai/config.json"),
+        );
+        root.insert("model".to_string(), serde_json::json!(&model_str));
+        root.insert("small_model".to_string(), serde_json::json!(&model_str));
+
+        // Merge provider — only update our provider entry, preserve others
+        let providers = root
+            .entry("provider")
+            .or_insert_with(|| serde_json::json!({}));
+        if let Some(providers_obj) = providers.as_object_mut() {
+            providers_obj.insert(opencode_provider.to_string(), provider_obj);
+        }
+
+        agent_config.save(&opencode_json)?;
+
+        tracing::info!(
+            provider = %opencode_provider,
+            model = %config.model,
+            "LLM provider 已同步到 opencode.json"
+        );
+        Ok(())
+    })()
+    .await;
+    if let Err(e) = result {
+        tracing::warn!("sync_default_to_opencode failed (degraded): {}", e);
+    }
 }
 
 fn current_timestamp() -> String {

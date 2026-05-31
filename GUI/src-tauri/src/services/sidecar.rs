@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -10,7 +11,7 @@ use crate::error::AppError;
 
 const DEFAULT_PORT: u16 = 4096;
 const HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(2);
-const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 const STARTUP_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const WATCHDOG_INTERVAL: Duration = Duration::from_secs(5);
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -21,7 +22,10 @@ pub struct SidecarManager {
     child: Option<Child>,
     port: u16,
     binary_path: Option<PathBuf>,
+    working_dir: Option<PathBuf>,
     started_at: Option<Instant>,
+    stderr_buf: Arc<Mutex<String>>,
+    extra_env: HashMap<String, String>,
 }
 
 impl SidecarManager {
@@ -34,37 +38,113 @@ impl SidecarManager {
             child: None,
             port,
             binary_path,
+            working_dir: None,
             started_at: None,
+            stderr_buf: Arc::new(Mutex::new(String::new())),
+            extra_env: HashMap::new(),
         }
+    }
+
+    pub fn with_working_dir(mut self, working_dir: impl Into<PathBuf>) -> Self {
+        self.working_dir = Some(working_dir.into());
+        self
+    }
+
+    pub fn with_env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.extra_env.insert(key.into(), value.into());
+        self
     }
 
     /// Resolve the opencode binary path: resource dir first, then system PATH.
     fn resolve_binary_path(resource_dir: Option<PathBuf>) -> Option<PathBuf> {
-        let binary_name = if cfg!(target_os = "windows") {
-            "opencode.exe"
-        } else {
-            "opencode"
-        };
-
         // Try resource directory first
         if let Some(dir) = resource_dir {
-            let path = dir.join(binary_name);
-            if path.exists() {
-                tracing::info!("opencode binary found in resources: {}", path.display());
-                return Some(path);
+            let exe_path = dir.join("opencode.exe");
+            if exe_path.exists() {
+                tracing::info!("opencode binary found in resources: {}", exe_path.display());
+                return Some(exe_path);
+            }
+            let cmd_path = dir.join("opencode.cmd");
+            if cmd_path.exists() {
+                tracing::info!("opencode cmd found in resources: {}", cmd_path.display());
+                return Some(cmd_path);
+            }
+        }
+
+        // On Windows, resolve the .cmd shim to find the actual .exe binary.
+        // npm .cmd shims launch cmd.exe which exits immediately, leaving
+        // the real process untracked by our Child handle.
+        if cfg!(target_os = "windows") {
+            if let Some(exe_path) = Self::resolve_exe_from_cmd_shim() {
+                tracing::info!(
+                    "opencode.exe resolved from npm shim: {}",
+                    exe_path.display()
+                );
+                return Some(exe_path);
             }
         }
 
         // Fallback to system PATH — just use the command name, let OS resolve
+        let binary_name = if cfg!(target_os = "windows") {
+            "opencode.cmd"
+        } else {
+            "opencode"
+        };
         tracing::info!("opencode binary not in resources, will try system PATH");
         Some(PathBuf::from(binary_name))
+    }
+
+    /// On Windows, parse the npm .cmd shim to extract the actual .exe path.
+    /// The shim typically contains: `"%dp0%\node_modules\opencode-ai\bin\opencode.exe" %*`
+    fn resolve_exe_from_cmd_shim() -> Option<PathBuf> {
+        // Find opencode.cmd in PATH using platform-specific lookup
+        let cmd_path = Self::find_in_path("opencode.cmd")?;
+        let content = std::fs::read_to_string(&cmd_path).ok()?;
+        // Look for a line referencing opencode.exe
+        for line in content.lines() {
+            let trimmed = line.trim().trim_start_matches('"');
+            if trimmed.contains("opencode.exe") {
+                // Replace %dp0% with the directory containing the .cmd file
+                let dp0 = cmd_path.parent()?;
+                // Extract path: strip leading quote, %dp0%\, trailing " %*
+                let path_part = trimmed.replace("%dp0%\\", "").replace("%dp0%/", "");
+                // Remove trailing `"   %*` or similar
+                let path_part = path_part
+                    .split('"')
+                    .next()
+                    .unwrap_or(&path_part)
+                    .trim()
+                    .to_string();
+                let exe_path = dp0.join(&path_part);
+                if exe_path.exists() {
+                    return Some(exe_path);
+                }
+            }
+        }
+        None
+    }
+
+    /// Simple PATH lookup for a given filename (Windows).
+    fn find_in_path(name: &str) -> Option<PathBuf> {
+        let path_var = std::env::var("PATH").ok()?;
+        for dir in path_var.split(';') {
+            let candidate = PathBuf::from(dir).join(name);
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+        None
     }
 
     /// Start the opencode server process.
     pub async fn start(&mut self) -> Result<(), AppError> {
         if self.is_running() {
-            tracing::warn!("opencode sidecar is already running");
-            return Ok(());
+            if self.health_check().await {
+                tracing::warn!("opencode sidecar is already running");
+                return Ok(());
+            }
+            tracing::warn!("opencode child is running but unhealthy; restarting sidecar");
+            self.stop().await?;
         }
 
         let binary = match &self.binary_path {
@@ -76,6 +156,13 @@ impl SidecarManager {
             }
         };
 
+        if self.health_check().await {
+            return Err(AppError::SidecarError(format!(
+                "opencode port {} is already serving before sidecar startup",
+                self.port
+            )));
+        }
+
         tracing::info!(
             "Starting opencode server on port {} with binary: {}",
             self.port,
@@ -83,41 +170,92 @@ impl SidecarManager {
         );
 
         // On Windows, npm installs a .cmd shim which can't be executed directly
-        // by CreateProcessW — must go through cmd.exe.
-        let child = if cfg!(target_os = "windows") {
-            Command::new("cmd")
+        // by CreateProcessW — must go through cmd.exe. However, if we resolved
+        // the actual .exe binary, we can run it directly (and track its PID).
+        let use_cmd_wrapper =
+            cfg!(target_os = "windows") && binary.extension().map_or(false, |ext| ext == "cmd");
+
+        let mut command = if use_cmd_wrapper {
+            let mut command = Command::new("cmd");
+            command
                 .arg("/c")
                 .arg(&binary)
                 .arg("serve")
                 .arg("--port")
-                .arg(self.port.to_string())
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .kill_on_drop(true)
-                .spawn()
+                .arg(self.port.to_string());
+            command
         } else {
-            Command::new(&binary)
+            let mut command = Command::new(&binary);
+            command
                 .arg("serve")
                 .arg("--port")
-                .arg(self.port.to_string())
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .kill_on_drop(true)
-                .spawn()
-        }
-        .map_err(|e| {
+                .arg(self.port.to_string());
+            command
+        };
+        if let Some(working_dir) = &self.working_dir {
+            std::fs::create_dir_all(working_dir).map_err(|e| {
                 AppError::SidecarError(format!(
-                    "Failed to spawn opencode process ({}): {}",
-                    binary.display(),
+                    "Failed to create opencode working directory ({}): {}",
+                    working_dir.display(),
                     e
                 ))
             })?;
+            command.current_dir(working_dir);
+        }
+        command
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true);
+        for (key, value) in &self.extra_env {
+            command.env(key, value);
+        }
+        self.stderr_buf.lock().await.clear();
+        let mut child = command.spawn().map_err(|e| {
+            AppError::SidecarError(format!(
+                "Failed to spawn opencode process ({}): {}",
+                binary.display(),
+                e
+            ))
+        })?;
+
+        // Drain child stdout/stderr to prevent pipe blocking and capture stderr for error reports.
+        {
+            let pid = child.id();
+            tracing::debug!(?pid, "opencode child spawned");
+
+            use tokio::io::{AsyncBufReadExt, BufReader};
+            if let Some(stdout) = child.stdout.take() {
+                tokio::spawn(async move {
+                    let mut lines = BufReader::new(stdout).lines();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        tracing::debug!(target: "opencode::stdout", "{}", line);
+                    }
+                    tracing::debug!(target: "opencode::stdout", "EOF");
+                });
+            }
+            if let Some(stderr) = child.stderr.take() {
+                let buf = self.stderr_buf.clone();
+                tokio::spawn(async move {
+                    let mut lines = BufReader::new(stderr).lines();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        tracing::debug!(target: "opencode::stderr", "{}", line);
+                        let mut s = buf.lock().await;
+                        s.push_str(&line);
+                        s.push('\n');
+                    }
+                    tracing::debug!(target: "opencode::stderr", "EOF");
+                });
+            }
+        }
 
         self.child = Some(child);
         self.started_at = Some(Instant::now());
 
-        // Wait for health check to pass
-        self.wait_for_healthy().await?;
+        // Wait for this child process to stay alive and serve the configured port.
+        if let Err(e) = self.wait_for_healthy().await {
+            let _ = self.stop().await;
+            return Err(e);
+        }
 
         tracing::info!("opencode server started successfully on port {}", self.port);
         Ok(())
@@ -215,9 +353,18 @@ impl SidecarManager {
     }
 
     /// Wait for the server to become healthy after starting.
-    async fn wait_for_healthy(&self) -> Result<(), AppError> {
+    async fn wait_for_healthy(&mut self) -> Result<(), AppError> {
         let deadline = Instant::now() + STARTUP_TIMEOUT;
         loop {
+            if !self.is_running() {
+                let stderr = self.stderr_buf.lock().await.trim().to_string();
+                let detail = if stderr.is_empty() {
+                    "opencode process exited during startup".to_string()
+                } else {
+                    format!("opencode process exited during startup: {}", stderr)
+                };
+                return Err(AppError::SidecarError(detail));
+            }
             if Instant::now() > deadline {
                 return Err(AppError::SidecarError(format!(
                     "opencode server did not become healthy within {}s",
@@ -225,7 +372,16 @@ impl SidecarManager {
                 )));
             }
             if self.health_check().await {
-                return Ok(());
+                if self.is_running() {
+                    return Ok(());
+                }
+                let stderr = self.stderr_buf.lock().await.trim().to_string();
+                let detail = if stderr.is_empty() {
+                    "opencode process exited during startup".to_string()
+                } else {
+                    format!("opencode process exited during startup: {}", stderr)
+                };
+                return Err(AppError::SidecarError(detail));
             }
             tokio::time::sleep(STARTUP_POLL_INTERVAL).await;
         }
@@ -233,10 +389,7 @@ impl SidecarManager {
 }
 
 /// Start a background watchdog that monitors the sidecar and restarts it on failure.
-pub async fn start_watchdog(
-    manager: Arc<Mutex<SidecarManager>>,
-    cancel: CancellationToken,
-) {
+pub async fn start_watchdog(manager: Arc<Mutex<SidecarManager>>, cancel: CancellationToken) {
     let mut interval = tokio::time::interval(WATCHDOG_INTERVAL);
     let mut consecutive_failures: u32 = 0;
 
@@ -308,6 +461,36 @@ mod tests {
     }
 
     #[test]
+    fn test_sidecar_manager_stores_working_dir() {
+        let mgr = SidecarManager::new(None, Some(5000)).with_working_dir("C:\\egosync-workspace");
+
+        assert_eq!(
+            mgr.working_dir.as_deref(),
+            Some(std::path::Path::new("C:\\egosync-workspace"))
+        );
+    }
+
+    #[test]
+    fn test_sidecar_manager_stores_extra_env() {
+        let mgr = SidecarManager::new(None, Some(5000))
+            .with_env("EGOSYNC_DELEGATE_BRIDGE_TOKEN", "secret")
+            .with_env("EGOSYNC_DELEGATE_BRIDGE_PORT", "5010");
+
+        assert_eq!(
+            mgr.extra_env
+                .get("EGOSYNC_DELEGATE_BRIDGE_TOKEN")
+                .map(String::as_str),
+            Some("secret")
+        );
+        assert_eq!(
+            mgr.extra_env
+                .get("EGOSYNC_DELEGATE_BRIDGE_PORT")
+                .map(String::as_str),
+            Some("5010")
+        );
+    }
+
+    #[test]
     fn test_health_check_urls_includes_both_endpoints() {
         // WHY: opencode's actual health endpoint is unverified at spec time;
         // accepting either /health or / lets the sidecar work regardless of
@@ -327,8 +510,148 @@ mod tests {
         let mgr = SidecarManager::new(None, Some(9999));
         let urls = mgr.health_check_urls();
         for url in &urls {
-            assert!(url.contains(":9999"), "url must use configured port: {}", url);
+            assert!(
+                url.contains(":9999"),
+                "url must use configured port: {}",
+                url
+            );
         }
+    }
+
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn test_start_rejects_running_child_without_healthy_server() {
+        let child = Command::new("cmd")
+            .arg("/c")
+            .arg("timeout /t 5 /nobreak >nul")
+            .spawn()
+            .unwrap();
+
+        let mut mgr = SidecarManager::new(None, Some(9));
+        mgr.binary_path = None;
+        mgr.child = Some(child);
+        mgr.started_at = Some(Instant::now());
+
+        let result = mgr.start().await;
+        if let Some(mut child) = mgr.child.take() {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+        }
+
+        assert!(
+            result.is_err(),
+            "已有 child 但端口不健康时，start 不能只凭进程存活返回成功"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn test_start_clears_child_after_startup_failure() {
+        let temp = tempfile::tempdir().unwrap();
+        let fake_binary = temp.path().join("fake-opencode.cmd");
+        std::fs::write(&fake_binary, "@echo off\r\ntimeout /t 5 /nobreak >nul\r\n").unwrap();
+
+        let mut mgr = SidecarManager::new(None, Some(9));
+        mgr.binary_path = Some(fake_binary);
+        let result = mgr.start().await;
+
+        assert!(result.is_err());
+        assert!(
+            mgr.child.is_none(),
+            "启动失败后必须清理 child，避免下次 start 误报成功"
+        );
+        assert!(mgr.started_at.is_none());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn test_start_clears_previous_stderr_before_spawn() {
+        let temp = tempfile::tempdir().unwrap();
+        let fake_binary = temp.path().join("fake-opencode.cmd");
+        std::fs::write(
+            &fake_binary,
+            "@echo off\r\necho current failure 1>&2\r\nexit /b 1\r\n",
+        )
+        .unwrap();
+
+        let mut mgr = SidecarManager::new(None, Some(9));
+        mgr.binary_path = Some(fake_binary);
+        mgr.stderr_buf.lock().await.push_str("old failure\n");
+        let result = mgr.start().await;
+        let message = result.unwrap_err().to_string();
+
+        assert!(
+            message.contains("current failure"),
+            "应返回本次 stderr: {message}"
+        );
+        assert!(
+            !message.contains("old failure"),
+            "不应混入上次启动残留 stderr: {message}"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn test_start_rejects_preexisting_healthy_listener() {
+        use tokio::io::AsyncWriteExt;
+
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let _ = stream
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK")
+                    .await;
+            }
+        });
+
+        let temp = tempfile::tempdir().unwrap();
+        let fake_binary = temp.path().join("fake-opencode.cmd");
+        std::fs::write(&fake_binary, "@echo off\r\nexit /b 0\r\n").unwrap();
+
+        let mut mgr = SidecarManager::new(None, Some(port));
+        mgr.binary_path = Some(fake_binary);
+        let result = mgr.start().await;
+        server.abort();
+
+        assert!(
+            result.is_err(),
+            "start 不能把已存在的旧健康监听服务误判为当前 sidecar 启动成功"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_healthy_rejects_listener_not_owned_by_child() {
+        use tokio::io::AsyncWriteExt;
+
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let _ = stream
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK")
+                    .await;
+            }
+        });
+
+        let mut mgr = SidecarManager::new(None, Some(port));
+        let result = mgr.wait_for_healthy().await;
+        server.abort();
+
+        assert!(
+            result.is_err(),
+            "健康检查不能把非当前 child 拥有的旧监听服务判定为启动成功"
+        );
     }
 
     #[test]
@@ -347,27 +670,29 @@ mod tests {
     fn test_resolve_binary_path_no_resource_dir() {
         let path = SidecarManager::resolve_binary_path(None);
         assert!(path.is_some());
+        // Should resolve to either the actual .exe (if npm shim is installed)
+        // or fallback to the .cmd/.exe name for PATH resolution
         let name = path.unwrap();
-        if cfg!(target_os = "windows") {
-            assert_eq!(name, PathBuf::from("opencode.exe"));
-        } else {
-            assert_eq!(name, PathBuf::from("opencode"));
-        }
+        let name_str = name.to_string_lossy();
+        assert!(
+            name_str.contains("opencode"),
+            "resolved path must contain 'opencode': {}",
+            name_str
+        );
     }
 
     #[test]
     fn test_resolve_binary_path_nonexistent_resource_dir() {
-        // Resource dir exists but no binary inside → falls back to PATH name
+        // Resource dir exists but no binary inside → falls back to PATH/shim resolution
         let path =
             SidecarManager::resolve_binary_path(Some(PathBuf::from("/nonexistent/resources")));
         assert!(path.is_some());
-        // Should fallback to just the binary name
         let name = path.unwrap();
-        let expected = if cfg!(target_os = "windows") {
-            "opencode.exe"
-        } else {
-            "opencode"
-        };
-        assert_eq!(name, PathBuf::from(expected));
+        let name_str = name.to_string_lossy();
+        assert!(
+            name_str.contains("opencode"),
+            "resolved path must contain 'opencode': {}",
+            name_str
+        );
     }
 }

@@ -15,6 +15,7 @@ so that 我只需要面对一个稳定的"助理"，不必在不同身份之间�
    - **When** 管家 LLM 流式回复
    - **Then** 管家在文字中**显式提及**正在委派（如「稍等，我让产品经理看一下」），随后通过 `delegate_to_role` 工具调用（同一轮）触发后端执行
    - **And** 用户**不会**看到任何视图切换、modal、确认按钮 —— 整个流程都在管家对话流中
+   - **And** 委派仅用于任务/安排/日程/待办/需要后续行动的请求；如果用户只是陈述某个角色的事实、偏好或认知更新（如孩子姓名、喜好、学习表现），管家直接回应，不调用 `delegate_to_role`，记忆系统负责同步到匹配角色
 
 2. **AC-2 单次 LLM 回合允许并行多委派**
    - **Given** 用户输入「帮我安排今天的工作和健身」涉及两个角色
@@ -66,6 +67,13 @@ so that 我只需要面对一个稳定的"助理"，不必在不同身份之间�
    - `cd GUI && npm run test:frontend`
    - `cd GUI/src-tauri && cargo test`
    - 至少覆盖：`delegate_to_role` ToolDefinition、`execute_delegate_to_role` 写双方对话与 routing_metadata、无效 role_id 走 AC-8 兜底、follow-up `ChatOptions.tools=None`（AC-3）、跨角色摘要拼接函数（AC-7）。
+
+10. **AC-10 事实记忆与任务委派分流**
+    - **Given** 用户在管家对话中陈述某个 active 角色相关事实/偏好/认知更新（例如「我儿子叫小米米」「他喜欢薯条」「他的数学计算能力有待加强」）
+    - **Then** 管家直接确认或基于已知记忆回答，不调用 `delegate_to_role`
+    - **And** Story 2.6 记忆管线会把该事实保存在管家全局记忆，并同步一份到匹配角色记忆
+    - **Given** 用户交代某个 active 角色相关任务/安排/日程/待办/需要后续行动（例如「明天下午要参加儿子的家长会」）
+    - **Then** 管家必须调用 `delegate_to_role`，让匹配角色处理并在管家气泡中转述结果
 
 ## Tasks / Subtasks
 
@@ -147,6 +155,17 @@ so that 我只需要面对一个稳定的"助理"，不必在不同身份之间�
 | Q5 跨角色全局同步 | 管家 system prompt 注入各角色近况摘要 | 用户主动私聊后管家自动掌握，无需手动同步 |
 | D-confidence | 不硬编码阈值，prompt 引导 LLM 自评 | LLM API 不返回 confidence，硬编码会变 dead code |
 
+### 管家当前行为分流：已知记忆优先，任务才委派
+
+当前 butler system prompt 在角色清单和近况摘要之外，还注入 `[已知记忆]` 段以及明确的行为指南：
+
+- 用户只是陈述角色相关事实/偏好/认知更新时，管家直接回应，不委派；后台 memory pipeline 会同步到匹配角色记忆。
+- 用户询问已知事实时，管家优先基于 `[已知记忆]` 回答，可说明目前只知道这些。
+- 用户交代角色相关任务、安排、日程、待办或需要跟进的事项时，只要能匹配 active 角色，就调用 `delegate_to_role`。
+- 意图模糊或没有合适角色时，管家不调用工具，而是追问用户希望由谁处理。
+
+这条分流规则解决了“管家已有完整记忆仍委派角色”和“角色任务未委派”两个相反问题：事实靠记忆同步，任务靠委派执行。
+
 ### 当前委派实现：opencode custom tool → 本地 delegate bridge → 真实角色回复
 
 当前运行路径已经从原始“Rust 内部本地 drain 角色 LLM”演进为 opencode 主路径：
@@ -202,7 +221,7 @@ so that 我只需要面对一个稳定的"助理"，不必在不同身份之间�
 | 多委派串行下总延迟 = Σ 各角色 | V1 接受；并行扩展点已留注释 |
 | 跨角色摘要长 prompt 拖慢首 token | V1 限上限 ~2000 字；超长可加 token 上限截断；本 story 用 chars 软截断够用 |
 | LLM 在 follow-up 仍想委派但被 tools=None 拒绝 | LLM 会自然降级为文字描述；不会报错 |
-| user 写入角色对话的 `[管家委派]` 前缀污染记忆提炼（Story 2.6） | 前缀是约定标识，Story 2.6 设计时可识别并跳过/特殊处理；本 story 不做 |
+| user 写入角色对话的 `[管家委派]` 前缀污染记忆提炼（Story 2.6） | Story 2.6 已采用来源消息去重和角色范围记忆归属；角色事实从管家全局同步，`task_status` 不走事实同步，任务类内容保留在委派/角色对话路径中 |
 | 大量 active 角色时摘要拼接代价 | V1 限制 < 20 角色尚可；超过后续优化 |
 
 ### Out of Scope（明确不做）
@@ -293,6 +312,7 @@ Claude Sonnet 4.5
 - `agent_engine.rs` 通过 `EventRouter` 按 opencode sessionID 分发全局事件流；butler 会话注册到 delegate bridge，`delegate_to_role` 活动态会冻结第一段气泡并唤醒 follow-up 气泡。
 - `ChatStream.tsx` 支持按 `messageId` 分桶渲染多流式气泡；`isInputLocked` 与流式气泡渲染状态拆分，最终 done 到达后立即解锁输入框，并加固 late history / late sendMessage / assistant busy / 重复内容等竞态。
 - `ChatBubble.tsx` 去除已有文本流式气泡尾部光标；空内容流式气泡继续显示等待点。
+- 事实/记忆与任务/行动的分流规则已补进管家 prompt：角色事实、偏好、认知更新直接回应并交给记忆系统同步；角色任务、安排、日程、待办必须走 `delegate_to_role`。
 
 **实施增量记录 (2026-05-24)：**
 

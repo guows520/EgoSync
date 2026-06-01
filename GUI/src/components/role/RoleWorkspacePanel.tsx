@@ -1,10 +1,36 @@
+import { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { TasksTab } from './TasksTab';
 import { MemoryTab } from './MemoryTab';
 import { SettingsTab } from './SettingsTab';
+import { memoryService } from '../../services/memoryService';
+import type { MemoryCategory } from '../../types/memory';
 
 export function RoleWorkspacePanel({ role, currentTab, setTab, onOpenTask, onUpdateRole, onArchiveRole, onDeleteRole, activeRoleCount }: any) {
+  const [memoryCount, setMemoryCount] = useState<number | null>(null);
+  const [memoryCategory, setMemoryCategory] = useState<MemoryCategory | undefined>();
+
+  useEffect(() => {
+    let cancelled = false;
+    setMemoryCount(null);
+    memoryService
+      .count({ roleId: role.id, category: memoryCategory })
+      .then(count => {
+        if (!cancelled) setMemoryCount(count);
+      })
+      .catch(e => {
+        console.error('加载记忆数量失败:', e);
+        if (!cancelled) setMemoryCount(0);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [role.id, memoryCategory]);
+
+  const memoryLabel = memoryCount === null ? '记忆档案' : `记忆档案 (${memoryCount})`;
+
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center justify-between border-b border-slate-200/80 px-6 pt-4 bg-white/60 backdrop-blur-md shrink-0">
@@ -13,7 +39,7 @@ export function RoleWorkspacePanel({ role, currentTab, setTab, onOpenTask, onUpd
             任务清单
           </button>
           <button onClick={() => setTab('memory')} className={cn("pb-3.5 text-[14px] font-medium transition-colors border-b-[3px]", currentTab === 'memory' ? `${role.text} border-current` : "border-transparent text-slate-500 hover:text-slate-800")}>
-            记忆档案
+            {memoryLabel}
           </button>
           <button onClick={() => setTab('settings')} className={cn("pb-3.5 text-[14px] font-medium transition-colors border-b-[3px]", currentTab === 'settings' ? `${role.text} border-current` : "border-transparent text-slate-500 hover:text-slate-800")}>
             设置
@@ -26,7 +52,9 @@ export function RoleWorkspacePanel({ role, currentTab, setTab, onOpenTask, onUpd
 
       <div className="flex-1 overflow-y-auto p-6 scroll-smooth">
         {currentTab === 'tasks' && <TasksTab role={role} onOpenTask={onOpenTask} />}
-        {currentTab === 'memory' && <MemoryTab roleId={role.id} />}
+        {currentTab === 'memory' && (
+          <MemoryTab roleId={role.id} category={memoryCategory} onCategoryChange={setMemoryCategory} />
+        )}
         {currentTab === 'settings' && (
           <SettingsTab
             role={role}

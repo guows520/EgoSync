@@ -5,5 +5,6 @@ pub mod delegate_bridge;
 pub mod event_router;
 pub mod llm_config;
 pub mod memory_pipeline;
+pub mod memory_query;
 pub mod secret_store;
 pub mod sidecar;

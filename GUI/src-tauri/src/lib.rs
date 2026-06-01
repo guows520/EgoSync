@@ -217,6 +217,8 @@ pub fn run() {
             commands::chat::chat_new_conversation,
             commands::memory::memory_list,
             commands::memory::memory_list_all,
+            commands::memory::memory_count,
+            commands::memory::memory_get_source_messages,
             commands::role::role_create,
             commands::role::role_list,
             commands::role::role_list_archived,

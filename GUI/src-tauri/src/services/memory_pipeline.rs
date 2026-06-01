@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use crate::db::conversations;
@@ -7,7 +7,7 @@ use crate::db::pool::{ConversationsPool, DbPool};
 use crate::error::AppError;
 use crate::llm::traits::{ChatCompletionMessage, ChatOptions, LlmProvider, StreamEvent};
 use crate::models::chat::Message;
-use crate::models::memory::ExtractedMemory;
+use crate::models::memory::{ExtractedMemory, Memory};
 use crate::services::agent_engine;
 use serde::Deserialize;
 use tokio::sync::mpsc;
@@ -77,9 +77,9 @@ async fn extract_for_conversation_with_provider(
         Vec::new()
     } else {
         let global_messages = if is_global_conversation {
-            global_extraction_messages(&messages)
+            user_extraction_messages(&global_extraction_messages(&messages))
         } else {
-            messages.clone()
+            user_extraction_messages(&messages)
         };
         let prompt = build_extraction_prompt(conversation.role_id.as_deref(), &global_messages);
         match extract_with_provider(provider.clone(), &prompt, &global_messages, conversation_id)
@@ -94,36 +94,32 @@ async fn extract_for_conversation_with_provider(
         }
     };
     let mut total_inserted = 0;
-    let mut role_sync_candidates = Vec::new();
     if extracted.is_empty() {
         tracing::debug!(
             conversation_id,
             "memory extraction produced no durable memories"
         );
     } else if conversation.role_id.is_some() {
-        total_inserted += memories::insert_memories(
+        total_inserted += insert_reconciled_memories(
             main_pool,
+            provider.clone(),
             conversation.role_id.as_deref(),
             conversation_id,
             &extracted,
         )
         .await?;
     } else {
-        let global_memories = global_memory_candidates(&messages, &extracted);
-        total_inserted +=
-            memories::insert_memories(main_pool, None, conversation_id, &global_memories).await?;
-        role_sync_candidates = global_memories;
-    }
-
-    if conversation.role_id.is_none() {
-        total_inserted += sync_global_memories_to_roles(
+        total_inserted += insert_global_memories_with_owners(
             main_pool,
             provider.clone(),
             conversation_id,
             &messages,
-            &role_sync_candidates,
+            &extracted,
         )
         .await?;
+    }
+
+    if conversation.role_id.is_none() {
         total_inserted +=
             extract_delegated_role_conversations(main_pool, conv_pool, provider, &messages).await?;
     }
@@ -239,12 +235,20 @@ async fn extract_role_conversation_with_provider(
         return Ok(0);
     }
 
-    let prompt = build_extraction_prompt(Some(role_id), &messages);
-    let extracted = extract_with_provider(provider, &prompt, &messages, conversation_id).await?;
+    let user_messages = user_extraction_messages(&messages);
+    let prompt = build_extraction_prompt(Some(role_id), &user_messages);
+    let extracted = extract_with_provider(provider.clone(), &prompt, &user_messages, conversation_id).await?;
     if extracted.is_empty() {
         return Ok(0);
     }
-    memories::insert_memories(main_pool, Some(role_id), conversation_id, &extracted).await
+    insert_reconciled_memories(
+        main_pool,
+        provider,
+        Some(role_id),
+        conversation_id,
+        &extracted,
+    )
+    .await
 }
 
 fn global_memory_candidates(
@@ -264,54 +268,404 @@ fn global_memory_candidates(
         .collect()
 }
 
-async fn sync_global_memories_to_roles(
+async fn insert_reconciled_memories(
+    main_pool: &DbPool,
+    provider: Arc<dyn LlmProvider>,
+    role_id: Option<&str>,
+    source_conversation_id: &str,
+    extracted: &[ExtractedMemory],
+) -> Result<usize, AppError> {
+    if extracted.is_empty() {
+        return Ok(0);
+    }
+
+    let existing = memories::list_memories(main_pool, role_id, None, None, None).await?;
+    let actions = match reconcile_memories(provider, role_id, &existing, extracted).await {
+        Ok(actions) => actions,
+        Err(err) => {
+            tracing::warn!(role_id = ?role_id, source_conversation_id, error = %err, "memory reconciliation skipped");
+            deterministic_reconciliation_actions(&existing, extracted)
+        }
+    };
+    apply_memory_reconciliation(main_pool, role_id, source_conversation_id, extracted, actions).await
+}
+
+async fn insert_global_memories_with_owners(
     main_pool: &DbPool,
     provider: Arc<dyn LlmProvider>,
     conversation_id: &str,
     messages: &[Message],
     extracted: &[ExtractedMemory],
 ) -> Result<usize, AppError> {
-    let role_candidates = extracted
-        .iter()
-        .filter(|memory| memory.category != "task_status")
-        .cloned()
-        .collect::<Vec<_>>();
-    if role_candidates.is_empty() {
+    let candidates = global_memory_candidates(messages, extracted);
+    if candidates.is_empty() {
         return Ok(0);
     }
 
     let roles = crate::db::roles::list_active_roles(main_pool).await?;
-    if roles.is_empty() {
-        return Ok(0);
-    }
-
-    let assignments =
-        match assign_memories_to_roles(provider, &roles, messages, &role_candidates).await {
+    let assignments = if roles.is_empty() {
+        Vec::new()
+    } else {
+        match assign_memories_to_roles(provider.clone(), &roles, messages, &candidates).await {
             Ok(assignments) => assignments,
             Err(err) => {
-                tracing::warn!(conversation_id, error = %err, "role memory assignment skipped");
-                return Ok(0);
+                tracing::warn!(conversation_id, error = %err, "role memory owner assignment skipped");
+                Vec::new()
             }
-        };
-    let mut inserted = 0;
-    for assignment in assignments {
-        let memories_for_role = assignment
-            .memory_indexes
-            .iter()
-            .filter_map(|index| role_candidates.get(*index).cloned())
-            .collect::<Vec<_>>();
-        if memories_for_role.is_empty() {
-            continue;
         }
-        inserted += memories::insert_memories(
+    };
+    let owner_by_index = unique_owner_by_memory_index(assignments, candidates.len());
+    let mut grouped: BTreeMap<Option<String>, Vec<ExtractedMemory>> = BTreeMap::new();
+    for (index, memory) in candidates.into_iter().enumerate() {
+        let owner = if memory.category == "task_status" {
+            None
+        } else {
+            owner_by_index.get(&index).cloned().flatten()
+        };
+        grouped.entry(owner).or_default().push(memory);
+    }
+
+    let mut changed = 0;
+    for (owner, memories_for_owner) in grouped {
+        changed += insert_reconciled_memories(
             main_pool,
-            Some(&assignment.role_id),
+            provider.clone(),
+            owner.as_deref(),
             conversation_id,
-            &memories_for_role,
+            &memories_for_owner,
         )
         .await?;
     }
-    Ok(inserted)
+    Ok(changed)
+}
+
+fn unique_owner_by_memory_index(
+    assignments: Vec<RoleMemoryAssignment>,
+    memory_count: usize,
+) -> BTreeMap<usize, Option<String>> {
+    let mut owner_by_index = BTreeMap::new();
+    let mut conflicts = HashSet::new();
+    for assignment in assignments {
+        for index in assignment.memory_indexes {
+            if index >= memory_count {
+                continue;
+            }
+            if owner_by_index
+                .insert(index, Some(assignment.role_id.clone()))
+                .is_some()
+            {
+                conflicts.insert(index);
+            }
+        }
+    }
+    for index in conflicts {
+        owner_by_index.remove(&index);
+    }
+    owner_by_index
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum MemoryReconciliationAction {
+    Insert { memory_index: usize },
+    Skip { memory_index: usize },
+    Update {
+        memory_index: usize,
+        existing_memory_id: String,
+    },
+}
+
+async fn reconcile_memories(
+    provider: Arc<dyn LlmProvider>,
+    role_id: Option<&str>,
+    existing: &[Memory],
+    candidates: &[ExtractedMemory],
+) -> Result<Vec<MemoryReconciliationAction>, AppError> {
+    if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+    if existing.is_empty() {
+        return Ok((0..candidates.len())
+            .map(|memory_index| MemoryReconciliationAction::Insert { memory_index })
+            .collect());
+    }
+
+    let deterministic = deterministic_reconciliation_actions(existing, candidates);
+    let pending = deterministic
+        .iter()
+        .filter_map(|action| match action {
+            MemoryReconciliationAction::Insert { memory_index } => Some(*memory_index),
+            MemoryReconciliationAction::Skip { .. } | MemoryReconciliationAction::Update { .. } => None,
+        })
+        .collect::<Vec<_>>();
+    if pending.is_empty() {
+        return Ok(deterministic);
+    }
+
+    let prompt = build_memory_reconciliation_prompt(role_id, existing, candidates, &pending);
+    let (tx, mut rx) = mpsc::channel::<StreamEvent>(128);
+    let stream_handle = tokio::spawn(async move {
+        if let Err(err) = provider
+            .chat_stream(
+                prompt,
+                tx,
+                ChatOptions {
+                    disable_thinking: true,
+                    tools: None,
+                    tool_choice: None,
+                },
+            )
+            .await
+        {
+            tracing::warn!(error = %err, "memory reconciliation provider stream failed");
+        }
+    });
+
+    let mut response = String::new();
+    let stream_result = timeout(Duration::from_secs(LLM_EXTRACTION_TIMEOUT_SECONDS), async {
+        while let Some(event) = rx.recv().await {
+            match event {
+                StreamEvent::Token(token) => {
+                    if response.len() + token.len() > MAX_EXTRACTION_RESPONSE_BYTES {
+                        tracing::warn!("memory reconciliation response exceeded size limit");
+                        return Ok(());
+                    }
+                    response.push_str(&token);
+                }
+                StreamEvent::Done => return Ok::<(), AppError>(()),
+                StreamEvent::Error(err) => {
+                    tracing::warn!(error = %err, "memory reconciliation stream error");
+                    return Ok(());
+                }
+                StreamEvent::Thinking(_) | StreamEvent::ToolCall(_) => {}
+            }
+        }
+        Ok(())
+    })
+    .await;
+    if stream_result.is_err() {
+        stream_handle.abort();
+        tracing::warn!(role_id = ?role_id, "memory reconciliation timed out");
+        return Ok(deterministic);
+    }
+
+    let llm_actions = parse_memory_reconciliation_response(&response, existing, candidates, &pending)?;
+    Ok(merge_reconciliation_actions(deterministic, llm_actions))
+}
+
+fn deterministic_reconciliation_actions(
+    existing: &[Memory],
+    candidates: &[ExtractedMemory],
+) -> Vec<MemoryReconciliationAction> {
+    candidates
+        .iter()
+        .enumerate()
+        .map(|(memory_index, candidate)| {
+            let candidate_content = normalize_memory_content(&candidate.content);
+            if existing.iter().any(|memory| {
+                memory.category == candidate.category
+                    && normalize_memory_content(&memory.content) == candidate_content
+            }) {
+                MemoryReconciliationAction::Skip { memory_index }
+            } else {
+                MemoryReconciliationAction::Insert { memory_index }
+            }
+        })
+        .collect()
+}
+
+fn merge_reconciliation_actions(
+    deterministic: Vec<MemoryReconciliationAction>,
+    llm_actions: Vec<MemoryReconciliationAction>,
+) -> Vec<MemoryReconciliationAction> {
+    let llm_by_index = llm_actions
+        .into_iter()
+        .filter_map(|action| match &action {
+            MemoryReconciliationAction::Insert { memory_index }
+            | MemoryReconciliationAction::Skip { memory_index }
+            | MemoryReconciliationAction::Update { memory_index, .. } => Some((*memory_index, action)),
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    deterministic
+        .into_iter()
+        .map(|action| match action {
+            MemoryReconciliationAction::Insert { memory_index } => llm_by_index
+                .get(&memory_index)
+                .cloned()
+                .unwrap_or(MemoryReconciliationAction::Insert { memory_index }),
+            action => action,
+        })
+        .collect()
+}
+
+async fn apply_memory_reconciliation(
+    main_pool: &DbPool,
+    role_id: Option<&str>,
+    source_conversation_id: &str,
+    extracted: &[ExtractedMemory],
+    actions: Vec<MemoryReconciliationAction>,
+) -> Result<usize, AppError> {
+    let mut changed = 0;
+    for action in actions {
+        match action {
+            MemoryReconciliationAction::Insert { memory_index } => {
+                if let Some(memory) = extracted.get(memory_index) {
+                    changed += memories::insert_memories(
+                        main_pool,
+                        role_id,
+                        source_conversation_id,
+                        std::slice::from_ref(memory),
+                    )
+                    .await?;
+                }
+            }
+            MemoryReconciliationAction::Update {
+                memory_index,
+                existing_memory_id,
+            } => {
+                if let Some(memory) = extracted.get(memory_index) {
+                    memories::update_memory_from_extracted(
+                        main_pool,
+                        &existing_memory_id,
+                        role_id,
+                        source_conversation_id,
+                        memory,
+                    )
+                    .await?;
+                    changed += 1;
+                }
+            }
+            MemoryReconciliationAction::Skip { .. } => {}
+        }
+    }
+    Ok(changed)
+}
+
+fn build_memory_reconciliation_prompt(
+    role_id: Option<&str>,
+    existing: &[Memory],
+    candidates: &[ExtractedMemory],
+    pending_indexes: &[usize],
+) -> Vec<ChatCompletionMessage> {
+    let existing_lines = existing
+        .iter()
+        .map(|memory| {
+            format!(
+                "id: {}\ncategory: {}\ncontent: {}\nsourceMessageIds: {}",
+                memory.id, memory.category, memory.content, memory.source_message_ids
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n---\n");
+    let candidate_lines = pending_indexes
+        .iter()
+        .filter_map(|index| candidates.get(*index).map(|memory| (*index, memory)))
+        .map(|(index, memory)| {
+            format!(
+                "index: {}\ncategory: {}\ncontent: {}\nsourceMessageIds: {}",
+                index,
+                memory.category,
+                memory.content,
+                serde_json::to_string(&memory.source_message_ids)
+                    .unwrap_or_else(|_| "[]".to_string())
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n---\n");
+
+    vec![
+        ChatCompletionMessage {
+            role: "system".to_string(),
+            content: "你是 EgoSync 的记忆冲突审查器。只输出严格 JSON 对象，不要 Markdown、code fence 或解释文本。顶层格式必须是 {\"actions\":[{\"memoryIndex\":0,\"action\":\"insert|skip|update\",\"existingMemoryId\":\"...\"}]}。只审视同一个 owner 下的记忆；相同记忆输出 skip，新增记忆与旧记忆冲突且新记忆更新时输出 update，否则输出 insert。skip/update 必须引用 existingMemoryId。".to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+        },
+        ChatCompletionMessage {
+            role: "user".to_string(),
+            content: format!(
+                "owner: {}\n\nexisting memories:\n{}\n\ncandidate memories:\n{}",
+                role_id.unwrap_or("butler"),
+                existing_lines,
+                candidate_lines
+            ),
+            tool_calls: None,
+            tool_call_id: None,
+        },
+    ]
+}
+
+#[derive(Deserialize)]
+struct ReconciliationResponse {
+    actions: Vec<RawReconciliationAction>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawReconciliationAction {
+    memory_index: usize,
+    action: String,
+    existing_memory_id: Option<String>,
+}
+
+fn parse_memory_reconciliation_response(
+    response: &str,
+    existing: &[Memory],
+    candidates: &[ExtractedMemory],
+    allowed_indexes: &[usize],
+) -> Result<Vec<MemoryReconciliationAction>, AppError> {
+    let cleaned = strip_json_code_fence(response.trim());
+    let parsed: ReconciliationResponse = serde_json::from_str(cleaned)
+        .map_err(|e| AppError::ValidationError(format!("记忆冲突审查 JSON 解析失败: {}", e)))?;
+    let existing_ids = existing
+        .iter()
+        .map(|memory| memory.id.as_str())
+        .collect::<HashSet<_>>();
+    let allowed = allowed_indexes.iter().copied().collect::<HashSet<_>>();
+    let mut seen = HashSet::new();
+    let actions = parsed
+        .actions
+        .into_iter()
+        .filter_map(|action| {
+            if action.memory_index >= candidates.len()
+                || !allowed.contains(&action.memory_index)
+                || !seen.insert(action.memory_index)
+            {
+                return None;
+            }
+            match action.action.trim() {
+                "insert" => Some(MemoryReconciliationAction::Insert {
+                    memory_index: action.memory_index,
+                }),
+                "skip" => action
+                    .existing_memory_id
+                    .as_deref()
+                    .filter(|id| existing_ids.contains(*id))
+                    .map(|_| MemoryReconciliationAction::Skip {
+                        memory_index: action.memory_index,
+                    }),
+                "update" => action
+                    .existing_memory_id
+                    .filter(|id| existing_ids.contains(id.as_str()))
+                    .map(|existing_memory_id| MemoryReconciliationAction::Update {
+                        memory_index: action.memory_index,
+                        existing_memory_id,
+                    }),
+                _ => None,
+            }
+        })
+        .collect();
+    Ok(actions)
+}
+
+fn normalize_memory_content(content: &str) -> String {
+    let trimmed = content
+        .trim()
+        .trim_end_matches(|ch| matches!(ch, '.' | '。' | '!' | '！' | '?' | '？'));
+    trimmed
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 struct RoleMemoryAssignment {
@@ -424,7 +778,7 @@ fn build_role_memory_assignment_prompt(
     vec![
         ChatCompletionMessage {
             role: "system".to_string(),
-            content: "你是 EgoSync 的角色记忆归属判定器。只输出严格 JSON 对象，不要 Markdown、code fence 或解释文本。顶层格式必须是 {\"assignments\":[{\"roleId\":\"...\",\"memoryIndexes\":[0]}]}。只把关于某个 active 角色领域的事实、偏好、认知更新归属给该角色；任务状态不要归属到这里。无法明确归属时不要输出。".to_string(),
+            content: "你是 EgoSync 的角色记忆归属判定器。只输出严格 JSON 对象，不要 Markdown、code fence 或解释文本。顶层格式必须是 {\"assignments\":[{\"memoryIndex\":0,\"roleId\":\"...|null\"}]}。每条 memory 最多归属一个 active 角色；只把关于某个 active 角色领域的事实、偏好、认知更新归属给该角色；任务状态或无法明确归属时 roleId 输出 null。".to_string(),
             tool_calls: None,
             tool_call_id: None,
         },
@@ -448,8 +802,10 @@ struct RoleAssignmentResponse {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RawRoleAssignment {
-    role_id: String,
+    role_id: Option<String>,
+    #[serde(default)]
     memory_indexes: Vec<usize>,
+    memory_index: Option<usize>,
 }
 
 fn parse_role_memory_assignment_response(
@@ -469,12 +825,16 @@ fn parse_role_memory_assignment_response(
         .assignments
         .into_iter()
         .filter_map(|assignment| {
-            let role_id = assignment.role_id.trim().to_string();
+            let role_id = assignment.role_id?.trim().to_string();
             if !role_ids.contains(role_id.as_str()) {
                 return None;
             }
-            let memory_indexes = assignment
-                .memory_indexes
+            let raw_indexes = if let Some(memory_index) = assignment.memory_index {
+                vec![memory_index]
+            } else {
+                assignment.memory_indexes
+            };
+            let memory_indexes = raw_indexes
                 .into_iter()
                 .filter(|index| *index < memories.len())
                 .filter(|index| seen.insert((role_id.clone(), *index)))
@@ -593,6 +953,16 @@ fn global_extraction_messages(messages: &[Message]) -> Vec<Message> {
         .collect()
 }
 
+fn user_extraction_messages(messages: &[Message]) -> Vec<Message> {
+    messages
+        .iter()
+        .filter(|message| {
+            message.role == "user" && message.is_complete && !message.content.trim().is_empty()
+        })
+        .cloned()
+        .collect()
+}
+
 async fn extract_with_provider(
     provider: Arc<dyn LlmProvider>,
     prompt: &[ChatCompletionMessage],
@@ -658,7 +1028,11 @@ async fn extract_with_provider(
         return Ok(Vec::new());
     }
 
-    let allowed_ids: HashSet<String> = messages.iter().map(|m| m.id.clone()).collect();
+    let allowed_ids: HashSet<String> = messages
+        .iter()
+        .filter(|m| m.role == "user")
+        .map(|m| m.id.clone())
+        .collect();
     parse_extraction_response(&response, &allowed_ids)
 }
 
@@ -673,12 +1047,11 @@ fn build_extraction_prompt(
     };
     let transcript = messages
         .iter()
-        .filter(|m| m.role != "system" && !m.content.trim().is_empty())
+        .filter(|m| m.role == "user" && !m.content.trim().is_empty())
         .map(|m| {
             format!(
-                "id: {}\nrole: {}\ncreated_at: {}\ncontent: {}",
+                "id: {}\ncreated_at: {}\ncontent: {}",
                 m.id,
-                m.role,
                 m.created_at,
                 m.content.trim()
             )
@@ -690,7 +1063,7 @@ fn build_extraction_prompt(
         ChatCompletionMessage {
             role: "system".to_string(),
             content: format!(
-                "你是 EgoSync 的记忆提炼器。{}\n只输出严格 JSON 对象，不要 Markdown、code fence 或解释文本。顶层格式必须是 {{\"memories\":[{{\"category\":\"preference|task_status|cognition_update|fact\",\"content\":\"...\",\"sourceMessageIds\":[\"...\"]}}]}}。无持久价值信息时输出 {{\"memories\":[]}}。每条记忆必须引用 1 个或多个原始消息 id，只记录未来有持续价值的信息，不记录寒暄、一次性确认或模型自己的建议。",
+                "你是 EgoSync 的记忆提炼器。{}\n只输出严格 JSON 对象，不要 Markdown、code fence 或解释文本。顶层格式必须是 {{\"memories\":[{{\"category\":\"preference|task_status|cognition_update|fact\",\"content\":\"...\",\"sourceMessageIds\":[\"...\"]}}]}}。无持久价值信息时输出 {{\"memories\":[]}}。每条记忆必须引用 1 个或多个原始用户消息 id，只记录用户自己说出的、未来有持续价值的信息。不要基于助手回复、角色回复或模型建议生成记忆。记忆内容用第一人称语境的自然事实表述，不要把对话对象称为“用户”，例如输出“儿子喜欢吃薯条”，不要输出“用户儿子喜欢吃薯条”。",
                 scope
             ),
             tool_calls: None,
@@ -729,7 +1102,7 @@ fn parse_extraction_response(
         .memories
         .into_iter()
         .filter_map(|memory| {
-            let content = memory.content.trim().to_string();
+            let content = sanitize_memory_content(&memory.content);
             if !ALLOWED_CATEGORIES.contains(&memory.category.as_str()) {
                 tracing::warn!(
                     category = memory.category,
@@ -757,6 +1130,33 @@ fn parse_extraction_response(
         })
         .collect();
     Ok(memories)
+}
+
+fn sanitize_memory_content(content: &str) -> String {
+    let mut value = content.trim().to_string();
+    for (from, to) in [
+        ("用户的儿子", "儿子"),
+        ("用户儿子", "儿子"),
+        ("用户的女儿", "女儿"),
+        ("用户女儿", "女儿"),
+        ("用户的孩子", "孩子"),
+        ("用户孩子", "孩子"),
+        ("用户的父亲", "父亲"),
+        ("用户父亲", "父亲"),
+        ("用户的母亲", "母亲"),
+        ("用户母亲", "母亲"),
+        ("用户的家庭", "家庭"),
+        ("用户家庭", "家庭"),
+    ] {
+        value = value.replace(from, to);
+    }
+    for prefix in ["用户比较", "用户偏好", "用户喜欢", "用户经常", "用户正在", "用户将", "用户会", "用户要", "用户"] {
+        if let Some(stripped) = value.strip_prefix(prefix) {
+            value = stripped.trim_start_matches(['的', '：', ':', '，', ',']).trim().to_string();
+            break;
+        }
+    }
+    value
 }
 
 fn strip_json_code_fence(response: &str) -> &str {
@@ -803,6 +1203,12 @@ mod tests {
         .execute(&pool)
         .await
         .expect("migrate memory dedupe index");
+        sqlx::raw_sql(include_str!(
+            "../../migrations/006_memory_single_owner_dedupe.sql"
+        ))
+        .execute(&pool)
+        .await
+        .expect("migrate memory single-owner dedupe index");
         pool
     }
 
@@ -868,11 +1274,13 @@ mod tests {
 
         assert_eq!(strict.len(), 1);
         assert_eq!(strict[0].category, "preference");
+        assert_eq!(strict[0].content, "中文输出");
         assert_eq!(strict[0].source_message_ids, vec!["msg-1"]);
         assert_eq!(fenced.len(), 1);
         assert_eq!(fenced[0].category, "fact");
+        assert_eq!(fenced[0].content, "在做 Story 2.6");
         assert_eq!(surrounded.len(), 1);
-        assert_eq!(surrounded[0].content, "用户重视可验证结论");
+        assert_eq!(surrounded[0].content, "重视可验证结论");
     }
 
     #[test]
@@ -894,6 +1302,7 @@ mod tests {
 
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].category, "task_status");
+        assert_eq!(parsed[0].content, "推进记忆管线");
         assert_eq!(empty.len(), 0);
     }
 
@@ -917,7 +1326,8 @@ mod tests {
 
         assert!(prompt.iter().any(|m| m.content.contains("管家全局记忆")));
         assert!(prompt.iter().any(|m| m.content.contains("msg-1")));
-        assert!(prompt.iter().any(|m| m.content.contains("msg-2")));
+        assert!(!prompt.iter().any(|m| m.content.contains("msg-2")));
+        assert!(!prompt.iter().any(|m| m.content.contains("好的")));
         assert!(!prompt
             .iter()
             .any(|m| m.content.contains("[onboarding_start]")));
@@ -1285,6 +1695,48 @@ mod tests {
         }
     }
 
+    struct ReconciliationProvider {
+        response: String,
+    }
+
+    impl ReconciliationProvider {
+        fn new(response: &str) -> Self {
+            Self {
+                response: response.to_string(),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for ReconciliationProvider {
+        async fn test_connection(&self) -> Result<(), AppError> {
+            Ok(())
+        }
+
+        async fn chat_stream(
+            &self,
+            _messages: Vec<ChatCompletionMessage>,
+            tx: mpsc::Sender<StreamEvent>,
+            _options: ChatOptions,
+        ) -> Result<(), AppError> {
+            tx.send(StreamEvent::Token(self.response.clone()))
+                .await
+                .map_err(|e| AppError::LlmError(format!("fake stream failed: {}", e)))?;
+            tx.send(StreamEvent::Done)
+                .await
+                .map_err(|e| AppError::LlmError(format!("fake stream failed: {}", e)))?;
+            Ok(())
+        }
+    }
+
+    fn extracted(category: &str, content: &str, source_message_ids: Vec<&str>) -> ExtractedMemory {
+        ExtractedMemory {
+            category: category.to_string(),
+            content: content.to_string(),
+            source_message_ids: source_message_ids.into_iter().map(str::to_string).collect(),
+        }
+    }
+
     async fn insert_complete_user_messages(
         pool: &ConversationsPool,
         conversation_id: &str,
@@ -1304,6 +1756,75 @@ mod tests {
             );
         }
         messages
+    }
+
+    #[tokio::test]
+    async fn insert_reconciled_memories_skips_same_memory() {
+        let main_pool = setup_main_pool().await;
+        let first = extracted("fact", "用户喜欢中文输出。", vec!["msg-1"]);
+        memories::insert_memories(&main_pool, None, "conv-old", &[first])
+            .await
+            .expect("insert existing memory");
+
+        let changed = insert_reconciled_memories(
+            &main_pool,
+            Arc::new(ReconciliationProvider::new(r#"{"actions":[]}"#)),
+            None,
+            "conv-new",
+            &[extracted("fact", "  用户喜欢中文输出  ", vec!["msg-2"])],
+        )
+        .await
+        .expect("reconcile memories");
+
+        let rows: Vec<String> = sqlx::query_scalar("SELECT content FROM memories")
+            .fetch_all(&main_pool)
+            .await
+            .expect("query memories");
+        assert_eq!(changed, 0);
+        assert_eq!(rows, vec!["用户喜欢中文输出。"]);
+    }
+
+    #[tokio::test]
+    async fn insert_reconciled_memories_updates_conflicting_memory() {
+        let main_pool = setup_main_pool().await;
+        memories::insert_memories(
+            &main_pool,
+            None,
+            "conv-old",
+            &[extracted("fact", "用户偏好每周一上午开会", vec!["msg-1"])],
+        )
+        .await
+        .expect("insert existing memory");
+        let existing_id: String = sqlx::query_scalar("SELECT id FROM memories")
+            .fetch_one(&main_pool)
+            .await
+            .expect("query existing id");
+        let response = format!(
+            r#"{{"actions":[{{"memoryIndex":0,"action":"update","existingMemoryId":"{}"}}]}}"#,
+            existing_id
+        );
+
+        let changed = insert_reconciled_memories(
+            &main_pool,
+            Arc::new(ReconciliationProvider::new(&response)),
+            None,
+            "conv-new",
+            &[extracted("fact", "用户偏好每周二下午开会", vec!["msg-2"])],
+        )
+        .await
+        .expect("reconcile memories");
+
+        let stored: Vec<(String, String, String)> = sqlx::query_as(
+            "SELECT id, content, source_conversation_id FROM memories",
+        )
+        .fetch_all(&main_pool)
+        .await
+        .expect("query memories");
+        assert_eq!(changed, 1);
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].0, existing_id);
+        assert_eq!(stored[0].1, "用户偏好每周二下午开会");
+        assert_eq!(stored[0].2, "conv-new");
     }
 
     #[tokio::test]
@@ -1368,7 +1889,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn extract_for_conversation_syncs_role_facts_from_butler_memory() {
+    async fn extract_for_conversation_assigns_single_owner_for_role_facts_from_butler_memory() {
         let main_pool = setup_main_pool().await;
         let conv_pool = setup_conversation_pool().await;
         sqlx::query(
@@ -1430,16 +1951,13 @@ mod tests {
         .fetch_all(&main_pool)
         .await
         .expect("query memories");
-        assert_eq!(count, 2);
+        assert_eq!(count, 1);
         assert_eq!(
             stored,
-            vec![
-                (None, "儿子喜欢吃薯条".to_string()),
-                (
-                    Some("father-role".to_string()),
-                    "儿子喜欢吃薯条".to_string()
-                ),
-            ]
+            vec![(
+                Some("father-role".to_string()),
+                "儿子喜欢吃薯条".to_string()
+            )]
         );
     }
 

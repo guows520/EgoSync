@@ -160,7 +160,10 @@ mod tests {
         .fetch_one(&pool)
         .await
         .expect("query memory dedupe index sql");
-        assert!(dedupe_sql.contains("COALESCE(role_id, '')"));
+        assert!(dedupe_sql.contains("source_conversation_id"));
+        assert!(dedupe_sql.contains("category"));
+        assert!(dedupe_sql.contains("source_message_ids"));
+        assert!(!dedupe_sql.contains("COALESCE(role_id"));
 
         let foreign_keys: i64 = sqlx::query_scalar("PRAGMA foreign_keys")
             .fetch_one(&pool)

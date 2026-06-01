@@ -1,10 +1,37 @@
+import { useEffect, useState } from 'react';
 import { X, Plus, Circle } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { DashboardTab } from './DashboardTab';
 import { MemoryTab } from '../role/MemoryTab';
 import { ButlerSettingsContent } from './ButlerSettingsContent';
+import { memoryService } from '../../services/memoryService';
+import type { MemoryCategory } from '../../types/memory';
 
 export function ButlerWorkspacePanel({ roles, currentTab, setTab, archivedRoles, onRestoreRole, onViewChange }: any) {
+  const [memoryCount, setMemoryCount] = useState<number | null>(null);
+  const [memoryCategory, setMemoryCategory] = useState<MemoryCategory | undefined>();
+
+  useEffect(() => {
+    let cancelled = false;
+    setMemoryCount(null);
+    memoryService
+      .count({ roleId: null, includeRoleMemories: true, category: memoryCategory })
+      .then(count => {
+        if (!cancelled) setMemoryCount(count);
+      })
+      .catch(e => {
+        console.error('加载管家记忆数量失败:', e);
+        if (!cancelled) setMemoryCount(0);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [memoryCategory]);
+
+  const roleLabels = Object.fromEntries((roles ?? []).map((role: any) => [role.id, role.name]));
+  const memoryLabel = memoryCount === null ? '管家记忆' : `管家记忆 (${memoryCount})`;
+
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center justify-between border-b border-slate-200/80 px-6 pt-4 bg-white/60 backdrop-blur-md shrink-0">
@@ -16,7 +43,7 @@ export function ButlerWorkspacePanel({ roles, currentTab, setTab, archivedRoles,
             通用任务
           </button>
           <button onClick={() => setTab('memory')} className={cn("pb-3.5 text-[14px] font-medium transition-colors border-b-[3px]", currentTab === 'memory' ? "text-indigo-600 border-current" : "border-transparent text-slate-500 hover:text-slate-800")}>
-            管家记忆
+            {memoryLabel}
           </button>
           <button onClick={() => setTab('settings')} className={cn("pb-3.5 text-[14px] font-medium transition-colors border-b-[3px]", currentTab === 'settings' ? "text-indigo-600 border-current" : "border-transparent text-slate-500 hover:text-slate-800")}>
             管家设置
@@ -49,7 +76,16 @@ export function ButlerWorkspacePanel({ roles, currentTab, setTab, archivedRoles,
             </div>
           </div>
         )}
-        {currentTab === 'memory' && <MemoryTab roleId={null} includeRoleMemories />}
+        {currentTab === 'memory' && (
+          <MemoryTab
+            roleId={null}
+            includeRoleMemories
+            showOwnerLabel
+            roleLabels={roleLabels}
+            category={memoryCategory}
+            onCategoryChange={setMemoryCategory}
+          />
+        )}
         {currentTab === 'settings' && <ButlerSettingsContent archivedRoles={archivedRoles} onRestoreRole={onRestoreRole} />}
       </div>
     </div>

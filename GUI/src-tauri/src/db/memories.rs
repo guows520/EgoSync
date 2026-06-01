@@ -12,22 +12,50 @@ pub async fn insert_memories(
     source_conversation_id: &str,
     extracted: &[ExtractedMemory],
 ) -> Result<usize, AppError> {
-    let mut inserted = 0;
+    let mut changed = 0;
 
     for memory in extracted {
         validate_memory(memory)?;
         let source_message_ids = normalized_source_message_ids(&memory.source_message_ids)?;
-        let duplicate_exists: Option<i64> = sqlx::query_scalar(
-            "SELECT 1 FROM memories WHERE ((role_id IS NULL AND ?1 IS NULL) OR role_id = ?1) AND source_conversation_id = ?2 AND category = ?3 AND source_message_ids = ?4 LIMIT 1",
+        let content = memory.content.trim();
+
+        if let Some(existing) = find_memory_by_source(
+            pool,
+            source_conversation_id,
+            &memory.category,
+            &source_message_ids,
         )
-        .bind(role_id)
-        .bind(source_conversation_id)
-        .bind(&memory.category)
-        .bind(&source_message_ids)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| AppError::DbError(format!("查询重复记忆失败: {}", e)))?;
-        if duplicate_exists.is_some() {
+        .await?
+        {
+            if should_refresh_existing(&existing, role_id, content) {
+                refresh_memory(
+                    pool,
+                    &existing,
+                    role_id,
+                    &memory.category,
+                    content,
+                    source_conversation_id,
+                    &source_message_ids,
+                )
+                .await?;
+                changed += 1;
+            } else if existing.role_id.as_deref() != role_id
+                && existing.role_id.is_some()
+                && role_id.is_some()
+            {
+                tracing::warn!(
+                    memory_id = %existing.id,
+                    existing_role_id = ?existing.role_id,
+                    incoming_role_id = ?role_id,
+                    source_conversation_id,
+                    category = %memory.category,
+                    "同源记忆已归属其他角色，跳过跨角色刷新"
+                );
+            }
+            continue;
+        }
+
+        if normalized_content_duplicate_exists(pool, role_id, &memory.category, content).await? {
             continue;
         }
 
@@ -38,50 +66,248 @@ pub async fn insert_memories(
         .bind(&id)
         .bind(role_id)
         .bind(&memory.category)
-        .bind(memory.content.trim())
+        .bind(content)
         .bind(source_conversation_id)
         .bind(&source_message_ids)
         .execute(pool)
         .await
         .map_err(|e| AppError::DbError(format!("写入记忆失败: {}", e)))?;
 
-        inserted += result.rows_affected() as usize;
+        changed += result.rows_affected() as usize;
     }
 
-    Ok(inserted)
+    Ok(changed)
+}
+
+struct ExistingMemory {
+    id: String,
+    role_id: Option<String>,
+    content: String,
+}
+
+async fn find_memory_by_source(
+    pool: &SqlitePool,
+    source_conversation_id: &str,
+    category: &str,
+    source_message_ids: &str,
+) -> Result<Option<ExistingMemory>, AppError> {
+    sqlx::query_as::<_, (String, Option<String>, String)>(
+        "SELECT id, role_id, content FROM memories WHERE source_conversation_id = ?1 AND category = ?2 AND source_message_ids = ?3 ORDER BY CASE WHEN role_id IS NULL THEN 0 ELSE 1 END DESC, created_at DESC, rowid DESC LIMIT 1",
+    )
+    .bind(source_conversation_id)
+    .bind(category)
+    .bind(source_message_ids)
+    .fetch_optional(pool)
+    .await
+    .map(|row| {
+        row.map(|(id, role_id, content)| ExistingMemory {
+            id,
+            role_id,
+            content,
+        })
+    })
+    .map_err(|e| AppError::DbError(format!("查询同源记忆失败: {}", e)))
+}
+
+fn should_refresh_existing(existing: &ExistingMemory, incoming_role_id: Option<&str>, content: &str) -> bool {
+    if existing.role_id.is_some()
+        && incoming_role_id.is_some()
+        && existing.role_id.as_deref() != incoming_role_id
+    {
+        return false;
+    }
+
+    let owner_changes = existing.role_id.is_none() && incoming_role_id.is_some();
+    let content_changes = normalize_memory_content(&existing.content) != normalize_memory_content(content);
+    owner_changes || content_changes
+}
+
+async fn refresh_memory(
+    pool: &SqlitePool,
+    existing: &ExistingMemory,
+    incoming_role_id: Option<&str>,
+    category: &str,
+    content: &str,
+    source_conversation_id: &str,
+    source_message_ids: &str,
+) -> Result<(), AppError> {
+    let next_role_id = match (existing.role_id.as_deref(), incoming_role_id) {
+        (None, Some(role_id)) => Some(role_id),
+        (Some(role_id), _) => Some(role_id),
+        (None, None) => None,
+    };
+
+    sqlx::query(
+        "UPDATE memories SET role_id = ?1, category = ?2, content = ?3, source_conversation_id = ?4, source_message_ids = ?5, created_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?6",
+    )
+    .bind(next_role_id)
+    .bind(category)
+    .bind(content)
+    .bind(source_conversation_id)
+    .bind(source_message_ids)
+    .bind(&existing.id)
+    .execute(pool)
+    .await
+    .map_err(|e| AppError::DbError(format!("刷新记忆失败: {}", e)))?;
+
+    Ok(())
+}
+
+async fn normalized_content_duplicate_exists(
+    pool: &SqlitePool,
+    role_id: Option<&str>,
+    category: &str,
+    content: &str,
+) -> Result<bool, AppError> {
+    let rows = if let Some(role_id) = role_id {
+        sqlx::query_scalar::<_, String>(
+            "SELECT content FROM memories WHERE role_id = ?1 AND category = ?2",
+        )
+        .bind(role_id)
+        .bind(category)
+        .fetch_all(pool)
+        .await
+    } else {
+        sqlx::query_scalar::<_, String>(
+            "SELECT content FROM memories WHERE role_id IS NULL AND category = ?1",
+        )
+        .bind(category)
+        .fetch_all(pool)
+        .await
+    }
+    .map_err(|e| AppError::DbError(format!("查询同内容记忆失败: {}", e)))?;
+
+    let normalized = normalize_memory_content(content);
+    Ok(rows
+        .iter()
+        .any(|existing| normalize_memory_content(existing) == normalized))
+}
+
+pub async fn update_memory_from_extracted(
+    pool: &SqlitePool,
+    memory_id: &str,
+    role_id: Option<&str>,
+    source_conversation_id: &str,
+    memory: &ExtractedMemory,
+) -> Result<(), AppError> {
+    validate_memory(memory)?;
+    let source_message_ids = normalized_source_message_ids(&memory.source_message_ids)?;
+    let content = memory.content.trim();
+
+    sqlx::query(
+        "UPDATE memories SET role_id = ?1, category = ?2, content = ?3, source_conversation_id = ?4, source_message_ids = ?5, created_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?6",
+    )
+    .bind(role_id)
+    .bind(&memory.category)
+    .bind(content)
+    .bind(source_conversation_id)
+    .bind(&source_message_ids)
+    .bind(memory_id)
+    .execute(pool)
+    .await
+    .map_err(|e| AppError::DbError(format!("刷新记忆失败: {}", e)))?;
+
+    Ok(())
+}
+
+pub async fn get_memory_by_id(
+    pool: &SqlitePool,
+    memory_id: &str,
+) -> Result<Option<Memory>, AppError> {
+    sqlx::query_as::<_, Memory>(
+        "SELECT id, role_id, category, content, source_conversation_id, source_message_ids, created_at FROM memories WHERE id = ?1",
+    )
+    .bind(memory_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| AppError::DbError(format!("查询记忆失败: {}", e)))
 }
 
 pub async fn list_memories(
     pool: &SqlitePool,
     role_id: Option<&str>,
+    category: Option<&str>,
+    limit: Option<i64>,
+    offset: Option<i64>,
 ) -> Result<Vec<Memory>, AppError> {
-    let rows = if let Some(role_id) = role_id {
-        sqlx::query_as::<_, Memory>(
-            "SELECT id, role_id, category, content, source_conversation_id, source_message_ids, created_at FROM memories WHERE role_id = ?1 ORDER BY created_at DESC",
+    validate_category_filter(category)?;
+    let rows = match (role_id, category) {
+        (Some(role_id), Some(category)) => sqlx::query_as::<_, Memory>(
+            "SELECT id, role_id, category, content, source_conversation_id, source_message_ids, created_at FROM memories WHERE role_id = ?1 AND category = ?2 ORDER BY created_at DESC, rowid DESC",
         )
         .bind(role_id)
+        .bind(category)
+        .fetch_all(pool)
+        .await,
+        (Some(role_id), None) => sqlx::query_as::<_, Memory>(
+            "SELECT id, role_id, category, content, source_conversation_id, source_message_ids, created_at FROM memories WHERE role_id = ?1 AND category != 'task_status' ORDER BY created_at DESC, rowid DESC",
+        )
+        .bind(role_id)
+        .fetch_all(pool)
+        .await,
+        (None, Some(category)) => sqlx::query_as::<_, Memory>(
+            "SELECT id, role_id, category, content, source_conversation_id, source_message_ids, created_at FROM memories WHERE role_id IS NULL AND category = ?1 ORDER BY created_at DESC, rowid DESC",
+        )
+        .bind(category)
+        .fetch_all(pool)
+        .await,
+        (None, None) => sqlx::query_as::<_, Memory>(
+            "SELECT id, role_id, category, content, source_conversation_id, source_message_ids, created_at FROM memories WHERE role_id IS NULL AND category != 'task_status' ORDER BY created_at DESC, rowid DESC",
+        )
+        .fetch_all(pool)
+        .await,
+    };
+
+    let visible = rows
+        .map(dedup_memories)
+        .map_err(|e| AppError::DbError(format!("查询记忆失败: {}", e)))?;
+    paginate_memories(visible, limit, offset)
+}
+
+pub async fn list_all_memories(pool: &SqlitePool) -> Result<Vec<Memory>, AppError> {
+    list_all_memories_with_options(pool, None, None, None).await
+}
+
+pub async fn list_all_memories_with_options(
+    pool: &SqlitePool,
+    category: Option<&str>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+) -> Result<Vec<Memory>, AppError> {
+    validate_category_filter(category)?;
+    let rows = if let Some(category) = category {
+        sqlx::query_as::<_, Memory>(
+            "SELECT id, role_id, category, content, source_conversation_id, source_message_ids, created_at FROM memories WHERE category = ?1 ORDER BY created_at DESC, rowid DESC",
+        )
+        .bind(category)
         .fetch_all(pool)
         .await
     } else {
         sqlx::query_as::<_, Memory>(
-            "SELECT id, role_id, category, content, source_conversation_id, source_message_ids, created_at FROM memories WHERE role_id IS NULL ORDER BY created_at DESC",
+            "SELECT id, role_id, category, content, source_conversation_id, source_message_ids, created_at FROM memories WHERE category != 'task_status' ORDER BY created_at DESC, rowid DESC",
         )
         .fetch_all(pool)
         .await
     };
 
-    rows.map(dedup_memories)
-        .map_err(|e| AppError::DbError(format!("查询记忆失败: {}", e)))
+    let visible = rows
+        .map(dedup_memories)
+        .map_err(|e| AppError::DbError(format!("查询全部记忆失败: {}", e)))?;
+    paginate_memories(visible, limit, offset)
 }
 
-pub async fn list_all_memories(pool: &SqlitePool) -> Result<Vec<Memory>, AppError> {
-    let rows = sqlx::query_as::<_, Memory>(
-        "SELECT id, role_id, category, content, source_conversation_id, source_message_ids, created_at FROM memories ORDER BY created_at DESC",
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(|e| AppError::DbError(format!("查询全部记忆失败: {}", e)))?;
-    Ok(dedup_memories(rows))
+pub async fn count_memories(
+    pool: &SqlitePool,
+    role_id: Option<&str>,
+    include_role_memories: bool,
+    category: Option<&str>,
+) -> Result<usize, AppError> {
+    let memories = if include_role_memories {
+        list_all_memories_with_options(pool, category, None, None).await?
+    } else {
+        list_memories(pool, role_id, category, None, None).await?
+    };
+    Ok(memories.len())
 }
 
 fn dedup_memories(memories: Vec<Memory>) -> Vec<Memory> {
@@ -90,8 +316,7 @@ fn dedup_memories(memories: Vec<Memory>) -> Vec<Memory> {
         .into_iter()
         .filter(|memory| {
             let key = format!(
-                "{}\u{1f}{}\u{1f}{}\u{1f}{}",
-                memory.role_id.as_deref().unwrap_or(""),
+                "{}\u{1f}{}\u{1f}{}",
                 memory.source_conversation_id,
                 memory.category,
                 normalized_source_message_ids_json(&memory.source_message_ids)
@@ -99,6 +324,39 @@ fn dedup_memories(memories: Vec<Memory>) -> Vec<Memory> {
             seen.insert(key)
         })
         .collect()
+}
+
+fn paginate_memories(
+    memories: Vec<Memory>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+) -> Result<Vec<Memory>, AppError> {
+    let offset = offset.unwrap_or(0);
+    if offset < 0 {
+        return Err(AppError::ValidationError("offset 不能小于 0".to_string()));
+    }
+    if matches!(limit, Some(limit) if limit < 0) {
+        return Err(AppError::ValidationError("limit 不能小于 0".to_string()));
+    }
+
+    let skipped = memories.into_iter().skip(offset as usize);
+    Ok(if let Some(limit) = limit {
+        skipped.take(limit as usize).collect()
+    } else {
+        skipped.collect()
+    })
+}
+
+fn validate_category_filter(category: Option<&str>) -> Result<(), AppError> {
+    if let Some(category) = category {
+        if !ALLOWED_CATEGORIES.contains(&category) {
+            return Err(AppError::ValidationError(format!(
+                "无效记忆分类: {}",
+                category
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn normalized_source_message_ids_json(source_message_ids: &str) -> String {
@@ -119,6 +377,17 @@ fn normalized_source_message_ids(source_message_ids: &[String]) -> Result<String
         .collect::<Vec<_>>();
     serde_json::to_string(&unique)
         .map_err(|e| AppError::ValidationError(format!("记忆来源消息序列化失败: {}", e)))
+}
+
+fn normalize_memory_content(content: &str) -> String {
+    let trimmed = content
+        .trim()
+        .trim_end_matches(|ch| matches!(ch, '.' | '。' | '!' | '！' | '?' | '？'));
+    trimmed
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 fn validate_memory(memory: &ExtractedMemory) -> Result<(), AppError> {
@@ -166,6 +435,12 @@ mod tests {
         .execute(&pool)
         .await
         .expect("migrate memory dedupe index");
+        sqlx::raw_sql(include_str!(
+            "../../migrations/006_memory_single_owner_dedupe.sql"
+        ))
+        .execute(&pool)
+        .await
+        .expect("migrate memory single-owner dedupe");
 
         pool
     }
@@ -226,7 +501,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn insert_memories_allows_same_source_in_global_and_role_scope() {
+    async fn insert_memories_keeps_single_owner_for_same_source() {
         let pool = setup_test_db().await;
         sqlx::query("INSERT INTO roles (id, name) VALUES ('role-1', '父亲')")
             .execute(&pool)
@@ -239,7 +514,7 @@ mod tests {
             .expect("insert global");
         let role = insert_memories(&pool, Some("role-1"), "conv-1", &[memory.clone()])
             .await
-            .expect("insert role");
+            .expect("refresh owner to role");
         let role_duplicate = insert_memories(&pool, Some("role-1"), "conv-1", &[memory])
             .await
             .expect("insert duplicate role");
@@ -247,11 +522,39 @@ mod tests {
         assert_eq!(global, 1);
         assert_eq!(role, 1);
         assert_eq!(role_duplicate, 0);
-        let stored_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM memories")
+        let rows: Vec<(Option<String>, String)> =
+            sqlx::query_as("SELECT role_id, content FROM memories")
+                .fetch_all(&pool)
+                .await
+                .expect("query memories");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0.as_deref(), Some("role-1"));
+        assert_eq!(rows[0].1, "儿子喜欢吃薯条");
+    }
+
+    #[tokio::test]
+    async fn insert_memories_does_not_downgrade_role_owner_to_global() {
+        let pool = setup_test_db().await;
+        sqlx::query("INSERT INTO roles (id, name) VALUES ('role-1', '父亲')")
+            .execute(&pool)
+            .await
+            .expect("insert role");
+        let memory = extracted("fact", "儿子喜欢吃薯条", vec!["msg-1"]);
+
+        let role = insert_memories(&pool, Some("role-1"), "conv-1", &[memory.clone()])
+            .await
+            .expect("insert role");
+        let global = insert_memories(&pool, None, "conv-1", &[memory])
+            .await
+            .expect("skip global downgrade");
+
+        assert_eq!(role, 1);
+        assert_eq!(global, 0);
+        let role_id: Option<String> = sqlx::query_scalar("SELECT role_id FROM memories")
             .fetch_one(&pool)
             .await
-            .expect("count memories");
-        assert_eq!(stored_count, 2);
+            .expect("query owner");
+        assert_eq!(role_id.as_deref(), Some("role-1"));
     }
 
     #[tokio::test]
@@ -287,7 +590,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn insert_memories_ignores_same_source_with_reworded_content() {
+    async fn insert_memories_refreshes_same_source_with_reworded_content() {
         let pool = setup_test_db().await;
         let first = insert_memories(
             &pool,
@@ -315,7 +618,12 @@ mod tests {
         .expect("reworded duplicate insert");
 
         assert_eq!(first, 1);
-        assert_eq!(second, 0);
+        assert_eq!(second, 1);
+        let rows: Vec<String> = sqlx::query_scalar("SELECT content FROM memories")
+            .fetch_all(&pool)
+            .await
+            .expect("query contents");
+        assert_eq!(rows, vec!["儿子喜欢书法课，每次上课都写得很认真。"]);
     }
 
     #[tokio::test]
@@ -347,7 +655,41 @@ mod tests {
         .expect("reordered duplicate insert");
 
         assert_eq!(first, 1);
+        assert_eq!(second, 1);
+        let rows: Vec<String> = sqlx::query_scalar("SELECT content FROM memories")
+            .fetch_all(&pool)
+            .await
+            .expect("query contents");
+        assert_eq!(rows, vec!["每周周日安排书法课与家庭日"]);
+    }
+
+    #[tokio::test]
+    async fn insert_memories_skips_normalized_same_content_in_same_owner() {
+        let pool = setup_test_db().await;
+        let first = insert_memories(
+            &pool,
+            None,
+            "conv-1",
+            &[extracted("fact", "Prefers concise updates.", vec!["msg-1"])],
+        )
+        .await
+        .expect("first insert");
+        let second = insert_memories(
+            &pool,
+            None,
+            "conv-2",
+            &[extracted("fact", "  prefers   concise updates  ", vec!["msg-2"])],
+        )
+        .await
+        .expect("same normalized content");
+
+        assert_eq!(first, 1);
         assert_eq!(second, 0);
+        let stored_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM memories")
+            .fetch_one(&pool)
+            .await
+            .expect("count memories");
+        assert_eq!(stored_count, 1);
     }
 
     #[tokio::test]
@@ -366,10 +708,12 @@ mod tests {
         .await
         .expect("insert duplicated historical memories");
 
-        let global = list_memories(&pool, None)
+        let global = list_memories(&pool, None, None, None, None)
             .await
             .expect("list global memories");
-        let all = list_all_memories(&pool).await.expect("list all memories");
+        let all = list_all_memories(&pool)
+            .await
+            .expect("list all memories");
 
         assert_eq!(global.len(), 1);
         assert_eq!(global[0].id, "new");
@@ -406,13 +750,15 @@ mod tests {
         .await
         .expect("insert role memory");
 
-        let global = list_memories(&pool, None)
+        let global = list_memories(&pool, None, None, None, None)
             .await
             .expect("list global memories");
-        let role = list_memories(&pool, Some("role-1"))
+        let role = list_memories(&pool, Some("role-1"), None, None, None)
             .await
             .expect("list role memories");
-        let all = list_all_memories(&pool).await.expect("list all memories");
+        let all = list_all_memories(&pool)
+            .await
+            .expect("list all memories");
 
         assert_eq!(global.len(), 1);
         assert_eq!(global[0].role_id, None);
@@ -423,5 +769,155 @@ mod tests {
         assert_eq!(all.len(), 2);
         assert!(all.iter().any(|m| m.role_id.is_none()));
         assert!(all.iter().any(|m| m.role_id.as_deref() == Some("role-1")));
+    }
+
+    #[tokio::test]
+    async fn list_memories_filters_category_and_paginates_after_dedupe() {
+        let pool = setup_test_db().await;
+        sqlx::query("DROP INDEX idx_memories_source_dedupe")
+            .execute(&pool)
+            .await
+            .expect("drop dedupe index to simulate historical duplicates");
+        sqlx::query(
+            "INSERT INTO memories (id, role_id, category, content, source_conversation_id, source_message_ids, created_at) VALUES
+            ('m-1', NULL, 'fact', '最早事实', 'conv-1', '[\"msg-1\"]', '2026-05-31T03:39:24Z'),
+            ('m-2', NULL, 'preference', '用户喜欢表格', 'conv-2', '[\"msg-2\"]', '2026-05-31T03:40:24Z'),
+            ('m-3', NULL, 'preference', '用户喜欢短句', 'conv-3', '[\"msg-3\"]', '2026-05-31T03:41:24Z'),
+            ('m-4', NULL, 'preference', '用户喜欢短句改写', 'conv-3', '[\"msg-3\"]', '2026-05-31T03:42:24Z')",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert memories");
+
+        let page = list_memories(&pool, None, Some("preference"), Some(1), Some(1))
+            .await
+            .expect("list paged memories");
+        let count = count_memories(&pool, None, false, Some("preference"))
+            .await
+            .expect("count memories");
+
+        assert_eq!(page.len(), 1);
+        assert_eq!(page[0].id, "m-2");
+        assert_eq!(count, 2);
+    }
+
+    #[tokio::test]
+    async fn list_all_memories_filters_category_across_global_and_role_scopes() {
+        let pool = setup_test_db().await;
+        sqlx::query("INSERT INTO roles (id, name) VALUES ('role-1', '产品经理')")
+            .execute(&pool)
+            .await
+            .expect("insert role");
+        insert_memories(
+            &pool,
+            None,
+            "conv-global",
+            &[extracted("preference", "全局偏好", vec!["msg-1"])],
+        )
+        .await
+        .expect("insert global memory");
+        insert_memories(
+            &pool,
+            Some("role-1"),
+            "conv-role",
+            &[extracted("preference", "角色偏好", vec!["msg-2"])],
+        )
+        .await
+        .expect("insert role memory");
+        insert_memories(
+            &pool,
+            None,
+            "conv-fact",
+            &[extracted("fact", "全局事实", vec!["msg-3"])],
+        )
+        .await
+        .expect("insert fact memory");
+
+        let all_preferences = list_all_memories_with_options(&pool, Some("preference"), None, None)
+            .await
+            .expect("list all preferences");
+        let all_count = count_memories(&pool, None, true, Some("preference"))
+            .await
+            .expect("count all preferences");
+
+        assert_eq!(all_preferences.len(), 2);
+        assert_eq!(all_count, 2);
+        assert!(all_preferences.iter().any(|m| m.role_id.is_none()));
+        assert!(all_preferences
+            .iter()
+            .any(|m| m.role_id.as_deref() == Some("role-1")));
+    }
+
+    #[tokio::test]
+    async fn list_memories_hides_task_status_by_default() {
+        let pool = setup_test_db().await;
+        insert_memories(
+            &pool,
+            None,
+            "conv-fact",
+            &[extracted("fact", "通用事实", vec!["msg-1"])],
+        )
+        .await
+        .expect("insert fact memory");
+        insert_memories(
+            &pool,
+            None,
+            "conv-task",
+            &[extracted("task_status", "后续任务", vec!["msg-2"])],
+        )
+        .await
+        .expect("insert task memory");
+
+        let visible = list_memories(&pool, None, None, None, None)
+            .await
+            .expect("list visible memories");
+        let explicit_task_status = list_memories(&pool, None, Some("task_status"), None, None)
+            .await
+            .expect("list explicit task status memories");
+        let visible_count = count_memories(&pool, None, false, None)
+            .await
+            .expect("count visible memories");
+
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].category, "fact");
+        assert_eq!(visible_count, 1);
+        assert_eq!(explicit_task_status.len(), 1);
+        assert_eq!(explicit_task_status[0].category, "task_status");
+    }
+
+    #[tokio::test]
+    async fn list_memories_orders_same_timestamp_by_newer_rowid() {
+        let pool = setup_test_db().await;
+        sqlx::query(
+            "INSERT INTO memories (id, category, content, source_conversation_id, source_message_ids, created_at) VALUES
+            ('old-row', 'fact', '较早写入', 'conv-1', '[\"msg-1\"]', '2026-05-31T03:39:24Z'),
+            ('new-row', 'fact', '较晚写入', 'conv-2', '[\"msg-2\"]', '2026-05-31T03:39:24Z')",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert same timestamp memories");
+
+        let visible = list_memories(&pool, None, None, None, None)
+            .await
+            .expect("list memories");
+
+        assert_eq!(
+            visible
+                .iter()
+                .map(|memory| memory.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["new-row", "old-row"]
+        );
+    }
+
+    #[tokio::test]
+    async fn list_memories_rejects_invalid_category_filter() {
+        let pool = setup_test_db().await;
+
+        let err = list_memories(&pool, None, Some("invalid"), None, None)
+            .await
+            .expect_err("invalid category should fail");
+
+        assert!(matches!(err, AppError::ValidationError(_)));
     }
 }

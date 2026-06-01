@@ -692,6 +692,32 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
     expect(screen.getByText('新对话').closest('button')).not.toBeDisabled();
   });
 
+  it('只有 thinking token 且历史刷新失败时仍保留可见思考气泡', async () => {
+    vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
+    vi.mocked(chatService.sendMessage).mockResolvedValue(chatMessage({ id: 'user-1', content: '他喜欢吃薯条' }));
+    const getStreamHandler = captureStreamHandler();
+    vi.mocked(chatService.getHistory)
+      .mockResolvedValueOnce([])
+      .mockRejectedValueOnce(new Error('history failed'));
+
+    render(<ChatStream role={null} />);
+
+    const input = await screen.findByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...');
+    fireEvent.change(input, { target: { value: '他喜欢吃薯条' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(input).toBeDisabled());
+
+    await act(async () => {
+      getStreamHandler()({ conversationId: 'conv-butler', token: '记录这条饮食偏好', done: false, thinking: true });
+      getStreamHandler()({ conversationId: 'conv-butler', token: '', done: true, thinking: false });
+    });
+
+    await waitFor(() => expect(input).not.toBeDisabled());
+    expect(screen.getByText('思考过程')).toBeInTheDocument();
+    expect(screen.getByText('管家')).toBeInTheDocument();
+    expect(screen.getByText('新对话').closest('button')).not.toBeDisabled();
+  });
+
   it('sendMessage 返回 assistant 时移除未落库的本地用户占位消息', async () => {
     vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
     vi.mocked(chatService.sendMessage).mockResolvedValue(chatMessage({

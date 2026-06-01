@@ -137,6 +137,14 @@ mod tests {
             ]
         );
 
+        let forgotten_table: Option<String> = sqlx::query_scalar(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'forgotten_memory_sources'",
+        )
+        .fetch_optional(&pool)
+        .await
+        .expect("query forgotten memory sources table");
+        assert_eq!(forgotten_table.as_deref(), Some("forgotten_memory_sources"));
+
         let indexes: Vec<String> = sqlx::query_scalar(
             "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'memories' AND name LIKE 'idx_memories_%' ORDER BY name",
         )
@@ -164,6 +172,21 @@ mod tests {
         assert!(dedupe_sql.contains("category"));
         assert!(dedupe_sql.contains("source_message_ids"));
         assert!(!dedupe_sql.contains("COALESCE(role_id"));
+
+        let forgotten_indexes: Vec<String> = sqlx::query_scalar(
+            "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'forgotten_memory_sources' AND name LIKE 'idx_forgotten_memory_sources_%' ORDER BY name",
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("query forgotten memory sources indexes");
+        assert_eq!(
+            forgotten_indexes,
+            vec![
+                "idx_forgotten_memory_sources_forgotten_at",
+                "idx_forgotten_memory_sources_role_id",
+                "idx_forgotten_memory_sources_source",
+            ]
+        );
 
         let foreign_keys: i64 = sqlx::query_scalar("PRAGMA foreign_keys")
             .fetch_one(&pool)

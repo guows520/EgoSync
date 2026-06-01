@@ -524,15 +524,17 @@ async fn apply_memory_reconciliation(
                 existing_memory_id,
             } => {
                 if let Some(memory) = extracted.get(memory_index) {
-                    memories::update_memory_from_extracted(
+                    if memories::update_memory_from_extracted(
                         main_pool,
                         &existing_memory_id,
                         role_id,
                         source_conversation_id,
                         memory,
                     )
-                    .await?;
-                    changed += 1;
+                    .await?
+                    {
+                        changed += 1;
+                    }
                 }
             }
             MemoryReconciliationAction::Skip { .. } => {}
@@ -1209,6 +1211,12 @@ mod tests {
         .execute(&pool)
         .await
         .expect("migrate memory single-owner dedupe index");
+        sqlx::raw_sql(include_str!(
+            "../../migrations/007_forgotten_memory_sources.sql"
+        ))
+        .execute(&pool)
+        .await
+        .expect("create forgotten memory sources");
         pool
     }
 
@@ -1782,6 +1790,43 @@ mod tests {
             .expect("query memories");
         assert_eq!(changed, 0);
         assert_eq!(rows, vec!["用户喜欢中文输出。"]);
+    }
+
+    #[tokio::test]
+    async fn insert_reconciled_memories_skips_forgotten_same_source_candidate() {
+        let main_pool = setup_main_pool().await;
+        memories::insert_memories(
+            &main_pool,
+            None,
+            "conv-old",
+            &[extracted("preference", "儿子喜欢吃薯条", vec!["msg-1"])],
+        )
+        .await
+        .expect("insert existing memory");
+        let memory_id: String = sqlx::query_scalar("SELECT id FROM memories")
+            .fetch_one(&main_pool)
+            .await
+            .expect("query memory id");
+        memories::delete_memory(&main_pool, &memory_id)
+            .await
+            .expect("forget memory");
+
+        let changed = insert_reconciled_memories(
+            &main_pool,
+            Arc::new(ReconciliationProvider::new(r#"{"actions":[]}"#)),
+            None,
+            "conv-old",
+            &[extracted("preference", "儿子真的喜欢吃薯条", vec!["msg-1"])],
+        )
+        .await
+        .expect("reconcile forgotten source");
+        let visible_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM memories")
+            .fetch_one(&main_pool)
+            .await
+            .expect("count memories");
+
+        assert_eq!(changed, 0);
+        assert_eq!(visible_count, 0);
     }
 
     #[tokio::test]

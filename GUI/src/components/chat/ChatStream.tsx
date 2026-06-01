@@ -19,19 +19,37 @@ function completedAssistantMessagesFromBubbles(
   bubbles: Array<StreamBubbleState & { generation?: number }>,
   conversationId: string,
   fallbackGeneration: number,
+  thinkingContent: string,
 ): ChatMessage[] {
-  return bubbles
+  const createdAt = new Date().toISOString();
+  const hasThinking = thinkingContent.trim().length > 0;
+  const completedMessages = bubbles
     .filter(b => b.content.trim().length > 0)
     .map((b, idx) => ({
       id: b.id ? `__completed__${b.id}` : `__completed__${b.generation ?? fallbackGeneration}_${idx}`,
       conversationId,
-      role: 'assistant',
+      role: 'assistant' as const,
       content: b.content,
-      thinkingContent: '',
+      thinkingContent: idx === 0 && hasThinking ? thinkingContent : '',
       isComplete: true,
-      createdAt: new Date().toISOString(),
+      createdAt,
       routingMetadata: null,
     }));
+
+  if (completedMessages.length === 0 && hasThinking) {
+    return [{
+      id: `__completed__thinking__${fallbackGeneration}`,
+      conversationId,
+      role: 'assistant',
+      content: '',
+      thinkingContent,
+      isComplete: true,
+      createdAt,
+      routingMetadata: null,
+    }];
+  }
+
+  return completedMessages;
 }
 
 function isLikelyPersistedLocalUser(historyMsg: ChatMessage, localMsg: ChatMessage) {
@@ -158,6 +176,7 @@ export function ChatStream({ role }: ChatStreamProps) {
   const localMessageSequenceRef = useRef(0);
   const conversationIdRef = useRef<string | null>(null);
   const [thinkingContent, setThinkingContent] = useState('');
+  const thinkingContentRef = useRef('');
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const updateStreamBubbles = useCallback((updater: (prev: StreamBubbleState[]) => StreamBubbleState[]) => {
@@ -175,6 +194,7 @@ export function ChatStream({ role }: ChatStreamProps) {
     updateStreamBubbles(() => []);
     setIsStreaming(false);
     setIsInputLocked(false);
+    thinkingContentRef.current = '';
     setThinkingContent('');
   }, [updateStreamBubbles]);
 
@@ -244,7 +264,7 @@ export function ChatStream({ role }: ChatStreamProps) {
       // 委派路径下 done 会发两次：第一段（带 messageId）与最终段（带 followup messageId）。
       // 中间 done（有 messageId 且桶里仍有其他活跃气泡）仅刷新历史，不结束 streaming——
       // 否则后续 follow-up token 因 isStreaming=false 而不渲染。
-        setThinkingContent('');
+      const currentThinkingContent = thinkingContentRef.current;
       const currentBubbles = streamBubblesRef.current;
       const doneMatchesActiveBucket = currentBubbles.some(b => b.id === bucketKey);
       const isDelegationSegmentDone = bucketKey !== null
@@ -255,10 +275,13 @@ export function ChatStream({ role }: ChatStreamProps) {
       const streamGeneration = streamGenerationRef.current;
       if (isFinalDone) {
         setIsInputLocked(false);
+        thinkingContentRef.current = '';
+        setThinkingContent('');
         const completedMessages = completedAssistantMessagesFromBubbles(
           currentBubbles,
           conversation.id,
           streamGeneration,
+          currentThinkingContent,
         );
         if (completedMessages.length > 0) {
           setMessages(prev => appendLocalMessages(prev, completedMessages));
@@ -305,7 +328,9 @@ export function ChatStream({ role }: ChatStreamProps) {
         applyBucketClear();
       }
     } else if (payload.thinking) {
-      setThinkingContent(prev => prev + payload.token);
+      const nextThinkingContent = thinkingContentRef.current + payload.token;
+      thinkingContentRef.current = nextThinkingContent;
+      setThinkingContent(nextThinkingContent);
     } else {
       setIsStreaming(true);
       setIsInputLocked(true);
@@ -392,6 +417,7 @@ export function ChatStream({ role }: ChatStreamProps) {
       routingMetadata: null,
     }]);
     updateStreamBubbles(() => []);
+    thinkingContentRef.current = '';
     setThinkingContent('');
 
     try {
@@ -466,8 +492,8 @@ export function ChatStream({ role }: ChatStreamProps) {
           {messages
             .filter(m =>
               m.role !== 'system'
-              && (m.role !== 'assistant' || m.content.trim().length > 0)
-              && Boolean(m.isComplete || m.content)
+              && (m.role !== 'assistant' || m.content.trim().length > 0 || m.thinkingContent.trim().length > 0)
+              && Boolean(m.isComplete || m.content || m.thinkingContent)
             )
             .map(msg => (
               <ChatBubble

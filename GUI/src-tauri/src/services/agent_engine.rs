@@ -102,6 +102,61 @@ fn stream_payload_from_sse(
     }
 }
 
+fn emit_stream_token(
+    app_handle: &tauri::AppHandle,
+    conversation_id: &str,
+    message_id: Option<&str>,
+    token: &str,
+    thinking: bool,
+) {
+    let _ = app_handle.emit(
+        "llm:stream",
+        StreamPayload {
+            conversation_id: conversation_id.to_string(),
+            token: token.to_string(),
+            done: false,
+            thinking,
+            message_id: message_id.map(str::to_string),
+        },
+    );
+}
+
+fn apply_completed_message_fallback(
+    app_handle: &tauri::AppHandle,
+    conversation_id: &str,
+    message_id: Option<&str>,
+    completed: Option<crate::models::agent::OpencodeCompletedMessage>,
+    text_target: &mut String,
+    thinking_target: &mut String,
+) {
+    let Some(completed) = completed else {
+        return;
+    };
+
+    if thinking_target.trim().is_empty() && !completed.thinking.trim().is_empty() {
+        thinking_target.push_str(&completed.thinking);
+        emit_stream_token(app_handle, conversation_id, None, &completed.thinking, true);
+    }
+    if text_target.trim().is_empty() && !completed.text.trim().is_empty() {
+        text_target.push_str(&completed.text);
+        emit_stream_token(app_handle, conversation_id, message_id, &completed.text, false);
+    }
+}
+
+fn ensure_non_empty_opencode_result(
+    app_handle: &tauri::AppHandle,
+    conversation_id: &str,
+    message_id: Option<&str>,
+    text: &mut String,
+    thinking: &str,
+) {
+    if text.trim().is_empty() && thinking.trim().is_empty() {
+        let fallback = "抱歉，这次没有生成可显示的回复，请再试一次。";
+        text.push_str(fallback);
+        emit_stream_token(app_handle, conversation_id, message_id, fallback, false);
+    }
+}
+
 const BUTLER_SYSTEM_PROMPT: &str = "\
 你是 EgoSync 的数字管家，用户的私人助理和生活协调者。\
 你的语调稳重、可靠、有温度，像一位值得信赖的英式管家。\
@@ -282,6 +337,7 @@ pub async fn build_butler_system_prompt(
             - 如果用户交代的是某个角色相关任务、安排、日程、待办、规划或需要跟进的事项（例如家长会、约定、准备材料、制定练习计划），只要能匹配 active 角色，就调用 delegate_to_role。\n\
             - 不要向用户暴露内部机制：不要说“系统会同步”“同步到某角色”“角色已收到”“委派成功”“工具调用”等。\n\
             - 当用户只是询问已知事实（例如某个孩子喜欢什么、某个固定安排是什么）时，优先基于[已知记忆]回答，并可说明目前只知道这些。\n\
+            - 当用户询问明确属性或偏好槽位（例如“喜欢吃什么”“喜欢什么运动”“某天安排是什么”）时，只回答与该问题槽位直接相关的记忆；不要因为同一角色或同一对象存在其它记忆，就补充阅读、学习、家庭日等无关事实。若没有直接相关记忆，只简短说明还不知道，不要列出其它领域记忆。\n\
             - 用户一句话同时涉及多个角色且需要角色处理时：可以在同一轮内调用多个 delegate_to_role（并行委派）。\n\
             - 意图模糊或没有合适角色时：不要调用工具，用一句话主动追问用户希望由谁来处理。\n\
             - 收到角色回复（tool result）后：融合成自然回复，不要强调内部流转；只有用户明确问是谁处理时，才说明对应角色。"
@@ -801,8 +857,8 @@ async fn try_run_opencode_stream(
     };
 
     // Trigger the prompt. POST /session/{id}/message is synchronous (returns
-    // the completed message as JSON). Live tokens stream via the event bus,
-    // so we run this in a side task and ignore its body.
+    // the completed message as JSON). Live tokens stream via the event bus;
+    // the returned body is retained as a fallback when events miss final text.
     let bridge = agent_bridge.clone();
     let send_session_id = session_id.clone();
     let (result_tx, mut result_rx) = tokio::sync::oneshot::channel();
@@ -832,6 +888,8 @@ async fn try_run_opencode_stream(
     let mut bubble_state = DelegationBubbleState::default();
     let mut followup_id: Option<String> = None;
     let mut followup_text = String::new();
+    let mut completed_response: Option<crate::models::agent::OpencodeCompletedMessage> = None;
+    let mut send_result_observed = false;
     let mut delegate_workers: Vec<tokio::task::JoinHandle<()>> = Vec::new();
     let delegate_lock = Arc::new(Mutex::new(()));
 
@@ -1148,20 +1206,29 @@ async fn try_run_opencode_stream(
                 // The POST returned (success or failure). For success this just
                 // means the LLM finished; the closing `session.idle` event may
                 // or may not have arrived yet — keep draining briefly.
-                if let Ok(Err(e)) = send_done {
-                    event_router.unsubscribe(&session_id).await;
-                    if delegation_session_registered {
-                        delegate_bridge.unregister_session(&session_id).await;
+                send_result_observed = true;
+                match send_done {
+                    Ok(Err(e)) => {
+                        event_router.unsubscribe(&session_id).await;
+                        if delegation_session_registered {
+                            delegate_bridge.unregister_session(&session_id).await;
+                        }
+                        if accumulated_text.is_empty() && accumulated_thinking.is_empty() && followup_text.is_empty() {
+                            let mut sessions = opencode_sessions.lock().await;
+                            sessions.remove(conversation_id);
+                            return Err(e);
+                        }
+                        let friendly = format!("\n\n抱歉，Agent 引擎返回错误：{}", summarize_error(&e.to_string()));
+                        if followup_id.is_some() {
+                            followup_text.push_str(&friendly);
+                        } else {
+                            accumulated_text.push_str(&friendly);
+                        }
                     }
-                    if accumulated_text.is_empty() && accumulated_thinking.is_empty() {
-                        let mut sessions = opencode_sessions.lock().await;
-                        sessions.remove(conversation_id);
-                        return Err(e);
+                    Ok(Ok(response)) => {
+                        completed_response = response;
                     }
-                    let friendly = format!("\n\n抱歉，Agent 引擎返回错误：{}", summarize_error(&e.to_string()));
-                    accumulated_text.push_str(&friendly);
-                    completed = true;
-                    break;
+                    Err(_) => {}
                 }
                 // POST success: the synchronous endpoint has returned,
                 // meaning LLM finished. All streaming deltas already arrived
@@ -1189,11 +1256,72 @@ async fn try_run_opencode_stream(
         completed = true;
     }
 
+    if !send_result_observed {
+        match tokio::time::timeout(Duration::from_secs(2), result_rx).await {
+            Ok(Ok(Ok(response))) => {
+                completed_response = response;
+            }
+            Ok(Ok(Err(e))) => {
+                if accumulated_text.is_empty() && accumulated_thinking.is_empty() && followup_text.is_empty() {
+                    let mut sessions = opencode_sessions.lock().await;
+                    sessions.remove(conversation_id);
+                    return Err(e);
+                }
+                let friendly = format!("\n\n抱歉，Agent 引擎返回错误：{}", summarize_error(&e.to_string()));
+                if followup_id.is_some() {
+                    followup_text.push_str(&friendly);
+                } else {
+                    accumulated_text.push_str(&friendly);
+                }
+            }
+            Ok(Err(_)) | Err(_) => {}
+        }
+    }
+
+    if followup_id.is_some() {
+        apply_completed_message_fallback(
+            app_handle,
+            conversation_id,
+            followup_id.as_deref(),
+            completed_response,
+            &mut followup_text,
+            &mut accumulated_thinking,
+        );
+        ensure_non_empty_opencode_result(
+            app_handle,
+            conversation_id,
+            followup_id.as_deref(),
+            &mut followup_text,
+            &accumulated_thinking,
+        );
+    } else {
+        apply_completed_message_fallback(
+            app_handle,
+            conversation_id,
+            None,
+            completed_response,
+            &mut accumulated_text,
+            &mut accumulated_thinking,
+        );
+        ensure_non_empty_opencode_result(
+            app_handle,
+            conversation_id,
+            None,
+            &mut accumulated_text,
+            &accumulated_thinking,
+        );
+    }
+
     if let Some(fid) = followup_id.clone() {
         // 委派已拆分：第一气泡（"稍等…"）在拆分时已冻结+done，这里收尾第二气泡（委派回复）。
         conversations::update_message_content(conv_pool, &fid, &followup_text)
             .await
             .ok();
+        if !accumulated_thinking.is_empty() {
+            conversations::update_message_thinking(conv_pool, &fid, &accumulated_thinking)
+                .await
+                .ok();
+        }
         conversations::mark_message_complete(conv_pool, &fid)
             .await
             .ok();
@@ -3202,6 +3330,24 @@ mod tests {
             .execute(&pool)
             .await
             .expect("failed to create memories table");
+        sqlx::raw_sql(include_str!(
+            "../../migrations/005_memory_role_scoped_dedupe.sql"
+        ))
+        .execute(&pool)
+        .await
+        .expect("failed to migrate memory dedupe index");
+        sqlx::raw_sql(include_str!(
+            "../../migrations/006_memory_single_owner_dedupe.sql"
+        ))
+        .execute(&pool)
+        .await
+        .expect("failed to migrate memory single-owner dedupe");
+        sqlx::raw_sql(include_str!(
+            "../../migrations/007_forgotten_memory_sources.sql"
+        ))
+        .execute(&pool)
+        .await
+        .expect("failed to create forgotten memory sources");
 
         pool
     }
@@ -3437,6 +3583,10 @@ mod tests {
         assert!(!prompt.contains("系统会把这类记忆同步到对应角色"));
         assert!(prompt.contains("角色相关任务、安排、日程、待办、规划或需要跟进"));
         assert!(prompt.contains("只要能匹配 active 角色，就调用 delegate_to_role"));
+        assert!(prompt.contains("明确属性或偏好槽位"));
+        assert!(prompt.contains("只回答与该问题槽位直接相关的记忆"));
+        assert!(prompt.contains("不要因为同一角色或同一对象存在其它记忆"));
+        assert!(prompt.contains("不要列出其它领域记忆"));
         assert!(!prompt.contains("当用户的需求清晰指向某个角色时"));
     }
 

@@ -19,6 +19,12 @@ pub async fn insert_memories(
         let source_message_ids = normalized_source_message_ids(&memory.source_message_ids)?;
         let content = memory.content.trim();
 
+        if forgotten_memory_source_exists(pool, source_conversation_id, &memory.category, &source_message_ids)
+            .await?
+        {
+            continue;
+        }
+
         if let Some(existing) = find_memory_by_source(
             pool,
             source_conversation_id,
@@ -109,7 +115,29 @@ async fn find_memory_by_source(
     .map_err(|e| AppError::DbError(format!("查询同源记忆失败: {}", e)))
 }
 
-fn should_refresh_existing(existing: &ExistingMemory, incoming_role_id: Option<&str>, content: &str) -> bool {
+async fn forgotten_memory_source_exists(
+    pool: &SqlitePool,
+    source_conversation_id: &str,
+    category: &str,
+    source_message_ids: &str,
+) -> Result<bool, AppError> {
+    let exists = sqlx::query_scalar::<_, i64>(
+        "SELECT EXISTS(SELECT 1 FROM forgotten_memory_sources WHERE source_conversation_id = ?1 AND category = ?2 AND source_message_ids = ?3)",
+    )
+    .bind(source_conversation_id)
+    .bind(category)
+    .bind(source_message_ids)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| AppError::DbError(format!("查询已遗忘记忆来源失败: {}", e)))?;
+    Ok(exists != 0)
+}
+
+fn should_refresh_existing(
+    existing: &ExistingMemory,
+    incoming_role_id: Option<&str>,
+    content: &str,
+) -> bool {
     if existing.role_id.is_some()
         && incoming_role_id.is_some()
         && existing.role_id.as_deref() != incoming_role_id
@@ -118,7 +146,8 @@ fn should_refresh_existing(existing: &ExistingMemory, incoming_role_id: Option<&
     }
 
     let owner_changes = existing.role_id.is_none() && incoming_role_id.is_some();
-    let content_changes = normalize_memory_content(&existing.content) != normalize_memory_content(content);
+    let content_changes =
+        normalize_memory_content(&existing.content) != normalize_memory_content(content);
     owner_changes || content_changes
 }
 
@@ -189,12 +218,18 @@ pub async fn update_memory_from_extracted(
     role_id: Option<&str>,
     source_conversation_id: &str,
     memory: &ExtractedMemory,
-) -> Result<(), AppError> {
+) -> Result<bool, AppError> {
     validate_memory(memory)?;
     let source_message_ids = normalized_source_message_ids(&memory.source_message_ids)?;
     let content = memory.content.trim();
 
-    sqlx::query(
+    if forgotten_memory_source_exists(pool, source_conversation_id, &memory.category, &source_message_ids)
+        .await?
+    {
+        return Ok(false);
+    }
+
+    let result = sqlx::query(
         "UPDATE memories SET role_id = ?1, category = ?2, content = ?3, source_conversation_id = ?4, source_message_ids = ?5, created_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?6",
     )
     .bind(role_id)
@@ -207,7 +242,7 @@ pub async fn update_memory_from_extracted(
     .await
     .map_err(|e| AppError::DbError(format!("刷新记忆失败: {}", e)))?;
 
-    Ok(())
+    Ok(result.rows_affected() > 0)
 }
 
 pub async fn get_memory_by_id(
@@ -221,6 +256,51 @@ pub async fn get_memory_by_id(
     .fetch_optional(pool)
     .await
     .map_err(|e| AppError::DbError(format!("查询记忆失败: {}", e)))
+}
+
+pub async fn delete_memory(pool: &SqlitePool, memory_id: &str) -> Result<bool, AppError> {
+    let Some(memory) = get_memory_by_id(pool, memory_id).await? else {
+        return Ok(false);
+    };
+    let normalized_content = normalize_memory_content(&memory.content);
+    let tombstone_id = uuid::Uuid::new_v4().to_string();
+
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| AppError::DbError(format!("开始遗忘记忆事务失败: {}", e)))?;
+
+    sqlx::query(
+        "INSERT INTO forgotten_memory_sources (id, role_id, category, content, normalized_content, source_conversation_id, source_message_ids, forgotten_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+         ON CONFLICT(source_conversation_id, category, source_message_ids) DO UPDATE SET
+           role_id = excluded.role_id,
+           content = excluded.content,
+           normalized_content = excluded.normalized_content,
+           forgotten_at = excluded.forgotten_at",
+    )
+    .bind(&tombstone_id)
+    .bind(memory.role_id.as_deref())
+    .bind(&memory.category)
+    .bind(&memory.content)
+    .bind(&normalized_content)
+    .bind(&memory.source_conversation_id)
+    .bind(&memory.source_message_ids)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| AppError::DbError(format!("记录已遗忘记忆来源失败: {}", e)))?;
+
+    let result = sqlx::query("DELETE FROM memories WHERE id = ?")
+        .bind(memory_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| AppError::DbError(format!("删除记忆失败: {}", e)))?;
+
+    tx.commit()
+        .await
+        .map_err(|e| AppError::DbError(format!("提交遗忘记忆事务失败: {}", e)))?;
+
+    Ok(result.rows_affected() > 0)
 }
 
 pub async fn list_memories(
@@ -441,6 +521,12 @@ mod tests {
         .execute(&pool)
         .await
         .expect("migrate memory single-owner dedupe");
+        sqlx::raw_sql(include_str!(
+            "../../migrations/007_forgotten_memory_sources.sql"
+        ))
+        .execute(&pool)
+        .await
+        .expect("create forgotten memory sources");
 
         pool
     }
@@ -678,7 +764,11 @@ mod tests {
             &pool,
             None,
             "conv-2",
-            &[extracted("fact", "  prefers   concise updates  ", vec!["msg-2"])],
+            &[extracted(
+                "fact",
+                "  prefers   concise updates  ",
+                vec!["msg-2"],
+            )],
         )
         .await
         .expect("same normalized content");
@@ -711,9 +801,7 @@ mod tests {
         let global = list_memories(&pool, None, None, None, None)
             .await
             .expect("list global memories");
-        let all = list_all_memories(&pool)
-            .await
-            .expect("list all memories");
+        let all = list_all_memories(&pool).await.expect("list all memories");
 
         assert_eq!(global.len(), 1);
         assert_eq!(global[0].id, "new");
@@ -756,9 +844,7 @@ mod tests {
         let role = list_memories(&pool, Some("role-1"), None, None, None)
             .await
             .expect("list role memories");
-        let all = list_all_memories(&pool)
-            .await
-            .expect("list all memories");
+        let all = list_all_memories(&pool).await.expect("list all memories");
 
         assert_eq!(global.len(), 1);
         assert_eq!(global[0].role_id, None);
@@ -919,5 +1005,157 @@ mod tests {
             .expect_err("invalid category should fail");
 
         assert!(matches!(err, AppError::ValidationError(_)));
+    }
+
+    #[tokio::test]
+    async fn delete_memory_removes_only_target_and_updates_count() {
+        let pool = setup_test_db().await;
+        insert_memories(
+            &pool,
+            None,
+            "conv-1",
+            &[
+                extracted("fact", "用户喜欢早晨写 PRD", vec!["msg-1"]),
+                extracted("preference", "用户希望输出简短", vec!["msg-2"]),
+            ],
+        )
+        .await
+        .expect("insert memories");
+        let target = list_memories(&pool, None, Some("fact"), None, None)
+            .await
+            .expect("list fact memories")
+            .remove(0);
+
+        let deleted = delete_memory(&pool, &target.id)
+            .await
+            .expect("delete memory");
+        let target_after_delete = get_memory_by_id(&pool, &target.id)
+            .await
+            .expect("get deleted memory");
+        let remaining_count = count_memories(&pool, None, false, None)
+            .await
+            .expect("count memories");
+        let remaining = list_memories(&pool, None, None, None, None)
+            .await
+            .expect("list remaining memories");
+
+        assert!(deleted);
+        assert!(target_after_delete.is_none());
+        assert_eq!(remaining_count, 1);
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].content, "用户希望输出简短");
+    }
+
+    #[tokio::test]
+    async fn delete_memory_records_forgotten_source_and_removes_visible_memory() {
+        let pool = setup_test_db().await;
+        insert_memories(
+            &pool,
+            None,
+            "conv-1",
+            &[extracted("preference", "儿子喜欢吃薯条", vec!["msg-1"])],
+        )
+        .await
+        .expect("insert memory");
+        let target = list_memories(&pool, None, Some("preference"), None, None)
+            .await
+            .expect("list memories")
+            .remove(0);
+
+        let deleted = delete_memory(&pool, &target.id).await.expect("delete memory");
+        let visible = list_memories(&pool, None, None, None, None)
+            .await
+            .expect("list visible memories");
+        let tombstone: (String, String, String, String) = sqlx::query_as(
+            "SELECT category, content, source_conversation_id, source_message_ids FROM forgotten_memory_sources",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("query tombstone");
+
+        assert!(deleted);
+        assert!(visible.is_empty());
+        assert_eq!(tombstone.0, "preference");
+        assert_eq!(tombstone.1, "儿子喜欢吃薯条");
+        assert_eq!(tombstone.2, "conv-1");
+        assert_eq!(tombstone.3, "[\"msg-1\"]");
+    }
+
+    #[tokio::test]
+    async fn insert_memories_skips_forgotten_same_source() {
+        let pool = setup_test_db().await;
+        insert_memories(
+            &pool,
+            None,
+            "conv-1",
+            &[extracted("preference", "儿子喜欢吃薯条", vec!["msg-1"])],
+        )
+        .await
+        .expect("insert memory");
+        let target = list_memories(&pool, None, Some("preference"), None, None)
+            .await
+            .expect("list memories")
+            .remove(0);
+        delete_memory(&pool, &target.id).await.expect("delete memory");
+
+        let reinserted = insert_memories(
+            &pool,
+            None,
+            "conv-1",
+            &[extracted("preference", "儿子真的喜欢吃薯条", vec!["msg-1"])],
+        )
+        .await
+        .expect("reinsert from same source");
+        let visible = list_memories(&pool, None, Some("preference"), None, None)
+            .await
+            .expect("list visible memories");
+
+        assert_eq!(reinserted, 0);
+        assert!(visible.is_empty());
+    }
+
+    #[tokio::test]
+    async fn insert_memories_allows_same_content_from_new_source_after_forget() {
+        let pool = setup_test_db().await;
+        insert_memories(
+            &pool,
+            None,
+            "conv-1",
+            &[extracted("preference", "儿子喜欢吃薯条", vec!["msg-1"])],
+        )
+        .await
+        .expect("insert memory");
+        let target = list_memories(&pool, None, Some("preference"), None, None)
+            .await
+            .expect("list memories")
+            .remove(0);
+        delete_memory(&pool, &target.id).await.expect("delete memory");
+
+        let inserted = insert_memories(
+            &pool,
+            None,
+            "conv-2",
+            &[extracted("preference", "儿子喜欢吃薯条", vec!["msg-2"])],
+        )
+        .await
+        .expect("insert from new source");
+        let visible = list_memories(&pool, None, Some("preference"), None, None)
+            .await
+            .expect("list visible memories");
+
+        assert_eq!(inserted, 1);
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].source_conversation_id, "conv-2");
+    }
+
+    #[tokio::test]
+    async fn delete_memory_returns_false_for_missing_memory() {
+        let pool = setup_test_db().await;
+
+        let deleted = delete_memory(&pool, "missing-memory")
+            .await
+            .expect("delete missing memory");
+
+        assert!(!deleted);
     }
 }

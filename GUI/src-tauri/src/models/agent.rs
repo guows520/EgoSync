@@ -35,6 +35,72 @@ pub enum SseEvent {
     Error { message: String },
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OpencodeCompletedMessage {
+    pub text: String,
+    pub thinking: String,
+}
+
+impl OpencodeCompletedMessage {
+    pub fn from_value(value: &serde_json::Value) -> Option<Self> {
+        let mut result = Self::default();
+        extract_completed_message(value, &mut result);
+        if result.text.is_empty() && result.thinking.is_empty() {
+            None
+        } else {
+            Some(result)
+        }
+    }
+}
+
+fn extract_completed_message(value: &serde_json::Value, result: &mut OpencodeCompletedMessage) {
+    if let Some(array) = value.as_array() {
+        for item in array {
+            extract_completed_message(item, result);
+        }
+        return;
+    }
+
+    let Some(object) = value.as_object() else {
+        return;
+    };
+
+    for key in ["message", "info", "data"] {
+        if let Some(nested) = object.get(key) {
+            extract_completed_message(nested, result);
+        }
+    }
+
+    let role = object.get("role").and_then(|v| v.as_str());
+    if role == Some("user") {
+        return;
+    }
+
+    let text_before_parts = result.text.len();
+    let thinking_before_parts = result.thinking.len();
+    if let Some(parts) = object.get("parts").and_then(|v| v.as_array()) {
+        for part in parts {
+            let part_type = part.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            let text = part.get("text").and_then(|v| v.as_str()).unwrap_or("");
+            if text.is_empty() {
+                continue;
+            }
+            match part_type {
+                "text" => result.text.push_str(text),
+                "reasoning" | "thinking" => result.thinking.push_str(text),
+                _ => {}
+            }
+        }
+        if result.text.len() != text_before_parts || result.thinking.len() != thinking_before_parts {
+            return;
+        }
+    }
+
+    if let Some(content) = object.get("content").and_then(|v| v.as_str()) {
+        result.text.push_str(content);
+    }
+}
+
 /// A single opencode message part (text, reasoning, tool-invocation, etc.).
 /// We only consume the fields we route on; opencode may add more.
 #[derive(Debug, Clone, Deserialize)]
@@ -181,6 +247,36 @@ mod tests {
         let json = serde_json::to_string(&evt).unwrap();
         let parsed: SseEvent = serde_json::from_str(&json).unwrap();
         assert!(matches!(parsed, SseEvent::Done));
+    }
+
+    #[test]
+    fn test_opencode_completed_message_extracts_parts_text_and_thinking() {
+        let value = serde_json::json!({
+            "id": "msg-1",
+            "role": "assistant",
+            "parts": [
+                { "type": "reasoning", "text": "先分析" },
+                { "type": "text", "text": "最终回答" }
+            ]
+        });
+
+        let completed = OpencodeCompletedMessage::from_value(&value).expect("parse completed message");
+
+        assert_eq!(completed.thinking, "先分析");
+        assert_eq!(completed.text, "最终回答");
+    }
+
+    #[test]
+    fn test_opencode_completed_message_ignores_user_message_parts() {
+        let value = serde_json::json!({
+            "message": {
+                "id": "msg-user",
+                "role": "user",
+                "parts": [{ "type": "text", "text": "用户原文" }]
+            }
+        });
+
+        assert!(OpencodeCompletedMessage::from_value(&value).is_none());
     }
 
     #[test]

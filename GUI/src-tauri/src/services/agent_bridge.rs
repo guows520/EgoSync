@@ -2,7 +2,8 @@ use tokio::sync::mpsc;
 
 use crate::error::AppError;
 use crate::models::agent::{
-    AgentInfo, AgentMessage, BusEvent, OpencodeConfig, ProviderInfo, SessionInfo, SseEvent,
+    AgentInfo, AgentMessage, BusEvent, OpencodeCompletedMessage, OpencodeConfig, ProviderInfo,
+    SessionInfo, SseEvent,
 };
 
 #[derive(Clone)]
@@ -105,9 +106,13 @@ impl AgentBridge {
     /// is *synchronous* — it blocks until the LLM finishes and returns the
     /// completed message as application/json. Streaming tokens are NOT here;
     /// subscribe to `subscribe_events` instead for real-time updates.
-    /// The completed JSON response is discarded since live updates already
-    /// reached the caller via the event bus.
-    pub async fn send_message(&self, session_id: &str, content: &str) -> Result<(), AppError> {
+    /// The completed JSON response is used as a fallback when a provider omits
+    /// final text from the event bus.
+    pub async fn send_message(
+        &self,
+        session_id: &str,
+        content: &str,
+    ) -> Result<Option<OpencodeCompletedMessage>, AppError> {
         let url = format!("{}/session/{}/message", self.base_url, session_id);
         let body = serde_json::json!({
             "parts": [{ "type": "text", "text": content }]
@@ -121,8 +126,16 @@ impl AgentBridge {
             .await
             .map_err(|e| AppError::SidecarError(format!("send_message request failed: {}", e)))?;
 
-        let _ = Self::ensure_success_with_body(resp).await?;
-        Ok(())
+        let resp = Self::ensure_success_with_body(resp).await?;
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| AppError::SidecarError(format!("send_message body read failed: {}", e)))?;
+        if body.trim().is_empty() {
+            return Ok(None);
+        }
+        let value = serde_json::from_str::<serde_json::Value>(&body).ok();
+        Ok(value.and_then(|value| OpencodeCompletedMessage::from_value(&value)))
     }
 
     /// Subscribe to opencode's global event stream (`GET /event`) as SSE.

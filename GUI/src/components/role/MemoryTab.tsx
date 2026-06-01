@@ -14,6 +14,7 @@ interface MemoryTabProps {
   category?: MemoryCategory;
   /** 受控回调。传入后由父组件持有筛选状态（用于 badge 联动）；不传则组件内部自管。 */
   onCategoryChange?: (category: MemoryCategory | undefined) => void;
+  onMemoryDeleted?: () => void;
 }
 
 const categoryLabels: Record<MemoryCategory, string> = {
@@ -61,6 +62,7 @@ export function MemoryTab({
   roleLabels = {},
   category,
   onCategoryChange,
+  onMemoryDeleted,
 }: MemoryTabProps) {
   const isControlled = onCategoryChange !== undefined;
   const [internalCategory, setInternalCategory] = useState<MemoryCategory | undefined>();
@@ -71,8 +73,11 @@ export function MemoryTab({
   };
   const [expandedMemoryId, setExpandedMemoryId] = useState<string | null>(null);
   const [sourceStates, setSourceStates] = useState<Record<string, SourceState>>({});
+  const [confirmingMemoryId, setConfirmingMemoryId] = useState<string | null>(null);
+  const [deletingMemoryId, setDeletingMemoryId] = useState<string | null>(null);
+  const [deleteErrors, setDeleteErrors] = useState<Record<string, string>>({});
   const sourceRequestIds = useRef<Record<string, number>>({});
-  const { memories, isLoading, error } = useMemories({
+  const { memories, isLoading, error, refetch } = useMemories({
     roleId,
     includeRoleMemories,
     category: selectedCategory,
@@ -80,6 +85,9 @@ export function MemoryTab({
 
   useEffect(() => {
     setExpandedMemoryId(null);
+    setConfirmingMemoryId(null);
+    setDeletingMemoryId(null);
+    setDeleteErrors({});
   }, [includeRoleMemories, roleId, selectedCategory]);
 
   useEffect(() => {
@@ -117,6 +125,63 @@ export function MemoryTab({
           [memoryId]: { isLoading: false, error: '来源对话已不可用', messages: null },
         }));
       });
+  }
+
+  function openForgetConfirm(memoryId: string) {
+    setConfirmingMemoryId(memoryId);
+    setDeleteErrors(prev => {
+      const next = { ...prev };
+      delete next[memoryId];
+      return next;
+    });
+  }
+
+  function cancelForget(memoryId: string) {
+    if (deletingMemoryId === memoryId) return;
+    setConfirmingMemoryId(current => (current === memoryId ? null : current));
+  }
+
+  function finalizeForgotten(memoryId: string) {
+    setConfirmingMemoryId(current => (current === memoryId ? null : current));
+    setExpandedMemoryId(current => (current === memoryId ? null : current));
+    delete sourceRequestIds.current[memoryId];
+    setSourceStates(prev => {
+      const next = { ...prev };
+      delete next[memoryId];
+      return next;
+    });
+    refetch();
+    onMemoryDeleted?.();
+  }
+
+  async function confirmForget(memoryId: string) {
+    if (deletingMemoryId) return;
+    setDeletingMemoryId(memoryId);
+    setDeleteErrors(prev => {
+      const next = { ...prev };
+      delete next[memoryId];
+      return next;
+    });
+
+    try {
+      await memoryService.delete(memoryId);
+      finalizeForgotten(memoryId);
+    } catch (e) {
+      const alreadyGone =
+        typeof e === 'object' && e !== null && 'NotFound' in (e as Record<string, unknown>);
+      if (alreadyGone) {
+        // 记忆已在后端被删除（并发删除 / 已不存在）——视为遗忘成功，清理残留卡片
+        finalizeForgotten(memoryId);
+      } else {
+        console.error('删除记忆失败:', e);
+        setDeleteErrors(prev => ({
+          ...prev,
+          [memoryId]: '这条记忆暂时没忘掉，稍后再试一下',
+        }));
+      }
+    } finally {
+      setDeletingMemoryId(current => (current === memoryId ? null : current));
+    }
   }
 
   const emptyCopy = includeRoleMemories
@@ -158,6 +223,9 @@ export function MemoryTab({
         const sourceState = sourceStates[memory.id];
         const expanded = expandedMemoryId === memory.id;
         const ownerLabel = memory.roleId ? roleLabels[memory.roleId] ?? '未知角色' : '管家';
+        const isConfirmingForget = confirmingMemoryId === memory.id;
+        const isDeleting = deletingMemoryId === memory.id;
+        const deleteError = deleteErrors[memory.id];
         return (
           <div key={memory.id} className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm hover:shadow-md transition-shadow">
             <div className="flex justify-between items-start mb-3">
@@ -171,13 +239,53 @@ export function MemoryTab({
               </h4>
               <button
                 type="button"
-                disabled
-                className="text-[12px] text-slate-400 border border-slate-200 px-2.5 py-1 rounded-md cursor-not-allowed bg-slate-50"
+                onClick={() => openForgetConfirm(memory.id)}
+                disabled={isDeleting}
+                className={cn(
+                  'text-[12px] border px-2.5 py-1 rounded-md transition-colors focus:outline-none focus:ring-2 focus:ring-red-300 focus:ring-offset-1',
+                  isDeleting
+                    ? 'text-slate-400 border-slate-200 cursor-not-allowed bg-slate-50'
+                    : 'text-red-600 border-red-200 hover:bg-red-50 hover:border-red-300'
+                )}
               >
                 遗忘
               </button>
             </div>
             <p className="text-[14px] text-slate-600 leading-relaxed mb-4">{memory.content}</p>
+            {isConfirmingForget && (
+              <div className="mb-4 rounded-lg border border-red-100 bg-red-50/70 p-3 text-[13px] text-slate-700">
+                <p className="leading-relaxed">确定要忘记这条吗？忘了就真忘了哦。原始对话还会留在历史里。</p>
+                {deleteError && <p className="mt-2 text-red-600">{deleteError}</p>}
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => confirmForget(memory.id)}
+                    disabled={isDeleting}
+                    className={cn(
+                      'rounded-md border px-3 py-1.5 text-[12px] font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-red-300 focus:ring-offset-1',
+                      isDeleting
+                        ? 'cursor-not-allowed border-red-100 bg-red-100 text-red-300'
+                        : 'border-red-200 bg-white text-red-600 hover:bg-red-100'
+                    )}
+                  >
+                    确认遗忘
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => cancelForget(memory.id)}
+                    disabled={isDeleting}
+                    className={cn(
+                      'rounded-md border px-3 py-1.5 text-[12px] font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-slate-300 focus:ring-offset-1',
+                      isDeleting
+                        ? 'cursor-not-allowed border-slate-200 bg-slate-50 text-slate-300'
+                        : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                    )}
+                  >
+                    再想想
+                  </button>
+                </div>
+              </div>
+            )}
             <button
               type="button"
               onClick={() => toggleSource(memory.id)}

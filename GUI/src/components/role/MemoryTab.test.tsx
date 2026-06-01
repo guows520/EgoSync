@@ -10,6 +10,7 @@ vi.mock('../../services/memoryService', () => ({
     listAll: vi.fn(),
     count: vi.fn(),
     getSourceMessages: vi.fn(),
+    delete: vi.fn(),
   },
 }));
 
@@ -129,7 +130,7 @@ describe('MemoryTab', () => {
 
     const sourceButton = await screen.findByRole('button', { name: /来源对话 .*查看原文/ });
     expect(sourceButton).toHaveAttribute('aria-expanded', 'false');
-    expect(screen.getByRole('button', { name: '遗忘' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '遗忘' })).toBeEnabled();
 
     fireEvent.click(sourceButton);
 
@@ -151,5 +152,128 @@ describe('MemoryTab', () => {
     fireEvent.click(await screen.findByRole('button', { name: /来源对话 .*查看原文/ }));
 
     expect(await screen.findByText('来源对话已不可用')).toBeInTheDocument();
+  });
+
+  it('点击遗忘后显示自定义确认且不调用系统 confirm', async () => {
+    vi.mocked(memoryService.list).mockResolvedValue([preferenceMemory]);
+    const confirmSpy = vi.spyOn(window, 'confirm');
+
+    render(<MemoryTab roleId={null} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '遗忘' }));
+
+    expect(await screen.findByText('确定要忘记这条吗？忘了就真忘了哦。原始对话还会留在历史里。')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '确认遗忘' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '再想想' })).toBeInTheDocument();
+    expect(confirmSpy).not.toHaveBeenCalled();
+  });
+
+  it('取消遗忘不调用删除服务且保留卡片与来源展开状态', async () => {
+    vi.mocked(memoryService.list).mockResolvedValue([preferenceMemory]);
+    vi.mocked(memoryService.getSourceMessages).mockResolvedValue([sourceMessage]);
+
+    render(<MemoryTab roleId={null} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /来源对话 .*查看原文/ }));
+    expect(await screen.findByText('我喜欢早晨写 PRD，这时候头脑最清醒。')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '遗忘' }));
+    fireEvent.click(await screen.findByRole('button', { name: '再想想' }));
+
+    expect(memoryService.delete).not.toHaveBeenCalled();
+    expect(screen.getByText('喜欢在早晨写 PRD，认为这个时候头脑最清醒')).toBeInTheDocument();
+    expect(screen.getByText('我喜欢早晨写 PRD，这时候头脑最清醒。')).toBeInTheDocument();
+  });
+
+  it('确认遗忘后调用删除、刷新列表并通知父级刷新 badge', async () => {
+    vi.mocked(memoryService.list)
+      .mockResolvedValueOnce([preferenceMemory])
+      .mockResolvedValueOnce([]);
+    vi.mocked(memoryService.delete).mockResolvedValue(undefined);
+    const onMemoryDeleted = vi.fn();
+
+    render(<MemoryTab roleId={null} onMemoryDeleted={onMemoryDeleted} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '遗忘' }));
+    fireEvent.click(await screen.findByRole('button', { name: '确认遗忘' }));
+
+    await waitFor(() => {
+      expect(memoryService.delete).toHaveBeenCalledWith('memory-1');
+    });
+    await waitFor(() => {
+      expect(memoryService.list).toHaveBeenCalledTimes(2);
+    });
+    expect(onMemoryDeleted).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText('还没有记忆，多和这个角色聊聊吧')).toBeInTheDocument();
+    expect(screen.queryByText('喜欢在早晨写 PRD，认为这个时候头脑最清醒')).not.toBeInTheDocument();
+  });
+
+  it('删除失败时保留卡片、显示温和错误并允许重试', async () => {
+    vi.mocked(memoryService.list).mockResolvedValue([preferenceMemory]);
+    vi.mocked(memoryService.delete)
+      .mockRejectedValueOnce(new Error('delete failed'))
+      .mockResolvedValueOnce(undefined);
+    const onMemoryDeleted = vi.fn();
+
+    render(<MemoryTab roleId={null} onMemoryDeleted={onMemoryDeleted} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '遗忘' }));
+    fireEvent.click(await screen.findByRole('button', { name: '确认遗忘' }));
+
+    expect(await screen.findByText('这条记忆暂时没忘掉，稍后再试一下')).toBeInTheDocument();
+    expect(screen.getByText('喜欢在早晨写 PRD，认为这个时候头脑最清醒')).toBeInTheDocument();
+    expect(onMemoryDeleted).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: '确认遗忘' }));
+
+    await waitFor(() => {
+      expect(memoryService.delete).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it('删除进行中重复点击确认遗忘不会触发第二次删除', async () => {
+    vi.mocked(memoryService.list).mockResolvedValue([preferenceMemory]);
+    let resolveDelete: (() => void) | undefined;
+    vi.mocked(memoryService.delete).mockReturnValue(
+      new Promise<void>(resolve => {
+        resolveDelete = resolve;
+      })
+    );
+
+    render(<MemoryTab roleId={null} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '遗忘' }));
+    const confirmButton = await screen.findByRole('button', { name: '确认遗忘' });
+
+    fireEvent.click(confirmButton);
+    fireEvent.click(confirmButton);
+    fireEvent.click(confirmButton);
+
+    await waitFor(() => {
+      expect(memoryService.delete).toHaveBeenCalledTimes(1);
+    });
+    expect(confirmButton).toBeDisabled();
+
+    resolveDelete?.();
+  });
+
+  it('记忆已在后端不存在(NotFound)时按遗忘成功处理并移除卡片', async () => {
+    vi.mocked(memoryService.list)
+      .mockResolvedValueOnce([preferenceMemory])
+      .mockResolvedValueOnce([]);
+    vi.mocked(memoryService.delete).mockRejectedValue({ NotFound: '记忆不存在: memory-1' });
+    const onMemoryDeleted = vi.fn();
+
+    render(<MemoryTab roleId={null} onMemoryDeleted={onMemoryDeleted} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '遗忘' }));
+    fireEvent.click(await screen.findByRole('button', { name: '确认遗忘' }));
+
+    await waitFor(() => {
+      expect(memoryService.list).toHaveBeenCalledTimes(2);
+    });
+    expect(onMemoryDeleted).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText('还没有记忆，多和这个角色聊聊吧')).toBeInTheDocument();
+    expect(screen.queryByText('喜欢在早晨写 PRD，认为这个时候头脑最清醒')).not.toBeInTheDocument();
+    expect(screen.queryByText('这条记忆暂时没忘掉，稍后再试一下')).not.toBeInTheDocument();
   });
 });

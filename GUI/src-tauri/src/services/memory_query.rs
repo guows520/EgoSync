@@ -34,6 +34,15 @@ pub async fn count_memories(
     memories::count_memories(pool, role_id, include_role_memories, category).await
 }
 
+pub async fn delete_memory(pool: &DbPool, memory_id: &str) -> Result<(), AppError> {
+    let deleted = memories::delete_memory(pool, memory_id).await?;
+    if !deleted {
+        return Err(AppError::NotFound(format!("记忆不存在: {}", memory_id)));
+    }
+
+    Ok(())
+}
+
 pub async fn get_source_messages(
     main_pool: &DbPool,
     conversations_pool: &ConversationsPool,
@@ -114,6 +123,18 @@ mod tests {
         .execute(&pool)
         .await
         .expect("migrate memory dedupe index");
+        sqlx::raw_sql(include_str!(
+            "../../migrations/006_memory_single_owner_dedupe.sql"
+        ))
+        .execute(&pool)
+        .await
+        .expect("migrate memory single-owner dedupe");
+        sqlx::raw_sql(include_str!(
+            "../../migrations/007_forgotten_memory_sources.sql"
+        ))
+        .execute(&pool)
+        .await
+        .expect("create forgotten memory sources");
 
         pool
     }
@@ -276,7 +297,11 @@ mod tests {
             &main_pool,
             None,
             &conversation.id,
-            &[extracted("fact", "部分来源缺失", vec![&msg_1.id, "missing-msg"])],
+            &[extracted(
+                "fact",
+                "部分来源缺失",
+                vec![&msg_1.id, "missing-msg"],
+            )],
         )
         .await
         .expect("insert memory");
@@ -344,5 +369,90 @@ mod tests {
             .expect("missing source should not fail");
 
         assert!(source_messages.is_empty());
+    }
+
+    #[tokio::test]
+    async fn delete_memory_missing_returns_not_found() {
+        let main_pool = setup_main_pool().await;
+
+        let err = delete_memory(&main_pool, "missing-memory")
+            .await
+            .expect_err("missing memory should fail");
+
+        assert!(matches!(err, AppError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn delete_memory_preserves_conversation_messages_and_other_memory_sources() {
+        let main_pool = setup_main_pool().await;
+        let conv_pool = setup_conversations_pool().await;
+        let conversation = conversations::create_conversation(&conv_pool, None)
+            .await
+            .expect("create conversation");
+        let msg_1 = conversations::insert_message(
+            &conv_pool,
+            &conversation.id,
+            "user",
+            "要忘掉的来源",
+            true,
+        )
+        .await
+        .expect("insert msg 1");
+        let msg_2 = conversations::insert_message(
+            &conv_pool,
+            &conversation.id,
+            "user",
+            "仍要保留的来源",
+            true,
+        )
+        .await
+        .expect("insert msg 2");
+        memories::insert_memories(
+            &main_pool,
+            None,
+            &conversation.id,
+            &[
+                extracted("fact", "要忘掉的记忆", vec![&msg_1.id]),
+                extracted("preference", "仍要保留的记忆", vec![&msg_2.id]),
+            ],
+        )
+        .await
+        .expect("insert memories");
+        let mut all_memories = memories::list_memories(&main_pool, None, None, None, None)
+            .await
+            .expect("list memories");
+        let deleted_memory_id = all_memories
+            .iter()
+            .find(|memory| memory.content == "要忘掉的记忆")
+            .expect("find memory to delete")
+            .id
+            .clone();
+        let kept_memory_id = all_memories
+            .iter_mut()
+            .find(|memory| memory.content == "仍要保留的记忆")
+            .expect("find memory to keep")
+            .id
+            .clone();
+
+        delete_memory(&main_pool, &deleted_memory_id)
+            .await
+            .expect("delete memory");
+
+        let messages = conversations::list_messages(&conv_pool, &conversation.id)
+            .await
+            .expect("list messages");
+        let deleted_source_err = get_source_messages(&main_pool, &conv_pool, &deleted_memory_id)
+            .await
+            .expect_err("deleted memory source should fail");
+        let kept_sources = get_source_messages(&main_pool, &conv_pool, &kept_memory_id)
+            .await
+            .expect("kept memory source should still work");
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].content, "要忘掉的来源");
+        assert_eq!(messages[1].content, "仍要保留的来源");
+        assert!(matches!(deleted_source_err, AppError::NotFound(_)));
+        assert_eq!(kept_sources.len(), 1);
+        assert_eq!(kept_sources[0].id, msg_2.id);
     }
 }

@@ -25,4 +25,6 @@ export const memoryService = {
     invoke<number>('memory_count', { roleId, includeRoleMemories, category }),
   getSourceMessages: (memoryId: string) =>
     invoke<MemorySourceMessage[]>('memory_get_source_messages', { memoryId }),
+  delete: (memoryId: string) =>
+    invoke<void>('memory_delete', { memoryId }),
 };

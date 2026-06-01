@@ -219,6 +219,7 @@ pub fn run() {
             commands::memory::memory_list_all,
             commands::memory::memory_count,
             commands::memory::memory_get_source_messages,
+            commands::memory::memory_delete,
             commands::role::role_create,
             commands::role::role_list,
             commands::role::role_list_archived,

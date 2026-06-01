@@ -14,8 +14,11 @@ vi.mock('./DashboardTab', () => ({
 }));
 
 vi.mock('../role/MemoryTab', () => ({
-  MemoryTab: ({ onCategoryChange }: any) => (
-    <button type="button" onClick={() => onCategoryChange?.('preference')}>筛选偏好</button>
+  MemoryTab: ({ onCategoryChange, onMemoryDeleted }: any) => (
+    <div>
+      <button type="button" onClick={() => onCategoryChange?.('preference')}>筛选偏好</button>
+      <button type="button" onClick={() => onMemoryDeleted?.()}>模拟删除成功</button>
+    </div>
   ),
 }));
 
@@ -70,5 +73,33 @@ describe('ButlerWorkspacePanel memory badge', () => {
       expect(memoryService.count).toHaveBeenLastCalledWith({ roleId: null, includeRoleMemories: true, category: 'preference' });
     });
     expect(await screen.findByRole('button', { name: '管家记忆 (5)' })).toBeInTheDocument();
+  });
+
+  it('删除成功回调后按总览范围与当前类别重新刷新 badge', async () => {
+    vi.mocked(memoryService.count)
+      .mockResolvedValueOnce(18)
+      .mockResolvedValueOnce(5)
+      .mockResolvedValueOnce(4);
+
+    render(
+      <ButlerWorkspacePanel
+        roles={[]}
+        currentTab="memory"
+        setTab={vi.fn()}
+        archivedRoles={[]}
+        onRestoreRole={vi.fn()}
+        onViewChange={vi.fn()}
+      />
+    );
+
+    expect(await screen.findByRole('button', { name: '管家记忆 (18)' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '筛选偏好' }));
+    expect(await screen.findByRole('button', { name: '管家记忆 (5)' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '模拟删除成功' }));
+
+    await waitFor(() => {
+      expect(memoryService.count).toHaveBeenLastCalledWith({ roleId: null, includeRoleMemories: true, category: 'preference' });
+    });
+    expect(await screen.findByRole('button', { name: '管家记忆 (4)' })).toBeInTheDocument();
   });
 });

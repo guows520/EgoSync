@@ -57,3 +57,8 @@ pub async fn memory_get_source_messages(
 ) -> Result<Vec<MemorySourceMessage>, AppError> {
     memory_query::get_source_messages(&pool, &conversations_pool, &memory_id).await
 }
+
+#[tauri::command]
+pub async fn memory_delete(pool: State<'_, DbPool>, memory_id: String) -> Result<(), AppError> {
+    memory_query::delete_memory(&pool, &memory_id).await
+}

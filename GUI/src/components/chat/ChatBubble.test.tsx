@@ -51,4 +51,15 @@ describe('ChatBubble assistant identity', () => {
 
     expect(container.querySelectorAll('.animate-bounce-forever')).toHaveLength(3);
   });
+
+  it('完成后的空文本助手气泡仍显示思考入口', () => {
+    render(
+      <ChatBubble
+        message={{ ...assistantMsg, content: '', thinkingContent: '已经记录偏好', isComplete: true }}
+      />,
+    );
+
+    expect(screen.getByText('思考过程')).toBeInTheDocument();
+    expect(screen.getByText('管家')).toBeInTheDocument();
+  });
 });

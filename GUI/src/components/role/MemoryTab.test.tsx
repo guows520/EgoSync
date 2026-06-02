@@ -47,6 +47,7 @@ const taskMemory: Memory = {
 const sourceMessage: MemorySourceMessage = {
   id: 'msg-1',
   conversationId: 'conv-1',
+  roleId: null,
   role: 'user',
   content: '我喜欢早晨写 PRD，这时候头脑最清醒。',
   createdAt: '2026-05-30T12:01:29Z',
@@ -256,24 +257,179 @@ describe('MemoryTab', () => {
     resolveDelete?.();
   });
 
-  it('记忆已在后端不存在(NotFound)时按遗忘成功处理并移除卡片', async () => {
+  it('点击来源原文记录时回传来源对话归属角色而不是记忆归属角色', async () => {
+    vi.mocked(memoryService.list).mockResolvedValue([{ ...roleFactMemory, roleId: 'role-child' }]);
+    vi.mocked(memoryService.getSourceMessages).mockResolvedValue([{ ...sourceMessage, id: 'msg-2', conversationId: 'conv-2', roleId: 'role-father' }]);
+    const onSourceMessageClick = vi.fn();
+
+    render(<MemoryTab roleId="role-child" onSourceMessageClick={onSourceMessageClick} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /来源对话 .*查看原文/ }));
+    const sourceRecord = await screen.findByRole('button', { name: /跳转到来源消息/ });
+    fireEvent.click(sourceRecord);
+
+    expect(onSourceMessageClick).toHaveBeenCalledWith({
+      conversationId: 'conv-2',
+      messageId: 'msg-2',
+      roleId: 'role-father',
+    });
+  });
+
+  it('targetMemoryId 命中时滚动并高亮目标卡片，然后通知父级已处理', async () => {
+    vi.mocked(memoryService.list).mockResolvedValue([preferenceMemory, roleFactMemory]);
+    const scrollIntoView = vi.fn();
+    const onTargetMemoryHandled = vi.fn();
+    const originalScrollIntoView = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scrollIntoView;
+
+    try {
+      render(
+        <MemoryTab
+          roleId={null}
+          targetMemoryId="memory-2"
+          onTargetMemoryHandled={onTargetMemoryHandled}
+        />,
+      );
+
+      const card = await screen.findByTestId('memory-card-memory-2');
+
+      await waitFor(() => {
+        expect(scrollIntoView).toHaveBeenCalled();
+      });
+      expect(card).toHaveClass('ring-2');
+      expect(onTargetMemoryHandled).toHaveBeenCalledTimes(1);
+    } finally {
+      Element.prototype.scrollIntoView = originalScrollIntoView;
+    }
+  });
+
+  it('targetMemoryId 可以用时间型记忆引用定位目标卡片', async () => {
+    vi.mocked(memoryService.list).mockResolvedValue([preferenceMemory, roleFactMemory]);
+    const scrollIntoView = vi.fn();
+    const onTargetMemoryHandled = vi.fn();
+    const originalScrollIntoView = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scrollIntoView;
+
+    try {
+      render(
+        <MemoryTab
+          roleId={null}
+          targetMemoryId="2026/05/30 20:03"
+          onTargetMemoryHandled={onTargetMemoryHandled}
+        />,
+      );
+
+      const card = await screen.findByTestId('memory-card-memory-2');
+
+      await waitFor(() => {
+        expect(scrollIntoView).toHaveBeenCalled();
+      });
+      expect(card).toHaveClass('ring-2');
+      expect(onTargetMemoryHandled).toHaveBeenCalledTimes(1);
+    } finally {
+      Element.prototype.scrollIntoView = originalScrollIntoView;
+    }
+  });
+
+  it('targetMemoryId 使用旧时间引用且同分钟存在多条记忆时显示不唯一反馈，不误跳第一条', async () => {
+    const sameMinutePreference: Memory = {
+      ...preferenceMemory,
+      id: 'memory-product-planning',
+      content: '比较喜欢在下午写产品规划',
+      createdAt: '2026-06-02T03:15:09Z',
+    };
+    const sameMinuteFact: Memory = {
+      ...roleFactMemory,
+      id: 'memory-fries',
+      content: '儿子喜欢吃薯条',
+      createdAt: '2026-06-02T03:15:09Z',
+    };
+    vi.mocked(memoryService.list).mockResolvedValue([sameMinutePreference, sameMinuteFact]);
+    const scrollIntoView = vi.fn();
+    const onTargetMemoryHandled = vi.fn();
+    const originalScrollIntoView = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scrollIntoView;
+
+    try {
+      render(
+        <MemoryTab
+          roleId={null}
+          targetMemoryId="2026/06/02 11:15"
+          onTargetMemoryHandled={onTargetMemoryHandled}
+        />,
+      );
+
+      expect(await screen.findByText('这条记忆引用不唯一，无法准确定位')).toBeInTheDocument();
+      expect(screen.getByTestId('memory-card-memory-product-planning')).not.toHaveClass('ring-2');
+      expect(screen.getByTestId('memory-card-memory-fries')).not.toHaveClass('ring-2');
+      expect(scrollIntoView).not.toHaveBeenCalled();
+      expect(onTargetMemoryHandled).toHaveBeenCalledTimes(1);
+    } finally {
+      Element.prototype.scrollIntoView = originalScrollIntoView;
+    }
+  });
+
+  it('targetMemoryId 等待当前未筛选请求完成，不用旧类别数据误判不可用', async () => {
+    let resolveUnfiltered: ((memories: Memory[]) => void) | undefined;
     vi.mocked(memoryService.list)
       .mockResolvedValueOnce([preferenceMemory])
-      .mockResolvedValueOnce([]);
-    vi.mocked(memoryService.delete).mockRejectedValue({ NotFound: '记忆不存在: memory-1' });
-    const onMemoryDeleted = vi.fn();
+      .mockReturnValueOnce(
+        new Promise<Memory[]>(resolve => {
+          resolveUnfiltered = resolve;
+        })
+      );
+    const onTargetMemoryHandled = vi.fn();
+    const scrollIntoView = vi.fn();
+    const originalScrollIntoView = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scrollIntoView;
 
-    render(<MemoryTab roleId={null} onMemoryDeleted={onMemoryDeleted} />);
+    try {
+      const { rerender } = render(<MemoryTab roleId={null} category="preference" onCategoryChange={vi.fn()} />);
 
-    fireEvent.click(await screen.findByRole('button', { name: '遗忘' }));
-    fireEvent.click(await screen.findByRole('button', { name: '确认遗忘' }));
+      expect(await screen.findByText('喜欢在早晨写 PRD，认为这个时候头脑最清醒')).toBeInTheDocument();
 
+      rerender(
+        <MemoryTab
+          roleId={null}
+          category={undefined}
+          onCategoryChange={vi.fn()}
+          targetMemoryId="memory-2"
+          onTargetMemoryHandled={onTargetMemoryHandled}
+        />,
+      );
+
+      expect(screen.getByText('正在加载记忆...')).toBeInTheDocument();
+      expect(screen.queryByText('这条记忆现在不可用，可能已经被遗忘了')).not.toBeInTheDocument();
+      expect(onTargetMemoryHandled).not.toHaveBeenCalled();
+
+      resolveUnfiltered?.([preferenceMemory, roleFactMemory]);
+
+      expect(await screen.findByTestId('memory-card-memory-2')).toBeInTheDocument();
+      await waitFor(() => {
+        expect(onTargetMemoryHandled).toHaveBeenCalledTimes(1);
+      });
+      expect(scrollIntoView).toHaveBeenCalled();
+      expect(screen.queryByText('这条记忆现在不可用，可能已经被遗忘了')).not.toBeInTheDocument();
+    } finally {
+      Element.prototype.scrollIntoView = originalScrollIntoView;
+    }
+  });
+
+  it('targetMemoryId 不存在时显示温和不可用反馈并通知父级已处理', async () => {
+    vi.mocked(memoryService.list).mockResolvedValue([preferenceMemory]);
+    const onTargetMemoryHandled = vi.fn();
+
+    render(
+      <MemoryTab
+        roleId={null}
+        targetMemoryId="missing-memory"
+        onTargetMemoryHandled={onTargetMemoryHandled}
+      />,
+    );
+
+    expect(await screen.findByText('这条记忆现在不可用，可能已经被遗忘了')).toBeInTheDocument();
     await waitFor(() => {
-      expect(memoryService.list).toHaveBeenCalledTimes(2);
+      expect(onTargetMemoryHandled).toHaveBeenCalledTimes(1);
     });
-    expect(onMemoryDeleted).toHaveBeenCalledTimes(1);
-    expect(await screen.findByText('还没有记忆，多和这个角色聊聊吧')).toBeInTheDocument();
-    expect(screen.queryByText('喜欢在早晨写 PRD，认为这个时候头脑最清醒')).not.toBeInTheDocument();
-    expect(screen.queryByText('这条记忆暂时没忘掉，稍后再试一下')).not.toBeInTheDocument();
   });
 });

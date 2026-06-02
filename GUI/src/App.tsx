@@ -17,6 +17,7 @@ import { roleService } from './services/roleService';
 import { useTauriEvent } from './hooks/useTauriEvent';
 import { normalizeColorHex } from './lib/roleIcons';
 import type { Role } from './types/role';
+import type { SourceNavigationTarget } from './types/chat';
 
 const BUTLER_ACCENT = '#6366F1';
 
@@ -36,6 +37,8 @@ export default function App() {
     return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   });
   const [roleInitialTab, setRoleInitialTab] = useState<string | null>(null);
+  const [pendingRoleSourceNavigation, setPendingRoleSourceNavigation] = useState<SourceNavigationTarget | null>(null);
+  const [pendingButlerSourceNavigation, setPendingButlerSourceNavigation] = useState<SourceNavigationTarget | null>(null);
   const [isNotifOpen, setIsNotifOpen] = useState(false);
 
   // Story 2.5: 管家涌现角色提议（非 onboarding 模式）
@@ -151,6 +154,26 @@ export default function App() {
     setRoles(prev => prev.map(role => role.id === updated.id ? updated : role));
   };
 
+  const handleSourceNavigation = (target: SourceNavigationTarget) => {
+    if (!target.roleId) {
+      setPendingRoleSourceNavigation(null);
+      setPendingButlerSourceNavigation(target);
+      setCurrentView('butler');
+      return;
+    }
+    setPendingButlerSourceNavigation(null);
+    setPendingRoleSourceNavigation(target);
+    setCurrentView(target.roleId);
+  };
+
+  const handleRoleSourceNavigation = (target: SourceNavigationTarget) => {
+    handleSourceNavigation(target);
+  };
+
+  const handleButlerSourceNavigation = (target: SourceNavigationTarget) => {
+    handleSourceNavigation(target);
+  };
+
   const toggleTheme = () => {
     setTheme(t => {
       const next = t === 'light' ? 'dark' : 'light';
@@ -200,7 +223,17 @@ export default function App() {
           style={{ ...mainTint, backgroundColor: 'var(--role-bg-tint)' }}
         >
           {currentView === 'onboard' && <OnboardingView onComplete={handleOnboardingComplete} onOpenSettings={() => setIsSettingsOpen(true)} />}
-          {currentView === 'butler' && <ButlerView roles={roles} onViewChange={setCurrentView} archivedRoles={archivedRoles} onRestoreRole={handleRestoreRole} />}
+          {currentView === 'butler' && (
+            <ButlerView
+              roles={roles}
+              onViewChange={setCurrentView}
+              archivedRoles={archivedRoles}
+              onRestoreRole={handleRestoreRole}
+              onRoleSourceNavigation={handleRoleSourceNavigation}
+              sourceNavigationTarget={pendingButlerSourceNavigation}
+              onSourceNavigationHandled={() => setPendingButlerSourceNavigation(null)}
+            />
+          )}
           {roles.map(r => r.id === currentView && (
             <RoleView
               key={r.id}
@@ -212,6 +245,10 @@ export default function App() {
               onArchiveRole={handleArchiveRole}
               onDeleteRole={handleDeleteRole}
               activeRoleCount={roles.length}
+              sourceNavigationTarget={pendingRoleSourceNavigation?.roleId === r.id ? pendingRoleSourceNavigation : null}
+              onSourceNavigationHandled={() => setPendingRoleSourceNavigation(null)}
+              onButlerSourceNavigation={handleButlerSourceNavigation}
+              onRoleSourceNavigation={handleRoleSourceNavigation}
             />
           ))}
         </main>

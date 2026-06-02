@@ -35,6 +35,7 @@ export function ChatInput({ onSend, onStop, isStreaming, disabled, placeholder, 
       {isStreaming ? (
         <button
           onClick={onStop}
+          aria-label="停止"
           className="absolute right-2 top-1/2 -translate-y-1/2 w-9 h-9 flex items-center justify-center text-white bg-slate-800 rounded-lg transition-colors shadow-sm hover:bg-slate-700"
         >
           <Square size={14} fill="currentColor" />
@@ -43,6 +44,7 @@ export function ChatInput({ onSend, onStop, isStreaming, disabled, placeholder, 
         <button
           onClick={handleSend}
           disabled={disabled || !input.trim()}
+          aria-label="发送"
           className={cn(
             'absolute right-2 top-1/2 -translate-y-1/2 w-9 h-9 flex items-center justify-center text-white rounded-lg transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed',
             useRoleAccent ? 'hover:brightness-110' : 'bg-slate-800 hover:bg-slate-700',

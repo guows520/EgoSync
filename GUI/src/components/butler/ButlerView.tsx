@@ -1,14 +1,35 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Home, BarChart2, ListTodo, BrainCircuit, Sliders } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { ButlerWorkspacePanel } from './ButlerWorkspacePanel';
 import { ChatStream } from '../chat/ChatStream';
+import type { SourceNavigationTarget } from '../../types/chat';
 
-export function ButlerView({ roles, onViewChange, archivedRoles, onRestoreRole }: any) {
+export function ButlerView({ roles, onViewChange, archivedRoles, onRestoreRole, onRoleSourceNavigation, sourceNavigationTarget: externalSourceNavigationTarget, onSourceNavigationHandled }: any) {
   const [openTab, setOpenTab] = useState<'dashboard' | 'tasks' | 'memory' | 'settings' | null>(null);
+  const [targetMemoryId, setTargetMemoryId] = useState<string | null>(null);
+  const [sourceNavigationTarget, setSourceNavigationTarget] = useState<SourceNavigationTarget | null>(null);
+
+  useEffect(() => {
+    if (!externalSourceNavigationTarget) return;
+    setSourceNavigationTarget(externalSourceNavigationTarget);
+  }, [externalSourceNavigationTarget]);
 
   const toggleTab = (tab: 'dashboard' | 'tasks' | 'memory' | 'settings') => {
     setOpenTab(prev => prev === tab ? null : tab);
+  };
+
+  const handleMemoryReferenceClick = (memoryId: string) => {
+    setTargetMemoryId(memoryId);
+    setOpenTab('memory');
+  };
+
+  const handleSourceMessageClick = (target: SourceNavigationTarget) => {
+    if (target.roleId) {
+      onRoleSourceNavigation?.(target);
+      return;
+    }
+    setSourceNavigationTarget(target);
   };
 
   return (
@@ -40,13 +61,31 @@ export function ButlerView({ roles, onViewChange, archivedRoles, onRestoreRole }
       <div className="flex-1 flex overflow-hidden">
         {/* Chat Area */}
         <div className={cn("flex flex-col relative bg-white/40 dark:bg-slate-900/40 transition-all duration-500 ease-in-out", openTab ? "w-[60%] border-r border-slate-200/60 dark:border-slate-700/60" : "w-full")}>
-          <ChatStream role={null} />
+          <ChatStream
+            role={null}
+            onMemoryReferenceClick={handleMemoryReferenceClick}
+            sourceNavigationTarget={sourceNavigationTarget}
+            onSourceNavigationHandled={() => {
+              setSourceNavigationTarget(null);
+              onSourceNavigationHandled?.();
+            }}
+          />
         </div>
 
         {/* Workspace Panel */}
         {openTab && (
           <div className="w-[40%] bg-slate-50/60 dark:bg-slate-800/60 flex flex-col backdrop-blur-sm border-l border-white/40 dark:border-slate-700/40 shadow-[-8px_0_24px_rgba(0,0,0,0.02)] animate-in slide-in-from-right-8 duration-300">
-            <ButlerWorkspacePanel roles={roles} currentTab={openTab} setTab={setOpenTab} archivedRoles={archivedRoles} onRestoreRole={onRestoreRole} onViewChange={onViewChange} />
+            <ButlerWorkspacePanel
+              roles={roles}
+              currentTab={openTab}
+              setTab={setOpenTab}
+              archivedRoles={archivedRoles}
+              onRestoreRole={onRestoreRole}
+              onViewChange={onViewChange}
+              targetMemoryId={targetMemoryId}
+              onTargetMemoryHandled={() => setTargetMemoryId(null)}
+              onSourceMessageClick={handleSourceMessageClick}
+            />
           </div>
         )}
       </div>

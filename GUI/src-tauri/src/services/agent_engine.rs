@@ -70,13 +70,7 @@ fn stream_payload_from_sse(
             thinking: false,
             message_id: message_id.map(str::to_string),
         }),
-        crate::models::agent::SseEvent::Thinking { content } => Some(StreamPayload {
-            conversation_id: conversation_id.to_string(),
-            token: content,
-            done: false,
-            thinking: true,
-            message_id: message_id.map(str::to_string),
-        }),
+        crate::models::agent::SseEvent::Thinking { .. } => None,
         crate::models::agent::SseEvent::Done => Some(StreamPayload {
             conversation_id: conversation_id.to_string(),
             token: String::new(),
@@ -100,6 +94,56 @@ fn stream_payload_from_sse(
             None
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BusTextDeltaDecision {
+    EmitText,
+    SkipHidden,
+    WaitForPartType,
+}
+
+fn is_hidden_bus_part_type(part_type: &str) -> bool {
+    matches!(part_type, "reasoning" | "thinking")
+}
+
+fn bus_delta_part_type(properties: &serde_json::Value) -> Option<&str> {
+    properties
+        .get("partType")
+        .or_else(|| properties.get("part_type"))
+        .and_then(|value| value.as_str())
+        .or_else(|| {
+            properties
+                .get("part")
+                .and_then(|part| part.get("type"))
+                .and_then(|value| value.as_str())
+        })
+}
+
+fn classify_bus_text_delta(
+    properties: &serde_json::Value,
+    visible_text_parts: &std::collections::HashSet<String>,
+    hidden_parts: &std::collections::HashSet<String>,
+) -> BusTextDeltaDecision {
+    let part_id = properties
+        .get("partID")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    if !part_id.is_empty() && hidden_parts.contains(part_id) {
+        return BusTextDeltaDecision::SkipHidden;
+    }
+    if let Some(part_type) = bus_delta_part_type(properties) {
+        if is_hidden_bus_part_type(part_type) {
+            return BusTextDeltaDecision::SkipHidden;
+        }
+        if part_type == "text" {
+            return BusTextDeltaDecision::EmitText;
+        }
+    }
+    if !part_id.is_empty() && visible_text_parts.contains(part_id) {
+        return BusTextDeltaDecision::EmitText;
+    }
+    BusTextDeltaDecision::WaitForPartType
 }
 
 fn emit_stream_token(
@@ -127,16 +171,11 @@ fn apply_completed_message_fallback(
     message_id: Option<&str>,
     completed: Option<crate::models::agent::OpencodeCompletedMessage>,
     text_target: &mut String,
-    thinking_target: &mut String,
 ) {
     let Some(completed) = completed else {
         return;
     };
 
-    if thinking_target.trim().is_empty() && !completed.thinking.trim().is_empty() {
-        thinking_target.push_str(&completed.thinking);
-        emit_stream_token(app_handle, conversation_id, None, &completed.thinking, true);
-    }
     if text_target.trim().is_empty() && !completed.text.trim().is_empty() {
         text_target.push_str(&completed.text);
         emit_stream_token(app_handle, conversation_id, message_id, &completed.text, false);
@@ -148,9 +187,8 @@ fn ensure_non_empty_opencode_result(
     conversation_id: &str,
     message_id: Option<&str>,
     text: &mut String,
-    thinking: &str,
 ) {
-    if text.trim().is_empty() && thinking.trim().is_empty() {
+    if text.trim().is_empty() {
         let fallback = "抱歉，这次没有生成可显示的回复，请再试一次。";
         text.push_str(fallback);
         emit_stream_token(app_handle, conversation_id, message_id, fallback, false);
@@ -162,6 +200,26 @@ const BUTLER_SYSTEM_PROMPT: &str = "\
 你的语调稳重、可靠、有温度，像一位值得信赖的英式管家。\
 你帮助用户管理角色、任务和日程，但决定权永远在用户手中。\
 用简洁自然的中文回复，不用 emoji。";
+
+const TRANSPARENCY_UNCERTAINTY_RULES: &str = "\
+[透明推理与不确定性规则]\n\
+- 可以基于[已知记忆]回答普通问题，但用户没有明确要求来源、依据、原文或你怎么知道时，不要主动展示记忆标签或内部链接。\n\
+- 只有用户明确询问为什么、依据是什么、你怎么知道的、来源或原文时，才使用本 prompt 中的记忆内部链接 `[[记忆#YYYY/MM/DD HH:mm]](egosync-memory://memory-id)` 标注来源；用户只会看到时间标签。\n\
+- 溯源回答必须原样输出本 prompt 中已有的记忆内部链接，不要删掉链接地址，不要把来源改写成自然语言时间（例如“你在 2026/06/02 11:15 告诉我”）。\n\
+- 溯源回答要输出简洁依据链：记忆、规则、历史模式 → 建议。\n\
+- 只能引用本 prompt 中出现的记忆内部链接；不得编造记忆标签，不得使用列表序号或内部 ID 冒充来源。\n\
+- 没有可引用记忆时，明确说明“我现在没有可溯源的记忆依据”。\n\
+- 不确定时主动声明，不把推断写成确定事实。\n\
+- 不暴露隐藏 chain-of-thought，只给依据链/证据链。";
+
+const UNCERTAINTY_NOTICE: &str = "我不太确定这个判断，建议你自己评估一下。";
+const HEDGING_MARKERS: &[&str] = &["可能", "也许", "不太确定", "大概", "看起来像"];
+const UNCERTAINTY_STATEMENT_MARKERS: &[&str] = &[
+    UNCERTAINTY_NOTICE,
+    "建议你自己评估",
+    "建议你自行评估",
+    "请你自己评估",
+];
 
 const HISTORY_LIMIT: i64 = 20;
 
@@ -180,6 +238,44 @@ fn truncate_chars(value: &str, limit: usize) -> String {
     value.chars().take(limit).collect()
 }
 
+fn format_memory_reference_label(memory: &crate::models::memory::Memory) -> String {
+    chrono::DateTime::parse_from_rfc3339(&memory.created_at)
+        .map(|created_at| created_at.with_timezone(&chrono::Local).format("%Y/%m/%d %H:%M").to_string())
+        .unwrap_or_else(|_| memory.created_at.clone())
+}
+
+fn format_memory_reference_line(memory: &crate::models::memory::Memory) -> String {
+    format!(
+        "- [[记忆#{}]](egosync-memory://{}) [{}] {}",
+        format_memory_reference_label(memory),
+        memory.id,
+        memory.category,
+        truncate_chars(memory.content.trim(), BUTLER_MEMORY_PER_LINE_CHARS)
+    )
+}
+
+fn append_uncertainty_notice_if_needed(text: &mut String) -> Option<&'static str> {
+    let visible = text.trim();
+    if visible.is_empty() {
+        return None;
+    }
+    if !HEDGING_MARKERS.iter().any(|marker| visible.contains(marker)) {
+        return None;
+    }
+    if UNCERTAINTY_STATEMENT_MARKERS
+        .iter()
+        .any(|marker| visible.contains(marker))
+    {
+        return None;
+    }
+
+    if !text.ends_with('\n') {
+        text.push_str("\n\n");
+    }
+    text.push_str(UNCERTAINTY_NOTICE);
+    Some(UNCERTAINTY_NOTICE)
+}
+
 pub async fn build_butler_memory_summary(main_pool: &DbPool) -> Result<String, AppError> {
     let all_memories = memories::list_all_memories(main_pool).await?;
     if all_memories.is_empty() {
@@ -195,11 +291,7 @@ pub async fn build_butler_memory_summary(main_pool: &DbPool) -> Result<String, A
     let mut global_lines = Vec::new();
     let mut role_lines = std::collections::BTreeMap::<String, Vec<String>>::new();
     for memory in all_memories {
-        let line = format!(
-            "- [{}] {}",
-            memory.category,
-            truncate_chars(memory.content.trim(), BUTLER_MEMORY_PER_LINE_CHARS)
-        );
+        let line = format_memory_reference_line(&memory);
         if let Some(role_id) = memory.role_id {
             let role_name = role_names
                 .get(&role_id)
@@ -322,6 +414,9 @@ pub async fn build_butler_system_prompt(
         system_prompt.push_str(&memory_summary);
     }
 
+    system_prompt.push_str("\n\n");
+    system_prompt.push_str(TRANSPARENCY_UNCERTAINTY_RULES);
+
     let cross_summary = build_cross_role_summary(conv_pool, main_pool).await?;
     if !cross_summary.is_empty() {
         system_prompt.push_str("\n\n");
@@ -434,7 +529,32 @@ const ROLE_BASE_PERSONA_PROMPT: &str = "\
 你不是独立于用户的另一个人，你是用户作为「{name}」时的延伸。\
 用简洁自然的中文回复，不用 emoji。";
 
-fn build_role_system_prompt(role: &crate::models::role::Role) -> String {
+pub async fn build_role_memory_summary(
+    main_pool: &DbPool,
+    role_id: &str,
+) -> Result<String, AppError> {
+    let role = crate::db::roles::get_role(main_pool, role_id).await?;
+    let memories = memories::list_memories(main_pool, Some(role_id), None, None, None).await?;
+    if memories.is_empty() {
+        return Ok(String::new());
+    }
+
+    let lines = memories
+        .into_iter()
+        .take(BUTLER_MEMORY_PER_ROLE)
+        .map(|memory| format_memory_reference_line(&memory))
+        .collect::<Vec<_>>();
+    let mut summary = format!("[当前角色记忆]\n{}：\n{}", role.name, lines.join("\n"));
+    if summary.chars().count() > BUTLER_MEMORY_TOTAL_CHARS {
+        summary = truncate_chars(&summary, BUTLER_MEMORY_TOTAL_CHARS) + "…";
+    }
+    Ok(summary)
+}
+
+async fn build_role_system_prompt(
+    main_pool: &DbPool,
+    role: &crate::models::role::Role,
+) -> Result<String, AppError> {
     let mut sections = vec![ROLE_BASE_PERSONA_PROMPT.replace("{name}", &role.name)];
 
     let mut role_definition = format!("[role_definition]\n角色名称：{}", role.name);
@@ -452,10 +572,16 @@ fn build_role_system_prompt(role: &crate::models::role::Role) -> String {
     }
     sections.push(role_definition);
 
+    let memory_summary = build_role_memory_summary(main_pool, &role.id).await?;
+    if !memory_summary.is_empty() {
+        sections.push(memory_summary);
+    }
+    sections.push(TRANSPARENCY_UNCERTAINTY_RULES.to_string());
+
     sections.push(
         "[context_injection]\n以下历史消息是当前对话上下文；不要引入未提供的记忆。".to_string(),
     );
-    sections.join("\n\n")
+    Ok(sections.join("\n\n"))
 }
 
 /// 构建角色对话上下文。system prompt 完全独立于管家基线，
@@ -470,7 +596,7 @@ pub async fn build_role_messages(
 ) -> Result<Vec<ChatCompletionMessage>, AppError> {
     let role = crate::db::roles::get_role(main_pool, role_id).await?;
 
-    let system_prompt = build_role_system_prompt(&role);
+    let system_prompt = build_role_system_prompt(main_pool, &role).await?;
 
     let mut result = Vec::new();
     result.push(ChatCompletionMessage {
@@ -843,7 +969,7 @@ async fn try_run_opencode_stream(
     // For roles: includes the role's personality/goal prompt.
     let content = if let Some(rid) = role_id {
         if let Ok(role) = crate::db::roles::get_role(main_pool, rid).await {
-            let role_prompt = build_role_system_prompt(&role);
+            let role_prompt = build_role_system_prompt(main_pool, &role).await?;
             format!("[系统指示]\n{}\n---\n{}", role_prompt, user_message)
         } else {
             user_message.to_string()
@@ -872,15 +998,15 @@ async fn try_run_opencode_stream(
     // carries the full part text each time, so we diff locally.
     let mut part_text: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let mut accumulated_text = String::new();
-    let mut accumulated_thinking = String::new();
     let mut completed = false;
     // Fix 2: messageID → role mapping. opencode sends message.part.updated for
     // *both* user and assistant messages. We must learn each message's role from
     // "message.updated" events and only stream assistant-role parts to the UI.
     let mut message_roles: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
-    // Track which partIDs are reasoning (thinking) vs text
-    let mut reasoning_parts: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // Track which bus part IDs have known user-visible text vs hidden reasoning.
+    let mut visible_text_parts: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut hidden_parts: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut processed_tool_parts: std::collections::HashSet<String> =
         std::collections::HashSet::new();
     // 委派两气泡：第一段"稍等…"落 assistant_message_id；delegate_to_role 激活后，
@@ -914,9 +1040,6 @@ async fn try_run_opencode_stream(
                     });
                 } else {
                     conversations::update_message_content(conv_pool, assistant_message_id, &accumulated_text).await.ok();
-                    if !accumulated_thinking.is_empty() {
-                        conversations::update_message_thinking(conv_pool, assistant_message_id, &accumulated_thinking).await.ok();
-                    }
                     conversations::mark_message_complete(conv_pool, assistant_message_id).await.ok();
                     let _ = app_handle.emit("llm:stream", StreamPayload {
                         conversation_id: conversation_id.to_string(),
@@ -948,27 +1071,22 @@ async fn try_run_opencode_stream(
                                 _ => {} // unknown or assistant — proceed
                             }
                         }
-                        // Determine thinking vs text by partID tracking
                         let part_id = event.properties.get("partID")
                             .and_then(|v| v.as_str()).unwrap_or("");
-                        let thinking = reasoning_parts.contains(part_id);
-                        // 委派两气泡路由：thinking 始终归第一气泡；text 按 messageID 分桶。
-                        let emit_message_id = if thinking {
-                            accumulated_thinking.push_str(delta);
-                            None
-                        } else {
-                            match bubble_state.classify_message(msg_id) {
-                                BubbleSlot::First => {
-                                    accumulated_text.push_str(delta);
-                                    None
-                                }
-                                BubbleSlot::Followup => {
-                                    followup_text.push_str(delta);
-                                    followup_id.clone()
-                                }
+                        match classify_bus_text_delta(&event.properties, &visible_text_parts, &hidden_parts) {
+                            BusTextDeltaDecision::EmitText => {}
+                            BusTextDeltaDecision::SkipHidden | BusTextDeltaDecision::WaitForPartType => continue,
+                        }
+                        let emit_message_id = match bubble_state.classify_message(msg_id) {
+                            BubbleSlot::First => {
+                                accumulated_text.push_str(delta);
+                                None
+                            }
+                            BubbleSlot::Followup => {
+                                followup_text.push_str(delta);
+                                followup_id.clone()
                             }
                         };
-                        // Update part_text so message.updated/part.updated won't re-emit
                         if !part_id.is_empty() {
                             let entry = part_text.entry(part_id.to_string()).or_default();
                             entry.push_str(delta);
@@ -977,7 +1095,7 @@ async fn try_run_opencode_stream(
                             conversation_id: conversation_id.to_string(),
                             token: delta.to_string(),
                             done: false,
-                            thinking,
+                            thinking: false,
                             message_id: emit_message_id,
                         });
                     }
@@ -999,14 +1117,12 @@ async fn try_run_opencode_stream(
                                             let ptype = p.get("type").and_then(|v| v.as_str()).unwrap_or("");
                                             let text = p.get("text").and_then(|v| v.as_str()).unwrap_or("");
                                             if !text.is_empty() {
-                                                // 委派两气泡路由：reasoning 归 thinking；text 按 messageID 分桶。
-                                                let (thinking, emit_message_id, accum): (bool, Option<String>, &mut String) = match ptype {
-                                                    "text" => match bubble_state.classify_message(id) {
-                                                        BubbleSlot::First => (false, None, &mut accumulated_text),
-                                                        BubbleSlot::Followup => (false, followup_id.clone(), &mut followup_text),
-                                                    },
-                                                    "reasoning" => (true, None, &mut accumulated_thinking),
-                                                    _ => continue,
+                                                if ptype != "text" {
+                                                    continue;
+                                                }
+                                                let (emit_message_id, accum): (Option<String>, &mut String) = match bubble_state.classify_message(id) {
+                                                    BubbleSlot::First => (None, &mut accumulated_text),
+                                                    BubbleSlot::Followup => (followup_id.clone(), &mut followup_text),
                                                 };
                                                 let part_id = p.get("id").and_then(|v| v.as_str()).unwrap_or("");
                                                 let prev = part_text.entry(part_id.to_string()).or_default();
@@ -1018,7 +1134,7 @@ async fn try_run_opencode_stream(
                                                         conversation_id: conversation_id.to_string(),
                                                         token: delta,
                                                         done: false,
-                                                        thinking,
+                                                        thinking: false,
                                                         message_id: emit_message_id,
                                                     });
                                                 } else if text != prev.as_str() {
@@ -1037,9 +1153,10 @@ async fn try_run_opencode_stream(
                         let Some(part_raw) = event.properties.get("part") else { continue };
                         let Ok(part) = serde_json::from_value::<crate::models::agent::BusPart>(part_raw.clone()) else { continue };
                         tracing::debug!(part_type = %part.part_type, part_id = %part.id, msg_id = %part.message_id, text_len = part.text.len(), "stream part updated");
-                        // Register reasoning parts so delta handler knows to set thinking=true
-                        if part.part_type == "reasoning" {
-                            reasoning_parts.insert(part.id.clone());
+                        if is_hidden_bus_part_type(&part.part_type) {
+                            hidden_parts.insert(part.id.clone());
+                        } else if part.part_type == "text" {
+                            visible_text_parts.insert(part.id.clone());
                         }
                         // Skip user-role parts — they echo the user's own input.
                         if !part.message_id.is_empty() {
@@ -1050,12 +1167,12 @@ async fn try_run_opencode_stream(
                         }
                         // Only stream user-visible content. Tool parts are intercepted
                         // to trigger Tauri-side effects (role proposals, delegation, etc.)
-                        let (thinking, emit_message_id, accum): (bool, Option<String>, &mut String) = match part.part_type.as_str() {
+                        let (emit_message_id, accum): (Option<String>, &mut String) = match part.part_type.as_str() {
                             "text" => match bubble_state.classify_message(&part.message_id) {
-                                BubbleSlot::First => (false, None, &mut accumulated_text),
-                                BubbleSlot::Followup => (false, followup_id.clone(), &mut followup_text),
+                                BubbleSlot::First => (None, &mut accumulated_text),
+                                BubbleSlot::Followup => (followup_id.clone(), &mut followup_text),
                             },
-                            "reasoning" => (true, None, &mut accumulated_thinking),
+                            "reasoning" | "thinking" => continue,
                             "tool" => {
                                 // Intercept custom tool results from opencode.
                                 // Tool part structure: { tool: "create_role", state: { status, output, input } }
@@ -1086,15 +1203,6 @@ async fn try_run_opencode_stream(
                                         )
                                         .await
                                         .ok();
-                                        if !accumulated_thinking.is_empty() {
-                                            conversations::update_message_thinking(
-                                                conv_pool,
-                                                assistant_message_id,
-                                                &accumulated_thinking,
-                                            )
-                                            .await
-                                            .ok();
-                                        }
                                         conversations::mark_message_complete(
                                             conv_pool,
                                             assistant_message_id,
@@ -1164,7 +1272,7 @@ async fn try_run_opencode_stream(
                                 conversation_id: conversation_id.to_string(),
                                 token: delta,
                                 done: false,
-                                thinking,
+                                thinking: false,
                                 message_id: emit_message_id,
                             });
                         } else if part.text != *prev {
@@ -1213,7 +1321,7 @@ async fn try_run_opencode_stream(
                         if delegation_session_registered {
                             delegate_bridge.unregister_session(&session_id).await;
                         }
-                        if accumulated_text.is_empty() && accumulated_thinking.is_empty() && followup_text.is_empty() {
+                        if accumulated_text.is_empty() && followup_text.is_empty() {
                             let mut sessions = opencode_sessions.lock().await;
                             sessions.remove(conversation_id);
                             return Err(e);
@@ -1262,7 +1370,7 @@ async fn try_run_opencode_stream(
                 completed_response = response;
             }
             Ok(Ok(Err(e))) => {
-                if accumulated_text.is_empty() && accumulated_thinking.is_empty() && followup_text.is_empty() {
+                if accumulated_text.is_empty() && followup_text.is_empty() {
                     let mut sessions = opencode_sessions.lock().await;
                     sessions.remove(conversation_id);
                     return Err(e);
@@ -1285,14 +1393,12 @@ async fn try_run_opencode_stream(
             followup_id.as_deref(),
             completed_response,
             &mut followup_text,
-            &mut accumulated_thinking,
         );
         ensure_non_empty_opencode_result(
             app_handle,
             conversation_id,
             followup_id.as_deref(),
             &mut followup_text,
-            &accumulated_thinking,
         );
     } else {
         apply_completed_message_fallback(
@@ -1301,27 +1407,23 @@ async fn try_run_opencode_stream(
             None,
             completed_response,
             &mut accumulated_text,
-            &mut accumulated_thinking,
         );
         ensure_non_empty_opencode_result(
             app_handle,
             conversation_id,
             None,
             &mut accumulated_text,
-            &accumulated_thinking,
         );
     }
 
     if let Some(fid) = followup_id.clone() {
         // 委派已拆分：第一气泡（"稍等…"）在拆分时已冻结+done，这里收尾第二气泡（委派回复）。
+        if let Some(notice) = append_uncertainty_notice_if_needed(&mut followup_text) {
+            emit_stream_token(app_handle, conversation_id, Some(&fid), notice, false);
+        }
         conversations::update_message_content(conv_pool, &fid, &followup_text)
             .await
             .ok();
-        if !accumulated_thinking.is_empty() {
-            conversations::update_message_thinking(conv_pool, &fid, &accumulated_thinking)
-                .await
-                .ok();
-        }
         conversations::mark_message_complete(conv_pool, &fid)
             .await
             .ok();
@@ -1337,18 +1439,12 @@ async fn try_run_opencode_stream(
         );
     } else {
         // 普通单段对话：单气泡收尾（改动前的原行为）。
+        if let Some(notice) = append_uncertainty_notice_if_needed(&mut accumulated_text) {
+            emit_stream_token(app_handle, conversation_id, None, notice, false);
+        }
         conversations::update_message_content(conv_pool, assistant_message_id, &accumulated_text)
             .await
             .ok();
-        if !accumulated_thinking.is_empty() {
-            conversations::update_message_thinking(
-                conv_pool,
-                assistant_message_id,
-                &accumulated_thinking,
-            )
-            .await
-            .ok();
-        }
         conversations::mark_message_complete(conv_pool, assistant_message_id)
             .await
             .ok();
@@ -1458,10 +1554,8 @@ pub async fn run_stream(
     });
 
     let mut accumulated = OPENCODE_FALLBACK_NOTICE.to_string();
-    let mut accumulated_thinking = String::new();
     let mut pending = String::new();
-    let mut pending_thinking = String::new();
-    let mut is_thinking = false;
+    let mut saw_thinking = false;
     let mut last_emit = Instant::now();
     let mut tool_calls_received: Vec<ToolCall> = Vec::new();
     const EMIT_INTERVAL: Duration = Duration::from_millis(33);
@@ -1475,20 +1569,6 @@ pub async fn run_stream(
             }
             event = rx.recv() => event,
             _ = tokio::time::sleep(EMIT_INTERVAL) => {
-                if !pending_thinking.is_empty() {
-                    let batch = std::mem::take(&mut pending_thinking);
-                    let _ = app_handle.emit(
-                        "llm:stream",
-                        StreamPayload {
-                            conversation_id: conversation_id.clone(),
-                            token: batch,
-                            done: false,
-                            thinking: true,
-                            message_id: None,
-                        },
-                    );
-                    last_emit = Instant::now();
-                }
                 if !pending.is_empty() {
                     let batch = std::mem::take(&mut pending);
                     let _ = app_handle.emit(
@@ -1508,27 +1588,10 @@ pub async fn run_stream(
         };
 
         match event {
-            Some(StreamEvent::Thinking(token)) => {
-                if !is_thinking {
-                    is_thinking = true;
-                    tracing::info!("思考开始，耗时: {:?}", stream_start.elapsed());
-                }
-                accumulated_thinking.push_str(&token);
-                pending_thinking.push_str(&token);
-
-                if last_emit.elapsed() >= EMIT_INTERVAL {
-                    let batch = std::mem::take(&mut pending_thinking);
-                    let _ = app_handle.emit(
-                        "llm:stream",
-                        StreamPayload {
-                            conversation_id: conversation_id.clone(),
-                            token: batch,
-                            done: false,
-                            thinking: true,
-                            message_id: None,
-                        },
-                    );
-                    last_emit = Instant::now();
+            Some(StreamEvent::Thinking(_token)) => {
+                if !saw_thinking {
+                    saw_thinking = true;
+                    tracing::info!("模型发送了隐藏 reasoning，已禁止展示，耗时: {:?}", stream_start.elapsed());
                 }
             }
             Some(StreamEvent::Token(token)) => {
@@ -1567,27 +1630,13 @@ pub async fn run_stream(
             }
             Some(StreamEvent::Done) => {
                 tracing::info!(
-                    "[run_stream] done: conv={} assistant_msg={} accumulated_len={} thinking_len={} tool_calls={}",
+                    "[run_stream] done: conv={} assistant_msg={} accumulated_len={} saw_thinking={} tool_calls={}",
                     conversation_id,
                     assistant_message_id,
                     accumulated.len(),
-                    accumulated_thinking.len(),
+                    saw_thinking,
                     tool_calls_received.len()
                 );
-                // Flush pending tokens
-                if !pending_thinking.is_empty() {
-                    let batch = std::mem::take(&mut pending_thinking);
-                    let _ = app_handle.emit(
-                        "llm:stream",
-                        StreamPayload {
-                            conversation_id: conversation_id.clone(),
-                            token: batch,
-                            done: false,
-                            thinking: true,
-                            message_id: None,
-                        },
-                    );
-                }
                 if !pending.is_empty() {
                     let batch = std::mem::take(&mut pending);
                     let _ = app_handle.emit(
@@ -1608,11 +1657,11 @@ pub async fn run_stream(
                     // 否则 follow-up 累加进同一变量会让两段在同一气泡里拼接显示。
                     let first_bubble_text = accumulated.clone();
                     tracing::info!(
-                        "[run_stream] handling_tools: conv={} assistant_msg={} first_bubble_len={} thinking_len={} tool_calls={}",
+                        "[run_stream] handling_tools: conv={} assistant_msg={} first_bubble_len={} saw_thinking={} tool_calls={}",
                         conversation_id,
                         assistant_message_id,
                         first_bubble_text.len(),
-                        accumulated_thinking.len(),
+                        saw_thinking,
                         tool_calls_received.len()
                     );
                     let first_bubble_visible = !first_bubble_text.trim().is_empty();
@@ -1624,15 +1673,6 @@ pub async fn run_stream(
                         )
                         .await
                         .ok();
-                        if !accumulated_thinking.is_empty() {
-                            conversations::update_message_thinking(
-                                &conv_pool,
-                                &assistant_message_id,
-                                &accumulated_thinking,
-                            )
-                            .await
-                            .ok();
-                        }
                         conversations::mark_message_complete(&conv_pool, &assistant_message_id)
                             .await
                             .ok();
@@ -1845,6 +1885,9 @@ pub async fn run_stream(
                             tool_calls_received.len()
                         );
                     }
+                    if let Some(notice) = append_uncertainty_notice_if_needed(&mut followup_accumulated) {
+                        emit_stream_token(&app_handle, &conversation_id, Some(&followup_id), notice, false);
+                    }
                     conversations::update_message_content(
                         &conv_pool,
                         &followup_id,
@@ -1925,6 +1968,9 @@ pub async fn run_stream(
                 }
 
                 // Save final message
+                if let Some(notice) = append_uncertainty_notice_if_needed(&mut accumulated) {
+                    emit_stream_token(&app_handle, &conversation_id, None, notice, false);
+                }
                 conversations::update_message_content(
                     &conv_pool,
                     &assistant_message_id,
@@ -1932,15 +1978,6 @@ pub async fn run_stream(
                 )
                 .await
                 .ok();
-                if !accumulated_thinking.is_empty() {
-                    conversations::update_message_thinking(
-                        &conv_pool,
-                        &assistant_message_id,
-                        &accumulated_thinking,
-                    )
-                    .await
-                    .ok();
-                }
                 conversations::mark_message_complete(&conv_pool, &assistant_message_id)
                     .await
                     .ok();
@@ -1997,6 +2034,9 @@ pub async fn run_stream(
                     );
                 }
 
+                if let Some(notice) = append_uncertainty_notice_if_needed(&mut accumulated) {
+                    emit_stream_token(&app_handle, &conversation_id, None, notice, false);
+                }
                 conversations::update_message_content(
                     &conv_pool,
                     &assistant_message_id,
@@ -2004,15 +2044,6 @@ pub async fn run_stream(
                 )
                 .await
                 .ok();
-                if !accumulated_thinking.is_empty() {
-                    conversations::update_message_thinking(
-                        &conv_pool,
-                        &assistant_message_id,
-                        &accumulated_thinking,
-                    )
-                    .await
-                    .ok();
-                }
                 conversations::mark_message_complete(&conv_pool, &assistant_message_id)
                     .await
                     .ok();
@@ -3101,22 +3132,75 @@ mod tests {
     }
 
     #[test]
-    fn test_sse_thinking_maps_to_thinking_payload() {
-        // WHY: opencode reasoning must stay visually separated from final text;
-        // otherwise ChatStream would render internal thinking as normal content.
+    fn test_sse_thinking_is_not_mapped_to_user_visible_payload() {
         let payload = stream_payload_from_sse(
             "conv-1",
             Some("msg-1"),
             crate::models::agent::SseEvent::Thinking {
                 content: "plan".to_string(),
             },
-        )
-        .expect("thinking should map to payload");
+        );
 
-        assert_eq!(payload.token, "plan");
-        assert!(!payload.done);
-        assert!(payload.thinking);
-        assert_eq!(payload.message_id.as_deref(), Some("msg-1"));
+        assert!(payload.is_none());
+    }
+
+    #[test]
+    fn test_bus_delta_waits_for_part_type_before_emitting_unknown_part() {
+        let visible_text_parts = std::collections::HashSet::new();
+        let hidden_parts = std::collections::HashSet::new();
+        let properties = serde_json::json!({
+            "field": "text",
+            "partID": "part-1",
+            "delta": "hidden reasoning"
+        });
+
+        assert_eq!(
+            classify_bus_text_delta(&properties, &visible_text_parts, &hidden_parts),
+            BusTextDeltaDecision::WaitForPartType
+        );
+    }
+
+    #[test]
+    fn test_bus_delta_skips_hidden_part_even_when_type_arrives_on_delta() {
+        let visible_text_parts = std::collections::HashSet::new();
+        let hidden_parts = std::collections::HashSet::new();
+        let reasoning_properties = serde_json::json!({
+            "field": "text",
+            "partID": "part-1",
+            "partType": "reasoning",
+            "delta": "hidden reasoning"
+        });
+        let thinking_properties = serde_json::json!({
+            "field": "text",
+            "partID": "part-2",
+            "part": { "type": "thinking" },
+            "delta": "hidden thinking"
+        });
+
+        assert_eq!(
+            classify_bus_text_delta(&reasoning_properties, &visible_text_parts, &hidden_parts),
+            BusTextDeltaDecision::SkipHidden
+        );
+        assert_eq!(
+            classify_bus_text_delta(&thinking_properties, &visible_text_parts, &hidden_parts),
+            BusTextDeltaDecision::SkipHidden
+        );
+    }
+
+    #[test]
+    fn test_bus_delta_emits_known_visible_text_part() {
+        let visible_text_parts = std::collections::HashSet::from(["part-1".to_string()]);
+        let hidden_parts = std::collections::HashSet::new();
+        let properties = serde_json::json!({
+            "field": "text",
+            "partID": "part-1",
+            "delta": "visible text"
+        });
+
+        assert_eq!(
+            classify_bus_text_delta(&properties, &visible_text_parts, &hidden_parts),
+            BusTextDeltaDecision::EmitText
+        );
     }
 
     #[test]
@@ -3541,11 +3625,214 @@ mod tests {
 
         let summary = build_butler_memory_summary(&main_pool).await.unwrap();
 
+        let global_memory = crate::db::memories::list_memories(&main_pool, None, None, None, None)
+            .await
+            .unwrap()
+            .remove(0);
+        let role_memory = crate::db::memories::list_memories(
+            &main_pool,
+            Some("role-1"),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap()
+        .remove(0);
+
         assert!(summary.contains("[已知记忆]"));
         assert!(summary.contains("全局记忆"));
-        assert!(summary.contains("用户希望用中文沟通"));
+        assert!(summary.contains(&format!(
+            "[[记忆#{}]](egosync-memory://{})",
+            format_memory_reference_label(&global_memory),
+            global_memory.id
+        )));
+        assert!(!summary.contains(&format!(" {}", global_memory.id)));
+        assert!(summary.contains("[preference] 用户希望用中文沟通"));
         assert!(summary.contains("父亲"));
-        assert!(summary.contains("儿子喜欢书法课"));
+        assert!(summary.contains(&format!(
+            "[[记忆#{}]](egosync-memory://{})",
+            format_memory_reference_label(&role_memory),
+            role_memory.id
+        )));
+        assert!(!summary.contains(&format!(" {}", role_memory.id)));
+        assert!(summary.contains("[fact] 儿子喜欢书法课"));
+        assert!(!summary.contains("- [preference] 用户希望用中文沟通"));
+    }
+
+    #[tokio::test]
+    async fn test_role_memory_summary_includes_only_current_role_visible_memories() {
+        let main_pool = setup_test_main_pool().await;
+        let pm = crate::db::roles::create_role(
+            &main_pool,
+            &CreateRoleInput {
+                name: "产品经理".to_string(),
+                icon: None,
+                color: None,
+                goal: Some("打磨产品节奏".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+        let father = crate::db::roles::create_role(
+            &main_pool,
+            &CreateRoleInput {
+                name: "父亲".to_string(),
+                icon: None,
+                color: None,
+                goal: None,
+            },
+        )
+        .await
+        .unwrap();
+        crate::db::memories::insert_memories(
+            &main_pool,
+            Some(&pm.id),
+            "pm-conv",
+            &[crate::models::memory::ExtractedMemory {
+                category: "preference".to_string(),
+                content: "产品建议需要先给依据".to_string(),
+                source_message_ids: vec!["pm-msg".to_string()],
+            }],
+        )
+        .await
+        .unwrap();
+        crate::db::memories::insert_memories(
+            &main_pool,
+            Some(&father.id),
+            "father-conv",
+            &[crate::models::memory::ExtractedMemory {
+                category: "fact".to_string(),
+                content: "周五有家庭聚餐".to_string(),
+                source_message_ids: vec!["father-msg".to_string()],
+            }],
+        )
+        .await
+        .unwrap();
+        let pm_memory = crate::db::memories::list_memories(&main_pool, Some(&pm.id), None, None, None)
+            .await
+            .unwrap()
+            .remove(0);
+
+        let summary = build_role_memory_summary(&main_pool, &pm.id).await.unwrap();
+
+        assert!(summary.contains("[当前角色记忆]"));
+        assert!(summary.contains("产品经理"));
+        assert!(summary.contains(&format!(
+            "[[记忆#{}]](egosync-memory://{})",
+            format_memory_reference_label(&pm_memory),
+            pm_memory.id
+        )));
+        assert!(!summary.contains(&format!(" {}", pm_memory.id)));
+        assert!(summary.contains("[preference] 产品建议需要先给依据"));
+        assert!(!summary.contains("周五有家庭聚餐"));
+    }
+
+    #[tokio::test]
+    async fn test_role_messages_include_memory_time_labels_and_transparency_rules() {
+        let main_pool = setup_test_main_pool().await;
+        let conv_pool = setup_test_conv_pool().await;
+        let role = crate::db::roles::create_role(
+            &main_pool,
+            &CreateRoleInput {
+                name: "产品经理".to_string(),
+                icon: None,
+                color: None,
+                goal: Some("打磨产品节奏".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+        crate::db::memories::insert_memories(
+            &main_pool,
+            Some(&role.id),
+            "pm-conv",
+            &[crate::models::memory::ExtractedMemory {
+                category: "fact".to_string(),
+                content: "周五有产品评审".to_string(),
+                source_message_ids: vec!["pm-msg".to_string()],
+            }],
+        )
+        .await
+        .unwrap();
+        let memory = crate::db::memories::list_memories(&main_pool, Some(&role.id), None, None, None)
+            .await
+            .unwrap()
+            .remove(0);
+        let conv = crate::db::conversations::create_conversation(&conv_pool, Some(&role.id))
+            .await
+            .unwrap();
+
+        let msgs = build_role_messages(&conv_pool, &main_pool, &conv.id, &role.id, "为什么这样排？")
+            .await
+            .unwrap();
+        let system = &msgs.first().unwrap().content;
+
+        assert!(system.contains(&format!(
+            "[[记忆#{}]](egosync-memory://{})",
+            format_memory_reference_label(&memory),
+            memory.id
+        )));
+        assert!(!system.contains(&format!(" {}", memory.id)));
+        assert!(system.contains("[透明推理与不确定性规则]"));
+        assert!(!system.contains("必须使用本 prompt 中的 `[[记忆#YYYY/MM/DD HH:mm]](egosync-memory://memory-id)` 内部链接标注来源"));
+        assert!(system.contains("用户没有明确要求来源、依据、原文或你怎么知道时，不要主动展示记忆标签或内部链接"));
+        assert!(system.contains("只有用户明确询问为什么、依据是什么、你怎么知道的、来源或原文时，才使用本 prompt 中的记忆内部链接"));
+        assert!(system.contains("溯源回答必须原样输出本 prompt 中已有的记忆内部链接"));
+        assert!(system.contains("不要把来源改写成自然语言时间"));
+        assert!(system.contains("不得编造记忆标签"));
+        assert!(system.contains("不确定时主动声明"));
+        assert!(system.contains("不暴露隐藏 chain-of-thought"));
+    }
+
+    #[tokio::test]
+    async fn test_prompt_context_excludes_forgotten_memory_after_delete() {
+        let main_pool = setup_test_main_pool().await;
+        let conv_pool = setup_test_conv_pool().await;
+        crate::db::memories::insert_memories(
+            &main_pool,
+            None,
+            "global-conv",
+            &[crate::models::memory::ExtractedMemory {
+                category: "fact".to_string(),
+                content: "用户周五有家庭聚餐".to_string(),
+                source_message_ids: vec!["global-msg".to_string()],
+            }],
+        )
+        .await
+        .unwrap();
+        let memory = crate::db::memories::list_memories(&main_pool, None, None, None, None)
+            .await
+            .unwrap()
+            .remove(0);
+        crate::db::memories::delete_memory(&main_pool, &memory.id)
+            .await
+            .unwrap();
+        let conv = crate::db::conversations::get_or_create_butler_conversation(&conv_pool)
+            .await
+            .unwrap();
+
+        let msgs = build_butler_messages(&conv_pool, &main_pool, &conv.id, "为什么？")
+            .await
+            .unwrap();
+        let system = &msgs.first().unwrap().content;
+
+        assert!(!system.contains(&memory.id));
+        assert!(!system.contains("用户周五有家庭聚餐"));
+    }
+
+    #[test]
+    fn test_uncertainty_notice_appends_only_for_hedged_visible_assistant_text() {
+        let mut hedged = "这个安排可能更合适。".to_string();
+        let appended = append_uncertainty_notice_if_needed(&mut hedged);
+        assert_eq!(appended, Some(UNCERTAINTY_NOTICE));
+        assert!(hedged.contains(UNCERTAINTY_NOTICE));
+
+        let mut already_clear = "我不太确定这个判断，建议你自己评估一下。".to_string();
+        assert_eq!(append_uncertainty_notice_if_needed(&mut already_clear), None);
+
+        let mut confident = "这个安排更合适。".to_string();
+        assert_eq!(append_uncertainty_notice_if_needed(&mut confident), None);
     }
 
     #[tokio::test]

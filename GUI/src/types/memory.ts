@@ -13,6 +13,7 @@ export interface Memory {
 export interface MemorySourceMessage {
   id: string;
   conversationId: string;
+  roleId: string | null;
   role: 'user' | 'assistant' | string;
   content: string;
   createdAt: string;

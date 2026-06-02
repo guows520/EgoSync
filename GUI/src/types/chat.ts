@@ -38,3 +38,9 @@ export interface StreamPayload {
   /** Story 2.3: 后端切换到新 assistant 气泡时携带其 id；普通单段流式不带。 */
   messageId?: string | null;
 }
+
+export interface SourceNavigationTarget {
+  conversationId: string;
+  messageId: string;
+  roleId: string | null;
+}

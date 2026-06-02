@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Clock } from 'lucide-react';
 import { useMemories } from '../../hooks/useMemories';
 import { memoryService } from '../../services/memoryService';
 import type { MemoryCategory, MemorySourceMessage } from '../../types/memory';
+import type { SourceNavigationTarget } from '../../types/chat';
 import { cn } from '../../lib/utils';
 
 interface MemoryTabProps {
@@ -15,6 +16,9 @@ interface MemoryTabProps {
   /** 受控回调。传入后由父组件持有筛选状态（用于 badge 联动）；不传则组件内部自管。 */
   onCategoryChange?: (category: MemoryCategory | undefined) => void;
   onMemoryDeleted?: () => void;
+  targetMemoryId?: string | null;
+  onTargetMemoryHandled?: () => void;
+  onSourceMessageClick?: (target: SourceNavigationTarget) => void;
 }
 
 const categoryLabels: Record<MemoryCategory, string> = {
@@ -40,19 +44,32 @@ interface SourceState {
 function formatMemoryTime(createdAt: string) {
   const date = new Date(createdAt);
   if (Number.isNaN(date.getTime())) return createdAt;
-  return date.toLocaleString('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hour = String(date.getHours()).padStart(2, '0');
+  const minute = String(date.getMinutes()).padStart(2, '0');
+  return `${year}/${month}/${day} ${hour}:${minute}`;
 }
 
 function roleLabel(role: string) {
   if (role === 'user') return '用户';
   if (role === 'assistant') return '助手';
   return role;
+}
+
+type TargetResolution =
+  | { status: 'resolved'; id: string }
+  | { status: 'not-found' }
+  | { status: 'ambiguous' };
+
+function resolveTargetMemoryId(memories: Array<{ id: string; createdAt: string }>, targetMemoryId: string): TargetResolution {
+  const byId = memories.find(memory => memory.id === targetMemoryId);
+  if (byId) return { status: 'resolved', id: byId.id };
+  const byTime = memories.filter(memory => formatMemoryTime(memory.createdAt) === targetMemoryId);
+  if (byTime.length === 1) return { status: 'resolved', id: byTime[0].id };
+  if (byTime.length > 1) return { status: 'ambiguous' };
+  return { status: 'not-found' };
 }
 
 export function MemoryTab({
@@ -63,6 +80,9 @@ export function MemoryTab({
   category,
   onCategoryChange,
   onMemoryDeleted,
+  targetMemoryId,
+  onTargetMemoryHandled,
+  onSourceMessageClick,
 }: MemoryTabProps) {
   const isControlled = onCategoryChange !== undefined;
   const [internalCategory, setInternalCategory] = useState<MemoryCategory | undefined>();
@@ -76,7 +96,12 @@ export function MemoryTab({
   const [confirmingMemoryId, setConfirmingMemoryId] = useState<string | null>(null);
   const [deletingMemoryId, setDeletingMemoryId] = useState<string | null>(null);
   const [deleteErrors, setDeleteErrors] = useState<Record<string, string>>({});
+  const [highlightedMemoryId, setHighlightedMemoryId] = useState<string | null>(null);
+  const [targetUnavailable, setTargetUnavailable] = useState(false);
+  const [targetAmbiguous, setTargetAmbiguous] = useState(false);
+  const memoryRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const sourceRequestIds = useRef<Record<string, number>>({});
+  const highlightTimeout = useRef<number | null>(null);
   const { memories, isLoading, error, refetch } = useMemories({
     roleId,
     includeRoleMemories,
@@ -88,11 +113,16 @@ export function MemoryTab({
     setConfirmingMemoryId(null);
     setDeletingMemoryId(null);
     setDeleteErrors({});
+    setTargetUnavailable(false);
+    setTargetAmbiguous(false);
   }, [includeRoleMemories, roleId, selectedCategory]);
 
   useEffect(() => {
     return () => {
       sourceRequestIds.current = {};
+      if (highlightTimeout.current !== null) {
+        window.clearTimeout(highlightTimeout.current);
+      }
     };
   }, []);
 
@@ -187,7 +217,40 @@ export function MemoryTab({
   const emptyCopy = includeRoleMemories
     ? '还没有记忆，多聊几次，我会慢慢记住重要的事'
     : '还没有记忆，多和这个角色聊聊吧';
-  const visibleMemories = memories.filter(memory => memory.category !== 'task_status');
+  const visibleMemories = useMemo(
+    () => memories.filter(memory => memory.category !== 'task_status'),
+    [memories]
+  );
+
+  useEffect(() => {
+    if (!targetMemoryId || isLoading || error) return;
+    const resolvedTarget = resolveTargetMemoryId(visibleMemories, targetMemoryId);
+    if (resolvedTarget.status === 'not-found') {
+      setTargetUnavailable(true);
+      setTargetAmbiguous(false);
+      onTargetMemoryHandled?.();
+      return;
+    }
+    if (resolvedTarget.status === 'ambiguous') {
+      setTargetUnavailable(false);
+      setTargetAmbiguous(true);
+      onTargetMemoryHandled?.();
+      return;
+    }
+
+    setTargetUnavailable(false);
+    setTargetAmbiguous(false);
+    setHighlightedMemoryId(resolvedTarget.id);
+    memoryRefs.current[resolvedTarget.id]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    onTargetMemoryHandled?.();
+    if (highlightTimeout.current !== null) {
+      window.clearTimeout(highlightTimeout.current);
+    }
+    highlightTimeout.current = window.setTimeout(() => {
+      setHighlightedMemoryId(current => (current === resolvedTarget.id ? null : current));
+      highlightTimeout.current = null;
+    }, 1800);
+  }, [error, isLoading, onTargetMemoryHandled, targetMemoryId, visibleMemories]);
 
   return (
     <div className="space-y-4">
@@ -215,6 +278,16 @@ export function MemoryTab({
 
       {isLoading && <div className="text-[14px] text-slate-500">正在加载记忆...</div>}
       {!isLoading && error && <div className="text-[14px] text-red-500">{error}</div>}
+      {!isLoading && !error && targetUnavailable && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[13px] text-amber-700">
+          这条记忆现在不可用，可能已经被遗忘了
+        </div>
+      )}
+      {!isLoading && !error && targetAmbiguous && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[13px] text-amber-700">
+          这条记忆引用不唯一，无法准确定位
+        </div>
+      )}
       {!isLoading && !error && visibleMemories.length === 0 && (
         <div className="text-[14px] text-slate-500">{emptyCopy}</div>
       )}
@@ -227,7 +300,18 @@ export function MemoryTab({
         const isDeleting = deletingMemoryId === memory.id;
         const deleteError = deleteErrors[memory.id];
         return (
-          <div key={memory.id} className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm hover:shadow-md transition-shadow">
+          <div
+            key={memory.id}
+            id={`memory-${memory.id}`}
+            data-testid={`memory-card-${memory.id}`}
+            ref={node => {
+              memoryRefs.current[memory.id] = node;
+            }}
+            className={cn(
+              'bg-white border border-slate-200 rounded-xl p-5 shadow-sm hover:shadow-md transition-shadow',
+              highlightedMemoryId === memory.id && 'ring-2 ring-indigo-400 bg-indigo-50/40'
+            )}
+          >
             <div className="flex justify-between items-start mb-3">
               <h4 className="text-[15px] font-medium text-slate-800 flex items-center gap-2">
                 <span className="text-indigo-500">🧠</span> {categoryLabels[memory.category]}
@@ -311,13 +395,20 @@ export function MemoryTab({
                   <div className="text-[13px] text-slate-500">来源对话已不可用</div>
                 )}
                 {sourceState?.messages?.map(message => (
-                  <div
+                  <button
                     key={message.id}
+                    type="button"
+                    onClick={() => onSourceMessageClick?.({
+                      conversationId: message.conversationId,
+                      messageId: message.id,
+                      roleId: message.roleId,
+                    })}
+                    aria-label={`跳转到来源消息 ${formatMemoryTime(message.createdAt)}`}
                     className={cn(
-                      'rounded-lg border p-3 text-[13px]',
+                      'w-full rounded-lg border p-3 text-left text-[13px] transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:ring-offset-1',
                       message.isSource
-                        ? 'border-indigo-200 bg-indigo-50/70'
-                        : 'border-slate-200 bg-white'
+                        ? 'border-indigo-200 bg-indigo-50/70 hover:bg-indigo-100/70'
+                        : 'border-slate-200 bg-white hover:bg-slate-50'
                     )}
                   >
                     <div className="flex items-center justify-between gap-3 mb-1.5 text-[11px] text-slate-400">
@@ -325,7 +416,7 @@ export function MemoryTab({
                       <span>{formatMemoryTime(message.createdAt)}</span>
                     </div>
                     <p className="text-slate-700 leading-relaxed whitespace-pre-wrap">{message.content}</p>
-                  </div>
+                  </button>
                 ))}
               </div>
             )}

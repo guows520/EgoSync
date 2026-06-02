@@ -7,16 +7,30 @@ import { SettingsTab } from './SettingsTab';
 import { memoryService } from '../../services/memoryService';
 import type { MemoryCategory } from '../../types/memory';
 
-export function RoleWorkspacePanel({ role, currentTab, setTab, onOpenTask, onUpdateRole, onArchiveRole, onDeleteRole, activeRoleCount }: any) {
+export function RoleWorkspacePanel({
+  role,
+  currentTab,
+  setTab,
+  onOpenTask,
+  onUpdateRole,
+  onArchiveRole,
+  onDeleteRole,
+  activeRoleCount,
+  targetMemoryId,
+  onTargetMemoryHandled,
+  onSourceMessageClick,
+}: any) {
   const [memoryCount, setMemoryCount] = useState<number | null>(null);
   const [memoryCategory, setMemoryCategory] = useState<MemoryCategory | undefined>();
   const [memoryCountReloadKey, setMemoryCountReloadKey] = useState(0);
+
+  const effectiveMemoryCategory = targetMemoryId ? undefined : memoryCategory;
 
   useEffect(() => {
     let cancelled = false;
     setMemoryCount(null);
     memoryService
-      .count({ roleId: role.id, category: memoryCategory })
+      .count({ roleId: role.id, category: effectiveMemoryCategory })
       .then(count => {
         if (!cancelled) setMemoryCount(count);
       })
@@ -28,7 +42,22 @@ export function RoleWorkspacePanel({ role, currentTab, setTab, onOpenTask, onUpd
     return () => {
       cancelled = true;
     };
-  }, [role.id, memoryCategory, memoryCountReloadKey]);
+  }, [role.id, effectiveMemoryCategory, memoryCountReloadKey]);
+
+  useEffect(() => {
+    if (!targetMemoryId) return;
+    setMemoryCategory(undefined);
+    setTab('memory');
+  }, [setTab, targetMemoryId]);
+
+  const handleMemoryCategoryChange = (next: MemoryCategory | undefined) => {
+    if (targetMemoryId) {
+      setMemoryCategory(undefined);
+      setMemoryCountReloadKey(key => key + 1);
+      return;
+    }
+    setMemoryCategory(next);
+  };
 
   const memoryLabel = memoryCount === null ? '记忆档案' : `记忆档案 (${memoryCount})`;
 
@@ -56,9 +85,12 @@ export function RoleWorkspacePanel({ role, currentTab, setTab, onOpenTask, onUpd
         {currentTab === 'memory' && (
           <MemoryTab
             roleId={role.id}
-            category={memoryCategory}
-            onCategoryChange={setMemoryCategory}
+            category={effectiveMemoryCategory}
+            onCategoryChange={handleMemoryCategoryChange}
             onMemoryDeleted={() => setMemoryCountReloadKey(key => key + 1)}
+            targetMemoryId={targetMemoryId}
+            onTargetMemoryHandled={onTargetMemoryHandled}
+            onSourceMessageClick={onSourceMessageClick}
           />
         )}
         {currentTab === 'settings' && (

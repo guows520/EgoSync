@@ -382,6 +382,14 @@ pub async fn chat_get_history(
 }
 
 #[tauri::command]
+pub async fn chat_get_conversation(
+    conversation_id: String,
+    conv_pool: State<'_, ConversationsPool>,
+) -> Result<Option<Conversation>, AppError> {
+    conversations::get_conversation(&conv_pool, &conversation_id).await
+}
+
+#[tauri::command]
 pub async fn chat_get_butler_conversation(
     conv_pool: State<'_, ConversationsPool>,
 ) -> Result<Conversation, AppError> {
@@ -552,6 +560,27 @@ mod tests {
             .await
             .expect("add routing_metadata");
         ConversationsPool(pool)
+    }
+
+    #[tokio::test]
+    async fn chat_get_conversation_returns_none_for_deleted_source_conversation() {
+        let pool = setup_conversation_pool().await;
+        let conv = conversations::create_conversation(&pool, None)
+            .await
+            .expect("create conversation");
+        let found = conversations::get_conversation(&pool, &conv.id)
+            .await
+            .expect("query existing conversation");
+        assert!(found.is_some());
+
+        conversations::delete_conversation(&pool, &conv.id)
+            .await
+            .expect("delete conversation");
+
+        let missing = conversations::get_conversation(&pool, &conv.id)
+            .await
+            .expect("query deleted conversation");
+        assert!(missing.is_none());
     }
 
     #[tokio::test]

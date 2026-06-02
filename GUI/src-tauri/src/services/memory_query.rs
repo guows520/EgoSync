@@ -57,6 +57,8 @@ pub async fn get_source_messages(
     }
 
     let source_id_set = source_message_ids.into_iter().collect::<HashSet<_>>();
+    let source_conversation = conversations::get_conversation(conversations_pool, &memory.source_conversation_id).await?;
+    let source_role_id = source_conversation.and_then(|conversation| conversation.role_id);
     let messages =
         conversations::list_messages(conversations_pool, &memory.source_conversation_id).await?;
     let source_messages = messages
@@ -66,6 +68,7 @@ pub async fn get_source_messages(
         .map(|message| MemorySourceMessage {
             id: message.id,
             conversation_id: message.conversation_id,
+            role_id: source_role_id.clone(),
             role: message.role,
             content: message.content,
             created_at: message.created_at,
@@ -220,10 +223,46 @@ mod tests {
         assert_eq!(source_messages.len(), 2);
         assert_eq!(source_messages[0].id, msg_1.id);
         assert_eq!(source_messages[1].id, msg_3.id);
+        assert!(source_messages.iter().all(|message| message.role_id.is_none()));
         assert!(source_messages.iter().all(|message| message.is_source));
         let value = serde_json::to_value(&source_messages[0]).expect("serialize dto");
         assert!(value.get("thinkingContent").is_none());
         assert!(value.get("routingMetadata").is_none());
+    }
+
+    #[tokio::test]
+    async fn get_source_messages_returns_source_conversation_role_id() {
+        let main_pool = setup_main_pool().await;
+        let conv_pool = setup_conversations_pool().await;
+        sqlx::query("INSERT INTO roles (id, name, goal) VALUES ('memory-role', '孩子', '记录孩子信息'), ('source-role', '父亲', '父亲对话')")
+            .execute(&main_pool)
+            .await
+            .expect("insert roles");
+        let conversation = conversations::create_conversation(&conv_pool, Some("source-role"))
+            .await
+            .expect("create source conversation");
+        let msg = conversations::insert_message(&conv_pool, &conversation.id, "user", "儿子喜欢吃薯条", true)
+            .await
+            .expect("insert source message");
+        memories::insert_memories(
+            &main_pool,
+            Some("memory-role"),
+            &conversation.id,
+            &[extracted("fact", "儿子喜欢吃薯条", vec![&msg.id])],
+        )
+        .await
+        .expect("insert role memory");
+        let memory = memories::list_memories(&main_pool, Some("memory-role"), None, None, None)
+            .await
+            .expect("list role memories")
+            .remove(0);
+
+        let source_messages = get_source_messages(&main_pool, &conv_pool, &memory.id)
+            .await
+            .expect("get source messages");
+
+        assert_eq!(source_messages.len(), 1);
+        assert_eq!(source_messages[0].role_id.as_deref(), Some("source-role"));
     }
 
     #[tokio::test]

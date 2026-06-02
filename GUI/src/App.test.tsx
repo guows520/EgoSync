@@ -34,11 +34,35 @@ vi.mock('./components/layout/Sidebar', () => ({
 }))
 
 vi.mock('./components/butler/ButlerView', () => ({
-  ButlerView: () => <div>管家视图</div>,
+  ButlerView: ({ sourceNavigationTarget, onSourceNavigationHandled, onRoleSourceNavigation }: any) => (
+    <div>
+      <div>管家视图</div>
+      <div data-testid="app-butler-source-target">{sourceNavigationTarget?.messageId ?? 'none'}</div>
+      <button type="button" onClick={() => onSourceNavigationHandled?.()}>管家来源处理完成</button>
+      <button
+        type="button"
+        onClick={() => onRoleSourceNavigation?.({ conversationId: 'conv-role-source', messageId: 'msg-role-source', roleId: 'role-fitness' })}
+      >
+        管家来源跳角色
+      </button>
+    </div>
+  ),
 }))
 
 vi.mock('./components/role/RoleView', () => ({
-  RoleView: () => <div>角色视图</div>,
+  RoleView: ({ sourceNavigationTarget, onSourceNavigationHandled, onButlerSourceNavigation }: any) => (
+    <div>
+      <div>角色视图</div>
+      <div data-testid="app-role-source-target">{sourceNavigationTarget?.messageId ?? 'none'}</div>
+      <button type="button" onClick={() => onSourceNavigationHandled?.()}>角色来源处理完成</button>
+      <button
+        type="button"
+        onClick={() => onButlerSourceNavigation?.({ conversationId: 'conv-butler-source', messageId: 'msg-butler-source', roleId: null })}
+      >
+        角色来源跳管家
+      </button>
+    </div>
+  ),
 }))
 
 vi.mock('./components/onboarding/OnboardingView', () => ({
@@ -97,7 +121,7 @@ let roleProposedHandler: ((payload: RoleProposedPayload) => void) | undefined
 
 function mockNormalLaunch() {
   vi.mocked(appService.isFirstLaunch).mockResolvedValue(false)
-  vi.mocked(roleService.list).mockResolvedValue([])
+  vi.mocked(roleService.list).mockResolvedValue([createdRole])
   vi.mocked(roleService.listArchived).mockResolvedValue([])
   vi.mocked(roleService.create).mockResolvedValue(createdRole)
   vi.mocked(useTauriEvent).mockImplementation((eventName, handler) => {
@@ -134,8 +158,10 @@ describe('App', () => {
     })
 
     expect(await screen.findByRole('dialog')).toBeInTheDocument()
+    const createButton = screen.getByRole('button', { name: '创建' })
+    await waitFor(() => expect(createButton).toBeEnabled())
 
-    fireEvent.click(screen.getByRole('button', { name: '创建' }))
+    fireEvent.click(createButton)
 
     await waitFor(() => {
       expect(roleService.create).toHaveBeenCalledWith({
@@ -146,5 +172,38 @@ describe('App', () => {
       })
     })
     await waitFor(() => expect(roleService.list).toHaveBeenCalledTimes(2))
+  })
+
+  it('管家来源记录指向角色对话时切换到角色视图并传递来源定位目标', async () => {
+    render(<App />)
+
+    await waitFor(() => expect(roleService.list).toHaveBeenCalledTimes(1))
+    expect(screen.getByRole('button', { name: '管家来源跳角色' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '管家来源跳角色' }))
+
+    expect(await screen.findByText('角色视图')).toBeInTheDocument()
+    expect(screen.getByTestId('app-role-source-target')).toHaveTextContent('msg-role-source')
+
+    fireEvent.click(screen.getByRole('button', { name: '角色来源处理完成' }))
+
+    expect(screen.getByTestId('app-role-source-target')).toHaveTextContent('none')
+  })
+
+  it('角色来源记录指向管家对话时切回管家视图并传递来源定位目标', async () => {
+    render(<App />)
+
+    await waitFor(() => expect(roleService.list).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', { name: '管家来源跳角色' }))
+    expect(await screen.findByText('角色视图')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '角色来源跳管家' }))
+
+    expect(await screen.findByText('管家视图')).toBeInTheDocument()
+    expect(screen.getByTestId('app-butler-source-target')).toHaveTextContent('msg-butler-source')
+
+    fireEvent.click(screen.getByRole('button', { name: '管家来源处理完成' }))
+
+    expect(screen.getByTestId('app-butler-source-target')).toHaveTextContent('none')
   })
 })

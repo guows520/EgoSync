@@ -4,6 +4,7 @@ import { RoleHeader, type RoleViewTab } from './RoleHeader';
 import { RoleWorkspacePanel } from './RoleWorkspacePanel';
 import { ChatStream } from '../chat/ChatStream';
 import type { Role } from '../../types/role';
+import type { SourceNavigationTarget } from '../../types/chat';
 
 interface RoleViewProps {
   role: Role;
@@ -14,6 +15,10 @@ interface RoleViewProps {
   onArchiveRole: (id: string) => Promise<void> | void;
   onDeleteRole: (id: string) => Promise<void> | void;
   activeRoleCount: number;
+  sourceNavigationTarget?: SourceNavigationTarget | null;
+  onSourceNavigationHandled?: () => void;
+  onButlerSourceNavigation?: (target: SourceNavigationTarget) => void;
+  onRoleSourceNavigation?: (target: SourceNavigationTarget) => void;
 }
 
 export function RoleView({
@@ -25,10 +30,16 @@ export function RoleView({
   onArchiveRole,
   onDeleteRole,
   activeRoleCount,
+  sourceNavigationTarget: externalSourceNavigationTarget,
+  onSourceNavigationHandled,
+  onButlerSourceNavigation,
+  onRoleSourceNavigation,
 }: RoleViewProps) {
   const [openTab, setOpenTab] = useState<RoleViewTab>(
     (initialTab as RoleViewTab) ?? null,
   );
+  const [targetMemoryId, setTargetMemoryId] = useState<string | null>(null);
+  const [sourceNavigationTarget, setSourceNavigationTarget] = useState<SourceNavigationTarget | null>(null);
 
   useEffect(() => {
     if (initialTab && openTab !== initialTab) {
@@ -38,8 +49,30 @@ export function RoleView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialTab]);
 
+  useEffect(() => {
+    if (!externalSourceNavigationTarget) return;
+    setSourceNavigationTarget(externalSourceNavigationTarget);
+  }, [externalSourceNavigationTarget]);
+
   const toggleTab = (tab: Exclude<RoleViewTab, null>) => {
     setOpenTab(prev => (prev === tab ? null : tab));
+  };
+
+  const handleMemoryReferenceClick = (memoryId: string) => {
+    setTargetMemoryId(memoryId);
+    setOpenTab('memory');
+  };
+
+  const handleSourceMessageClick = (target: SourceNavigationTarget) => {
+    if (target.roleId === role.id) {
+      setSourceNavigationTarget(target);
+      return;
+    }
+    if (target.roleId === null) {
+      onButlerSourceNavigation?.(target);
+      return;
+    }
+    onRoleSourceNavigation?.(target);
   };
 
   return (
@@ -53,7 +86,15 @@ export function RoleView({
             openTab ? 'w-[60%] border-r border-slate-200/60 dark:border-slate-700/60' : 'w-full',
           )}
         >
-          <ChatStream role={role} />
+          <ChatStream
+            role={role}
+            onMemoryReferenceClick={handleMemoryReferenceClick}
+            sourceNavigationTarget={sourceNavigationTarget}
+            onSourceNavigationHandled={() => {
+              setSourceNavigationTarget(null);
+              onSourceNavigationHandled?.();
+            }}
+          />
         </div>
 
         {openTab && (
@@ -67,6 +108,9 @@ export function RoleView({
               onArchiveRole={onArchiveRole}
               onDeleteRole={onDeleteRole}
               activeRoleCount={activeRoleCount}
+              targetMemoryId={targetMemoryId}
+              onTargetMemoryHandled={() => setTargetMemoryId(null)}
+              onSourceMessageClick={handleSourceMessageClick}
             />
           </div>
         )}

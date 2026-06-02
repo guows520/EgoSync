@@ -15,9 +15,12 @@ vi.mock('./TasksTab', () => ({
 }));
 
 vi.mock('./MemoryTab', () => ({
-  MemoryTab: ({ onCategoryChange, onMemoryDeleted }: any) => (
+  MemoryTab: ({ category, targetMemoryId, onCategoryChange, onTargetMemoryHandled, onMemoryDeleted }: any) => (
     <div>
+      <div data-testid="memory-category">{category ?? 'all'}</div>
+      <div data-testid="memory-target">{targetMemoryId ?? 'none'}</div>
       <button type="button" onClick={() => onCategoryChange?.('preference')}>筛选偏好</button>
+      <button type="button" onClick={() => onTargetMemoryHandled?.()}>模拟定位完成</button>
       <button type="button" onClick={() => onMemoryDeleted?.()}>模拟删除成功</button>
     </div>
   ),
@@ -74,22 +77,56 @@ describe('RoleWorkspacePanel memory badge', () => {
     expect(await screen.findByRole('button', { name: '记忆档案 (3)' })).toBeInTheDocument();
   });
 
-  it('删除成功回调后按当前角色与类别重新刷新 badge', async () => {
-    vi.mocked(memoryService.count)
-      .mockResolvedValueOnce(12)
-      .mockResolvedValueOnce(3)
-      .mockResolvedValueOnce(2);
+  it('记忆引用跳转打开 memory tab、清空类别并透传目标 ID', async () => {
+    vi.mocked(memoryService.count).mockResolvedValueOnce(3).mockResolvedValueOnce(12);
+    const setTab = vi.fn();
+    const onTargetMemoryHandled = vi.fn();
 
-    render(<RoleWorkspacePanel role={role} currentTab="memory" setTab={vi.fn()} />);
+    render(
+      <RoleWorkspacePanel
+        role={role}
+        currentTab="memory"
+        setTab={setTab}
+        targetMemoryId="memory-2"
+        onTargetMemoryHandled={onTargetMemoryHandled}
+      />,
+    );
 
-    expect(await screen.findByRole('button', { name: '记忆档案 (12)' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '筛选偏好' }));
     expect(await screen.findByRole('button', { name: '记忆档案 (3)' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '模拟删除成功' }));
+    fireEvent.click(screen.getByRole('button', { name: '筛选偏好' }));
+    expect(await screen.findByRole('button', { name: '记忆档案 (12)' })).toBeInTheDocument();
+    expect(screen.getByTestId('memory-category')).toHaveTextContent('all');
+    expect(screen.getByTestId('memory-target')).toHaveTextContent('memory-2');
+    expect(setTab).toHaveBeenCalledWith('memory');
 
+    fireEvent.click(screen.getByRole('button', { name: '模拟定位完成' }));
+
+    expect(onTargetMemoryHandled).toHaveBeenCalledTimes(1);
+  });
+
+  it('目标记忆到来时立即以未筛选范围传给 MemoryTab，避免旧 category 先误判不可用', async () => {
+    vi.mocked(memoryService.count).mockResolvedValueOnce(3).mockResolvedValueOnce(12);
+    const setTab = vi.fn();
+
+    const { rerender } = render(<RoleWorkspacePanel role={role} currentTab="memory" setTab={setTab} />);
+
+    expect(await screen.findByRole('button', { name: '记忆档案 (3)' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '筛选偏好' }));
     await waitFor(() => {
-      expect(memoryService.count).toHaveBeenLastCalledWith({ roleId: 'role-1', category: 'preference' });
+      expect(screen.getByTestId('memory-category')).toHaveTextContent('preference');
     });
-    expect(await screen.findByRole('button', { name: '记忆档案 (2)' })).toBeInTheDocument();
+
+    rerender(
+      <RoleWorkspacePanel
+        role={role}
+        currentTab="memory"
+        setTab={setTab}
+        targetMemoryId="memory-2"
+        onTargetMemoryHandled={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId('memory-category')).toHaveTextContent('all');
+    expect(screen.getByTestId('memory-target')).toHaveTextContent('memory-2');
   });
 });

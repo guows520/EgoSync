@@ -10,6 +10,7 @@ vi.mock('../../services/chatService', () => ({
   chatService: {
     getButlerConversation: vi.fn(),
     getRoleConversation: vi.fn(),
+    getConversation: vi.fn(),
     listConversations: vi.fn(),
     getHistory: vi.fn(),
     sendMessage: vi.fn(),
@@ -118,6 +119,154 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
     });
     expect(chatService.getButlerConversation).not.toHaveBeenCalled();
     expect(chatService.listConversations).toHaveBeenCalledWith('role-1');
+  });
+
+  it('历史助手消息中的记忆引用点击后回传 memoryId', async () => {
+    vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
+    vi.mocked(chatService.getHistory).mockResolvedValue([
+      chatMessage({
+        id: 'assistant-1',
+        role: 'assistant',
+        content: '依据 [记忆#memory-1] 建议调整。',
+      }),
+    ]);
+    const onMemoryReferenceClick = vi.fn();
+
+    render(<ChatStream role={null} onMemoryReferenceClick={onMemoryReferenceClick} />);
+
+    const reference = await screen.findByRole('button', { name: '打开记忆 memory-1' });
+    fireEvent.click(reference);
+
+    expect(onMemoryReferenceClick).toHaveBeenCalledWith('memory-1');
+  });
+
+  it('streaming 完成后的助手消息记忆引用点击后回传 memoryId', async () => {
+    const getStreamHandler = captureStreamHandler();
+    vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
+    vi.mocked(chatService.sendMessage).mockResolvedValue(chatMessage({ id: 'user-1', content: '为什么' }));
+    vi.mocked(chatService.getHistory)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+    const onMemoryReferenceClick = vi.fn();
+
+    render(<ChatStream role={null} onMemoryReferenceClick={onMemoryReferenceClick} />);
+    await waitFor(() => expect(chatService.getButlerConversation).toHaveBeenCalled());
+    fireEvent.change(screen.getByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...'), { target: { value: '为什么' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await waitFor(() => expect(chatService.sendMessage).toHaveBeenCalled());
+
+    act(() => {
+      const handler = getStreamHandler();
+      handler({ conversationId: 'conv-butler', token: '依据 [记忆#memory-2]', done: false, thinking: false });
+      handler({ conversationId: 'conv-butler', token: '', done: true, thinking: false });
+    });
+
+    const reference = await screen.findByRole('button', { name: '打开记忆 memory-2' });
+    fireEvent.click(reference);
+
+    expect(onMemoryReferenceClick).toHaveBeenCalledWith('memory-2');
+  });
+
+  it('thinking token 中的记忆引用不作为正文链接渲染', async () => {
+    const getStreamHandler = captureStreamHandler();
+    vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
+
+    render(<ChatStream role={null} onMemoryReferenceClick={vi.fn()} />);
+    await waitFor(() => expect(chatService.getButlerConversation).toHaveBeenCalled());
+
+    act(() => {
+      getStreamHandler()({ conversationId: 'conv-butler', token: '[记忆#memory-hidden]', done: false, thinking: true });
+    });
+
+    expect(screen.queryByRole('button', { name: '打开记忆 memory-hidden' })).not.toBeInTheDocument();
+  });
+  it('来源导航目标存在时切换到目标对话并高亮来源消息', async () => {
+    const scrollIntoView = vi.fn();
+    const originalScrollIntoView = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scrollIntoView;
+    vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
+    vi.mocked(chatService.getConversation).mockResolvedValue({
+      ...butlerConv,
+      id: 'conv-source',
+      title: '来源对话',
+    });
+    vi.mocked(chatService.getHistory).mockImplementation(async conversationId => {
+      if (conversationId === 'conv-source') {
+        return [chatMessage({ id: 'msg-source', conversationId: 'conv-source', role: 'user', content: '来源上下文' })];
+      }
+      return [];
+    });
+    const onSourceNavigationHandled = vi.fn();
+
+    try {
+      Object.defineProperty(HTMLElement.prototype, 'scrollHeight', { configurable: true, get: () => 5000 });
+      render(
+        <ChatStream
+          role={null}
+          sourceNavigationTarget={{ conversationId: 'conv-source', messageId: 'msg-source', roleId: null }}
+          onSourceNavigationHandled={onSourceNavigationHandled}
+        />,
+      );
+
+      const sourceMessage = await screen.findByTestId('chat-message-msg-source');
+      Object.defineProperty(sourceMessage, 'offsetTop', { configurable: true, value: 1200 });
+      Object.defineProperty(sourceMessage, 'clientHeight', { configurable: true, value: 100 });
+      const scrollContainer = screen.getByTestId('chat-scroll-container');
+      Object.defineProperty(scrollContainer, 'clientHeight', { configurable: true, value: 400 });
+      expect(sourceMessage).toHaveClass('ring-2');
+      await waitFor(() => expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' }));
+      await waitFor(() => expect(scrollContainer.scrollTop).toBe(1050));
+      expect(scrollContainer.scrollTop).not.toBe(5000);
+      expect(onSourceNavigationHandled).toHaveBeenCalledTimes(1);
+    } finally {
+      delete (HTMLElement.prototype as any).scrollHeight;
+      Element.prototype.scrollIntoView = originalScrollIntoView;
+    }
+  });
+
+  it('来源对话已删除时显示温和提示且不切换历史', async () => {
+    vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
+    vi.mocked(chatService.getConversation).mockResolvedValue(null);
+    const onSourceNavigationHandled = vi.fn();
+
+    render(
+      <ChatStream
+        role={null}
+        sourceNavigationTarget={{ conversationId: 'deleted-conv', messageId: 'missing-msg', roleId: null }}
+        onSourceNavigationHandled={onSourceNavigationHandled}
+      />,
+    );
+
+    expect(await screen.findByText('来源信息已删除，无法跳转')).toBeInTheDocument();
+    expect(onSourceNavigationHandled).toHaveBeenCalledTimes(1);
+  });
+
+  it('来源消息已删除但对话仍存在时显示统一删除提示且不切换历史', async () => {
+    vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
+    vi.mocked(chatService.getConversation).mockResolvedValue({
+      ...butlerConv,
+      id: 'conv-source',
+      title: '来源对话',
+    });
+    vi.mocked(chatService.getHistory).mockImplementation(async conversationId => {
+      if (conversationId === 'conv-source') {
+        return [chatMessage({ id: 'other-msg', conversationId: 'conv-source', role: 'user', content: '来源对话里剩余的消息' })];
+      }
+      return [];
+    });
+    const onSourceNavigationHandled = vi.fn();
+
+    render(
+      <ChatStream
+        role={null}
+        sourceNavigationTarget={{ conversationId: 'conv-source', messageId: 'missing-msg', roleId: null }}
+        onSourceNavigationHandled={onSourceNavigationHandled}
+      />,
+    );
+
+    expect(await screen.findByText('来源信息已删除，无法跳转')).toBeInTheDocument();
+    expect(screen.queryByText('来源对话里剩余的消息')).not.toBeInTheDocument();
+    expect(onSourceNavigationHandled).toHaveBeenCalledTimes(1);
   });
 
   /// AC-2 / AC-7: 角色视图里的"新对话"也必须继续归属于当前角色。
@@ -692,7 +841,7 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
     expect(screen.getByText('新对话').closest('button')).not.toBeDisabled();
   });
 
-  it('只有 thinking token 且历史刷新失败时仍保留可见思考气泡', async () => {
+  it('只有 thinking token 且历史刷新失败时不暴露 raw thinking，但会解锁输入', async () => {
     vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
     vi.mocked(chatService.sendMessage).mockResolvedValue(chatMessage({ id: 'user-1', content: '他喜欢吃薯条' }));
     const getStreamHandler = captureStreamHandler();
@@ -713,7 +862,8 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
     });
 
     await waitFor(() => expect(input).not.toBeDisabled());
-    expect(screen.getByText('思考过程')).toBeInTheDocument();
+    expect(screen.queryByText('思考过程')).not.toBeInTheDocument();
+    expect(screen.queryByText('记录这条饮食偏好')).not.toBeInTheDocument();
     expect(screen.getByText('管家')).toBeInTheDocument();
     expect(screen.getByText('新对话').closest('button')).not.toBeDisabled();
   });

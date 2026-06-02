@@ -1,5 +1,5 @@
 # generated: 2026-05-21
-# last_updated: 2026-06-01T19:15:00+08:00
+# last_updated: 2026-06-02T01:46:16+08:00
 # project: 探索 (EgoSync)
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-21
-last_updated: 2026-06-01T19:55:00+08:00
+last_updated: 2026-06-02T01:46:16+08:00
 project: "探索 (EgoSync)"
 project_key: NOKEY
 tracking_system: file-system
@@ -72,7 +72,7 @@ development_status:
   2-6-conversation-memory-extraction: done
   2-7-memory-panel-traceability: done
   2-8-selective-memory-forget: done
-  2-9-reasoning-transparency-uncertainty: backlog
+  2-9-reasoning-transparency-uncertainty: review
   2-10-role-skill-config-proactivity-ui: backlog
   epic-2-retrospective: optional
 

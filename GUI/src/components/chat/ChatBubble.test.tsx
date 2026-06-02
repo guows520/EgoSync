@@ -1,5 +1,5 @@
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 import { Briefcase } from 'lucide-react';
 import { ChatBubble } from './ChatBubble';
 import type { ChatMessage } from '../../types/chat';
@@ -52,14 +52,93 @@ describe('ChatBubble assistant identity', () => {
     expect(container.querySelectorAll('.animate-bounce-forever')).toHaveLength(3);
   });
 
-  it('完成后的空文本助手气泡仍显示思考入口', () => {
+  it('助手消息中的记忆引用可点击并回传真实 ID，Markdown 仍正常渲染', () => {
+    const onMemoryReferenceClick = vi.fn();
+
     render(
       <ChatBubble
-        message={{ ...assistantMsg, content: '', thinkingContent: '已经记录偏好', isComplete: true }}
+        message={{ ...assistantMsg, content: '**依据** [记忆#memory-1] 建议调整。' }}
+        onMemoryReferenceClick={onMemoryReferenceClick}
       />,
     );
 
-    expect(screen.getByText('思考过程')).toBeInTheDocument();
-    expect(screen.getByText('管家')).toBeInTheDocument();
+    expect(screen.getByText('依据')).toBeInTheDocument();
+    const reference = screen.getByRole('button', { name: '打开记忆 memory-1' });
+
+    fireEvent.click(reference);
+
+    expect(reference).toHaveTextContent('[记忆#memory-1]');
+    expect(onMemoryReferenceClick).toHaveBeenCalledWith('memory-1');
+  });
+
+  it('助手消息中的时间型记忆引用可点击并完整回传时间标签', () => {
+    const onMemoryReferenceClick = vi.fn();
+
+    render(
+      <ChatBubble
+        message={{ ...assistantMsg, content: '依据 [记忆#2026/06/01 17:17] 判断。' }}
+        onMemoryReferenceClick={onMemoryReferenceClick}
+      />,
+    );
+
+    const reference = screen.getByRole('button', { name: '打开记忆 2026/06/01 17:17' });
+    fireEvent.click(reference);
+
+    expect(reference).toHaveTextContent('[记忆#2026/06/01 17:17]');
+    expect(onMemoryReferenceClick).toHaveBeenCalledWith('2026/06/01 17:17');
+  });
+
+  it('助手消息中的内部记忆链接显示时间标签但点击回传真实记忆 ID', () => {
+    const onMemoryReferenceClick = vi.fn();
+
+    render(
+      <ChatBubble
+        message={{ ...assistantMsg, content: '来源：[[记忆#2026/06/02 11:15]](egosync-memory://memory-fries)' }}
+        onMemoryReferenceClick={onMemoryReferenceClick}
+      />,
+    );
+
+    const reference = screen.getByRole('button', { name: '打开记忆 [记忆#2026/06/02 11:15]' });
+    fireEvent.click(reference);
+
+    expect(reference).toHaveTextContent('[记忆#2026/06/02 11:15]');
+    expect(onMemoryReferenceClick).toHaveBeenCalledWith('memory-fries');
+  });
+
+  it('用户消息中的记忆引用保持普通文本且不触发跳转', () => {
+    const onMemoryReferenceClick = vi.fn();
+
+    render(
+      <ChatBubble
+        message={{ ...assistantMsg, role: 'user', content: '我提到 [记忆#memory-1]' }}
+        onMemoryReferenceClick={onMemoryReferenceClick}
+      />,
+    );
+
+    expect(screen.getByText('我提到 [记忆#memory-1]')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '打开记忆 memory-1' })).not.toBeInTheDocument();
+    expect(onMemoryReferenceClick).not.toHaveBeenCalled();
+  });
+
+  it('assistant thinkingContent 不作为用户可见思考过程暴露', () => {
+    render(<ChatBubble message={{ ...assistantMsg, thinkingContent: 'hidden chain of thought' }} />);
+
+    expect(screen.queryByText('思考过程')).not.toBeInTheDocument();
+    expect(screen.queryByText('hidden chain of thought')).not.toBeInTheDocument();
+  });
+
+  it('streaming thinking token 只显示等待点，不展示 raw thinking 文本', () => {
+    const { container } = render(
+      <ChatBubble
+        message={{ ...assistantMsg, content: '', isComplete: false }}
+        isStreaming
+        streamingThinking="hidden streaming thought"
+        isThinkingPhase
+      />,
+    );
+
+    expect(container.querySelectorAll('.animate-bounce-forever')).toHaveLength(3);
+    expect(screen.queryByText('hidden streaming thought')).not.toBeInTheDocument();
+    expect(screen.queryByText('思考中...')).not.toBeInTheDocument();
   });
 });

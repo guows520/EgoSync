@@ -4,6 +4,7 @@ import type { Conversation, ChatMessage, ChatRequest } from '../types/chat';
 export const chatService = {
   sendMessage: (request: ChatRequest) => invoke<ChatMessage>('chat_send_message', { request }),
   getHistory: (conversationId: string) => invoke<ChatMessage[]>('chat_get_history', { conversationId }),
+  getConversation: (conversationId: string) => invoke<Conversation | null>('chat_get_conversation', { conversationId }),
   getButlerConversation: () => invoke<Conversation>('chat_get_butler_conversation'),
   getRoleConversation: (roleId: string) =>
     invoke<Conversation>('chat_get_role_conversation', { roleId }),

@@ -13,6 +13,8 @@ export function useMemories({ roleId, includeRoleMemories = false, category }: U
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [loadedRequestKey, setLoadedRequestKey] = useState<string | null>(null);
+  const requestKey = [includeRoleMemories ? 'all' : 'role', roleId ?? '', category ?? '', reloadKey].join('|');
 
   const refetch = useCallback(() => {
     setReloadKey(key => key + 1);
@@ -30,13 +32,17 @@ export function useMemories({ roleId, includeRoleMemories = false, category }: U
 
     request
       .then(list => {
-        if (!cancelled) setMemories(list);
+        if (!cancelled) {
+          setMemories(list);
+          setLoadedRequestKey(requestKey);
+        }
       })
       .catch(e => {
         console.error('加载记忆失败:', e);
         if (!cancelled) {
           setMemories([]);
           setError('记忆暂时加载失败，请稍后再试');
+          setLoadedRequestKey(requestKey);
         }
       })
       .finally(() => {
@@ -46,7 +52,14 @@ export function useMemories({ roleId, includeRoleMemories = false, category }: U
     return () => {
       cancelled = true;
     };
-  }, [category, includeRoleMemories, reloadKey, roleId]);
+  }, [category, includeRoleMemories, requestKey, roleId]);
 
-  return { memories, isLoading, error, refetch };
+  const hasCurrentData = loadedRequestKey === requestKey;
+
+  return {
+    memories: hasCurrentData ? memories : [],
+    isLoading: isLoading || !hasCurrentData,
+    error: hasCurrentData ? error : null,
+    refetch,
+  };
 }

@@ -5,12 +5,15 @@ import { ChatBubble } from './ChatBubble';
 import { ChatInput } from './ChatInput';
 import { ChatHeader } from './ChatHeader';
 import { getRoleIconComponent, normalizeColorHex } from '../../lib/roleIcons';
-import type { ChatMessage, StreamPayload, Conversation, TitleUpdatedPayload } from '../../types/chat';
+import type { ChatMessage, StreamPayload, Conversation, TitleUpdatedPayload, SourceNavigationTarget } from '../../types/chat';
 import type { Role } from '../../types/role';
 
 interface ChatStreamProps {
   /** 角色视图传入对应 Role；管家/onboarding 视图传 null。 */
   role?: Role | null;
+  onMemoryReferenceClick?: (memoryId: string) => void;
+  sourceNavigationTarget?: SourceNavigationTarget | null;
+  onSourceNavigationHandled?: () => void;
 }
 
 type StreamBubbleState = { id: string | null; content: string };
@@ -160,7 +163,19 @@ function mergeHistoryWithLocalMessages(history: ChatMessage[], current: ChatMess
   return [...mergedHistory, ...remainingCurrent];
 }
 
-export function ChatStream({ role }: ChatStreamProps) {
+function centerMessageInScrollContainer(container: HTMLDivElement | null, target: HTMLDivElement) {
+  target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  if (!container) return;
+  const top = target.offsetTop - (container.clientHeight / 2) + (target.clientHeight / 2);
+  container.scrollTop = Math.max(0, top);
+}
+
+export function ChatStream({
+  role,
+  onMemoryReferenceClick,
+  sourceNavigationTarget,
+  onSourceNavigationHandled,
+}: ChatStreamProps) {
   const roleId = role?.id ?? null;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [conversation, setConversation] = useState<Conversation | null>(null);
@@ -178,11 +193,29 @@ export function ChatStream({ role }: ChatStreamProps) {
   const [thinkingContent, setThinkingContent] = useState('');
   const thinkingContentRef = useRef('');
   const scrollRef = useRef<HTMLDivElement>(null);
+  const messageRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const highlightTimeout = useRef<number | null>(null);
+  const sourceScrollSuppressTimeout = useRef<number | null>(null);
+  const suppressAutoScrollRef = useRef(false);
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
+  const [sourceNavigationNotice, setSourceNavigationNotice] = useState<string | null>(null);
+  const [pendingScrollMessageId, setPendingScrollMessageId] = useState<string | null>(null);
 
   const updateStreamBubbles = useCallback((updater: (prev: StreamBubbleState[]) => StreamBubbleState[]) => {
     const next = updater(streamBubblesRef.current);
     streamBubblesRef.current = next;
     setStreamBubbles(next);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (highlightTimeout.current !== null) {
+        window.clearTimeout(highlightTimeout.current);
+      }
+      if (sourceScrollSuppressTimeout.current !== null) {
+        window.clearTimeout(sourceScrollSuppressTimeout.current);
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -249,10 +282,92 @@ export function ChatStream({ role }: ChatStreamProps) {
   }, [loadConversations, resetStreamingState, roleId]);
 
   useEffect(() => {
+    if (!sourceNavigationTarget) return;
+    const loadGeneration = ++conversationLoadGenerationRef.current;
+    const target = sourceNavigationTarget;
+
+    async function navigateToSource() {
+      try {
+        const conv = await chatService.getConversation(target.conversationId);
+        if (conversationLoadGenerationRef.current !== loadGeneration) return;
+        if (!conv) {
+          setSourceNavigationNotice('来源信息已删除，无法跳转');
+          onSourceNavigationHandled?.();
+          return;
+        }
+
+        if ((roleId ?? null) !== (conv.roleId ?? null)) {
+          setSourceNavigationNotice('来源对话不属于当前视图，无法在这里打开');
+          onSourceNavigationHandled?.();
+          return;
+        }
+
+        const history = await chatService.getHistory(conv.id);
+        if (conversationLoadGenerationRef.current !== loadGeneration) return;
+        const exists = history.some(message => message.id === target.messageId);
+        if (!exists) {
+          setSourceNavigationNotice('来源信息已删除，无法跳转');
+          onSourceNavigationHandled?.();
+          return;
+        }
+
+        conversationIdRef.current = conv.id;
+        setConversation(conv);
+        setMessages(history);
+        updateStreamBubbles(() => []);
+        setIsStreaming(false);
+        setIsInputLocked(false);
+        thinkingContentRef.current = '';
+        setThinkingContent('');
+        setSourceNavigationNotice(null);
+        setHighlightedMessageId(target.messageId);
+        setPendingScrollMessageId(target.messageId);
+        if (highlightTimeout.current !== null) {
+          window.clearTimeout(highlightTimeout.current);
+        }
+        highlightTimeout.current = window.setTimeout(() => {
+          setHighlightedMessageId(current => (current === target.messageId ? null : current));
+          highlightTimeout.current = null;
+        }, 3000);
+        await loadConversations();
+      } catch (e) {
+        console.error('跳转来源对话失败:', e);
+        if (conversationLoadGenerationRef.current !== loadGeneration) return;
+        setSourceNavigationNotice('来源对话暂时无法打开');
+        onSourceNavigationHandled?.();
+      }
+    }
+
+    navigateToSource();
+  }, [loadConversations, onSourceNavigationHandled, resetStreamingState, roleId, sourceNavigationTarget]);
+
+  useEffect(() => {
+    if (!pendingScrollMessageId) return;
+    const target = messageRefs.current[pendingScrollMessageId];
+    if (!target) return;
+    suppressAutoScrollRef.current = true;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        centerMessageInScrollContainer(scrollRef.current, target);
+        setPendingScrollMessageId(null);
+        onSourceNavigationHandled?.();
+        if (sourceScrollSuppressTimeout.current !== null) {
+          window.clearTimeout(sourceScrollSuppressTimeout.current);
+        }
+        sourceScrollSuppressTimeout.current = window.setTimeout(() => {
+          suppressAutoScrollRef.current = false;
+          sourceScrollSuppressTimeout.current = null;
+        }, 1200);
+      });
+    });
+  }, [messages, onSourceNavigationHandled, pendingScrollMessageId]);
+
+  useEffect(() => {
+    if (pendingScrollMessageId || suppressAutoScrollRef.current) return;
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages, streamBubbles, thinkingContent]);
+  }, [messages, pendingScrollMessageId, streamBubbles, thinkingContent]);
 
   const handleStreamEvent = useCallback((payload: StreamPayload) => {
     if (conversation && payload.conversationId !== conversation.id) return;
@@ -487,8 +602,13 @@ export function ChatStream({ role }: ChatStreamProps) {
         onSelectConversation={switchToConversation}
         onDeleteConversation={handleDeleteConversation}
       />
-      <div ref={scrollRef} className="flex-1 overflow-y-auto p-8 scroll-smooth">
+      <div ref={scrollRef} data-testid="chat-scroll-container" className="flex-1 overflow-y-auto p-8 scroll-smooth">
         <div className="mx-auto max-w-3xl space-y-3">
+          {sourceNavigationNotice && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[13px] text-amber-700">
+              {sourceNavigationNotice}
+            </div>
+          )}
           {messages
             .filter(m =>
               m.role !== 'system'
@@ -496,13 +616,22 @@ export function ChatStream({ role }: ChatStreamProps) {
               && Boolean(m.isComplete || m.content || m.thinkingContent)
             )
             .map(msg => (
-              <ChatBubble
+              <div
                 key={msg.id}
-                message={msg}
-                assistantName={role?.name}
-                assistantIcon={assistantIcon}
-                assistantColor={assistantColor}
-              />
+                data-testid={`chat-message-${msg.id}`}
+                ref={node => {
+                  messageRefs.current[msg.id] = node;
+                }}
+                className={highlightedMessageId === msg.id ? 'rounded-xl ring-2 ring-indigo-400 ring-offset-4 ring-offset-white' : undefined}
+              >
+                <ChatBubble
+                  message={msg}
+                  assistantName={role?.name}
+                  assistantIcon={assistantIcon}
+                  assistantColor={assistantColor}
+                  onMemoryReferenceClick={onMemoryReferenceClick}
+                />
+              </div>
             ))}
           {streamingMessages.map((m, idx) => (
             <ChatBubble

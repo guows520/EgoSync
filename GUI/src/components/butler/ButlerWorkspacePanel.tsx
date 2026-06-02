@@ -7,16 +7,28 @@ import { ButlerSettingsContent } from './ButlerSettingsContent';
 import { memoryService } from '../../services/memoryService';
 import type { MemoryCategory } from '../../types/memory';
 
-export function ButlerWorkspacePanel({ roles, currentTab, setTab, archivedRoles, onRestoreRole, onViewChange }: any) {
+export function ButlerWorkspacePanel({
+  roles,
+  currentTab,
+  setTab,
+  archivedRoles,
+  onRestoreRole,
+  onViewChange,
+  targetMemoryId,
+  onTargetMemoryHandled,
+  onSourceMessageClick,
+}: any) {
   const [memoryCount, setMemoryCount] = useState<number | null>(null);
   const [memoryCategory, setMemoryCategory] = useState<MemoryCategory | undefined>();
   const [memoryCountReloadKey, setMemoryCountReloadKey] = useState(0);
+
+  const effectiveMemoryCategory = targetMemoryId ? undefined : memoryCategory;
 
   useEffect(() => {
     let cancelled = false;
     setMemoryCount(null);
     memoryService
-      .count({ roleId: null, includeRoleMemories: true, category: memoryCategory })
+      .count({ roleId: null, includeRoleMemories: true, category: effectiveMemoryCategory })
       .then(count => {
         if (!cancelled) setMemoryCount(count);
       })
@@ -28,7 +40,22 @@ export function ButlerWorkspacePanel({ roles, currentTab, setTab, archivedRoles,
     return () => {
       cancelled = true;
     };
-  }, [memoryCategory, memoryCountReloadKey]);
+  }, [effectiveMemoryCategory, memoryCountReloadKey]);
+
+  useEffect(() => {
+    if (!targetMemoryId) return;
+    setMemoryCategory(undefined);
+    setTab('memory');
+  }, [setTab, targetMemoryId]);
+
+  const handleMemoryCategoryChange = (next: MemoryCategory | undefined) => {
+    if (targetMemoryId) {
+      setMemoryCategory(undefined);
+      setMemoryCountReloadKey(key => key + 1);
+      return;
+    }
+    setMemoryCategory(next);
+  };
 
   const roleLabels = Object.fromEntries((roles ?? []).map((role: any) => [role.id, role.name]));
   const memoryLabel = memoryCount === null ? '管家记忆' : `管家记忆 (${memoryCount})`;
@@ -83,9 +110,12 @@ export function ButlerWorkspacePanel({ roles, currentTab, setTab, archivedRoles,
             includeRoleMemories
             showOwnerLabel
             roleLabels={roleLabels}
-            category={memoryCategory}
-            onCategoryChange={setMemoryCategory}
+            category={effectiveMemoryCategory}
+            onCategoryChange={handleMemoryCategoryChange}
             onMemoryDeleted={() => setMemoryCountReloadKey(key => key + 1)}
+            targetMemoryId={targetMemoryId}
+            onTargetMemoryHandled={onTargetMemoryHandled}
+            onSourceMessageClick={onSourceMessageClick}
           />
         )}
         {currentTab === 'settings' && <ButlerSettingsContent archivedRoles={archivedRoles} onRestoreRole={onRestoreRole} />}

@@ -34,3 +34,23 @@ pub struct UpdateRoleInput {
     pub goal: Option<String>,
     pub personality_prompt: Option<String>,
 }
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateRoleSkillsInput {
+    pub find_skills: bool,
+    pub skill_creator: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ButlerSkillsConfig {
+    pub find_skills: bool,
+    pub skill_creator: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateRoleProactivityInput {
+    pub proactivity_level: String,
+}

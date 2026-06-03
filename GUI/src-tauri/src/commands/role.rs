@@ -3,7 +3,9 @@ use tauri::State;
 use crate::db::pool::{ConversationsPool, DbPool};
 use crate::db::roles;
 use crate::error::AppError;
-use crate::models::role::{CreateRoleInput, Role, UpdateRoleInput};
+use crate::models::role::{
+    CreateRoleInput, Role, UpdateRoleInput, UpdateRoleProactivityInput, UpdateRoleSkillsInput,
+};
 use crate::services::agent_config::AgentConfigService;
 
 const MIN_ACTIVE_ROLE_ERROR: &str = "至少保留一个角色";
@@ -50,6 +52,30 @@ pub async fn role_update(
 
     let role = roles::update_role(&pool, &id, &input).await?;
     sync_warn(agent_config.sync_role_updated(&role), "update");
+    Ok(role)
+}
+
+#[tauri::command]
+pub async fn role_update_skills(
+    id: String,
+    input: UpdateRoleSkillsInput,
+    pool: State<'_, DbPool>,
+    agent_config: State<'_, AgentConfigService>,
+) -> Result<Role, AppError> {
+    let role = roles::update_role_skills(&pool, &id, &input).await?;
+    sync_warn(agent_config.sync_role_updated(&role), "update_skills");
+    Ok(role)
+}
+
+#[tauri::command]
+pub async fn role_update_proactivity(
+    id: String,
+    input: UpdateRoleProactivityInput,
+    pool: State<'_, DbPool>,
+    agent_config: State<'_, AgentConfigService>,
+) -> Result<Role, AppError> {
+    let role = roles::update_role_proactivity(&pool, &id, &input).await?;
+    sync_warn(agent_config.sync_role_updated(&role), "update_proactivity");
     Ok(role)
 }
 

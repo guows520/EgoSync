@@ -1181,45 +1181,152 @@ So that 我能判断建议是否可信。
 
 ---
 
-### Story 2.10: 用户能为角色配置 Skill 并看到主动性刻度盘 UI
+### Story 2.10: 用户能为角色配置默认元 Skill 并看到主动性刻度盘 UI
 
 As a 用户,
-I want 为角色启用特定能力并调节主动性档位,
-So that 控制角色能做什么以及多主动地帮助我。
+I want 为角色启用默认元 Skill 并调节主动性档位,
+So that 控制角色发现/创建 Skill 的能力边界以及多主动地帮助我。
 
 **Acceptance Criteria:**
 
-**Given** 用户在 RoleView SettingsTab 的 Skill 配置区域
+**Given** 用户在 RoleView SettingsTab 或管家设置页的 Skill 配置区域
 **When** 查看可用 Skill 列表
-**Then** V1 显示两个 Skill 开关：Web 搜索、文件读写
-**And** 每个开关显示 Skill 名称和简短描述
+**Then** V1 显示两个默认元 Skill 开关：`find-skills`、`skill-creator`
+**And** 每个开关显示 Skill 名称、来源和简短描述
 
-**Given** 用户启用"Web 搜索" Skill
-**When** 保存
-**Then** `roles` 表 `skills_config` JSON 字段更新（如 `{"web_search": true, "file_rw": false}`）
-**And** 重启后配置保留
+**Given** 用户切换角色 `find-skills` 或 `skill-creator`
+**When** 保存成功
+**Then** `roles.skills_config` JSON 字段更新并在重启后保留
+**And** 角色 opencode agent 配置或 prompt 能力约束同步反映启用/禁用状态
 
-**Given** 角色执行任务需要未启用的 Skill
-**When** 对话中触发该能力
-**Then** 角色在对话中自然提示"我需要 Web 搜索能力才能帮你查这个，要开启吗？"
-**And** 用户确认后自动启用该 Skill 并继续执行
+**Given** 用户切换管家 `find-skills` 或 `skill-creator`
+**When** 保存成功
+**Then** `app_settings` 中的 `butler.skills_config` 更新并在重启后保留
+**And** 管家 opencode agent 配置或 prompt 能力约束同步反映启用/禁用状态
 
-**Given** ProactivityToggle 三档切换（低/中/高）
+**Given** 角色或管家收到需要关闭元 Skill 的请求
+**When** `find-skills=false` 的会话请求发现/搜索/推荐 Skill，或 `skill-creator=false` 的会话请求创建/扩展 Skill
+**Then** 后端在发送给 opencode 前返回边界提示，不调用 opencode `skill` 工具
+**And** 关闭的元 Skill 不出现在对应 system prompt 中
+**And** 两个元 Skill 都关闭时，对应 opencode agent permission 写入 `skill: deny`
+
+**Given** ProactivityToggle 三档切换（静默执行 / 适度建议 / 积极主动）
 **When** 用户切换档位
-**Then** 写入 `roles.proactivity_level`（枚举：low / medium / high）
+**Then** 写入 `roles.proactivity_level`（枚举：passive / moderate / proactive）
 **And** 重启后保留
 
 **Given** 主动性档位的行为差异
 **Then** V1 仅存储档位值和显示 UI
 **And** 实际行为差异在 Epic 4 接通
 
-**Given** Rust 后端
-**Then** `roles` 表增加 `skills_config` JSON 字段 + `proactivity_level` TEXT 字段（migration）
-**And** Tauri command: `role::update_skills` / `role::update_proactivity`
-
 **Given** 前端
-**Then** RoleView SettingsTab 接通真实 Skill 配置（替换原型 mock 开关）
+**Then** RoleView SettingsTab 接通真实 Skill 配置（替换原型 mock/API key UI）
 **And** ProactivityToggle 组件接通真实数据（替换原型 mock 滑块）
+
+---
+
+### Story 2.11: 用户能导入自定义 SKILL.md 并按角色启用
+
+As a 用户,
+I want 把本地自定义 SKILL.md 加入 EgoSync 的 Skill 库并绑定到角色,
+So that 我的角色能复用我自己沉淀的能力模块，而不需要每次手动复制提示词。
+
+**Acceptance Criteria:**
+
+**Given** 用户在角色 SettingsTab 的 Skill 区域点击“导入自定义 Skill”
+**When** 选择一个包含合法 frontmatter（name/description）的 `SKILL.md` 文件或目录
+**Then** 系统解析并展示名称、描述、来源路径和校验结果
+**And** 不把文件内容或路径密钥写入日志
+
+**Given** 用户确认导入自定义 Skill
+**When** 保存成功
+**Then** Skill 被复制到 EgoSync 管理的 opencode skills 目录或登记为受控路径
+**And** 全局 Skill registry 记录 Skill id、name、description、sourceType=`custom`、managedPath/contentHash
+**And** 角色的 `skills_config` 仅记录启用的 Skill id，不覆盖已有 `find-skills` / `skill-creator` 配置
+
+**Given** 用户在某角色启用或禁用自定义 Skill
+**When** 保存成功
+**Then** 对应角色的 opencode agent 配置或 prompt 能力约束同步更新
+**And** 应用重启后 Skill 库、角色绑定和启用状态仍保持一致
+
+**Given** 用户导入重复 Skill（同 name 或同 content hash）
+**When** 确认导入
+**Then** 系统提示已存在并允许取消或覆盖元数据
+**And** 不创建不可区分的重复条目
+
+**Given** 当前 Story 2.10 已实现两个元 Skill 开关
+**Then** 新的 Skill 配置 schema 必须向后兼容旧 JSON
+**And** 普通元 Skill toggle 不得丢弃自定义 Skill、permissions 或未来扩展字段
+
+---
+
+### Story 2.12: 用户能发现并导入 opencode 生态 Skill
+
+As a 用户,
+I want 从 opencode 可发现的 Skill 目录中扫描并导入第三方 Skill,
+So that 我能复用 opencode 生态能力，同时仍由 EgoSync 管理每个角色启用什么。
+
+**Acceptance Criteria:**
+
+**Given** 用户已启用 `find-skills`
+**When** 在 Skill 配置中点击“发现 Skill”
+**Then** 系统扫描 opencode 项目级与全局 Skill 目录（如 `.opencode/skills/`、`~/.config/opencode/skills/`）
+**And** 以列表展示可导入 Skill 的 name、description、来源位置和是否已导入
+
+**Given** 扫描到无效 Skill（缺少 `SKILL.md`、frontmatter 缺失、文件不可读）
+**When** 结果展示
+**Then** 无效项不进入可导入列表
+**And** 设置页以友好中文说明跳过原因，不暴露底层堆栈
+
+**Given** 用户选择一个第三方 opencode Skill 导入
+**When** 确认导入
+**Then** Skill 被登记到全局 Skill registry，sourceType=`opencode`
+**And** 用户可立即在当前角色启用该 Skill
+
+**Given** 第三方 Skill 已导入并启用到角色
+**When** 角色下一轮对话开始
+**Then** 角色 opencode agent 能自动发现/加载该 Skill
+**And** 禁用后角色不得再声明自己拥有该 Skill
+
+**Given** 当前 V1 范围
+**Then** 不实现远程市场、付费 Skill、账号登录或自动下载未知 URL
+**And** 如用户需要导入远程获得的 Skill，必须先保存为本地 SKILL.md 再走 Story 2.11 路径
+
+---
+
+### Story 2.13: 用户能配置 MCP server 列表并按角色接入外部工具
+
+As a 用户,
+I want 配置外部 MCP server 并选择哪些角色可用,
+So that 角色能安全接入日历、邮件、代码仓库等外部工具服务。
+
+**Acceptance Criteria:**
+
+**Given** 用户在设置中打开 MCP server 管理区域
+**When** 新增一个 MCP server
+**Then** 可填写 server 名称、类型（HTTP/SSE 或 command，本地能力优先）、连接参数、说明和启用状态
+**And** secrets/API key 不写入 `roles.skills_config`、app_settings 明文字段或日志；只能使用 keyring 引用或环境变量引用
+
+**Given** 用户保存 MCP server
+**When** 配置校验通过
+**Then** server 列表持久化到 EgoSync 本地配置
+**And** `AgentConfigService` 同步 opencode.json 的外部 `mcp` 配置
+**And** `full_sync()` 不得删除用户配置的外部 MCP server
+
+**Given** Story 2.0d 已将 EgoSync 内部工具从 MCP 改为 opencode Custom Tools
+**Then** 本 story 不恢复旧的 `egosync` MCP host
+**And** 继续保留 `create_role`、`delegate_to_role`、`record_emergence_rejection` 的 custom tools 路径
+
+**Given** 用户为某个角色启用一个 MCP server
+**When** 保存成功
+**Then** 角色配置记录该 MCP server 可用
+**And** opencode agent 配置或 prompt 能力约束反映该角色可使用的外部工具
+**And** 其他未启用该 server 的角色不得声明或调用该外部工具
+
+**Given** 用户测试 MCP server 连接
+**When** server 不可达或配置错误
+**Then** 设置页显示友好错误并允许修改
+**And** 不影响应用启动、角色 CRUD、普通对话和已有 custom tools
 
 ---
 

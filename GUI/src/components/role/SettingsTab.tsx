@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Plus, Check, Archive, Trash2, AlertCircle } from 'lucide-react';
+import { Check, Archive, Trash2, AlertCircle } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { ROLE_COLORS, ROLE_ICONS, getRoleIconComponent, normalizeColorHex, normalizeIconId } from '../../lib/roleIcons';
 import { roleService } from '../../services/roleService';
-import type { Role } from '../../types/role';
+import type { ProactivityLevel, Role, RoleSkillsConfig } from '../../types/role';
 import { ProactivityToggle } from './ProactivityToggle';
 
 interface SettingsTabProps {
@@ -16,7 +16,24 @@ interface SettingsTabProps {
 
 type DangerAction = 'archive' | 'delete' | null;
 
+type SkillKey = keyof RoleSkillsConfig;
+
 const MIN_ACTIVE_ROLE_MESSAGE = '至少保留一个角色';
+const DEFAULT_SKILLS: RoleSkillsConfig = { findSkills: false, skillCreator: false };
+const SKILL_OPTIONS: Array<{ key: SkillKey; title: string; source: string; description: string }> = [
+  {
+    key: 'findSkills',
+    title: 'find-skills',
+    source: 'Vercel 官方',
+    description: '发现并推荐适合当前任务的 Skill。',
+  },
+  {
+    key: 'skillCreator',
+    title: 'skill-creator',
+    source: 'Anthropic 官方',
+    description: '创建或扩展角色需要的新 Skill。',
+  },
+];
 
 export function SettingsTab({
   role,
@@ -32,6 +49,11 @@ export function SettingsTab({
   const [roleColor, setRoleColor] = useState(normalizeColorHex(role.color));
   const [saved, setSaved] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [skills, setSkills] = useState<RoleSkillsConfig>(() => parseSkillsConfig(role.skillsConfig));
+  const [proactivityLevel, setProactivityLevel] = useState<ProactivityLevel>(role.proactivityLevel);
+  const [pendingSkill, setPendingSkill] = useState<SkillKey | null>(null);
+  const [isSavingProactivity, setIsSavingProactivity] = useState(false);
+  const [settingsSavedMessage, setSettingsSavedMessage] = useState('');
   const [error, setError] = useState('');
   const [dangerAction, setDangerAction] = useState<DangerAction>(null);
   const [deleteConfirmName, setDeleteConfirmName] = useState('');
@@ -48,10 +70,15 @@ export function SettingsTab({
     setRoleIcon(normalizeIconId(role.icon));
     setRoleColor(normalizeColorHex(role.color));
     setSaved(false);
+    setSkills(parseSkillsConfig(role.skillsConfig));
+    setProactivityLevel(role.proactivityLevel);
+    setPendingSkill(null);
+    setIsSavingProactivity(false);
+    setSettingsSavedMessage('');
     setError('');
     setDangerAction(null);
     setDeleteConfirmName('');
-  }, [role.id, role.name, role.goal, role.personalityPrompt, role.icon, role.color]);
+  }, [role.id, role.name, role.goal, role.personalityPrompt, role.icon, role.color, role.skillsConfig, role.proactivityLevel]);
 
   const handleSave = async () => {
     const name = roleName.trim();
@@ -77,6 +104,47 @@ export function SettingsTab({
       setError(toFriendlyError(e, '保存失败，请稍后重试'));
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleSkillToggle = async (key: SkillKey) => {
+    const nextSkills = { ...skills, [key]: !skills[key] };
+    setSkills(nextSkills);
+    setPendingSkill(key);
+    setSettingsSavedMessage('');
+    setError('');
+    try {
+      const updated = await roleService.updateSkills(role.id, nextSkills);
+      onUpdateRole?.(updated);
+      setSkills(parseSkillsConfig(updated.skillsConfig));
+      setSettingsSavedMessage('Skill 配置已保存');
+      setTimeout(() => setSettingsSavedMessage(''), 1500);
+    } catch (e) {
+      setSkills(skills);
+      setError(toFriendlyError(e, 'Skill 配置保存失败，请稍后重试'));
+    } finally {
+      setPendingSkill(null);
+    }
+  };
+
+  const handleProactivityChange = async (nextLevel: ProactivityLevel) => {
+    if (nextLevel === proactivityLevel) return;
+    const previousLevel = proactivityLevel;
+    setProactivityLevel(nextLevel);
+    setIsSavingProactivity(true);
+    setSettingsSavedMessage('');
+    setError('');
+    try {
+      const updated = await roleService.updateProactivity(role.id, { proactivityLevel: nextLevel });
+      onUpdateRole?.(updated);
+      setProactivityLevel(updated.proactivityLevel);
+      setSettingsSavedMessage('主动性级别已保存');
+      setTimeout(() => setSettingsSavedMessage(''), 1500);
+    } catch (e) {
+      setProactivityLevel(previousLevel);
+      setError(toFriendlyError(e, '主动性级别保存失败，请稍后重试'));
+    } finally {
+      setIsSavingProactivity(false);
     }
   };
 
@@ -193,30 +261,57 @@ export function SettingsTab({
 
       <div className="pt-6 border-t border-slate-200/80">
         <label className="text-[14px] font-semibold text-slate-800 block mb-3">主动性级别</label>
-        <ProactivityToggle />
-        <p className="text-[12px] text-slate-400 mt-2.5 leading-relaxed">角色会定时审视目标，主动生成待处理建议卡片。</p>
+        <ProactivityToggle
+          level={proactivityLevel}
+          onChange={handleProactivityChange}
+          disabled={isSavingProactivity}
+        />
+        <p className="text-[12px] text-slate-400 mt-2.5 leading-relaxed">V1 仅保存角色主动性级别；实际主动建议会在后续主动循环中生效。</p>
       </div>
 
       <div className="pt-6 border-t border-slate-200/80">
-        <label className="text-[14px] font-semibold text-slate-800 block mb-3">Skill 插件配置</label>
+        <label className="text-[14px] font-semibold text-slate-800 block mb-3">Skill 配置</label>
         <div className="space-y-3">
-          <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-2.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.4)]"></span>
-                <span className="text-[14.5px] font-medium text-slate-800">Web Search API</span>
+          {SKILL_OPTIONS.map(option => {
+            const enabled = skills[option.key];
+            return (
+              <div key={option.key} className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="flex items-center gap-2.5">
+                      <span className={cn('w-2.5 h-2.5 rounded-full', enabled ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.4)]' : 'bg-slate-300')} />
+                      <span className="text-[14.5px] font-medium text-slate-800">{option.title}</span>
+                      <span className="text-[11px] font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full border border-slate-200">{option.source}</span>
+                    </div>
+                    <p className="mt-2 text-[12.5px] leading-relaxed text-slate-500">{option.description}</p>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={enabled}
+                    disabled={pendingSkill !== null}
+                    onClick={() => handleSkillToggle(option.key)}
+                    className={cn(
+                      'relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-60',
+                      enabled ? 'bg-indigo-600' : 'bg-slate-300',
+                    )}
+                  >
+                    <span className={cn('absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform', enabled ? 'translate-x-5' : 'translate-x-0')} />
+                    <span className="sr-only">{option.title}</span>
+                  </button>
+                </div>
               </div>
-              <span className="text-[12px] font-medium text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-100">已启用</span>
-            </div>
-            <input type="password" value="sk-xxxx-xxxx-xxxx-xxxx" readOnly className="w-full text-[13px] bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-500 focus:outline-none font-mono" />
-          </div>
-          <button className="w-full py-3 border border-dashed border-slate-300 rounded-xl text-[13px] font-medium text-slate-500 hover:text-indigo-600 hover:border-indigo-300 hover:bg-indigo-50/50 transition-all flex items-center justify-center gap-1.5">
-            <Plus size={16}/> 添加新 Skill
-          </button>
+            );
+          })}
         </div>
       </div>
 
       <div className="pt-6 border-t border-slate-200/80">
+        {settingsSavedMessage && (
+          <div className="mb-3 rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2 text-[13px] text-emerald-700 flex items-center gap-2">
+            <Check size={14} /> {settingsSavedMessage}
+          </div>
+        )}
         {error && (
           <div className="mb-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-[13px] text-red-600 flex items-center gap-2">
             <AlertCircle size={14} /> {error}
@@ -288,6 +383,18 @@ export function SettingsTab({
       )}
     </div>
   );
+}
+
+function parseSkillsConfig(raw: string): RoleSkillsConfig {
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return {
+      findSkills: parsed['find-skills'] === true || parsed.findSkills === true,
+      skillCreator: parsed['skill-creator'] === true || parsed.skillCreator === true,
+    };
+  } catch {
+    return DEFAULT_SKILLS;
+  }
 }
 
 function toFriendlyError(error: unknown, fallback: string) {

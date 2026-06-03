@@ -120,25 +120,41 @@ describe('ChatBubble assistant identity', () => {
     expect(onMemoryReferenceClick).not.toHaveBeenCalled();
   });
 
-  it('assistant thinkingContent 不作为用户可见思考过程暴露', () => {
-    render(<ChatBubble message={{ ...assistantMsg, thinkingContent: 'hidden chain of thought' }} />);
+  it('assistant thinkingContent 显示为可展开的思考过程', () => {
+    render(<ChatBubble message={{ ...assistantMsg, thinkingContent: 'visible thought' }} />);
 
-    expect(screen.queryByText('思考过程')).not.toBeInTheDocument();
-    expect(screen.queryByText('hidden chain of thought')).not.toBeInTheDocument();
+    const toggle = screen.getByRole('button', { name: '思考过程' });
+    expect(toggle).toBeInTheDocument();
+    expect(screen.queryByText('visible thought')).not.toBeInTheDocument();
+
+    fireEvent.click(toggle);
+
+    expect(screen.getByText('visible thought')).toBeInTheDocument();
   });
 
-  it('streaming thinking token 只显示等待点，不展示 raw thinking 文本', () => {
-    const { container } = render(
+  it('streaming thinking token 显示原思考中样式和实时文本', () => {
+    render(
       <ChatBubble
         message={{ ...assistantMsg, content: '', isComplete: false }}
         isStreaming
-        streamingThinking="hidden streaming thought"
+        streamingThinking="streaming thought"
         isThinkingPhase
       />,
     );
 
-    expect(container.querySelectorAll('.animate-bounce-forever')).toHaveLength(3);
-    expect(screen.queryByText('hidden streaming thought')).not.toBeInTheDocument();
-    expect(screen.queryByText('思考中...')).not.toBeInTheDocument();
+    expect(screen.getByText('思考中...')).toBeInTheDocument();
+    expect(screen.getByText('streaming thought')).toBeInTheDocument();
+  });
+
+  it('工具状态按通用文案显示', () => {
+    render(
+      <ChatBubble
+        message={{ ...assistantMsg, content: '', isComplete: false }}
+        isStreaming
+        streamStatus={{ phase: 'tool', statusText: '正在使用 find-skills...', toolName: 'find-skills' }}
+      />,
+    );
+
+    expect(screen.getByText('正在使用 find-skills...')).toBeInTheDocument();
   });
 });

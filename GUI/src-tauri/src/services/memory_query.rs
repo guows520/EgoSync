@@ -57,7 +57,8 @@ pub async fn get_source_messages(
     }
 
     let source_id_set = source_message_ids.into_iter().collect::<HashSet<_>>();
-    let source_conversation = conversations::get_conversation(conversations_pool, &memory.source_conversation_id).await?;
+    let source_conversation =
+        conversations::get_conversation(conversations_pool, &memory.source_conversation_id).await?;
     let source_role_id = source_conversation.and_then(|conversation| conversation.role_id);
     let messages =
         conversations::list_messages(conversations_pool, &memory.source_conversation_id).await?;
@@ -223,7 +224,9 @@ mod tests {
         assert_eq!(source_messages.len(), 2);
         assert_eq!(source_messages[0].id, msg_1.id);
         assert_eq!(source_messages[1].id, msg_3.id);
-        assert!(source_messages.iter().all(|message| message.role_id.is_none()));
+        assert!(source_messages
+            .iter()
+            .all(|message| message.role_id.is_none()));
         assert!(source_messages.iter().all(|message| message.is_source));
         let value = serde_json::to_value(&source_messages[0]).expect("serialize dto");
         assert!(value.get("thinkingContent").is_none());
@@ -241,9 +244,15 @@ mod tests {
         let conversation = conversations::create_conversation(&conv_pool, Some("source-role"))
             .await
             .expect("create source conversation");
-        let msg = conversations::insert_message(&conv_pool, &conversation.id, "user", "儿子喜欢吃薯条", true)
-            .await
-            .expect("insert source message");
+        let msg = conversations::insert_message(
+            &conv_pool,
+            &conversation.id,
+            "user",
+            "儿子喜欢吃薯条",
+            true,
+        )
+        .await
+        .expect("insert source message");
         memories::insert_memories(
             &main_pool,
             Some("memory-role"),

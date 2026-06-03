@@ -17,6 +17,7 @@ interface ChatStreamProps {
 }
 
 type StreamBubbleState = { id: string | null; content: string };
+type StreamStatus = Pick<StreamPayload, 'phase' | 'statusText' | 'toolName'>;
 
 function completedAssistantMessagesFromBubbles(
   bubbles: Array<StreamBubbleState & { generation?: number }>,
@@ -65,8 +66,12 @@ function isLikelyPersistedLocalUser(historyMsg: ChatMessage, localMsg: ChatMessa
   return Number.isFinite(historyTime) && Number.isFinite(localTime) && historyTime >= localTime - 60_000;
 }
 
+function isLocalCompletedAssistant(message: ChatMessage) {
+  return message.role === 'assistant' && message.id.startsWith('__completed__');
+}
+
 function hasPersistedCompletedAssistantId(historyMsg: ChatMessage, localMsg: ChatMessage) {
-  return localMsg.id.startsWith('__completed__')
+  return isLocalCompletedAssistant(localMsg)
     && historyMsg.role === 'assistant'
     && localMsg.id === `__completed__${historyMsg.id}`;
 }
@@ -192,6 +197,7 @@ export function ChatStream({
   const conversationIdRef = useRef<string | null>(null);
   const [thinkingContent, setThinkingContent] = useState('');
   const thinkingContentRef = useRef('');
+  const [streamStatus, setStreamStatus] = useState<StreamStatus | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const messageRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const highlightTimeout = useRef<number | null>(null);
@@ -229,6 +235,7 @@ export function ChatStream({
     setIsInputLocked(false);
     thinkingContentRef.current = '';
     setThinkingContent('');
+    setStreamStatus(null);
   }, [updateStreamBubbles]);
 
   const loadConversations = useCallback(async () => {
@@ -367,13 +374,19 @@ export function ChatStream({
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages, pendingScrollMessageId, streamBubbles, thinkingContent]);
+  }, [messages, pendingScrollMessageId, streamBubbles, streamStatus, thinkingContent]);
 
   const handleStreamEvent = useCallback((payload: StreamPayload) => {
     if (conversation && payload.conversationId !== conversation.id) return;
     if (!conversation) return;
 
     const bucketKey = payload.messageId ?? null;
+
+    if (payload.phase === 'tool' && payload.statusText) {
+      setIsStreaming(true);
+      setIsInputLocked(true);
+      setStreamStatus({ phase: payload.phase, statusText: payload.statusText, toolName: payload.toolName });
+    }
 
     if (payload.done) {
       // 委派路径下 done 会发两次：第一段（带 messageId）与最终段（带 followup messageId）。
@@ -390,6 +403,7 @@ export function ChatStream({
       const streamGeneration = streamGenerationRef.current;
       if (isFinalDone) {
         setIsInputLocked(false);
+        setStreamStatus(null);
         thinkingContentRef.current = '';
         setThinkingContent('');
         const completedMessages = completedAssistantMessagesFromBubbles(
@@ -443,10 +457,14 @@ export function ChatStream({
         applyBucketClear();
       }
     } else if (payload.thinking) {
+      setIsStreaming(true);
+      setIsInputLocked(true);
       const nextThinkingContent = thinkingContentRef.current + payload.token;
       thinkingContentRef.current = nextThinkingContent;
       setThinkingContent(nextThinkingContent);
     } else {
+      if (payload.phase === 'tool' && !payload.token) return;
+      setStreamStatus(null);
       setIsStreaming(true);
       setIsInputLocked(true);
       updateStreamBubbles(prev => {
@@ -521,19 +539,23 @@ export function ChatStream({
     streamGenerationRef.current += 1;
     const sendGeneration = streamGenerationRef.current;
     const localUserMessageId = `__local_user__${sendGeneration}_${localMessageSequenceRef.current++}`;
-    setMessages(prev => [...prev, {
-      id: localUserMessageId,
-      conversationId: conversation.id,
-      role: 'user',
-      content,
-      thinkingContent: '',
-      isComplete: true,
-      createdAt: new Date().toISOString(),
-      routingMetadata: null,
-    }]);
+    setMessages(prev => [
+      ...prev.filter(m => !isLocalCompletedAssistant(m)),
+      {
+        id: localUserMessageId,
+        conversationId: conversation.id,
+        role: 'user',
+        content,
+        thinkingContent: '',
+        isComplete: true,
+        createdAt: new Date().toISOString(),
+        routingMetadata: null,
+      },
+    ]);
     updateStreamBubbles(() => []);
     thinkingContentRef.current = '';
     setThinkingContent('');
+    setStreamStatus(null);
 
     try {
       const userMsg = await chatService.sendMessage({
@@ -640,6 +662,7 @@ export function ChatStream({
               isStreaming
               streamingThinking={idx === 0 && thinkingContent ? thinkingContent : undefined}
               isThinkingPhase={idx === 0 && thinkingContent.length > 0 && streamBubbles.length === 0}
+              streamStatus={idx === 0 ? streamStatus : null}
               assistantName={role?.name}
               assistantIcon={assistantIcon}
               assistantColor={assistantColor}

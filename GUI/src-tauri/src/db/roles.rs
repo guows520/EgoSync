@@ -2,7 +2,9 @@ use sqlx::SqlitePool;
 
 use crate::db::pool::ConversationsPool;
 use crate::error::AppError;
-use crate::models::role::{CreateRoleInput, Role, UpdateRoleInput};
+use crate::models::role::{
+    CreateRoleInput, Role, UpdateRoleInput, UpdateRoleProactivityInput, UpdateRoleSkillsInput,
+};
 
 const ROLE_SELECT_COLUMNS: &str = "id, name, icon, color, goal, personality_prompt, status, energy, skills_config, proactivity_level, archived_at, created_at, updated_at";
 
@@ -108,6 +110,65 @@ pub async fn update_role(
     .execute(pool)
     .await
     .map_err(|e| AppError::DbError(format!("更新角色失败: {}", e)))?;
+
+    if result.rows_affected() != 1 {
+        return Err(AppError::NotFound(format!("角色 {} 不存在", id)));
+    }
+
+    get_role(pool, id).await
+}
+
+pub async fn update_role_skills(
+    pool: &SqlitePool,
+    id: &str,
+    input: &UpdateRoleSkillsInput,
+) -> Result<Role, AppError> {
+    get_role(pool, id).await?;
+
+    let skills_config = crate::services::role_config::normalize_skills_config(input)?;
+    let now = crate::db::settings::chrono_now_pub();
+    let result = sqlx::query(
+        "UPDATE roles
+         SET skills_config = ?1,
+             updated_at = ?2
+         WHERE id = ?3",
+    )
+    .bind(&skills_config)
+    .bind(&now)
+    .bind(id)
+    .execute(pool)
+    .await
+    .map_err(|e| AppError::DbError(format!("更新角色 Skill 配置失败: {}", e)))?;
+
+    if result.rows_affected() != 1 {
+        return Err(AppError::NotFound(format!("角色 {} 不存在", id)));
+    }
+
+    get_role(pool, id).await
+}
+
+pub async fn update_role_proactivity(
+    pool: &SqlitePool,
+    id: &str,
+    input: &UpdateRoleProactivityInput,
+) -> Result<Role, AppError> {
+    get_role(pool, id).await?;
+
+    let proactivity_level =
+        crate::services::role_config::normalize_proactivity_level(&input.proactivity_level)?;
+    let now = crate::db::settings::chrono_now_pub();
+    let result = sqlx::query(
+        "UPDATE roles
+         SET proactivity_level = ?1,
+             updated_at = ?2
+         WHERE id = ?3",
+    )
+    .bind(&proactivity_level)
+    .bind(&now)
+    .bind(id)
+    .execute(pool)
+    .await
+    .map_err(|e| AppError::DbError(format!("更新角色主动性失败: {}", e)))?;
 
     if result.rows_affected() != 1 {
         return Err(AppError::NotFound(format!("角色 {} 不存在", id)));
@@ -335,6 +396,60 @@ mod tests {
         let restored = restore_role(&pool, &role.id).await.unwrap();
         assert_eq!(restored.status, "active");
         assert!(restored.archived_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_update_role_skills_persists_meta_skill_json() {
+        let pool = setup_test_db().await;
+        let role = create_test_role(&pool, "产品经理").await;
+
+        let updated = update_role_skills(
+            &pool,
+            &role.id,
+            &UpdateRoleSkillsInput {
+                find_skills: true,
+                skill_creator: false,
+            },
+        )
+        .await
+        .unwrap();
+
+        let parsed: serde_json::Value = serde_json::from_str(&updated.skills_config).unwrap();
+        assert_eq!(parsed[crate::services::role_config::FIND_SKILLS_KEY], true);
+        assert_eq!(
+            parsed[crate::services::role_config::SKILL_CREATOR_KEY],
+            false
+        );
+        assert_ne!(updated.updated_at, "2026-01-01T00:00:00Z");
+    }
+
+    #[tokio::test]
+    async fn test_update_role_proactivity_rejects_invalid_level() {
+        let pool = setup_test_db().await;
+        let role = create_test_role(&pool, "产品经理").await;
+
+        let err = update_role_proactivity(
+            &pool,
+            &role.id,
+            &UpdateRoleProactivityInput {
+                proactivity_level: "medium".to_string(),
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(err, AppError::ValidationError(_)));
+
+        let updated = update_role_proactivity(
+            &pool,
+            &role.id,
+            &UpdateRoleProactivityInput {
+                proactivity_level: "proactive".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.proactivity_level, "proactive");
     }
 
     #[tokio::test]

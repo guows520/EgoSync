@@ -7,6 +7,8 @@ import type { Role } from '../../types/role';
 vi.mock('../../services/roleService', () => ({
   roleService: {
     update: vi.fn(),
+    updateSkills: vi.fn(),
+    updateProactivity: vi.fn(),
   },
 }));
 
@@ -70,6 +72,74 @@ describe('SettingsTab role CRUD actions', () => {
     });
     expect(onUpdateRole).toHaveBeenCalledWith(updatedRole);
     expect(await screen.findByText('已保存')).toBeInTheDocument();
+  });
+
+  it('展示并持久化两个默认元 Skill 开关', async () => {
+    const onUpdateRole = vi.fn();
+    const skillsRole: Role = {
+      ...baseRole,
+      skillsConfig: '{"find-skills":false,"skill-creator":true}',
+    };
+    const updatedSkillsRole: Role = {
+      ...skillsRole,
+      skillsConfig: '{"find-skills":true,"skill-creator":true}',
+    };
+    vi.mocked(roleService.updateSkills).mockResolvedValue(updatedSkillsRole);
+
+    render(
+      <SettingsTab
+        role={skillsRole}
+        activeRoleCount={2}
+        onUpdateRole={onUpdateRole}
+      />
+    );
+
+    expect(screen.getByText('Skill 配置')).toBeInTheDocument();
+    expect(screen.queryByText('Skill 插件配置')).not.toBeInTheDocument();
+    expect(screen.getByRole('switch', { name: 'find-skills' })).toBeInTheDocument();
+    expect(screen.getByText('Vercel 官方')).toBeInTheDocument();
+    expect(screen.getByRole('switch', { name: 'skill-creator' })).toBeInTheDocument();
+    expect(screen.getByText('Anthropic 官方')).toBeInTheDocument();
+    expect(screen.queryByDisplayValue('sk-xxxx-xxxx-xxxx-xxxx')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('switch', { name: 'find-skills' }));
+
+    await waitFor(() => {
+      expect(roleService.updateSkills).toHaveBeenCalledWith('role-1', {
+        findSkills: true,
+        skillCreator: true,
+      });
+    });
+    expect(onUpdateRole).toHaveBeenCalledWith(updatedSkillsRole);
+    expect(await screen.findByText('Skill 配置已保存')).toBeInTheDocument();
+    expect(screen.queryByText('保存中...')).not.toBeInTheDocument();
+  });
+
+  it('切换主动性级别后持久化并回传更新后的角色', async () => {
+    const onUpdateRole = vi.fn();
+    const updatedProactivityRole: Role = {
+      ...baseRole,
+      proactivityLevel: 'proactive',
+    };
+    vi.mocked(roleService.updateProactivity).mockResolvedValue(updatedProactivityRole);
+
+    render(
+      <SettingsTab
+        role={baseRole}
+        activeRoleCount={2}
+        onUpdateRole={onUpdateRole}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '积极主动' }));
+
+    await waitFor(() => {
+      expect(roleService.updateProactivity).toHaveBeenCalledWith('role-1', {
+        proactivityLevel: 'proactive',
+      });
+    });
+    expect(onUpdateRole).toHaveBeenCalledWith(updatedProactivityRole);
+    expect(await screen.findByText('主动性级别已保存')).toBeInTheDocument();
   });
 
   it('永久删除必须输入角色名确认', () => {

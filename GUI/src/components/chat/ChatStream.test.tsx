@@ -167,7 +167,7 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
     expect(onMemoryReferenceClick).toHaveBeenCalledWith('memory-2');
   });
 
-  it('thinking token 中的记忆引用不作为正文链接渲染', async () => {
+  it('thinking token 中的记忆引用显示为思考文本但不作为正文链接渲染', async () => {
     const getStreamHandler = captureStreamHandler();
     vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
 
@@ -178,7 +178,31 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
       getStreamHandler()({ conversationId: 'conv-butler', token: '[记忆#memory-hidden]', done: false, thinking: true });
     });
 
+    expect(screen.getByText('[记忆#memory-hidden]')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '打开记忆 memory-hidden' })).not.toBeInTheDocument();
+  });
+
+  it('tool 状态显示通用工具文案且不生成正文链接', async () => {
+    const getStreamHandler = captureStreamHandler();
+    vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
+
+    render(<ChatStream role={null} onMemoryReferenceClick={vi.fn()} />);
+    await waitFor(() => expect(chatService.getButlerConversation).toHaveBeenCalled());
+
+    act(() => {
+      getStreamHandler()({
+        conversationId: 'conv-butler',
+        token: '',
+        done: false,
+        thinking: false,
+        phase: 'tool',
+        statusText: '正在使用 find-skills...',
+        toolName: 'find-skills',
+      });
+    });
+
+    expect(screen.getByText('正在使用 find-skills...')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /find-skills/ })).not.toBeInTheDocument();
   });
   it('来源导航目标存在时切换到目标对话并高亮来源消息', async () => {
     const scrollIntoView = vi.fn();
@@ -634,7 +658,7 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
     expect(screen.getAllByText('产品经理帮你整理了一份PRD框架清单。')).toHaveLength(1);
   });
 
-  it('最终历史返回前发送下一条时保留上一轮完成回复', async () => {
+  it('最终历史返回前发送下一条时清理上一轮本地完成回复，历史返回后按落库顺序恢复', async () => {
     vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
     vi.mocked(chatService.sendMessage)
       .mockResolvedValueOnce(chatMessage({ id: 'user-1', content: '第一条' }))
@@ -667,7 +691,7 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
     fireEvent.change(input, { target: { value: '第二条' } });
     fireEvent.keyDown(input, { key: 'Enter' });
     await waitFor(() => expect(input).toBeDisabled());
-    expect(screen.getByText('第一条回复')).toBeInTheDocument();
+    expect(screen.queryByText('第一条回复')).not.toBeInTheDocument();
 
     await act(async () => {
       resolveFirstHistoryRefresh();
@@ -678,7 +702,7 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
     expect(firstReply.compareDocumentPosition(secondUser) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it('连续相同问答且历史未返回时保留每一轮完成回复', async () => {
+  it('连续相同问答且历史未返回时只保留当前轮本地完成回复', async () => {
     vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
     vi.mocked(chatService.sendMessage)
       .mockResolvedValueOnce(chatMessage({ id: 'user-1', content: '继续' }))
@@ -713,7 +737,7 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
 
     await waitFor(() => expect(input).not.toBeDisabled());
     expect(screen.getAllByText('继续')).toHaveLength(2);
-    expect(screen.getAllByText('好的')).toHaveLength(2);
+    expect(screen.getAllByText('好的')).toHaveLength(1);
   });
 
   it('后续全量历史返回时替换普通单段本地完成回复且不重复', async () => {
@@ -780,6 +804,68 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
     expect(screen.getAllByText('第二条回复')).toHaveLength(1);
   });
 
+  it('新一轮发送前清理上一轮未落库的本地完成回复，避免漂移到下一轮末尾', async () => {
+    vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
+    vi.mocked(chatService.sendMessage)
+      .mockResolvedValueOnce(chatMessage({ id: 'user-1', content: '第一条' }))
+      .mockResolvedValueOnce(chatMessage({ id: 'user-2', content: '第二条' }));
+    const getStreamHandler = captureStreamHandler();
+    let resolveFirstHistoryRefresh!: () => void;
+    let resolveSecondHistoryRefresh!: () => void;
+    vi.mocked(chatService.getHistory)
+      .mockResolvedValueOnce([])
+      .mockImplementationOnce(() => new Promise(resolve => {
+        resolveFirstHistoryRefresh = () => resolve([
+          chatMessage({ id: 'history-user-1', content: '第一条' }),
+        ]);
+      }))
+      .mockImplementationOnce(() => new Promise(resolve => {
+        resolveSecondHistoryRefresh = () => resolve([
+          chatMessage({ id: 'history-user-1', content: '第一条' }),
+          chatMessage({ id: 'history-user-2', content: '第二条' }),
+          chatMessage({ id: 'history-assistant-2', role: 'assistant', content: '第二条回复' }),
+        ]);
+      }));
+
+    render(<ChatStream role={null} />);
+
+    const input = await screen.findByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...');
+    fireEvent.change(input, { target: { value: '第一条' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(input).toBeDisabled());
+
+    await act(async () => {
+      getStreamHandler()({ conversationId: 'conv-butler', token: '第一条回复', done: false, thinking: false });
+      getStreamHandler()({ conversationId: 'conv-butler', token: '', done: true, thinking: false });
+    });
+    await waitFor(() => expect(input).not.toBeDisabled());
+    expect(screen.getByText('第一条回复')).toBeInTheDocument();
+
+    await act(async () => {
+      resolveFirstHistoryRefresh();
+    });
+    expect(screen.getByText('第一条回复')).toBeInTheDocument();
+
+    fireEvent.change(input, { target: { value: '第二条' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(input).toBeDisabled());
+    expect(screen.queryByText('第一条回复')).not.toBeInTheDocument();
+
+    await act(async () => {
+      getStreamHandler()({ conversationId: 'conv-butler', token: '第二条回复', done: false, thinking: false });
+      getStreamHandler()({ conversationId: 'conv-butler', token: '', done: true, thinking: false });
+    });
+    await waitFor(() => expect(input).not.toBeDisabled());
+
+    await act(async () => {
+      resolveSecondHistoryRefresh();
+    });
+    expect(screen.queryByText('第一条回复')).not.toBeInTheDocument();
+    expect(screen.getAllByText('第二条回复')).toHaveLength(1);
+    expect(screen.getByText('第一条').compareDocumentPosition(screen.getByText('第二条')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByText('第二条').compareDocumentPosition(screen.getByText('第二条回复')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('历史里已有旧同内容回复时仍保留当前未落库完成回复', async () => {
     vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
     vi.mocked(chatService.sendMessage).mockResolvedValue(chatMessage({ id: 'user-1', content: '继续' }));
@@ -841,7 +927,7 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
     expect(screen.getByText('新对话').closest('button')).not.toBeDisabled();
   });
 
-  it('只有 thinking token 且历史刷新失败时不暴露 raw thinking，但会解锁输入', async () => {
+  it('只有 thinking token 且历史刷新失败时保留可展开思考过程并解锁输入', async () => {
     vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
     vi.mocked(chatService.sendMessage).mockResolvedValue(chatMessage({ id: 'user-1', content: '他喜欢吃薯条' }));
     const getStreamHandler = captureStreamHandler();
@@ -862,8 +948,9 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
     });
 
     await waitFor(() => expect(input).not.toBeDisabled());
-    expect(screen.queryByText('思考过程')).not.toBeInTheDocument();
-    expect(screen.queryByText('记录这条饮食偏好')).not.toBeInTheDocument();
+    const toggle = screen.getByRole('button', { name: '思考过程' });
+    fireEvent.click(toggle);
+    expect(screen.getByText('记录这条饮食偏好')).toBeInTheDocument();
     expect(screen.getByText('管家')).toBeInTheDocument();
     expect(screen.getByText('新对话').closest('button')).not.toBeDisabled();
   });

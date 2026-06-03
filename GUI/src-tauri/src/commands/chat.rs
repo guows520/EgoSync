@@ -9,6 +9,7 @@ use crate::db::conversations;
 use crate::db::pool::{ConversationsPool, DbPool};
 use crate::error::AppError;
 use crate::models::chat::{ChatRequest, Conversation, Message, TitleUpdatedPayload};
+use crate::services::agent_config::AgentConfigService;
 use crate::services::agent_engine;
 
 #[derive(Default)]
@@ -29,6 +30,12 @@ pub struct OnboardingConversations(pub Arc<Mutex<HashMap<String, u8>>>);
 pub struct MemoryExtractionState(pub Arc<Mutex<HashMap<String, CancellationToken>>>);
 
 const MEMORY_EXTRACTION_IDLE_SECONDS: u64 = 300;
+
+fn sync_role_config_warn(result: Result<(), AppError>, action: &str) {
+    if let Err(e) = result {
+        tracing::warn!("opencode sync ({}) failed: {}", action, e);
+    }
+}
 
 async fn replace_memory_extraction_token(
     memory_state: &MemoryExtractionState,
@@ -197,6 +204,7 @@ pub async fn chat_send_message(
     conv_pool: State<'_, ConversationsPool>,
     streaming_state: State<'_, StreamingState>,
     onboarding_convs: State<'_, OnboardingConversations>,
+    agent_config: State<'_, AgentConfigService>,
     app_handle: tauri::AppHandle,
 ) -> Result<Message, AppError> {
     // --- Resolve effective onboarding_step ---
@@ -273,6 +281,18 @@ pub async fn chat_send_message(
     } else {
         &request.content
     };
+
+    if let Some(role_id) = request.role_id.as_deref() {
+        maybe_enable_requested_meta_skill(
+            &main_pool,
+            &conv_pool,
+            &agent_config,
+            &conv_id,
+            role_id,
+            display_content,
+        )
+        .await?;
+    }
 
     let user_msg = if is_onboarding_start {
         // For onboarding start, create a placeholder user message but don't show it
@@ -371,6 +391,48 @@ pub async fn chat_send_message(
     });
 
     Ok(user_msg)
+}
+
+async fn maybe_enable_requested_meta_skill(
+    main_pool: &DbPool,
+    conv_pool: &ConversationsPool,
+    agent_config: &AgentConfigService,
+    conversation_id: &str,
+    role_id: &str,
+    user_content: &str,
+) -> Result<(), AppError> {
+    if !crate::services::role_config::is_user_confirmation(user_content) {
+        return Ok(());
+    }
+
+    let messages = conversations::get_recent_messages(conv_pool, conversation_id, 1).await?;
+    let Some(last_assistant) = messages
+        .iter()
+        .rev()
+        .find(|message| message.role == "assistant" && message.is_complete)
+    else {
+        return Ok(());
+    };
+    let Some(skill_key) =
+        crate::services::role_config::requested_meta_skill_from_assistant(&last_assistant.content)
+    else {
+        return Ok(());
+    };
+
+    let role = crate::db::roles::get_role(main_pool, role_id).await?;
+    if crate::services::role_config::skill_enabled(&role.skills_config, skill_key) {
+        return Ok(());
+    }
+    let Some(input) = crate::services::role_config::enable_skill(&role.skills_config, skill_key)
+    else {
+        return Ok(());
+    };
+    let updated = crate::db::roles::update_role_skills(main_pool, role_id, &input).await?;
+    sync_role_config_warn(
+        agent_config.sync_role_updated(&updated),
+        "auto_enable_skill",
+    );
+    Ok(())
 }
 
 #[tauri::command]
@@ -562,6 +624,17 @@ mod tests {
         ConversationsPool(pool)
     }
 
+    async fn setup_main_pool() -> DbPool {
+        let pool = SqlitePool::connect("sqlite::memory:")
+            .await
+            .expect("create main db");
+        sqlx::raw_sql(include_str!("../../migrations/003_roles.sql"))
+            .execute(&pool)
+            .await
+            .expect("create roles schema");
+        pool
+    }
+
     #[tokio::test]
     async fn chat_get_conversation_returns_none_for_deleted_source_conversation() {
         let pool = setup_conversation_pool().await;
@@ -636,6 +709,63 @@ mod tests {
         remove_memory_extraction_token_if_active(&memory_state, "conv-1", &first).await;
 
         assert_eq!(memory_state.0.lock().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn maybe_enable_requested_meta_skill_updates_role_before_next_turn() {
+        let main_pool = setup_main_pool().await;
+        let conv_pool = setup_conversation_pool().await;
+        let dir = tempfile::tempdir().unwrap();
+        let agent_config = AgentConfigService::new(dir.path().join("opencode.json"));
+        let role = crate::db::roles::create_role(
+            &main_pool,
+            &crate::models::role::CreateRoleInput {
+                name: "产品经理".to_string(),
+                icon: None,
+                color: None,
+                goal: Some("管理产品规划".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+        let conv = conversations::create_conversation(&conv_pool, Some(&role.id))
+            .await
+            .unwrap();
+        conversations::insert_message(
+            &conv_pool,
+            &conv.id,
+            "assistant",
+            "我需要 find-skills 能力才能帮你发现合适的 Skill，要开启吗？",
+            true,
+        )
+        .await
+        .unwrap();
+
+        maybe_enable_requested_meta_skill(
+            &main_pool,
+            &conv_pool,
+            &agent_config,
+            &conv.id,
+            &role.id,
+            "好的",
+        )
+        .await
+        .unwrap();
+
+        let updated = crate::db::roles::get_role(&main_pool, &role.id)
+            .await
+            .unwrap();
+        assert!(crate::services::role_config::skill_enabled(
+            &updated.skills_config,
+            crate::services::role_config::FIND_SKILLS_KEY,
+        ));
+        let config = agent_config.load().unwrap();
+        let agent_key = AgentConfigService::role_to_agent_key(&role.id);
+        let prompt = config["agent"][agent_key.as_str()]["prompt"]
+            .as_str()
+            .unwrap();
+        assert!(prompt.contains("find-skills"));
+        assert!(prompt.contains("已启用"));
     }
 
     #[tokio::test]

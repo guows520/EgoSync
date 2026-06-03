@@ -85,9 +85,16 @@ pub fn run() {
                 let all_roles = tauri::async_runtime::block_on(async {
                     db::roles::list_all_roles(pool_ref).await
                 });
+                let butler_skills = tauri::async_runtime::block_on(async {
+                    services::butler_config::get_butler_skills(pool_ref).await
+                })
+                .unwrap_or_else(|e| {
+                    tracing::warn!("Failed to load butler Skill config: {}", e);
+                    services::butler_config::default_butler_skills()
+                });
                 match all_roles {
                     Ok(roles) => {
-                        if let Err(e) = agent_config.full_sync(&roles) {
+                        if let Err(e) = agent_config.full_sync(&roles, &butler_skills) {
                             tracing::warn!("opencode.json full sync failed (degraded): {}", e);
                         }
                     }
@@ -150,6 +157,19 @@ pub fn run() {
             });
 
             let sidecar_port = sidecar.port();
+            let opencode_available = if sidecar_started {
+                true
+            } else {
+                let healthy =
+                    tauri::async_runtime::block_on(async { sidecar.health_check().await });
+                if healthy {
+                    tracing::info!(
+                        "opencode server already available on port {}; event router will attach",
+                        sidecar_port
+                    );
+                }
+                healthy
+            };
             let sidecar_state = Arc::new(Mutex::new(sidecar));
             app.manage(sidecar_state.clone());
 
@@ -157,11 +177,11 @@ pub fn run() {
             app.manage(agent_bridge.clone());
 
             // Global opencode event router: subscribes to /event SSE and
-            // demultiplexes to per-session subscribers. Only useful when
-            // sidecar is alive — chat falls back to LlmProvider otherwise.
+            // demultiplexes to per-session subscribers whenever an opencode
+            // server is reachable, including an already-running external server.
             let event_router = Arc::new(services::event_router::EventRouter::new());
             app.manage(event_router.clone());
-            if sidecar_started {
+            if opencode_available {
                 let router_clone = event_router.clone();
                 let bridge_clone = agent_bridge.clone();
                 tauri::async_runtime::spawn(async move {
@@ -225,12 +245,16 @@ pub fn run() {
             commands::role::role_list,
             commands::role::role_list_archived,
             commands::role::role_update,
+            commands::role::role_update_skills,
+            commands::role::role_update_proactivity,
             commands::role::role_archive,
             commands::role::role_restore,
             commands::role::role_delete,
             commands::app::app_is_first_launch,
             commands::app::app_complete_onboarding,
             commands::app::app_is_llm_configured,
+            commands::app::app_get_butler_skills,
+            commands::app::app_update_butler_skills,
             commands::app::app_sidecar_status,
         ])
         .build(tauri::generate_context!())

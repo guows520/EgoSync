@@ -1,13 +1,71 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { AlertCircle, Check } from 'lucide-react';
 import { getRoleIconComponent, normalizeColorHex } from '../../lib/roleIcons';
+import { cn } from '../../lib/utils';
+import { appService } from '../../services/appService';
+import type { RoleSkillsConfig } from '../../types/role';
+
+const DEFAULT_SKILLS: RoleSkillsConfig = { findSkills: true, skillCreator: false };
+const SKILL_OPTIONS: Array<{ key: keyof RoleSkillsConfig; title: string; source: string; description: string }> = [
+  {
+    key: 'findSkills',
+    title: 'find-skills',
+    source: 'Vercel 官方',
+    description: '发现并推荐适合当前任务的 Skill。',
+  },
+  {
+    key: 'skillCreator',
+    title: 'skill-creator',
+    source: 'Anthropic 官方',
+    description: '创建或扩展角色需要的新 Skill。',
+  },
+];
 
 export function ButlerSettingsContent({ archivedRoles = [], onRestoreRole }: any) {
   const [mission, setMission] = useState('');
+  const [skills, setSkills] = useState<RoleSkillsConfig>(DEFAULT_SKILLS);
+  const [pendingSkill, setPendingSkill] = useState<keyof RoleSkillsConfig | null>(null);
+  const [settingsSavedMessage, setSettingsSavedMessage] = useState('');
+  const [error, setError] = useState('');
   const templates = [
     '家庭优先：家人的健康与陪伴是一切决策的第一优先级。',
     '事业与家庭平衡：在事业高速成长的同时，确保每周至少两个晚上属于家人。',
     '终身学习：持续投入时间学习新知识，每月至少完成一本书或一门课程。'
   ];
+
+  useEffect(() => {
+    let cancelled = false;
+    appService.getButlerSkills()
+      .then(nextSkills => {
+        if (!cancelled) setSkills(nextSkills);
+      })
+      .catch(() => {
+        if (!cancelled) setError('Skill 配置加载失败，请稍后重试');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleSkillToggle = async (key: keyof RoleSkillsConfig) => {
+    const nextSkills = { ...skills, [key]: !skills[key] };
+    setSkills(nextSkills);
+    setPendingSkill(key);
+    setSettingsSavedMessage('');
+    setError('');
+    try {
+      const savedSkills = await appService.updateButlerSkills(nextSkills);
+      setSkills(savedSkills);
+      setSettingsSavedMessage('Skill 配置已保存');
+      setTimeout(() => setSettingsSavedMessage(''), 1500);
+    } catch {
+      setSkills(skills);
+      setError('Skill 配置保存失败，请稍后重试');
+    } finally {
+      setPendingSkill(null);
+    }
+  };
+
   return (
     <div className="space-y-8">
       <div>
@@ -32,6 +90,52 @@ export function ButlerSettingsContent({ archivedRoles = [], onRestoreRole }: any
             </button>
           ))}
         </div>
+      </div>
+      <div className="pt-6 border-t border-slate-200/80">
+        <label className="text-[14px] font-semibold text-slate-800 block mb-3">Skill 配置</label>
+        <div className="space-y-3">
+          {SKILL_OPTIONS.map(option => {
+            const enabled = skills[option.key];
+            return (
+              <div key={option.key} className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="flex items-center gap-2.5">
+                      <span className={cn('w-2.5 h-2.5 rounded-full', enabled ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.4)]' : 'bg-slate-300')} />
+                      <span className="text-[14.5px] font-medium text-slate-800">{option.title}</span>
+                      <span className="text-[11px] font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full border border-slate-200">{option.source}</span>
+                    </div>
+                    <p className="mt-2 text-[12.5px] leading-relaxed text-slate-500">{option.description}</p>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={enabled}
+                    disabled={pendingSkill !== null}
+                    onClick={() => handleSkillToggle(option.key)}
+                    className={cn(
+                      'relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-60',
+                      enabled ? 'bg-indigo-600' : 'bg-slate-300',
+                    )}
+                  >
+                    <span className={cn('absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform', enabled ? 'translate-x-5' : 'translate-x-0')} />
+                    <span className="sr-only">{option.title}</span>
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        {settingsSavedMessage && (
+          <div className="mt-3 rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2 text-[13px] text-emerald-700 flex items-center gap-2">
+            <Check size={14} /> {settingsSavedMessage}
+          </div>
+        )}
+        {error && (
+          <div className="mt-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-[13px] text-red-600 flex items-center gap-2">
+            <AlertCircle size={14} /> {error}
+          </div>
+        )}
       </div>
       <div className="pt-6 border-t border-slate-200/80">
         <label className="text-[14px] font-semibold text-slate-800 block mb-3">晨间简报时间</label>

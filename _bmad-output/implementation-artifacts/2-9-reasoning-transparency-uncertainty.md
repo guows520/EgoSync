@@ -5,7 +5,7 @@ baseline_commit: 55582e24f21e8d3432fca61bb837c1a333bce95b
 
 # Story 2.9: 用户追问“为什么”获得透明推理链，AI 不确定时主动声明
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -376,3 +376,4 @@ Claude Opus 4.7 (1M context)
 - 2026-06-02: Addressed code review findings for stale category-filter target navigation and hidden raw-thinking exposure; reran full validation and restarted Tauri dev. Status set to review.
 - 2026-06-02: Addressed second review findings for real MemoryTab stale-query handling and hidden thinking bus-delta ordering; reran full validation and restarted Tauri dev. Status set to review.
 - 2026-06-02: Added source-message navigation across butler/role views, exact source-message validation, centered scrolling/highlighting, unique hidden memory links behind time labels, and prompt rules for on-demand source disclosure. Status remains review.
+- 2026-06-02: User accepted Story 2.9 completion; status set to done.

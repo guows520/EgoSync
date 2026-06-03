@@ -37,6 +37,9 @@ export interface StreamPayload {
   thinking: boolean;
   /** Story 2.3: 后端切换到新 assistant 气泡时携带其 id；普通单段流式不带。 */
   messageId?: string | null;
+  phase?: 'thinking' | 'tool' | 'answering' | 'done' | 'error';
+  statusText?: string;
+  toolName?: string;
 }
 
 export interface SourceNavigationTarget {

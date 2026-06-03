@@ -69,14 +69,29 @@ fn stream_payload_from_sse(
             done: false,
             thinking: false,
             message_id: message_id.map(str::to_string),
+            phase: None,
+            status_text: None,
+            tool_name: None,
         }),
-        crate::models::agent::SseEvent::Thinking { .. } => None,
+        crate::models::agent::SseEvent::Thinking { content } => Some(StreamPayload {
+            conversation_id: conversation_id.to_string(),
+            token: content,
+            done: false,
+            thinking: true,
+            message_id: message_id.map(str::to_string),
+            phase: Some("thinking".to_string()),
+            status_text: Some("思考中...".to_string()),
+            tool_name: None,
+        }),
         crate::models::agent::SseEvent::Done => Some(StreamPayload {
             conversation_id: conversation_id.to_string(),
             token: String::new(),
             done: true,
             thinking: false,
             message_id: message_id.map(str::to_string),
+            phase: None,
+            status_text: None,
+            tool_name: None,
         }),
         crate::models::agent::SseEvent::Error { message } => Some(StreamPayload {
             conversation_id: conversation_id.to_string(),
@@ -84,6 +99,9 @@ fn stream_payload_from_sse(
             done: true,
             thinking: false,
             message_id: message_id.map(str::to_string),
+            phase: None,
+            status_text: None,
+            tool_name: None,
         }),
         crate::models::agent::SseEvent::ToolCall { name, arguments } => {
             tracing::info!(
@@ -97,13 +115,13 @@ fn stream_payload_from_sse(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BusTextDeltaDecision {
-    EmitText,
-    SkipHidden,
+enum BusTextDeltaKind {
+    Text,
+    Thinking,
     WaitForPartType,
 }
 
-fn is_hidden_bus_part_type(part_type: &str) -> bool {
+fn is_thinking_bus_part_type(part_type: &str) -> bool {
     matches!(part_type, "reasoning" | "thinking")
 }
 
@@ -123,27 +141,27 @@ fn bus_delta_part_type(properties: &serde_json::Value) -> Option<&str> {
 fn classify_bus_text_delta(
     properties: &serde_json::Value,
     visible_text_parts: &std::collections::HashSet<String>,
-    hidden_parts: &std::collections::HashSet<String>,
-) -> BusTextDeltaDecision {
+    reasoning_parts: &std::collections::HashSet<String>,
+) -> BusTextDeltaKind {
     let part_id = properties
         .get("partID")
         .and_then(|value| value.as_str())
         .unwrap_or("");
-    if !part_id.is_empty() && hidden_parts.contains(part_id) {
-        return BusTextDeltaDecision::SkipHidden;
+    if !part_id.is_empty() && reasoning_parts.contains(part_id) {
+        return BusTextDeltaKind::Thinking;
     }
     if let Some(part_type) = bus_delta_part_type(properties) {
-        if is_hidden_bus_part_type(part_type) {
-            return BusTextDeltaDecision::SkipHidden;
+        if is_thinking_bus_part_type(part_type) {
+            return BusTextDeltaKind::Thinking;
         }
         if part_type == "text" {
-            return BusTextDeltaDecision::EmitText;
+            return BusTextDeltaKind::Text;
         }
     }
     if !part_id.is_empty() && visible_text_parts.contains(part_id) {
-        return BusTextDeltaDecision::EmitText;
+        return BusTextDeltaKind::Text;
     }
-    BusTextDeltaDecision::WaitForPartType
+    BusTextDeltaKind::WaitForPartType
 }
 
 fn emit_stream_token(
@@ -161,8 +179,209 @@ fn emit_stream_token(
             done: false,
             thinking,
             message_id: message_id.map(str::to_string),
+            phase: Some(if thinking { "thinking" } else { "answering" }.to_string()),
+            status_text: if thinking {
+                Some("思考中...".to_string())
+            } else {
+                None
+            },
+            tool_name: None,
         },
     );
+}
+
+fn tool_status_text(tool_name: &str, status: &str) -> Option<String> {
+    let trimmed = tool_name.trim();
+    match status {
+        "running" => Some(if trimmed.is_empty() {
+            "正在使用工具...".to_string()
+        } else {
+            format!("正在使用 {}...", trimmed)
+        }),
+        "completed" => Some(if trimmed.is_empty() {
+            "工具已完成，正在整理结果...".to_string()
+        } else {
+            format!("{} 已完成，正在整理结果...", trimmed)
+        }),
+        _ => None,
+    }
+}
+
+fn emit_tool_status(
+    app_handle: &tauri::AppHandle,
+    conversation_id: &str,
+    tool_name: &str,
+    status: &str,
+) {
+    let Some(status_text) = tool_status_text(tool_name, status) else {
+        return;
+    };
+    let _ = app_handle.emit(
+        "llm:stream",
+        StreamPayload {
+            conversation_id: conversation_id.to_string(),
+            token: String::new(),
+            done: false,
+            thinking: false,
+            message_id: None,
+            phase: Some("tool".to_string()),
+            status_text: Some(status_text),
+            tool_name: if tool_name.trim().is_empty() {
+                None
+            } else {
+                Some(tool_name.trim().to_string())
+            },
+        },
+    );
+}
+
+fn emit_stream_done(
+    app_handle: &tauri::AppHandle,
+    conversation_id: &str,
+    message_id: Option<&str>,
+) {
+    let _ = app_handle.emit(
+        "llm:stream",
+        StreamPayload {
+            conversation_id: conversation_id.to_string(),
+            token: String::new(),
+            done: true,
+            thinking: false,
+            message_id: message_id.map(str::to_string),
+            phase: Some("done".to_string()),
+            status_text: None,
+            tool_name: None,
+        },
+    );
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MetaSkillConfigOwner {
+    Butler,
+    Role,
+}
+
+fn meta_skill_discovery_disabled_message(owner: MetaSkillConfigOwner) -> &'static str {
+    match owner {
+        MetaSkillConfigOwner::Butler => {
+            "当前没有启用 Skill 发现能力，需要在管家的 Skill 配置中开启后，我才能帮你查找或推荐 Skill。"
+        }
+        MetaSkillConfigOwner::Role => {
+            "当前角色没有启用 Skill 发现能力，需要在该角色的 Skill 配置中开启后，我才能帮你查找或推荐 Skill。"
+        }
+    }
+}
+
+fn meta_skill_creator_disabled_message(owner: MetaSkillConfigOwner) -> &'static str {
+    match owner {
+        MetaSkillConfigOwner::Butler => {
+            "当前没有启用 Skill 创建能力，需要在管家的 Skill 配置中开启后，我才能帮你创建或扩展 Skill。"
+        }
+        MetaSkillConfigOwner::Role => {
+            "当前角色没有启用 Skill 创建能力，需要在该角色的 Skill 配置中开启后，我才能帮你创建或扩展 Skill。"
+        }
+    }
+}
+
+fn looks_like_meta_skill_discovery_request(text: &str) -> bool {
+    let normalized = text.trim().to_ascii_lowercase();
+    if !normalized.contains("skill") && !normalized.contains("技能") {
+        return false;
+    }
+
+    const DISCOVERY_MARKERS: &[&str] = &[
+        "搜",
+        "搜索",
+        "找",
+        "查",
+        "查找",
+        "发现",
+        "推荐",
+        "有哪些",
+        "有什么",
+        "list",
+        "search",
+        "find",
+        "discover",
+        "recommend",
+    ];
+    DISCOVERY_MARKERS
+        .iter()
+        .any(|marker| normalized.contains(marker))
+}
+
+fn looks_like_meta_skill_creator_request(text: &str) -> bool {
+    let normalized = text.trim().to_ascii_lowercase();
+    if !normalized.contains("skill") && !normalized.contains("技能") {
+        return false;
+    }
+
+    const CREATOR_MARKERS: &[&str] = &[
+        "创建",
+        "新建",
+        "生成",
+        "扩展",
+        "开发",
+        "写一个",
+        "做一个",
+        "create",
+        "generate",
+        "build",
+        "extend",
+    ];
+    CREATOR_MARKERS
+        .iter()
+        .any(|marker| normalized.contains(marker))
+}
+
+fn disabled_meta_skill_message(
+    find_skills: bool,
+    skill_creator: bool,
+    user_message: &str,
+    owner: MetaSkillConfigOwner,
+) -> Option<&'static str> {
+    if !find_skills && looks_like_meta_skill_discovery_request(user_message) {
+        Some(meta_skill_discovery_disabled_message(owner))
+    } else if !skill_creator && looks_like_meta_skill_creator_request(user_message) {
+        Some(meta_skill_creator_disabled_message(owner))
+    } else {
+        None
+    }
+}
+
+fn append_completed_tail(
+    app_handle: Option<&tauri::AppHandle>,
+    conversation_id: &str,
+    message_id: Option<&str>,
+    target: &mut String,
+    completed_text: &str,
+    thinking: bool,
+) {
+    if completed_text.trim().is_empty() {
+        return;
+    }
+
+    if target.trim().is_empty() {
+        target.push_str(completed_text);
+        if let Some(app_handle) = app_handle {
+            emit_stream_token(
+                app_handle,
+                conversation_id,
+                message_id,
+                completed_text,
+                thinking,
+            );
+        }
+        return;
+    }
+
+    if completed_text.len() > target.len() && completed_text.starts_with(target.as_str()) {
+        let delta = &completed_text[target.len()..];
+        target.push_str(delta);
+        if let Some(app_handle) = app_handle {
+            emit_stream_token(app_handle, conversation_id, message_id, delta, thinking);
+        }
+    }
 }
 
 fn apply_completed_message_fallback(
@@ -171,15 +390,28 @@ fn apply_completed_message_fallback(
     message_id: Option<&str>,
     completed: Option<crate::models::agent::OpencodeCompletedMessage>,
     text_target: &mut String,
+    thinking_target: &mut String,
 ) {
     let Some(completed) = completed else {
         return;
     };
 
-    if text_target.trim().is_empty() && !completed.text.trim().is_empty() {
-        text_target.push_str(&completed.text);
-        emit_stream_token(app_handle, conversation_id, message_id, &completed.text, false);
-    }
+    append_completed_tail(
+        Some(app_handle),
+        conversation_id,
+        None,
+        thinking_target,
+        &completed.thinking,
+        true,
+    );
+    append_completed_tail(
+        Some(app_handle),
+        conversation_id,
+        message_id,
+        text_target,
+        &completed.text,
+        false,
+    );
 }
 
 fn ensure_non_empty_opencode_result(
@@ -187,8 +419,9 @@ fn ensure_non_empty_opencode_result(
     conversation_id: &str,
     message_id: Option<&str>,
     text: &mut String,
+    thinking: &str,
 ) {
-    if text.trim().is_empty() {
+    if text.trim().is_empty() && thinking.trim().is_empty() {
         let fallback = "抱歉，这次没有生成可显示的回复，请再试一次。";
         text.push_str(fallback);
         emit_stream_token(app_handle, conversation_id, message_id, fallback, false);
@@ -240,7 +473,12 @@ fn truncate_chars(value: &str, limit: usize) -> String {
 
 fn format_memory_reference_label(memory: &crate::models::memory::Memory) -> String {
     chrono::DateTime::parse_from_rfc3339(&memory.created_at)
-        .map(|created_at| created_at.with_timezone(&chrono::Local).format("%Y/%m/%d %H:%M").to_string())
+        .map(|created_at| {
+            created_at
+                .with_timezone(&chrono::Local)
+                .format("%Y/%m/%d %H:%M")
+                .to_string()
+        })
         .unwrap_or_else(|_| memory.created_at.clone())
 }
 
@@ -259,7 +497,10 @@ fn append_uncertainty_notice_if_needed(text: &mut String) -> Option<&'static str
     if visible.is_empty() {
         return None;
     }
-    if !HEDGING_MARKERS.iter().any(|marker| visible.contains(marker)) {
+    if !HEDGING_MARKERS
+        .iter()
+        .any(|marker| visible.contains(marker))
+    {
         return None;
     }
     if UNCERTAINTY_STATEMENT_MARKERS
@@ -390,6 +631,19 @@ pub async fn build_butler_system_prompt(
     // Story 2.3: butler system prompt 拼接顺序：基线 + 可委派角色清单 + 各角色近况 + 行为指南。
     // 顺序固定，保证 LLM 先建立身份，再看到资源，最后被告诉怎么用资源。
     let mut system_prompt = String::from(BUTLER_SYSTEM_PROMPT);
+
+    let butler_skills = crate::services::butler_config::get_butler_skills(main_pool)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!("Failed to load butler Skill config for prompt: {}", e);
+            crate::services::butler_config::default_butler_skills()
+        });
+    let skills_config = crate::services::butler_config::skills_config_json(&butler_skills);
+    let meta_skill_prompt = crate::services::role_config::meta_skill_prompt(&skills_config);
+    if !meta_skill_prompt.is_empty() {
+        system_prompt.push_str("\n\n");
+        system_prompt.push_str(&meta_skill_prompt);
+    }
 
     let active_roles = crate::db::roles::list_active_roles(main_pool).await?;
     if !active_roles.is_empty() {
@@ -571,6 +825,10 @@ async fn build_role_system_prompt(
         role_definition.push_str("\n默认语调：根据角色名称与核心目标选择自然语气；产品/工作类偏简洁专业，家庭/生活类偏温暖关怀，学习/成长类偏好奇探索。");
     }
     sections.push(role_definition);
+    let meta_skill_prompt = crate::services::role_config::meta_skill_prompt(&role.skills_config);
+    if !meta_skill_prompt.is_empty() {
+        sections.push(meta_skill_prompt);
+    }
 
     let memory_summary = build_role_memory_summary(main_pool, &role.id).await?;
     if !memory_summary.is_empty() {
@@ -933,6 +1191,48 @@ async fn try_run_opencode_stream(
     event_router: Arc<crate::services::event_router::EventRouter>,
     delegate_bridge: crate::services::delegate_bridge::DelegateBridge,
 ) -> Result<(), AppError> {
+    let disabled_message = if let Some(rid) = role_id {
+        crate::db::roles::get_role(main_pool, rid)
+            .await
+            .ok()
+            .and_then(|role| {
+                let skills = crate::services::role_config::skills_from_config(&role.skills_config);
+                disabled_meta_skill_message(
+                    skills.find_skills,
+                    skills.skill_creator,
+                    user_message,
+                    MetaSkillConfigOwner::Role,
+                )
+            })
+    } else {
+        let butler_skills = crate::services::butler_config::get_butler_skills(main_pool)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!(
+                    "Failed to load butler Skill config before opencode send: {}",
+                    e
+                );
+                crate::services::butler_config::default_butler_skills()
+            });
+        disabled_meta_skill_message(
+            butler_skills.find_skills,
+            butler_skills.skill_creator,
+            user_message,
+            MetaSkillConfigOwner::Butler,
+        )
+    };
+    if let Some(message) = disabled_message {
+        conversations::update_message_content(conv_pool, assistant_message_id, message)
+            .await
+            .ok();
+        conversations::mark_message_complete(conv_pool, assistant_message_id)
+            .await
+            .ok();
+        emit_stream_token(app_handle, conversation_id, None, message, false);
+        emit_stream_done(app_handle, conversation_id, None);
+        return Ok(());
+    }
+
     let session_id = {
         let sessions = opencode_sessions.lock().await;
         sessions.get(conversation_id).cloned()
@@ -998,16 +1298,21 @@ async fn try_run_opencode_stream(
     // carries the full part text each time, so we diff locally.
     let mut part_text: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let mut accumulated_text = String::new();
+    let mut accumulated_thinking = String::new();
     let mut completed = false;
+    let mut drain_deadline: Option<tokio::time::Instant> = None;
     // Fix 2: messageID → role mapping. opencode sends message.part.updated for
     // *both* user and assistant messages. We must learn each message's role from
     // "message.updated" events and only stream assistant-role parts to the UI.
     let mut message_roles: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
-    // Track which bus part IDs have known user-visible text vs hidden reasoning.
-    let mut visible_text_parts: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut hidden_parts: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // Track which bus part IDs have known user-visible text vs reasoning/thinking.
+    let mut visible_text_parts: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    let mut reasoning_parts: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut processed_tool_parts: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    let mut processed_tool_statuses: std::collections::HashSet<String> =
         std::collections::HashSet::new();
     // 委派两气泡：第一段"稍等…"落 assistant_message_id；delegate_to_role 激活后，
     // 第二段（委派回复）落新建的 followup 消息，并在激活瞬间唤醒前端弹跳点。
@@ -1029,25 +1334,19 @@ async fn try_run_opencode_stream(
                 }
                 if let Some(fid) = followup_id.clone() {
                     // 委派已拆分：第一气泡在拆分时已冻结，这里收尾第二气泡，避免弹跳点卡住。
+                    if !accumulated_thinking.is_empty() {
+                        conversations::update_message_thinking(conv_pool, assistant_message_id, &accumulated_thinking).await.ok();
+                    }
                     conversations::update_message_content(conv_pool, &fid, &followup_text).await.ok();
                     conversations::mark_message_complete(conv_pool, &fid).await.ok();
-                    let _ = app_handle.emit("llm:stream", StreamPayload {
-                        conversation_id: conversation_id.to_string(),
-                        token: String::new(),
-                        done: true,
-                        thinking: false,
-                        message_id: Some(fid),
-                    });
+                    emit_stream_done(app_handle, conversation_id, Some(&fid));
                 } else {
                     conversations::update_message_content(conv_pool, assistant_message_id, &accumulated_text).await.ok();
+                    if !accumulated_thinking.is_empty() {
+                        conversations::update_message_thinking(conv_pool, assistant_message_id, &accumulated_thinking).await.ok();
+                    }
                     conversations::mark_message_complete(conv_pool, assistant_message_id).await.ok();
-                    let _ = app_handle.emit("llm:stream", StreamPayload {
-                        conversation_id: conversation_id.to_string(),
-                        token: String::new(),
-                        done: true,
-                        thinking: false,
-                        message_id: None,
-                    });
+                    emit_stream_done(app_handle, conversation_id, None);
                 }
                 return Ok(());
             }
@@ -1073,9 +1372,18 @@ async fn try_run_opencode_stream(
                         }
                         let part_id = event.properties.get("partID")
                             .and_then(|v| v.as_str()).unwrap_or("");
-                        match classify_bus_text_delta(&event.properties, &visible_text_parts, &hidden_parts) {
-                            BusTextDeltaDecision::EmitText => {}
-                            BusTextDeltaDecision::SkipHidden | BusTextDeltaDecision::WaitForPartType => continue,
+                        match classify_bus_text_delta(&event.properties, &visible_text_parts, &reasoning_parts) {
+                            BusTextDeltaKind::Thinking => {
+                                accumulated_thinking.push_str(delta);
+                                if !part_id.is_empty() {
+                                    let entry = part_text.entry(part_id.to_string()).or_default();
+                                    entry.push_str(delta);
+                                }
+                                emit_stream_token(app_handle, conversation_id, None, delta, true);
+                                continue;
+                            }
+                            BusTextDeltaKind::Text => {}
+                            BusTextDeltaKind::WaitForPartType => continue,
                         }
                         let emit_message_id = match bubble_state.classify_message(msg_id) {
                             BubbleSlot::First => {
@@ -1091,13 +1399,7 @@ async fn try_run_opencode_stream(
                             let entry = part_text.entry(part_id.to_string()).or_default();
                             entry.push_str(delta);
                         }
-                        let _ = app_handle.emit("llm:stream", StreamPayload {
-                            conversation_id: conversation_id.to_string(),
-                            token: delta.to_string(),
-                            done: false,
-                            thinking: false,
-                            message_id: emit_message_id,
-                        });
+                        emit_stream_token(app_handle, conversation_id, emit_message_id.as_deref(), delta, false);
                     }
                     "message.updated" => {
                         // Learn messageID → role so we can filter parts later.
@@ -1110,38 +1412,42 @@ async fn try_run_opencode_stream(
                                 info.get("role").and_then(|v| v.as_str()),
                             ) {
                                 message_roles.insert(id.to_string(), role.to_string());
-                                // Extract text from completed assistant messages
                                 if role == "assistant" {
                                     if let Some(parts) = info.get("parts").and_then(|v| v.as_array()) {
                                         for p in parts {
                                             let ptype = p.get("type").and_then(|v| v.as_str()).unwrap_or("");
                                             let text = p.get("text").and_then(|v| v.as_str()).unwrap_or("");
-                                            if !text.is_empty() {
-                                                if ptype != "text" {
-                                                    continue;
+                                            if text.is_empty() {
+                                                continue;
+                                            }
+
+                                            let part_id = p.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                                            if ptype == "text" {
+                                                visible_text_parts.insert(part_id.to_string());
+                                            } else if is_thinking_bus_part_type(ptype) {
+                                                reasoning_parts.insert(part_id.to_string());
+                                            } else {
+                                                continue;
+                                            }
+
+                                            let (emit_message_id, accum, thinking): (Option<String>, &mut String, bool) = if is_thinking_bus_part_type(ptype) {
+                                                (None, &mut accumulated_thinking, true)
+                                            } else {
+                                                match bubble_state.classify_message(id) {
+                                                    BubbleSlot::First => (None, &mut accumulated_text, false),
+                                                    BubbleSlot::Followup => (followup_id.clone(), &mut followup_text, false),
                                                 }
-                                                let (emit_message_id, accum): (Option<String>, &mut String) = match bubble_state.classify_message(id) {
-                                                    BubbleSlot::First => (None, &mut accumulated_text),
-                                                    BubbleSlot::Followup => (followup_id.clone(), &mut followup_text),
-                                                };
-                                                let part_id = p.get("id").and_then(|v| v.as_str()).unwrap_or("");
-                                                let prev = part_text.entry(part_id.to_string()).or_default();
-                                                if text.len() > prev.len() && text.starts_with(prev.as_str()) {
-                                                    let delta = text[prev.len()..].to_string();
-                                                    *prev = text.to_string();
-                                                    accum.push_str(&delta);
-                                                    let _ = app_handle.emit("llm:stream", StreamPayload {
-                                                        conversation_id: conversation_id.to_string(),
-                                                        token: delta,
-                                                        done: false,
-                                                        thinking: false,
-                                                        message_id: emit_message_id,
-                                                    });
-                                                } else if text != prev.as_str() {
-                                                    *prev = text.to_string();
-                                                    accum.clear();
-                                                    accum.push_str(text);
-                                                }
+                                            };
+                                            let prev = part_text.entry(part_id.to_string()).or_default();
+                                            if text.len() > prev.len() && text.starts_with(prev.as_str()) {
+                                                let delta = text[prev.len()..].to_string();
+                                                *prev = text.to_string();
+                                                accum.push_str(&delta);
+                                                emit_stream_token(app_handle, conversation_id, emit_message_id.as_deref(), &delta, thinking);
+                                            } else if text != prev.as_str() {
+                                                *prev = text.to_string();
+                                                accum.clear();
+                                                accum.push_str(text);
                                             }
                                         }
                                     }
@@ -1153,8 +1459,8 @@ async fn try_run_opencode_stream(
                         let Some(part_raw) = event.properties.get("part") else { continue };
                         let Ok(part) = serde_json::from_value::<crate::models::agent::BusPart>(part_raw.clone()) else { continue };
                         tracing::debug!(part_type = %part.part_type, part_id = %part.id, msg_id = %part.message_id, text_len = part.text.len(), "stream part updated");
-                        if is_hidden_bus_part_type(&part.part_type) {
-                            hidden_parts.insert(part.id.clone());
+                        if is_thinking_bus_part_type(&part.part_type) {
+                            reasoning_parts.insert(part.id.clone());
                         } else if part.part_type == "text" {
                             visible_text_parts.insert(part.id.clone());
                         }
@@ -1167,12 +1473,12 @@ async fn try_run_opencode_stream(
                         }
                         // Only stream user-visible content. Tool parts are intercepted
                         // to trigger Tauri-side effects (role proposals, delegation, etc.)
-                        let (emit_message_id, accum): (Option<String>, &mut String) = match part.part_type.as_str() {
+                        let (emit_message_id, accum, thinking): (Option<String>, &mut String, bool) = match part.part_type.as_str() {
                             "text" => match bubble_state.classify_message(&part.message_id) {
-                                BubbleSlot::First => (None, &mut accumulated_text),
-                                BubbleSlot::Followup => (followup_id.clone(), &mut followup_text),
+                                BubbleSlot::First => (None, &mut accumulated_text, false),
+                                BubbleSlot::Followup => (followup_id.clone(), &mut followup_text, false),
                             },
-                            "reasoning" | "thinking" => continue,
+                            "reasoning" | "thinking" => (None, &mut accumulated_thinking, true),
                             "tool" => {
                                 // Intercept custom tool results from opencode.
                                 // Tool part structure: { tool: "create_role", state: { status, output, input } }
@@ -1186,6 +1492,12 @@ async fn try_run_opencode_stream(
                                     .and_then(|s| s.get("status"))
                                     .and_then(|v| v.as_str())
                                     .unwrap_or("");
+                                if matches!(tool_status, "running" | "completed") {
+                                    let status_key = format!("{}:{}", part.id, tool_status);
+                                    if processed_tool_statuses.insert(status_key) {
+                                        emit_tool_status(app_handle, conversation_id, tool_name, tool_status);
+                                    }
+                                }
                                 // 委派两气泡：delegate_to_role 进入活动态（running/completed，取最早一次）时，
                                 // 冻结第一气泡（"稍等…"）、新建 followup 气泡并发空 token 唤醒弹跳点，
                                 // 覆盖委派同步等待 PM 回复的 ~40s 窗口。仅 butler 路径启用。
@@ -1209,13 +1521,7 @@ async fn try_run_opencode_stream(
                                         )
                                         .await
                                         .ok();
-                                        let _ = app_handle.emit("llm:stream", StreamPayload {
-                                            conversation_id: conversation_id.to_string(),
-                                            token: String::new(),
-                                            done: true,
-                                            thinking: false,
-                                            message_id: Some(assistant_message_id.to_string()),
-                                        });
+                                        emit_stream_done(app_handle, conversation_id, Some(assistant_message_id));
                                     }
                                     match conversations::insert_message(
                                         conv_pool,
@@ -1229,13 +1535,7 @@ async fn try_run_opencode_stream(
                                         Ok(m) => {
                                             let new_id = m.id.clone();
                                             // 空 token 唤醒第二气泡的弹跳点（等待期间持续可见）。
-                                            let _ = app_handle.emit("llm:stream", StreamPayload {
-                                                conversation_id: conversation_id.to_string(),
-                                                token: String::new(),
-                                                done: false,
-                                                thinking: false,
-                                                message_id: Some(new_id.clone()),
-                                            });
+                                            emit_stream_token(app_handle, conversation_id, Some(&new_id), "", false);
                                             followup_id = Some(new_id);
                                         }
                                         Err(e) => {
@@ -1268,13 +1568,7 @@ async fn try_run_opencode_stream(
                             let delta = part.text[prev.len()..].to_string();
                             *prev = part.text.clone();
                             accum.push_str(&delta);
-                            let _ = app_handle.emit("llm:stream", StreamPayload {
-                                conversation_id: conversation_id.to_string(),
-                                token: delta,
-                                done: false,
-                                thinking: false,
-                                message_id: emit_message_id,
-                            });
+                            emit_stream_token(app_handle, conversation_id, emit_message_id.as_deref(), &delta, thinking);
                         } else if part.text != *prev {
                             // Non-monotonic update (replacement). Replay full text.
                             *prev = part.text.clone();
@@ -1310,12 +1604,12 @@ async fn try_run_opencode_stream(
                     _ => { /* ignore unrelated events */ }
                 }
             }
-            send_done = &mut result_rx => {
+            send_done = &mut result_rx, if !send_result_observed => {
                 // The POST returned (success or failure). For success this just
                 // means the LLM finished; the closing `session.idle` event may
                 // or may not have arrived yet — keep draining briefly.
                 send_result_observed = true;
-                match send_done {
+                let should_drain = match send_done {
                     Ok(Err(e)) => {
                         event_router.unsubscribe(&session_id).await;
                         if delegation_session_registered {
@@ -1332,15 +1626,28 @@ async fn try_run_opencode_stream(
                         } else {
                             accumulated_text.push_str(&friendly);
                         }
+                        false
                     }
                     Ok(Ok(response)) => {
                         completed_response = response;
+                        true
                     }
-                    Err(_) => {}
+                    Err(_) => false,
+                };
+                if should_drain {
+                    drain_deadline = Some(tokio::time::Instant::now() + Duration::from_millis(800));
+                    continue;
                 }
-                // POST success: the synchronous endpoint has returned,
-                // meaning LLM finished. All streaming deltas already arrived
-                // before POST returns (it waits for completion).
+                completed = true;
+                break;
+            }
+            _ = async {
+                if let Some(deadline) = drain_deadline {
+                    tokio::time::sleep_until(deadline).await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            }, if drain_deadline.is_some() => {
                 completed = true;
                 break;
             }
@@ -1375,7 +1682,10 @@ async fn try_run_opencode_stream(
                     sessions.remove(conversation_id);
                     return Err(e);
                 }
-                let friendly = format!("\n\n抱歉，Agent 引擎返回错误：{}", summarize_error(&e.to_string()));
+                let friendly = format!(
+                    "\n\n抱歉，Agent 引擎返回错误：{}",
+                    summarize_error(&e.to_string())
+                );
                 if followup_id.is_some() {
                     followup_text.push_str(&friendly);
                 } else {
@@ -1393,12 +1703,14 @@ async fn try_run_opencode_stream(
             followup_id.as_deref(),
             completed_response,
             &mut followup_text,
+            &mut accumulated_thinking,
         );
         ensure_non_empty_opencode_result(
             app_handle,
             conversation_id,
             followup_id.as_deref(),
             &mut followup_text,
+            &accumulated_thinking,
         );
     } else {
         apply_completed_message_fallback(
@@ -1407,12 +1719,14 @@ async fn try_run_opencode_stream(
             None,
             completed_response,
             &mut accumulated_text,
+            &mut accumulated_thinking,
         );
         ensure_non_empty_opencode_result(
             app_handle,
             conversation_id,
             None,
             &mut accumulated_text,
+            &accumulated_thinking,
         );
     }
 
@@ -1427,16 +1741,7 @@ async fn try_run_opencode_stream(
         conversations::mark_message_complete(conv_pool, &fid)
             .await
             .ok();
-        let _ = app_handle.emit(
-            "llm:stream",
-            StreamPayload {
-                conversation_id: conversation_id.to_string(),
-                token: String::new(),
-                done: true,
-                thinking: false,
-                message_id: Some(fid),
-            },
-        );
+        emit_stream_done(app_handle, conversation_id, Some(&fid));
     } else {
         // 普通单段对话：单气泡收尾（改动前的原行为）。
         if let Some(notice) = append_uncertainty_notice_if_needed(&mut accumulated_text) {
@@ -1445,19 +1750,19 @@ async fn try_run_opencode_stream(
         conversations::update_message_content(conv_pool, assistant_message_id, &accumulated_text)
             .await
             .ok();
+        if !accumulated_thinking.is_empty() {
+            conversations::update_message_thinking(
+                conv_pool,
+                assistant_message_id,
+                &accumulated_thinking,
+            )
+            .await
+            .ok();
+        }
         conversations::mark_message_complete(conv_pool, assistant_message_id)
             .await
             .ok();
-        let _ = app_handle.emit(
-            "llm:stream",
-            StreamPayload {
-                conversation_id: conversation_id.to_string(),
-                token: String::new(),
-                done: true,
-                thinking: false,
-                message_id: None,
-            },
-        );
+        emit_stream_done(app_handle, conversation_id, None);
     }
     let _ = completed;
     Ok(())
@@ -1554,6 +1859,7 @@ pub async fn run_stream(
     });
 
     let mut accumulated = OPENCODE_FALLBACK_NOTICE.to_string();
+    let mut accumulated_thinking = String::new();
     let mut pending = String::new();
     let mut saw_thinking = false;
     let mut last_emit = Instant::now();
@@ -1571,16 +1877,7 @@ pub async fn run_stream(
             _ = tokio::time::sleep(EMIT_INTERVAL) => {
                 if !pending.is_empty() {
                     let batch = std::mem::take(&mut pending);
-                    let _ = app_handle.emit(
-                        "llm:stream",
-                        StreamPayload {
-                            conversation_id: conversation_id.clone(),
-                            token: batch,
-                            done: false,
-                            thinking: false,
-                            message_id: None,
-                        },
-                    );
+                    emit_stream_token(&app_handle, &conversation_id, None, &batch, false);
                     last_emit = Instant::now();
                 }
                 continue;
@@ -1588,11 +1885,16 @@ pub async fn run_stream(
         };
 
         match event {
-            Some(StreamEvent::Thinking(_token)) => {
+            Some(StreamEvent::Thinking(token)) => {
                 if !saw_thinking {
                     saw_thinking = true;
-                    tracing::info!("模型发送了隐藏 reasoning，已禁止展示，耗时: {:?}", stream_start.elapsed());
+                    tracing::info!(
+                        "模型发送 reasoning，开始展示思考过程，耗时: {:?}",
+                        stream_start.elapsed()
+                    );
                 }
+                accumulated_thinking.push_str(&token);
+                emit_stream_token(&app_handle, &conversation_id, None, &token, true);
             }
             Some(StreamEvent::Token(token)) => {
                 if accumulated.is_empty() {
@@ -1606,16 +1908,7 @@ pub async fn run_stream(
 
                 if last_emit.elapsed() >= EMIT_INTERVAL {
                     let batch = std::mem::take(&mut pending);
-                    let _ = app_handle.emit(
-                        "llm:stream",
-                        StreamPayload {
-                            conversation_id: conversation_id.clone(),
-                            token: batch,
-                            done: false,
-                            thinking: false,
-                            message_id: None,
-                        },
-                    );
+                    emit_stream_token(&app_handle, &conversation_id, None, &batch, false);
                     last_emit = Instant::now();
                 }
             }
@@ -1626,6 +1919,7 @@ pub async fn run_stream(
                     tc.id,
                     tc.arguments
                 );
+                emit_tool_status(&app_handle, &conversation_id, &tc.name, "running");
                 tool_calls_received.push(tc);
             }
             Some(StreamEvent::Done) => {
@@ -1639,16 +1933,7 @@ pub async fn run_stream(
                 );
                 if !pending.is_empty() {
                     let batch = std::mem::take(&mut pending);
-                    let _ = app_handle.emit(
-                        "llm:stream",
-                        StreamPayload {
-                            conversation_id: conversation_id.clone(),
-                            token: batch,
-                            done: false,
-                            thinking: false,
-                            message_id: None,
-                        },
-                    );
+                    emit_stream_token(&app_handle, &conversation_id, None, &batch, false);
                 }
 
                 // Handle tool calls if any
@@ -1673,19 +1958,23 @@ pub async fn run_stream(
                         )
                         .await
                         .ok();
+                        if !accumulated_thinking.is_empty() {
+                            conversations::update_message_thinking(
+                                &conv_pool,
+                                &assistant_message_id,
+                                &accumulated_thinking,
+                            )
+                            .await
+                            .ok();
+                        }
                         conversations::mark_message_complete(&conv_pool, &assistant_message_id)
                             .await
                             .ok();
                         // 通知前端第一气泡 done（仍带其 message_id，便于前端定型这桶）。
-                        let _ = app_handle.emit(
-                            "llm:stream",
-                            StreamPayload {
-                                conversation_id: conversation_id.clone(),
-                                token: String::new(),
-                                done: true,
-                                thinking: false,
-                                message_id: Some(assistant_message_id.clone()),
-                            },
+                        emit_stream_done(
+                            &app_handle,
+                            &conversation_id,
+                            Some(&assistant_message_id),
                         );
                     } else {
                         tracing::warn!(
@@ -1716,6 +2005,9 @@ pub async fn run_stream(
                             &tool_calls_received,
                         )
                         .await;
+                        for tc in &tool_calls_received {
+                            emit_tool_status(&app_handle, &conversation_id, &tc.name, "completed");
+                        }
                         let proposal_emitted = tool_results
                             .first()
                             .map(|result| result.starts_with("role_proposal_emitted:"))
@@ -1728,16 +2020,7 @@ pub async fn run_stream(
                                 assistant_message_id
                             );
                             if !first_bubble_visible {
-                                let _ = app_handle.emit(
-                                    "llm:stream",
-                                    StreamPayload {
-                                        conversation_id: conversation_id.clone(),
-                                        token: String::new(),
-                                        done: true,
-                                        thinking: false,
-                                        message_id: None,
-                                    },
-                                );
+                                emit_stream_done(&app_handle, &conversation_id, None);
                             }
                             break;
                         }
@@ -1769,21 +2052,12 @@ pub async fn run_stream(
                         }
                     };
                     let followup_id = followup_msg.id.clone();
-                    let _ = app_handle.emit(
-                        "llm:stream",
-                        StreamPayload {
-                            conversation_id: conversation_id.clone(),
-                            token: String::new(),
-                            done: false,
-                            thinking: false,
-                            message_id: Some(followup_id.clone()),
-                        },
-                    );
+                    emit_stream_token(&app_handle, &conversation_id, Some(&followup_id), "", false);
 
                     let tool_results = match precomputed_tool_results {
                         Some(results) => results,
                         None => {
-                            execute_tool_calls(
+                            let results = execute_tool_calls(
                                 &app_handle,
                                 &main_pool,
                                 &conv_pool,
@@ -1791,7 +2065,16 @@ pub async fn run_stream(
                                 &user_message_id,
                                 &tool_calls_received,
                             )
-                            .await
+                            .await;
+                            for tc in &tool_calls_received {
+                                emit_tool_status(
+                                    &app_handle,
+                                    &conversation_id,
+                                    &tc.name,
+                                    "completed",
+                                );
+                            }
+                            results
                         }
                     };
 
@@ -1850,15 +2133,12 @@ pub async fn run_stream(
                         match event2 {
                             StreamEvent::Token(token) => {
                                 followup_accumulated.push_str(&token);
-                                let _ = app_handle.emit(
-                                    "llm:stream",
-                                    StreamPayload {
-                                        conversation_id: conversation_id.clone(),
-                                        token,
-                                        done: false,
-                                        thinking: false,
-                                        message_id: Some(followup_id.clone()),
-                                    },
+                                emit_stream_token(
+                                    &app_handle,
+                                    &conversation_id,
+                                    Some(&followup_id),
+                                    &token,
+                                    false,
                                 );
                             }
                             StreamEvent::Done => break,
@@ -1885,8 +2165,16 @@ pub async fn run_stream(
                             tool_calls_received.len()
                         );
                     }
-                    if let Some(notice) = append_uncertainty_notice_if_needed(&mut followup_accumulated) {
-                        emit_stream_token(&app_handle, &conversation_id, Some(&followup_id), notice, false);
+                    if let Some(notice) =
+                        append_uncertainty_notice_if_needed(&mut followup_accumulated)
+                    {
+                        emit_stream_token(
+                            &app_handle,
+                            &conversation_id,
+                            Some(&followup_id),
+                            notice,
+                            false,
+                        );
                     }
                     conversations::update_message_content(
                         &conv_pool,
@@ -1898,16 +2186,7 @@ pub async fn run_stream(
                     conversations::mark_message_complete(&conv_pool, &followup_id)
                         .await
                         .ok();
-                    let _ = app_handle.emit(
-                        "llm:stream",
-                        StreamPayload {
-                            conversation_id: conversation_id.clone(),
-                            token: String::new(),
-                            done: true,
-                            thinking: false,
-                            message_id: Some(followup_id),
-                        },
-                    );
+                    emit_stream_done(&app_handle, &conversation_id, Some(&followup_id));
                     break;
                 } else if onboarding_step.is_some() && looks_like_fake_role_creation(&accumulated) {
                     // ========== 方案 A 兜底：模型伪装了"角色创建成功"但实际没发 tool_calls ==========
@@ -1978,20 +2257,20 @@ pub async fn run_stream(
                 )
                 .await
                 .ok();
+                if !accumulated_thinking.is_empty() {
+                    conversations::update_message_thinking(
+                        &conv_pool,
+                        &assistant_message_id,
+                        &accumulated_thinking,
+                    )
+                    .await
+                    .ok();
+                }
                 conversations::mark_message_complete(&conv_pool, &assistant_message_id)
                     .await
                     .ok();
 
-                let _ = app_handle.emit(
-                    "llm:stream",
-                    StreamPayload {
-                        conversation_id: conversation_id.clone(),
-                        token: String::new(),
-                        done: true,
-                        thinking: false,
-                        message_id: None,
-                    },
-                );
+                emit_stream_done(&app_handle, &conversation_id, None);
                 break;
             }
             Some(StreamEvent::Error(err_msg)) => {
@@ -2007,31 +2286,14 @@ pub async fn run_stream(
                     .await
                     .ok();
 
-                let _ = app_handle.emit(
-                    "llm:stream",
-                    StreamPayload {
-                        conversation_id: conversation_id.clone(),
-                        token: friendly,
-                        done: true,
-                        thinking: false,
-                        message_id: None,
-                    },
-                );
+                emit_stream_token(&app_handle, &conversation_id, None, &friendly, false);
+                emit_stream_done(&app_handle, &conversation_id, None);
                 break;
             }
             None => {
                 if !pending.is_empty() {
                     let batch = std::mem::take(&mut pending);
-                    let _ = app_handle.emit(
-                        "llm:stream",
-                        StreamPayload {
-                            conversation_id: conversation_id.clone(),
-                            token: batch,
-                            done: false,
-                            thinking: false,
-                            message_id: None,
-                        },
-                    );
+                    emit_stream_token(&app_handle, &conversation_id, None, &batch, false);
                 }
 
                 if let Some(notice) = append_uncertainty_notice_if_needed(&mut accumulated) {
@@ -2044,20 +2306,20 @@ pub async fn run_stream(
                 )
                 .await
                 .ok();
+                if !accumulated_thinking.is_empty() {
+                    conversations::update_message_thinking(
+                        &conv_pool,
+                        &assistant_message_id,
+                        &accumulated_thinking,
+                    )
+                    .await
+                    .ok();
+                }
                 conversations::mark_message_complete(&conv_pool, &assistant_message_id)
                     .await
                     .ok();
 
-                let _ = app_handle.emit(
-                    "llm:stream",
-                    StreamPayload {
-                        conversation_id: conversation_id.clone(),
-                        token: String::new(),
-                        done: true,
-                        thinking: false,
-                        message_id: None,
-                    },
-                );
+                emit_stream_done(&app_handle, &conversation_id, None);
                 break;
             }
         }
@@ -3132,65 +3394,70 @@ mod tests {
     }
 
     #[test]
-    fn test_sse_thinking_is_not_mapped_to_user_visible_payload() {
+    fn test_sse_thinking_maps_to_user_visible_payload() {
         let payload = stream_payload_from_sse(
             "conv-1",
             Some("msg-1"),
             crate::models::agent::SseEvent::Thinking {
                 content: "plan".to_string(),
             },
-        );
+        )
+        .expect("thinking should map to payload");
 
-        assert!(payload.is_none());
+        assert_eq!(payload.token, "plan");
+        assert!(!payload.done);
+        assert!(payload.thinking);
+        assert_eq!(payload.phase.as_deref(), Some("thinking"));
+        assert_eq!(payload.status_text.as_deref(), Some("思考中..."));
     }
 
     #[test]
     fn test_bus_delta_waits_for_part_type_before_emitting_unknown_part() {
         let visible_text_parts = std::collections::HashSet::new();
-        let hidden_parts = std::collections::HashSet::new();
+        let reasoning_parts = std::collections::HashSet::new();
         let properties = serde_json::json!({
             "field": "text",
             "partID": "part-1",
-            "delta": "hidden reasoning"
+            "delta": "pending text"
         });
 
         assert_eq!(
-            classify_bus_text_delta(&properties, &visible_text_parts, &hidden_parts),
-            BusTextDeltaDecision::WaitForPartType
+            classify_bus_text_delta(&properties, &visible_text_parts, &reasoning_parts),
+            BusTextDeltaKind::WaitForPartType
         );
     }
 
     #[test]
-    fn test_bus_delta_skips_hidden_part_even_when_type_arrives_on_delta() {
+    fn test_bus_delta_emits_thinking_when_reasoning_type_arrives_on_delta() {
         let visible_text_parts = std::collections::HashSet::new();
-        let hidden_parts = std::collections::HashSet::new();
+        let reasoning_parts = std::collections::HashSet::new();
         let reasoning_properties = serde_json::json!({
             "field": "text",
             "partID": "part-1",
             "partType": "reasoning",
-            "delta": "hidden reasoning"
+            "delta": "visible reasoning"
         });
         let thinking_properties = serde_json::json!({
             "field": "text",
             "partID": "part-2",
             "part": { "type": "thinking" },
-            "delta": "hidden thinking"
+            "delta": "visible thinking"
         });
 
         assert_eq!(
-            classify_bus_text_delta(&reasoning_properties, &visible_text_parts, &hidden_parts),
-            BusTextDeltaDecision::SkipHidden
+            classify_bus_text_delta(&reasoning_properties, &visible_text_parts, &reasoning_parts),
+            BusTextDeltaKind::Thinking
         );
         assert_eq!(
-            classify_bus_text_delta(&thinking_properties, &visible_text_parts, &hidden_parts),
-            BusTextDeltaDecision::SkipHidden
+            classify_bus_text_delta(&thinking_properties, &visible_text_parts, &reasoning_parts),
+            BusTextDeltaKind::Thinking
         );
     }
 
     #[test]
     fn test_bus_delta_emits_known_visible_text_part() {
         let visible_text_parts = std::collections::HashSet::from(["part-1".to_string()]);
-        let hidden_parts = std::collections::HashSet::new();
+        let reasoning_parts = std::collections::HashSet::new();
         let properties = serde_json::json!({
             "field": "text",
             "partID": "part-1",
@@ -3198,8 +3465,8 @@ mod tests {
         });
 
         assert_eq!(
-            classify_bus_text_delta(&properties, &visible_text_parts, &hidden_parts),
-            BusTextDeltaDecision::EmitText
+            classify_bus_text_delta(&properties, &visible_text_parts, &reasoning_parts),
+            BusTextDeltaKind::Text
         );
     }
 
@@ -3433,6 +3700,17 @@ mod tests {
         .await
         .expect("failed to create forgotten memory sources");
 
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY NOT NULL,
+                value TEXT,
+                updated_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00Z'
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("failed to create app_settings table");
+
         pool
     }
 
@@ -3529,6 +3807,98 @@ mod tests {
             system.content.contains("分身"),
             "角色 prompt 必须明确是用户的分身"
         );
+    }
+
+    #[tokio::test]
+    async fn test_build_role_messages_injects_meta_skill_config() {
+        let main_pool = setup_test_main_pool().await;
+        let conv_pool = setup_test_conv_pool().await;
+        let role = crate::db::roles::create_role(
+            &main_pool,
+            &CreateRoleInput {
+                name: "产品经理".to_string(),
+                icon: None,
+                color: None,
+                goal: Some("管理产品规划".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+        let role = crate::db::roles::update_role_skills(
+            &main_pool,
+            &role.id,
+            &crate::models::role::UpdateRoleSkillsInput {
+                find_skills: true,
+                skill_creator: false,
+            },
+        )
+        .await
+        .unwrap();
+        let conv = crate::db::conversations::create_conversation(&conv_pool, Some(&role.id))
+            .await
+            .unwrap();
+
+        let msgs = build_role_messages(&conv_pool, &main_pool, &conv.id, &role.id, "你好")
+            .await
+            .unwrap();
+
+        let system = &msgs.first().unwrap().content;
+        assert!(system.contains("[元 Skill 配置]"));
+        assert!(system.contains("find-skills"));
+        assert!(!system.contains("skill-creator"));
+        assert!(!system.contains("未启用"));
+        assert!(!system.contains("要开启吗"));
+    }
+
+    #[tokio::test]
+    async fn test_build_butler_system_prompt_omits_disabled_meta_skills() {
+        let main_pool = setup_test_main_pool().await;
+        let conv_pool = setup_test_conv_pool().await;
+        crate::services::butler_config::set_butler_skills(
+            &main_pool,
+            &crate::models::role::UpdateRoleSkillsInput {
+                find_skills: false,
+                skill_creator: false,
+            },
+        )
+        .await
+        .unwrap();
+
+        let prompt = build_butler_system_prompt(&conv_pool, &main_pool)
+            .await
+            .unwrap();
+
+        assert!(prompt.contains("你是 EgoSync 的数字管家"));
+        assert!(!prompt.contains("[元 Skill 配置]"));
+        assert!(!prompt.contains("find-skills"));
+        assert!(!prompt.contains("skill-creator"));
+        assert!(!prompt.contains("未启用"));
+        assert!(!prompt.contains("要开启吗"));
+    }
+
+    #[tokio::test]
+    async fn test_build_butler_system_prompt_lists_only_enabled_meta_skills() {
+        let main_pool = setup_test_main_pool().await;
+        let conv_pool = setup_test_conv_pool().await;
+        crate::services::butler_config::set_butler_skills(
+            &main_pool,
+            &crate::models::role::UpdateRoleSkillsInput {
+                find_skills: true,
+                skill_creator: false,
+            },
+        )
+        .await
+        .unwrap();
+
+        let prompt = build_butler_system_prompt(&conv_pool, &main_pool)
+            .await
+            .unwrap();
+
+        assert!(prompt.contains("[元 Skill 配置]"));
+        assert!(prompt.contains("find-skills"));
+        assert!(!prompt.contains("skill-creator"));
+        assert!(!prompt.contains("未启用"));
+        assert!(!prompt.contains("要开启吗"));
     }
 
     /// AC-6: personality_prompt 为空时不应在 prompt 末尾留空行或 `personality:` 残骸 —
@@ -3629,16 +3999,11 @@ mod tests {
             .await
             .unwrap()
             .remove(0);
-        let role_memory = crate::db::memories::list_memories(
-            &main_pool,
-            Some("role-1"),
-            None,
-            None,
-            None,
-        )
-        .await
-        .unwrap()
-        .remove(0);
+        let role_memory =
+            crate::db::memories::list_memories(&main_pool, Some("role-1"), None, None, None)
+                .await
+                .unwrap()
+                .remove(0);
 
         assert!(summary.contains("[已知记忆]"));
         assert!(summary.contains("全局记忆"));
@@ -3709,10 +4074,11 @@ mod tests {
         )
         .await
         .unwrap();
-        let pm_memory = crate::db::memories::list_memories(&main_pool, Some(&pm.id), None, None, None)
-            .await
-            .unwrap()
-            .remove(0);
+        let pm_memory =
+            crate::db::memories::list_memories(&main_pool, Some(&pm.id), None, None, None)
+                .await
+                .unwrap()
+                .remove(0);
 
         let summary = build_role_memory_summary(&main_pool, &pm.id).await.unwrap();
 
@@ -3755,17 +4121,19 @@ mod tests {
         )
         .await
         .unwrap();
-        let memory = crate::db::memories::list_memories(&main_pool, Some(&role.id), None, None, None)
-            .await
-            .unwrap()
-            .remove(0);
+        let memory =
+            crate::db::memories::list_memories(&main_pool, Some(&role.id), None, None, None)
+                .await
+                .unwrap()
+                .remove(0);
         let conv = crate::db::conversations::create_conversation(&conv_pool, Some(&role.id))
             .await
             .unwrap();
 
-        let msgs = build_role_messages(&conv_pool, &main_pool, &conv.id, &role.id, "为什么这样排？")
-            .await
-            .unwrap();
+        let msgs =
+            build_role_messages(&conv_pool, &main_pool, &conv.id, &role.id, "为什么这样排？")
+                .await
+                .unwrap();
         let system = &msgs.first().unwrap().content;
 
         assert!(system.contains(&format!(
@@ -3776,7 +4144,9 @@ mod tests {
         assert!(!system.contains(&format!(" {}", memory.id)));
         assert!(system.contains("[透明推理与不确定性规则]"));
         assert!(!system.contains("必须使用本 prompt 中的 `[[记忆#YYYY/MM/DD HH:mm]](egosync-memory://memory-id)` 内部链接标注来源"));
-        assert!(system.contains("用户没有明确要求来源、依据、原文或你怎么知道时，不要主动展示记忆标签或内部链接"));
+        assert!(system.contains(
+            "用户没有明确要求来源、依据、原文或你怎么知道时，不要主动展示记忆标签或内部链接"
+        ));
         assert!(system.contains("只有用户明确询问为什么、依据是什么、你怎么知道的、来源或原文时，才使用本 prompt 中的记忆内部链接"));
         assert!(system.contains("溯源回答必须原样输出本 prompt 中已有的记忆内部链接"));
         assert!(system.contains("不要把来源改写成自然语言时间"));
@@ -3829,7 +4199,10 @@ mod tests {
         assert!(hedged.contains(UNCERTAINTY_NOTICE));
 
         let mut already_clear = "我不太确定这个判断，建议你自己评估一下。".to_string();
-        assert_eq!(append_uncertainty_notice_if_needed(&mut already_clear), None);
+        assert_eq!(
+            append_uncertainty_notice_if_needed(&mut already_clear),
+            None
+        );
 
         let mut confident = "这个安排更合适。".to_string();
         assert_eq!(append_uncertainty_notice_if_needed(&mut confident), None);
@@ -3866,7 +4239,9 @@ mod tests {
         assert!(prompt.contains("陈述某个角色相关事实或偏好"));
         assert!(prompt.contains("直接用自然口吻确认"));
         assert!(prompt.contains("不要向用户暴露内部机制"));
-        assert!(prompt.contains("不要说“系统会同步”“同步到某角色”“角色已收到”“委派成功”“工具调用”等"));
+        assert!(
+            prompt.contains("不要说“系统会同步”“同步到某角色”“角色已收到”“委派成功”“工具调用”等")
+        );
         assert!(!prompt.contains("系统会把这类记忆同步到对应角色"));
         assert!(prompt.contains("角色相关任务、安排、日程、待办、规划或需要跟进"));
         assert!(prompt.contains("只要能匹配 active 角色，就调用 delegate_to_role"));
@@ -4247,6 +4622,98 @@ mod tests {
             .expect("第二个后台委派任务应完成")
             .expect("第二个后台委派任务不应 panic");
         assert!(*second_ran.lock().await);
+    }
+
+    #[test]
+    fn test_completed_response_appends_missing_tail() {
+        let mut text = "这些技能的安装量都不是很高（低于1K），建议".to_string();
+        append_completed_tail(
+            None,
+            "conversation-id",
+            None,
+            &mut text,
+            "这些技能的安装量都不是很高（低于1K），建议先试用安装量最高的选项，再根据实际效果决定是否保留。",
+            false,
+        );
+
+        assert!(text.ends_with("是否保留。"));
+    }
+
+    #[test]
+    fn test_completed_response_does_not_replace_divergent_stream_text() {
+        let mut text = "事件流文本".to_string();
+        append_completed_tail(
+            None,
+            "conversation-id",
+            None,
+            &mut text,
+            "另一个完整回复",
+            false,
+        );
+
+        assert_eq!(text, "事件流文本");
+    }
+
+    #[test]
+    fn test_meta_skill_discovery_request_detection() {
+        assert!(looks_like_meta_skill_discovery_request(
+            "搜索一下视频格式转换的skill"
+        ));
+        assert!(looks_like_meta_skill_discovery_request(
+            "找一下音频转换技能"
+        ));
+        assert!(looks_like_meta_skill_discovery_request(
+            "find skill for audio conversion"
+        ));
+        assert!(!looks_like_meta_skill_discovery_request(
+            "帮我转换一个视频格式"
+        ));
+        assert!(looks_like_meta_skill_creator_request(
+            "创建一个视频转换技能"
+        ));
+        assert!(looks_like_meta_skill_creator_request(
+            "create a skill for product managers"
+        ));
+        assert!(!looks_like_meta_skill_creator_request("帮我写一个产品方案"));
+    }
+
+    #[test]
+    fn test_role_meta_skill_disabled_message_blocks_discovery() {
+        let message = disabled_meta_skill_message(
+            false,
+            true,
+            "搜索一下视频格式转换的skill",
+            MetaSkillConfigOwner::Role,
+        );
+        assert_eq!(
+            message,
+            Some("当前角色没有启用 Skill 发现能力，需要在该角色的 Skill 配置中开启后，我才能帮你查找或推荐 Skill。")
+        );
+    }
+
+    #[test]
+    fn test_butler_meta_skill_disabled_message_blocks_creator() {
+        let message = disabled_meta_skill_message(
+            true,
+            false,
+            "创建一个视频转换技能",
+            MetaSkillConfigOwner::Butler,
+        );
+        assert_eq!(
+            message,
+            Some("当前没有启用 Skill 创建能力，需要在管家的 Skill 配置中开启后，我才能帮你创建或扩展 Skill。")
+        );
+    }
+
+    #[test]
+    fn test_meta_skill_disabled_message_allows_enabled_discovery() {
+        let message = disabled_meta_skill_message(
+            true,
+            false,
+            "搜索一下视频格式转换的skill",
+            MetaSkillConfigOwner::Role,
+        );
+        assert!(message.is_none());
     }
 
     #[tokio::test]

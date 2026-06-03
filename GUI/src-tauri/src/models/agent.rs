@@ -91,7 +91,8 @@ fn extract_completed_message(value: &serde_json::Value, result: &mut OpencodeCom
                 _ => {}
             }
         }
-        if result.text.len() != text_before_parts || result.thinking.len() != thinking_before_parts {
+        if result.text.len() != text_before_parts || result.thinking.len() != thinking_before_parts
+        {
             return;
         }
     }
@@ -260,7 +261,8 @@ mod tests {
             ]
         });
 
-        let completed = OpencodeCompletedMessage::from_value(&value).expect("parse completed message");
+        let completed =
+            OpencodeCompletedMessage::from_value(&value).expect("parse completed message");
 
         assert_eq!(completed.thinking, "先分析");
         assert_eq!(completed.text, "最终回答");

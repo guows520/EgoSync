@@ -1,3 +1,5 @@
+export type ProactivityLevel = 'passive' | 'moderate' | 'proactive';
+
 export interface Role {
   id: string;
   name: string;
@@ -8,7 +10,7 @@ export interface Role {
   status: 'active' | 'archived';
   energy: number;
   skillsConfig: string;
-  proactivityLevel: 'passive' | 'moderate' | 'proactive';
+  proactivityLevel: ProactivityLevel;
   archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -27,4 +29,18 @@ export interface UpdateRoleInput {
   color?: string;
   goal?: string;
   personalityPrompt?: string;
+}
+
+export interface UpdateRoleSkillsInput {
+  findSkills: boolean;
+  skillCreator: boolean;
+}
+
+export interface RoleSkillsConfig {
+  findSkills: boolean;
+  skillCreator: boolean;
+}
+
+export interface UpdateRoleProactivityInput {
+  proactivityLevel: ProactivityLevel;
 }

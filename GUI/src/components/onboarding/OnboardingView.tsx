@@ -28,6 +28,7 @@ export function OnboardingView({ onComplete, onOpenSettings }: OnboardingViewPro
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamContent, setStreamContent] = useState('');
   const [thinkingContent, setThinkingContent] = useState('');
+  const [streamStatus, setStreamStatus] = useState<Pick<StreamPayload, 'phase' | 'statusText' | 'toolName'> | null>(null);
   const [isThinking, setIsThinking] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [llmReady, setLlmReady] = useState<boolean | null>(null);
@@ -35,6 +36,7 @@ export function OnboardingView({ onComplete, onOpenSettings }: OnboardingViewPro
   const [modalOpen, setModalOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const thinkingContentRef = useRef('');
   const initRef = useRef(false);
   const proposalHandledRef = useRef(false);
 
@@ -47,17 +49,24 @@ export function OnboardingView({ onComplete, onOpenSettings }: OnboardingViewPro
   useTauriEvent<StreamPayload>('llm:stream', useCallback((payload: StreamPayload) => {
     if (conversationId && payload.conversationId !== conversationId) return;
 
+    if (payload.phase === 'tool' && payload.statusText) {
+      setIsStreaming(true);
+      setStreamStatus({ phase: payload.phase, statusText: payload.statusText, toolName: payload.toolName });
+    }
+
     if (payload.done) {
+      const currentThinkingContent = thinkingContentRef.current;
       setIsStreaming(false);
       setIsThinking(false);
+      setStreamStatus(null);
       setStreamContent(prev => {
-        if (prev.trim()) {
+        if (prev.trim() || currentThinkingContent.trim()) {
           const assistantMsg: ChatMessage = {
             id: `onboard-${Date.now()}`,
             conversationId: conversationId ?? '',
             role: 'assistant',
             content: prev.trim(),
-            thinkingContent: '',
+            thinkingContent: currentThinkingContent,
             isComplete: true,
             createdAt: new Date().toISOString(),
             routingMetadata: null,
@@ -66,12 +75,18 @@ export function OnboardingView({ onComplete, onOpenSettings }: OnboardingViewPro
         }
         return '';
       });
+      thinkingContentRef.current = '';
       setThinkingContent('');
     } else if (payload.thinking) {
+      setIsStreaming(true);
       setIsThinking(true);
-      setThinkingContent(prev => prev + payload.token);
+      const nextThinkingContent = thinkingContentRef.current + payload.token;
+      thinkingContentRef.current = nextThinkingContent;
+      setThinkingContent(nextThinkingContent);
     } else {
+      if (payload.phase === 'tool' && !payload.token) return;
       if (isThinking) setIsThinking(false);
+      setStreamStatus(null);
       setStreamContent(prev => prev + payload.token);
     }
   }, [conversationId, isThinking]), [conversationId]);
@@ -183,7 +198,9 @@ export function OnboardingView({ onComplete, onOpenSettings }: OnboardingViewPro
     const nextStep = Math.min(step + 1, 5);
     setStep(nextStep);
     setIsStreaming(true);
+    thinkingContentRef.current = '';
     setThinkingContent('');
+    setStreamStatus(null);
     setIsThinking(false);
 
     try {
@@ -301,6 +318,7 @@ export function OnboardingView({ onComplete, onOpenSettings }: OnboardingViewPro
               isStreaming
               streamingThinking={thinkingContent || undefined}
               isThinkingPhase={isThinking}
+              streamStatus={streamStatus}
             />
           )}
           <div ref={chatEndRef} />

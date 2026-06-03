@@ -19,8 +19,13 @@ pub async fn insert_memories(
         let source_message_ids = normalized_source_message_ids(&memory.source_message_ids)?;
         let content = memory.content.trim();
 
-        if forgotten_memory_source_exists(pool, source_conversation_id, &memory.category, &source_message_ids)
-            .await?
+        if forgotten_memory_source_exists(
+            pool,
+            source_conversation_id,
+            &memory.category,
+            &source_message_ids,
+        )
+        .await?
         {
             continue;
         }
@@ -223,8 +228,13 @@ pub async fn update_memory_from_extracted(
     let source_message_ids = normalized_source_message_ids(&memory.source_message_ids)?;
     let content = memory.content.trim();
 
-    if forgotten_memory_source_exists(pool, source_conversation_id, &memory.category, &source_message_ids)
-        .await?
+    if forgotten_memory_source_exists(
+        pool,
+        source_conversation_id,
+        &memory.category,
+        &source_message_ids,
+    )
+    .await?
     {
         return Ok(false);
     }
@@ -1062,7 +1072,9 @@ mod tests {
             .expect("list memories")
             .remove(0);
 
-        let deleted = delete_memory(&pool, &target.id).await.expect("delete memory");
+        let deleted = delete_memory(&pool, &target.id)
+            .await
+            .expect("delete memory");
         let visible = list_memories(&pool, None, None, None, None)
             .await
             .expect("list visible memories");
@@ -1096,7 +1108,9 @@ mod tests {
             .await
             .expect("list memories")
             .remove(0);
-        delete_memory(&pool, &target.id).await.expect("delete memory");
+        delete_memory(&pool, &target.id)
+            .await
+            .expect("delete memory");
 
         let reinserted = insert_memories(
             &pool,
@@ -1129,7 +1143,9 @@ mod tests {
             .await
             .expect("list memories")
             .remove(0);
-        delete_memory(&pool, &target.id).await.expect("delete memory");
+        delete_memory(&pool, &target.id)
+            .await
+            .expect("delete memory");
 
         let inserted = insert_memories(
             &pool,

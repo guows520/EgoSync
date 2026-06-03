@@ -237,7 +237,8 @@ async fn extract_role_conversation_with_provider(
 
     let user_messages = user_extraction_messages(&messages);
     let prompt = build_extraction_prompt(Some(role_id), &user_messages);
-    let extracted = extract_with_provider(provider.clone(), &prompt, &user_messages, conversation_id).await?;
+    let extracted =
+        extract_with_provider(provider.clone(), &prompt, &user_messages, conversation_id).await?;
     if extracted.is_empty() {
         return Ok(0);
     }
@@ -287,7 +288,14 @@ async fn insert_reconciled_memories(
             deterministic_reconciliation_actions(&existing, extracted)
         }
     };
-    apply_memory_reconciliation(main_pool, role_id, source_conversation_id, extracted, actions).await
+    apply_memory_reconciliation(
+        main_pool,
+        role_id,
+        source_conversation_id,
+        extracted,
+        actions,
+    )
+    .await
 }
 
 async fn insert_global_memories_with_owners(
@@ -366,8 +374,12 @@ fn unique_owner_by_memory_index(
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum MemoryReconciliationAction {
-    Insert { memory_index: usize },
-    Skip { memory_index: usize },
+    Insert {
+        memory_index: usize,
+    },
+    Skip {
+        memory_index: usize,
+    },
     Update {
         memory_index: usize,
         existing_memory_id: String,
@@ -394,7 +406,9 @@ async fn reconcile_memories(
         .iter()
         .filter_map(|action| match action {
             MemoryReconciliationAction::Insert { memory_index } => Some(*memory_index),
-            MemoryReconciliationAction::Skip { .. } | MemoryReconciliationAction::Update { .. } => None,
+            MemoryReconciliationAction::Skip { .. } | MemoryReconciliationAction::Update { .. } => {
+                None
+            }
         })
         .collect::<Vec<_>>();
     if pending.is_empty() {
@@ -448,7 +462,8 @@ async fn reconcile_memories(
         return Ok(deterministic);
     }
 
-    let llm_actions = parse_memory_reconciliation_response(&response, existing, candidates, &pending)?;
+    let llm_actions =
+        parse_memory_reconciliation_response(&response, existing, candidates, &pending)?;
     Ok(merge_reconciliation_actions(deterministic, llm_actions))
 }
 
@@ -482,7 +497,9 @@ fn merge_reconciliation_actions(
         .filter_map(|action| match &action {
             MemoryReconciliationAction::Insert { memory_index }
             | MemoryReconciliationAction::Skip { memory_index }
-            | MemoryReconciliationAction::Update { memory_index, .. } => Some((*memory_index, action)),
+            | MemoryReconciliationAction::Update { memory_index, .. } => {
+                Some((*memory_index, action))
+            }
         })
         .collect::<BTreeMap<_, _>>();
 
@@ -1152,9 +1169,22 @@ fn sanitize_memory_content(content: &str) -> String {
     ] {
         value = value.replace(from, to);
     }
-    for prefix in ["用户比较", "用户偏好", "用户喜欢", "用户经常", "用户正在", "用户将", "用户会", "用户要", "用户"] {
+    for prefix in [
+        "用户比较",
+        "用户偏好",
+        "用户喜欢",
+        "用户经常",
+        "用户正在",
+        "用户将",
+        "用户会",
+        "用户要",
+        "用户",
+    ] {
         if let Some(stripped) = value.strip_prefix(prefix) {
-            value = stripped.trim_start_matches(['的', '：', ':', '，', ',']).trim().to_string();
+            value = stripped
+                .trim_start_matches(['的', '：', ':', '，', ','])
+                .trim()
+                .to_string();
             break;
         }
     }
@@ -1859,12 +1889,11 @@ mod tests {
         .await
         .expect("reconcile memories");
 
-        let stored: Vec<(String, String, String)> = sqlx::query_as(
-            "SELECT id, content, source_conversation_id FROM memories",
-        )
-        .fetch_all(&main_pool)
-        .await
-        .expect("query memories");
+        let stored: Vec<(String, String, String)> =
+            sqlx::query_as("SELECT id, content, source_conversation_id FROM memories")
+                .fetch_all(&main_pool)
+                .await
+                .expect("query memories");
         assert_eq!(changed, 1);
         assert_eq!(stored.len(), 1);
         assert_eq!(stored[0].0, existing_id);

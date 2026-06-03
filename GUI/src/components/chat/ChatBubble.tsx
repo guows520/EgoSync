@@ -1,8 +1,8 @@
-import { Fragment, memo, type AnchorHTMLAttributes, type ReactNode } from 'react';
+import { useState, Fragment, memo, type AnchorHTMLAttributes, type ReactNode } from 'react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import { cn } from '../../lib/utils';
-import { Home, type LucideIcon } from 'lucide-react';
-import type { ChatMessage } from '../../types/chat';
+import { Home, ChevronRight, type LucideIcon } from 'lucide-react';
+import type { ChatMessage, StreamPayload } from '../../types/chat';
 
 const BounceDots = memo(function BounceDots() {
   return (
@@ -19,6 +19,7 @@ interface ChatBubbleProps {
   isStreaming?: boolean;
   streamingThinking?: string;
   isThinkingPhase?: boolean;
+  streamStatus?: Pick<StreamPayload, 'phase' | 'statusText' | 'toolName'> | null;
   /** 助手气泡显示的角色名。未传时回退到「管家」。 */
   assistantName?: string;
   /** 助手气泡左上角图标。未传时回退到 Home。 */
@@ -91,13 +92,19 @@ function renderMemoryReferences(node: ReactNode, onMemoryReferenceClick?: (memor
 export function ChatBubble({
   message,
   isStreaming,
+  streamingThinking,
   isThinkingPhase,
+  streamStatus,
   assistantName,
   assistantIcon,
   assistantColor,
   onMemoryReferenceClick,
 }: ChatBubbleProps) {
+  const [thinkingExpanded, setThinkingExpanded] = useState(false);
   const isUser = message.role === 'user';
+  const thinkingText = !isUser ? (streamingThinking || message.thinkingContent) : '';
+  const hasThinking = Boolean(thinkingText && thinkingText.length > 0);
+  const statusText = streamStatus?.statusText;
 
   const AssistantIcon = assistantIcon ?? Home;
   const displayName = assistantName ?? '管家';
@@ -108,6 +115,44 @@ export function ChatBubble({
       !isStreaming && "animate-in slide-in-from-bottom-2",
       isUser ? "items-end" : "items-start"
     )}>
+      {hasThinking && (
+        <div className="max-w-[85%]">
+          {isThinkingPhase ? (
+            <div className="bg-slate-50 dark:bg-slate-800/50 border border-slate-200/60 dark:border-slate-700/60 rounded-xl p-3 shadow-sm">
+              <div className="flex items-center gap-2 mb-1.5">
+                <span className="text-xs font-medium text-amber-500">思考中...</span>
+                <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse" />
+              </div>
+              <div className="max-h-10 overflow-hidden flex flex-col justify-end">
+                <p className="text-xs text-slate-400 dark:text-slate-500 leading-relaxed whitespace-pre-wrap">
+                  {thinkingText}
+                </p>
+              </div>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setThinkingExpanded(prev => !prev)}
+              className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-500 dark:hover:text-slate-300 transition-colors py-1"
+            >
+              <ChevronRight size={12} className={cn('transition-transform', thinkingExpanded && 'rotate-90')} />
+              <span>思考过程</span>
+            </button>
+          )}
+          {thinkingExpanded && !isThinkingPhase && (
+            <div className="bg-slate-50 dark:bg-slate-800/50 border border-slate-200/60 dark:border-slate-700/60 rounded-xl p-3 mt-1 shadow-sm">
+              <p className="text-xs text-slate-400 dark:text-slate-500 leading-relaxed whitespace-pre-wrap max-h-48 overflow-y-auto">
+                {thinkingText}
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+      {statusText && !isUser && (
+        <div className="max-w-[85%] rounded-xl border border-slate-200/60 bg-slate-50 px-3 py-2 text-xs text-slate-500 shadow-sm dark:border-slate-700/60 dark:bg-slate-800/50 dark:text-slate-400">
+          {statusText}
+        </div>
+      )}
       <div className={cn(
         "rounded-2xl px-5 py-3 max-w-[85%] text-[14.5px] leading-[1.7] shadow-sm",
         isUser

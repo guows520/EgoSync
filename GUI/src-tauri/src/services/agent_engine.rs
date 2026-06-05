@@ -644,6 +644,23 @@ pub async fn build_butler_system_prompt(
         system_prompt.push_str("\n\n");
         system_prompt.push_str(&meta_skill_prompt);
     }
+    if let Ok(registry) = crate::db::skills::list_skills(main_pool).await {
+        let custom_skill_lines = butler_skills
+            .enabled_skill_ids
+            .iter()
+            .filter_map(|id| {
+                registry
+                    .iter()
+                    .find(|skill| skill.id == *id)
+                    .map(|skill| format!("- {}：{}", skill.name, skill.description))
+            })
+            .collect::<Vec<_>>();
+        if !custom_skill_lines.is_empty() {
+            system_prompt.push_str("\n\n[自定义 Skill]\n");
+            system_prompt.push_str(&custom_skill_lines.join("\n"));
+            system_prompt.push_str("\n只能按以上 EgoSync 已导入 Skill 的说明行动，不要调用或列出外部环境中的其它 Skill。");
+        }
+    }
 
     let active_roles = crate::db::roles::list_active_roles(main_pool).await?;
     if !active_roles.is_empty() {
@@ -828,6 +845,29 @@ async fn build_role_system_prompt(
     let meta_skill_prompt = crate::services::role_config::meta_skill_prompt(&role.skills_config);
     if !meta_skill_prompt.is_empty() {
         sections.push(meta_skill_prompt);
+    }
+    // P10: 降级直连 prompt 路径也声明已启用的自定义 Skill，与 AgentConfigService
+    // 的 opencode 路径口径一致（禁用/已删除的不声明）。registry 加载失败时跳过，不阻断对话。
+    let enabled_skill_ids =
+        crate::services::role_config::enabled_skill_ids_from_config(&role.skills_config);
+    if !enabled_skill_ids.is_empty() {
+        if let Ok(registry) = crate::db::skills::list_skills(main_pool).await {
+            let custom_skill_lines: Vec<String> = enabled_skill_ids
+                .iter()
+                .filter_map(|id| {
+                    registry
+                        .iter()
+                        .find(|skill| skill.id == *id)
+                        .map(|skill| format!("- {}：{}", skill.name, skill.description))
+                })
+                .collect();
+            if !custom_skill_lines.is_empty() {
+                sections.push(format!(
+                    "[自定义 Skill]\n{}\n只能按以上 EgoSync 已导入 Skill 的说明行动，不要调用或列出外部环境中的其它 Skill。",
+                    custom_skill_lines.join("\n")
+                ));
+            }
+        }
     }
 
     let memory_summary = build_role_memory_summary(main_pool, &role.id).await?;
@@ -3710,6 +3750,14 @@ mod tests {
         .execute(&pool)
         .await
         .expect("failed to create app_settings table");
+        sqlx::raw_sql(include_str!("../../migrations/008_skills_registry.sql"))
+            .execute(&pool)
+            .await
+            .expect("failed to create skills table");
+        sqlx::raw_sql(include_str!("../../migrations/009_skill_role_bindings.sql"))
+            .execute(&pool)
+            .await
+            .expect("failed to create skill role bindings table");
 
         pool
     }
@@ -3830,6 +3878,7 @@ mod tests {
             &crate::models::role::UpdateRoleSkillsInput {
                 find_skills: true,
                 skill_creator: false,
+                enabled_skill_ids: None,
             },
         )
         .await
@@ -3859,6 +3908,7 @@ mod tests {
             &crate::models::role::UpdateRoleSkillsInput {
                 find_skills: false,
                 skill_creator: false,
+                enabled_skill_ids: None,
             },
         )
         .await
@@ -3885,6 +3935,7 @@ mod tests {
             &crate::models::role::UpdateRoleSkillsInput {
                 find_skills: true,
                 skill_creator: false,
+                enabled_skill_ids: None,
             },
         )
         .await
@@ -3899,6 +3950,79 @@ mod tests {
         assert!(!prompt.contains("skill-creator"));
         assert!(!prompt.contains("未启用"));
         assert!(!prompt.contains("要开启吗"));
+    }
+
+    #[tokio::test]
+    async fn test_build_butler_system_prompt_injects_enabled_custom_skills() {
+        let main_pool = setup_test_main_pool().await;
+        let conv_pool = setup_test_conv_pool().await;
+        let skill = crate::db::skills::create_skill(
+            &main_pool,
+            "daily-review",
+            "日复盘助手",
+            "skills/daily-review/SKILL.md",
+            "hash-1",
+        )
+        .await
+        .unwrap();
+        crate::db::skill_bindings::replace_bindings(&main_pool, &skill.id, true, &[])
+            .await
+            .unwrap();
+        crate::services::butler_config::set_butler_skills(
+            &main_pool,
+            &crate::models::role::UpdateRoleSkillsInput {
+                find_skills: true,
+                skill_creator: false,
+                enabled_skill_ids: Some(vec![skill.id.clone()]),
+            },
+        )
+        .await
+        .unwrap();
+
+        let prompt = build_butler_system_prompt(&conv_pool, &main_pool)
+            .await
+            .unwrap();
+
+        assert!(prompt.contains("[自定义 Skill]"));
+        assert!(prompt.contains("daily-review"));
+        assert!(prompt.contains("日复盘助手"));
+        assert!(prompt.contains("不要调用或列出外部环境中的其它 Skill"));
+    }
+
+    #[tokio::test]
+    async fn test_build_butler_system_prompt_omits_disabled_custom_skills() {
+        let main_pool = setup_test_main_pool().await;
+        let conv_pool = setup_test_conv_pool().await;
+        let skill = crate::db::skills::create_skill(
+            &main_pool,
+            "markitdown",
+            "文件与文档转 Markdown",
+            "skills/markitdown/SKILL.md",
+            "hash-markitdown",
+        )
+        .await
+        .unwrap();
+        crate::db::skill_bindings::replace_bindings(&main_pool, &skill.id, true, &[])
+            .await
+            .unwrap();
+        crate::services::butler_config::set_butler_skills(
+            &main_pool,
+            &crate::models::role::UpdateRoleSkillsInput {
+                find_skills: false,
+                skill_creator: false,
+                enabled_skill_ids: Some(Vec::new()),
+            },
+        )
+        .await
+        .unwrap();
+
+        let prompt = build_butler_system_prompt(&conv_pool, &main_pool)
+            .await
+            .unwrap();
+
+        assert!(!prompt.contains("[自定义 Skill]"));
+        assert!(!prompt.contains("markitdown"));
+        assert!(!prompt.contains("文件与文档转 Markdown"));
     }
 
     /// AC-6: personality_prompt 为空时不应在 prompt 末尾留空行或 `personality:` 残骸 —

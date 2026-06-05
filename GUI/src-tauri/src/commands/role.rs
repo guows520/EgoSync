@@ -17,6 +17,21 @@ fn sync_warn(result: Result<(), AppError>, action: &str) {
     }
 }
 
+async fn registry_for_sync(pool: &DbPool) -> Vec<crate::models::skill::SkillRegistryEntry> {
+    match crate::db::skills::list_skills(pool).await {
+        Ok(registry) => registry,
+        Err(e) => {
+            // P6: registry 加载失败会导致该角色已启用的自定义 Skill 无法注入 opencode 配置
+            //（虽 best-effort 不阻断 CRUD，但属配置不完整），升级为 error 级别便于排查。
+            tracing::error!(
+                "load skill registry for opencode sync failed: {}; 角色自定义 Skill 同步可能不完整",
+                e
+            );
+            Vec::new()
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn role_create(
     input: CreateRoleInput,
@@ -24,8 +39,29 @@ pub async fn role_create(
     agent_config: State<'_, AgentConfigService>,
 ) -> Result<Role, AppError> {
     validate_role_name(input.name.as_str())?;
-    let role = roles::create_role(&pool, &input).await?;
-    sync_warn(agent_config.sync_role_created(&role), "create");
+    let mut role = roles::create_role(&pool, &input).await?;
+    let all_role_skill_ids = crate::db::skill_bindings::all_role_skill_ids(&pool)
+        .await
+        .unwrap_or_default();
+    if !all_role_skill_ids.is_empty() {
+        let input = UpdateRoleSkillsInput {
+            find_skills: crate::services::role_config::skill_enabled(
+                &role.skills_config,
+                crate::services::role_config::FIND_SKILLS_KEY,
+            ),
+            skill_creator: crate::services::role_config::skill_enabled(
+                &role.skills_config,
+                crate::services::role_config::SKILL_CREATOR_KEY,
+            ),
+            enabled_skill_ids: Some(all_role_skill_ids),
+        };
+        role = roles::update_role_skills(&pool, &role.id, &input).await?;
+    }
+    let registry = registry_for_sync(&pool).await;
+    sync_warn(
+        agent_config.sync_role_created_with_skills(&role, &registry),
+        "create",
+    );
     Ok(role)
 }
 
@@ -51,7 +87,11 @@ pub async fn role_update(
     }
 
     let role = roles::update_role(&pool, &id, &input).await?;
-    sync_warn(agent_config.sync_role_updated(&role), "update");
+    let registry = registry_for_sync(&pool).await;
+    sync_warn(
+        agent_config.sync_role_updated_with_skills(&role, &registry),
+        "update",
+    );
     Ok(role)
 }
 
@@ -63,7 +103,11 @@ pub async fn role_update_skills(
     agent_config: State<'_, AgentConfigService>,
 ) -> Result<Role, AppError> {
     let role = roles::update_role_skills(&pool, &id, &input).await?;
-    sync_warn(agent_config.sync_role_updated(&role), "update_skills");
+    let registry = registry_for_sync(&pool).await;
+    sync_warn(
+        agent_config.sync_role_updated_with_skills(&role, &registry),
+        "update_skills",
+    );
     Ok(role)
 }
 
@@ -75,7 +119,11 @@ pub async fn role_update_proactivity(
     agent_config: State<'_, AgentConfigService>,
 ) -> Result<Role, AppError> {
     let role = roles::update_role_proactivity(&pool, &id, &input).await?;
-    sync_warn(agent_config.sync_role_updated(&role), "update_proactivity");
+    let registry = registry_for_sync(&pool).await;
+    sync_warn(
+        agent_config.sync_role_updated_with_skills(&role, &registry),
+        "update_proactivity",
+    );
     Ok(role)
 }
 
@@ -98,7 +146,11 @@ pub async fn role_restore(
     agent_config: State<'_, AgentConfigService>,
 ) -> Result<Role, AppError> {
     let role = roles::restore_role(&pool, &id).await?;
-    sync_warn(agent_config.sync_role_created(&role), "restore");
+    let registry = registry_for_sync(&pool).await;
+    sync_warn(
+        agent_config.sync_role_created_with_skills(&role, &registry),
+        "restore",
+    );
     Ok(role)
 }
 

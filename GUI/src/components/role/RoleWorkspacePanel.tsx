@@ -9,6 +9,7 @@ import type { MemoryCategory } from '../../types/memory';
 
 export function RoleWorkspacePanel({
   role,
+  roles,
   currentTab,
   setTab,
   onOpenTask,
@@ -96,6 +97,7 @@ export function RoleWorkspacePanel({
         {currentTab === 'settings' && (
           <SettingsTab
             role={role}
+            activeRoles={roles}
             activeRoleCount={activeRoleCount}
             onUpdateRole={onUpdateRole}
             onArchiveRole={onArchiveRole}

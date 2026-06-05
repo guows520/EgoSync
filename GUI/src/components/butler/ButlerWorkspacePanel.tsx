@@ -13,6 +13,7 @@ export function ButlerWorkspacePanel({
   setTab,
   archivedRoles,
   onRestoreRole,
+  onUpdateRole,
   onViewChange,
   targetMemoryId,
   onTargetMemoryHandled,
@@ -118,7 +119,7 @@ export function ButlerWorkspacePanel({
             onSourceMessageClick={onSourceMessageClick}
           />
         )}
-        {currentTab === 'settings' && <ButlerSettingsContent archivedRoles={archivedRoles} onRestoreRole={onRestoreRole} />}
+        {currentTab === 'settings' && <ButlerSettingsContent activeRoles={roles} archivedRoles={archivedRoles} onRestoreRole={onRestoreRole} onUpdateRole={onUpdateRole} />}
       </div>
     </div>
   );

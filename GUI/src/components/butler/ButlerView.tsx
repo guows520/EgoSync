@@ -5,7 +5,7 @@ import { ButlerWorkspacePanel } from './ButlerWorkspacePanel';
 import { ChatStream } from '../chat/ChatStream';
 import type { SourceNavigationTarget } from '../../types/chat';
 
-export function ButlerView({ roles, onViewChange, archivedRoles, onRestoreRole, onRoleSourceNavigation, sourceNavigationTarget: externalSourceNavigationTarget, onSourceNavigationHandled }: any) {
+export function ButlerView({ roles, onViewChange, archivedRoles, onRestoreRole, onUpdateRole, onRoleSourceNavigation, sourceNavigationTarget: externalSourceNavigationTarget, onSourceNavigationHandled }: any) {
   const [openTab, setOpenTab] = useState<'dashboard' | 'tasks' | 'memory' | 'settings' | null>(null);
   const [targetMemoryId, setTargetMemoryId] = useState<string | null>(null);
   const [sourceNavigationTarget, setSourceNavigationTarget] = useState<SourceNavigationTarget | null>(null);
@@ -81,6 +81,7 @@ export function ButlerView({ roles, onViewChange, archivedRoles, onRestoreRole, 
               setTab={setOpenTab}
               archivedRoles={archivedRoles}
               onRestoreRole={onRestoreRole}
+              onUpdateRole={onUpdateRole}
               onViewChange={onViewChange}
               targetMemoryId={targetMemoryId}
               onTargetMemoryHandled={() => setTargetMemoryId(null)}

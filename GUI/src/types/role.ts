@@ -34,11 +34,19 @@ export interface UpdateRoleInput {
 export interface UpdateRoleSkillsInput {
   findSkills: boolean;
   skillCreator: boolean;
+  enabledSkillIds?: string[];
 }
 
 export interface RoleSkillsConfig {
   findSkills: boolean;
   skillCreator: boolean;
+  enabledSkillIds: string[];
+}
+
+export interface ButlerSkillsConfig {
+  findSkills: boolean;
+  skillCreator: boolean;
+  enabledSkillIds: string[];
 }
 
 export interface UpdateRoleProactivityInput {

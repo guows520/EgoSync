@@ -92,9 +92,20 @@ pub fn run() {
                     tracing::warn!("Failed to load butler Skill config: {}", e);
                     services::butler_config::default_butler_skills()
                 });
+                let skill_registry = tauri::async_runtime::block_on(async {
+                    db::skills::list_skills(pool_ref).await
+                })
+                .unwrap_or_else(|e| {
+                    tracing::warn!("Failed to load Skill registry for opencode sync: {}", e);
+                    Vec::new()
+                });
                 match all_roles {
                     Ok(roles) => {
-                        if let Err(e) = agent_config.full_sync(&roles, &butler_skills) {
+                        if let Err(e) = agent_config.full_sync_with_skills(
+                            &roles,
+                            &butler_skills,
+                            &skill_registry,
+                        ) {
                             tracing::warn!("opencode.json full sync failed (degraded): {}", e);
                         }
                     }
@@ -250,6 +261,14 @@ pub fn run() {
             commands::role::role_archive,
             commands::role::role_restore,
             commands::role::role_delete,
+            commands::skill::skill_list_registry,
+            commands::skill::skill_list_for_role,
+            commands::skill::skill_list_all_role_skills,
+            commands::skill::skill_pick_custom_directory,
+            commands::skill::skill_preview_custom,
+            commands::skill::skill_import_custom,
+            commands::skill::skill_remove_from_role,
+            commands::skill::skill_delete,
             commands::app::app_is_first_launch,
             commands::app::app_complete_onboarding,
             commands::app::app_is_llm_configured,

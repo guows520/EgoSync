@@ -229,6 +229,7 @@ export default function App() {
               onViewChange={setCurrentView}
               archivedRoles={archivedRoles}
               onRestoreRole={handleRestoreRole}
+              onUpdateRole={handleUpdateRole}
               onRoleSourceNavigation={handleRoleSourceNavigation}
               sourceNavigationTarget={pendingButlerSourceNavigation}
               onSourceNavigationHandled={() => setPendingButlerSourceNavigation(null)}
@@ -238,6 +239,7 @@ export default function App() {
             <RoleView
               key={r.id}
               role={r}
+              roles={roles}
               onOpenTask={() => setIsTaskModalOpen(true)}
               initialTab={roleInitialTab}
               onTabConsumed={() => setRoleInitialTab(null)}

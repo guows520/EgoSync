@@ -145,6 +145,51 @@ mod tests {
         .expect("query forgotten memory sources table");
         assert_eq!(forgotten_table.as_deref(), Some("forgotten_memory_sources"));
 
+        let skills_table: Option<String> = sqlx::query_scalar(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'skills'",
+        )
+        .fetch_optional(&pool)
+        .await
+        .expect("query skills table");
+        assert_eq!(skills_table.as_deref(), Some("skills"));
+
+        let skills_columns: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info('skills') ORDER BY cid")
+                .fetch_all(&pool)
+                .await
+                .expect("query skills columns");
+        assert_eq!(
+            skills_columns,
+            vec![
+                "id",
+                "name",
+                "description",
+                "source_type",
+                "managed_path",
+                "content_hash",
+                "created_at",
+                "updated_at",
+            ]
+        );
+
+        let skill_role_bindings_table: Option<String> = sqlx::query_scalar(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'skill_role_bindings'",
+        )
+        .fetch_optional(&pool)
+        .await
+        .expect("query skill role bindings table");
+        assert_eq!(skill_role_bindings_table.as_deref(), Some("skill_role_bindings"));
+
+        let skill_role_binding_columns: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info('skill_role_bindings') ORDER BY cid")
+                .fetch_all(&pool)
+                .await
+                .expect("query skill role binding columns");
+        assert_eq!(
+            skill_role_binding_columns,
+            vec!["skill_id", "role_id", "created_at"]
+        );
+
         let indexes: Vec<String> = sqlx::query_scalar(
             "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'memories' AND name LIKE 'idx_memories_%' ORDER BY name",
         )
@@ -193,5 +238,30 @@ mod tests {
             .await
             .expect("query foreign_keys pragma");
         assert_eq!(foreign_keys, 1);
+    }
+
+    #[tokio::test]
+    async fn init_db_persists_skill_registry_across_reopen() {
+        let dir = tempdir().expect("create temp dir");
+        let db_path = dir.path().join("egosync.db");
+        let pool = init_db(&db_path).await.expect("init db");
+        crate::db::skills::create_skill(
+            &pool,
+            "daily-review",
+            "日复盘助手",
+            "skills/daily-review/SKILL.md",
+            "hash-1",
+        )
+        .await
+        .expect("create skill");
+        pool.close().await;
+
+        let reopened = init_db(&db_path).await.expect("reopen db");
+        let skills = crate::db::skills::list_skills(&reopened)
+            .await
+            .expect("list skills");
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].name, "daily-review");
+        assert_eq!(skills[0].content_hash, "hash-1");
     }
 }

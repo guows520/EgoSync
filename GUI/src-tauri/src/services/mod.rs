@@ -10,3 +10,4 @@ pub mod memory_query;
 pub mod role_config;
 pub mod secret_store;
 pub mod sidecar;
+pub mod skill_registry;

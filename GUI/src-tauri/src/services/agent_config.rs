@@ -4,6 +4,7 @@ use serde_json::{json, Value};
 
 use crate::error::AppError;
 use crate::models::role::{ButlerSkillsConfig, Role};
+use crate::models::skill::SkillRegistryEntry;
 
 // ── Custom Tools (written to .opencode/tools/) ────────────────────────────
 
@@ -185,8 +186,33 @@ impl AgentConfigService {
         format!("role-{}", role_id)
     }
 
+    fn custom_skill_lines(skill_ids: &[String], registry: &[SkillRegistryEntry]) -> Vec<String> {
+        skill_ids
+            .iter()
+            .filter_map(|id| {
+                registry
+                    .iter()
+                    .find(|skill| skill.id == *id)
+                    .map(|skill| format!("- {}：{}", skill.name, skill.description))
+            })
+            .collect()
+    }
+
+    fn push_custom_skill_prompt(prompt_parts: &mut Vec<String>, custom_skill_lines: &[String]) {
+        if !custom_skill_lines.is_empty() {
+            prompt_parts.push(format!(
+                "[自定义 Skill]\n{}\n只能按以上 EgoSync 已导入 Skill 的说明行动，不要调用或列出外部环境中的其它 Skill。",
+                custom_skill_lines.join("\n")
+            ));
+        }
+    }
+
     /// Build an opencode agent entry from a `Role`.
     pub fn build_agent_entry(role: &Role) -> Value {
+        Self::build_agent_entry_with_skills(role, &[])
+    }
+
+    pub fn build_agent_entry_with_skills(role: &Role, registry: &[SkillRegistryEntry]) -> Value {
         let mut prompt_parts: Vec<String> = Vec::new();
         prompt_parts.push(format!("角色名: {}", role.name));
         if !role.goal.is_empty() {
@@ -200,6 +226,10 @@ impl AgentConfigService {
         if !meta_skill_prompt.is_empty() {
             prompt_parts.push(meta_skill_prompt);
         }
+        let custom_skill_ids =
+            crate::services::role_config::enabled_skill_ids_from_config(&role.skills_config);
+        let custom_skill_lines = Self::custom_skill_lines(&custom_skill_ids, registry);
+        Self::push_custom_skill_prompt(&mut prompt_parts, &custom_skill_lines);
         let prompt = prompt_parts.join("\n");
 
         let permission = Self::parse_permissions(&role.skills_config);
@@ -216,28 +246,17 @@ impl AgentConfigService {
 
     /// Parse `skills_config` JSON → opencode permission object.
     /// Falls back to `{ "*": "allow" }` when empty or unparseable.
+    /// EgoSync 管理自定义 Skill 的 prompt 注入，不允许 opencode 底层 `skill` 工具自动加载外部全局 Skill。
     fn parse_permissions(skills_config: &str) -> Value {
         let default_perm = json!({ "*": "allow" });
-        let Ok(parsed) = serde_json::from_str::<Value>(skills_config) else {
-            return default_perm;
-        };
-        let mut permission = match parsed.get("permissions") {
+        let config = crate::services::role_config::role_skill_config_from_json(skills_config);
+        let mut permission = match config.permissions.as_ref() {
             Some(p) if p.is_object() => p.clone(),
             _ => default_perm,
         };
 
-        let find_skills = parsed
-            .get(crate::services::role_config::FIND_SKILLS_KEY)
-            .and_then(|enabled| enabled.as_bool())
-            .unwrap_or(false);
-        let skill_creator = parsed
-            .get(crate::services::role_config::SKILL_CREATOR_KEY)
-            .and_then(|enabled| enabled.as_bool())
-            .unwrap_or(false);
-        if !find_skills && !skill_creator {
-            if let Some(object) = permission.as_object_mut() {
-                object.insert("skill".to_string(), json!("deny"));
-            }
+        if let Some(object) = permission.as_object_mut() {
+            object.insert("skill".to_string(), json!("deny"));
         }
 
         permission
@@ -246,29 +265,40 @@ impl AgentConfigService {
     // ── Role lifecycle sync ───────────────────────────────────────
 
     pub fn build_butler_entry(skills: &ButlerSkillsConfig) -> Value {
-        let skills_config = crate::services::butler_config::skills_config_json(skills);
-        let meta_skill_prompt = crate::services::role_config::meta_skill_prompt(&skills_config);
-        let prompt = if meta_skill_prompt.is_empty() {
-            "你是EgoSync管家".to_string()
-        } else {
-            format!("你是EgoSync管家\n{}", meta_skill_prompt)
-        };
+        Self::build_butler_entry_with_skills(skills, &[])
+    }
 
-        let permission = if skills.find_skills || skills.skill_creator {
-            json!({ "*": "allow" })
-        } else {
-            json!({ "*": "allow", "skill": "deny" })
-        };
+    pub fn build_butler_entry_with_skills(
+        skills: &ButlerSkillsConfig,
+        registry: &[SkillRegistryEntry],
+    ) -> Value {
+        let skills_config = crate::services::butler_config::skills_config_json(skills);
+        let mut prompt_parts = vec!["你是EgoSync管家".to_string()];
+        let meta_skill_prompt = crate::services::role_config::meta_skill_prompt(&skills_config);
+        if !meta_skill_prompt.is_empty() {
+            prompt_parts.push(meta_skill_prompt);
+        }
+        let custom_skill_lines = Self::custom_skill_lines(&skills.enabled_skill_ids, registry);
+        Self::push_custom_skill_prompt(&mut prompt_parts, &custom_skill_lines);
+        let permission = Self::parse_permissions(&skills_config);
 
         json!({
             "name": "管家",
             "mode": "primary",
-            "prompt": prompt,
+            "prompt": prompt_parts.join("\n"),
             "permission": permission
         })
     }
 
     pub fn sync_butler_skills(&self, skills: &ButlerSkillsConfig) -> Result<(), AppError> {
+        self.sync_butler_skills_with_registry(skills, &[])
+    }
+
+    pub fn sync_butler_skills_with_registry(
+        &self,
+        skills: &ButlerSkillsConfig,
+        registry: &[SkillRegistryEntry],
+    ) -> Result<(), AppError> {
         let mut config = self.load()?;
         let agents = config.as_object_mut().and_then(|o| {
             o.entry("agent")
@@ -280,7 +310,7 @@ impl AgentConfigService {
                 "opencode.json agent 段格式异常".to_string(),
             ));
         };
-        agents.insert(BUTLER_KEY.to_string(), Self::build_butler_entry(skills));
+        agents.insert(BUTLER_KEY.to_string(), Self::build_butler_entry_with_skills(skills, registry));
         self.save(&config)
     }
 
@@ -303,6 +333,7 @@ impl AgentConfigService {
                 Self::build_butler_entry(&ButlerSkillsConfig {
                     find_skills: false,
                     skill_creator: false,
+                    enabled_skill_ids: Vec::new(),
                 }),
             );
             self.save(&config)?;
@@ -311,6 +342,14 @@ impl AgentConfigService {
     }
 
     pub fn sync_role_created(&self, role: &Role) -> Result<(), AppError> {
+        self.sync_role_created_with_skills(role, &[])
+    }
+
+    pub fn sync_role_created_with_skills(
+        &self,
+        role: &Role,
+        registry: &[SkillRegistryEntry],
+    ) -> Result<(), AppError> {
         let mut config = self.load()?;
         let agents = config.as_object_mut().and_then(|o| {
             o.entry("agent")
@@ -323,13 +362,20 @@ impl AgentConfigService {
             ));
         };
         let key = Self::role_to_agent_key(&role.id);
-        agents.insert(key, Self::build_agent_entry(role));
+        agents.insert(key, Self::build_agent_entry_with_skills(role, registry));
         self.save(&config)
     }
 
     pub fn sync_role_updated(&self, role: &Role) -> Result<(), AppError> {
-        // Same mechanics as create — overwrites the entry.
         self.sync_role_created(role)
+    }
+
+    pub fn sync_role_updated_with_skills(
+        &self,
+        role: &Role,
+        registry: &[SkillRegistryEntry],
+    ) -> Result<(), AppError> {
+        self.sync_role_created_with_skills(role, registry)
     }
 
     pub fn sync_role_archived(&self, role_id: &str) -> Result<(), AppError> {
@@ -433,6 +479,15 @@ impl AgentConfigService {
         roles: &[Role],
         butler_skills: &ButlerSkillsConfig,
     ) -> Result<(), AppError> {
+        self.full_sync_with_skills(roles, butler_skills, &[])
+    }
+
+    pub fn full_sync_with_skills(
+        &self,
+        roles: &[Role],
+        butler_skills: &ButlerSkillsConfig,
+        registry: &[SkillRegistryEntry],
+    ) -> Result<(), AppError> {
         let mut config = self.load()?;
         let root = config
             .as_object_mut()
@@ -442,7 +497,7 @@ impl AgentConfigService {
 
         agents.insert(
             BUTLER_KEY.to_string(),
-            Self::build_butler_entry(butler_skills),
+            Self::build_butler_entry_with_skills(butler_skills, registry),
         );
 
         // Butler-exclusive tools that role agents must NOT see
@@ -455,7 +510,7 @@ impl AgentConfigService {
         // Sync each role
         for role in roles {
             let key = Self::role_to_agent_key(&role.id);
-            let mut entry = Self::build_agent_entry(role);
+            let mut entry = Self::build_agent_entry_with_skills(role, registry);
             if role.status == "archived" {
                 entry
                     .as_object_mut()
@@ -502,6 +557,19 @@ mod tests {
 
     fn active_role(id: &str, name: &str, goal: &str) -> Role {
         make_role(id, name, goal, "active", "{}")
+    }
+
+    fn custom_skill(id: &str, name: &str, description: &str) -> SkillRegistryEntry {
+        SkillRegistryEntry {
+            id: id.to_string(),
+            name: name.to_string(),
+            description: description.to_string(),
+            source_type: "custom".to_string(),
+            managed_path: format!("skills/{}/SKILL.md", name),
+            content_hash: "hash".to_string(),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            updated_at: "2026-01-01T00:00:00Z".to_string(),
+        }
     }
 
     // ── custom tools ──────────────────────────────────────────────
@@ -590,7 +658,7 @@ mod tests {
     }
 
     #[test]
-    fn permission_keeps_skill_available_when_any_meta_skill_enabled() {
+    fn permission_denies_skill_tool_when_meta_skill_enabled() {
         let role = make_role(
             "r1",
             "PM",
@@ -599,7 +667,51 @@ mod tests {
             r#"{"find-skills":false,"skill-creator":true,"permissions":{"*":"allow","skill":"allow"}}"#,
         );
         let entry = AgentConfigService::build_agent_entry(&role);
-        assert_eq!(entry["permission"]["skill"], "allow");
+        assert_eq!(entry["permission"]["skill"], "deny");
+    }
+
+    #[test]
+    fn permission_denies_external_skill_tool_even_when_meta_skill_enabled() {
+        let role = make_role(
+            "r1",
+            "PM",
+            "goal",
+            "active",
+            r#"{"find-skills":true,"skill-creator":true,"permissions":{"*":"allow","skill":"allow"}}"#,
+        );
+        let entry = AgentConfigService::build_agent_entry(&role);
+        assert_eq!(entry["permission"]["skill"], "deny");
+    }
+
+    #[test]
+    fn permission_denies_external_skill_tool_even_when_custom_skill_enabled() {
+        let role = make_role(
+            "r1",
+            "PM",
+            "goal",
+            "active",
+            r#"{"enabledSkillIds":["skill-1"],"permissions":{"*":"allow","skill":"allow"}}"#,
+        );
+        let entry = AgentConfigService::build_agent_entry_with_skills(
+            &role,
+            &[custom_skill("skill-1", "daily-review", "日复盘助手")],
+        );
+        assert!(entry["prompt"].as_str().unwrap().contains("daily-review"));
+        assert_eq!(entry["permission"]["skill"], "deny");
+    }
+
+    #[test]
+    fn butler_permission_denies_external_skill_tool_even_with_visible_custom_skill() {
+        let entry = AgentConfigService::build_butler_entry_with_skills(
+            &ButlerSkillsConfig {
+                find_skills: true,
+                skill_creator: true,
+                enabled_skill_ids: vec!["skill-1".to_string()],
+            },
+            &[custom_skill("skill-1", "daily-review", "日复盘助手")],
+        );
+        assert!(entry["prompt"].as_str().unwrap().contains("daily-review"));
+        assert_eq!(entry["permission"]["skill"], "deny");
     }
 
     #[test]
@@ -620,10 +732,69 @@ mod tests {
     }
 
     #[test]
+    fn build_agent_entry_includes_enabled_custom_skill_ids() {
+        let role = make_role(
+            "r1",
+            "PM",
+            "goal",
+            "active",
+            r#"{"enabledSkillIds":["skill-1"],"permissions":{"*":"allow","skill":"allow"}}"#,
+        );
+        let entry = AgentConfigService::build_agent_entry_with_skills(
+            &role,
+            &[custom_skill("skill-1", "daily-review", "日复盘助手")],
+        );
+        let prompt = entry["prompt"].as_str().unwrap();
+        assert!(prompt.contains("[自定义 Skill]"));
+        assert!(prompt.contains("daily-review"));
+        assert!(prompt.contains("日复盘助手"));
+        assert!(prompt.contains("不要调用或列出外部环境中的其它 Skill"));
+        assert!(!prompt.contains("skill-1"));
+        assert_eq!(entry["permission"]["skill"], "deny");
+    }
+
+    #[test]
+    fn build_agent_entry_denies_skill_when_enabled_ids_are_all_ghosts() {
+        // P3 回归：enabledSkillIds 非空但 registry 中查不到（幽灵 id，如 Skill 已删除）时，
+        // prompt 不应声明任何自定义 Skill，权限也不应保持 allow（否则配置漂移）。
+        let role = make_role(
+            "r1",
+            "PM",
+            "goal",
+            "active",
+            r#"{"enabledSkillIds":["ghost-id"],"permissions":{"*":"allow","skill":"allow"}}"#,
+        );
+        let entry = AgentConfigService::build_agent_entry_with_skills(
+            &role,
+            &[custom_skill("skill-1", "daily-review", "日复盘助手")],
+        );
+        let prompt = entry["prompt"].as_str().unwrap();
+        assert!(!prompt.contains("[自定义 Skill]"));
+        assert_eq!(entry["permission"]["skill"], "deny");
+    }
+
+    #[test]
+    fn build_agent_entry_does_not_declare_disabled_custom_skills() {
+        let role = make_role(
+            "r1",
+            "PM",
+            "goal",
+            "active",
+            r#"{"enabledSkillIds":[],"permissions":{"*":"allow","skill":"allow"}}"#,
+        );
+        let entry = AgentConfigService::build_agent_entry(&role);
+        let prompt = entry["prompt"].as_str().unwrap();
+        assert!(!prompt.contains("[自定义 Skill]"));
+        assert!(!prompt.contains("daily-review"));
+        assert_eq!(entry["permission"]["skill"], "deny");
+    }
+
+    #[test]
     fn build_butler_entry_includes_meta_skill_prompt() {
         let entry = AgentConfigService::build_butler_entry(&ButlerSkillsConfig {
             find_skills: true,
             skill_creator: false,
+            enabled_skill_ids: Vec::new(),
         });
         let prompt = entry["prompt"].as_str().unwrap();
         assert!(prompt.contains("你是EgoSync管家"));
@@ -631,7 +802,34 @@ mod tests {
         assert!(!prompt.contains("skill-creator"));
         assert!(prompt.contains("已启用"));
         assert!(!prompt.contains("未启用"));
-        assert_eq!(entry["permission"], json!({ "*": "allow" }));
+        assert_eq!(entry["permission"], json!({ "*": "allow", "skill": "deny" }));
+    }
+
+    #[test]
+    fn full_sync_with_skills_injects_butler_custom_skill_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let svc = AgentConfigService::new(dir.path().join("opencode.json"));
+
+        svc.full_sync_with_skills(
+            &[],
+            &ButlerSkillsConfig {
+                find_skills: false,
+                skill_creator: false,
+                enabled_skill_ids: vec!["skill-1".to_string(), "ghost-id".to_string()],
+            },
+            &[custom_skill("skill-1", "daily-review", "日复盘助手")],
+        )
+        .unwrap();
+
+        let config = svc.load().unwrap();
+        let prompt = config["agent"]["butler"]["prompt"].as_str().unwrap();
+        assert!(prompt.contains("你是EgoSync管家"));
+        assert!(prompt.contains("[自定义 Skill]"));
+        assert!(prompt.contains("daily-review"));
+        assert!(prompt.contains("日复盘助手"));
+        assert!(prompt.contains("不要调用或列出外部环境中的其它 Skill"));
+        assert!(!prompt.contains("ghost-id"));
+        assert_eq!(config["agent"]["butler"]["permission"], json!({ "*": "allow", "skill": "deny" }));
     }
 
     #[test]
@@ -639,6 +837,7 @@ mod tests {
         let entry = AgentConfigService::build_butler_entry(&ButlerSkillsConfig {
             find_skills: false,
             skill_creator: false,
+            enabled_skill_ids: Vec::new(),
         });
         let prompt = entry["prompt"].as_str().unwrap();
         assert!(!prompt.contains("find-skills"));
@@ -787,6 +986,7 @@ mod tests {
             &ButlerSkillsConfig {
                 find_skills: true,
                 skill_creator: false,
+                enabled_skill_ids: Vec::new(),
             },
         )
         .unwrap();
@@ -815,6 +1015,36 @@ mod tests {
     }
 
     #[test]
+    fn full_sync_with_skills_injects_custom_skill_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let svc = AgentConfigService::new(dir.path().join("opencode.json"));
+        let roles = vec![make_role(
+            "r1",
+            "PM",
+            "manage",
+            "active",
+            r#"{"enabledSkillIds":["skill-1"],"permissions":{"*":"allow","skill":"allow"}}"#,
+        )];
+
+        svc.full_sync_with_skills(
+            &roles,
+            &ButlerSkillsConfig {
+                find_skills: false,
+                skill_creator: false,
+                enabled_skill_ids: Vec::new(),
+            },
+            &[custom_skill("skill-1", "daily-review", "日复盘助手")],
+        )
+        .unwrap();
+
+        let config = svc.load().unwrap();
+        let prompt = config["agent"]["role-r1"]["prompt"].as_str().unwrap();
+        assert!(prompt.contains("daily-review"));
+        assert!(prompt.contains("日复盘助手"));
+        assert!(!prompt.contains("skill-1"));
+    }
+
+    #[test]
     fn full_sync_removes_legacy_mcp_config() {
         // WHY: migration from MCP to custom tools must clean up old config.
         let dir = tempfile::tempdir().unwrap();
@@ -834,6 +1064,7 @@ mod tests {
             &ButlerSkillsConfig {
                 find_skills: true,
                 skill_creator: false,
+                enabled_skill_ids: Vec::new(),
             },
         )
         .unwrap();

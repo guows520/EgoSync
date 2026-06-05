@@ -4,3 +4,5 @@ pub mod memories;
 pub mod pool;
 pub mod roles;
 pub mod settings;
+pub mod skill_bindings;
+pub mod skills;

@@ -40,6 +40,8 @@ pub struct UpdateRoleInput {
 pub struct UpdateRoleSkillsInput {
     pub find_skills: bool,
     pub skill_creator: bool,
+    #[serde(default)]
+    pub enabled_skill_ids: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -47,6 +49,8 @@ pub struct UpdateRoleSkillsInput {
 pub struct ButlerSkillsConfig {
     pub find_skills: bool,
     pub skill_creator: bool,
+    #[serde(default)]
+    pub enabled_skill_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

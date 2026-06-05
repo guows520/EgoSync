@@ -1,12 +1,21 @@
 import { useEffect, useState } from 'react';
-import { AlertCircle, Check } from 'lucide-react';
+import { AlertCircle, Check, Trash2, Upload } from 'lucide-react';
 import { getRoleIconComponent, normalizeColorHex } from '../../lib/roleIcons';
 import { cn } from '../../lib/utils';
 import { appService } from '../../services/appService';
-import type { RoleSkillsConfig } from '../../types/role';
+import { roleService } from '../../services/roleService';
+import { skillService } from '../../services/skillService';
+import type { ButlerSkillsConfig, Role } from '../../types/role';
+import type { SkillImportPreview, SkillRegistryEntry } from '../../types/skill';
 
-const DEFAULT_SKILLS: RoleSkillsConfig = { findSkills: true, skillCreator: false };
-const SKILL_OPTIONS: Array<{ key: keyof RoleSkillsConfig; title: string; source: string; description: string }> = [
+type ButlerSkillsState = ButlerSkillsConfig;
+
+type ButlerSkillKey = 'findSkills' | 'skillCreator';
+
+const DEFAULT_SKILLS: ButlerSkillsState = { findSkills: true, skillCreator: false, enabledSkillIds: [] };
+const BUTLER_SCOPE_ID = '__butler__';
+const MESSAGE_TIMEOUT_MS = 1500;
+const SKILL_OPTIONS: Array<{ key: ButlerSkillKey; title: string; source: string; description: string }> = [
   {
     key: 'findSkills',
     title: 'find-skills',
@@ -21,10 +30,27 @@ const SKILL_OPTIONS: Array<{ key: keyof RoleSkillsConfig; title: string; source:
   },
 ];
 
-export function ButlerSettingsContent({ archivedRoles = [], onRestoreRole }: any) {
+interface ButlerSettingsContentProps {
+  activeRoles?: Role[];
+  archivedRoles?: Role[];
+  onRestoreRole?: (id: string) => Promise<void> | void;
+  onUpdateRole?: (role: Role) => void;
+}
+
+export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], onRestoreRole, onUpdateRole }: ButlerSettingsContentProps) {
   const [mission, setMission] = useState('');
-  const [skills, setSkills] = useState<RoleSkillsConfig>(DEFAULT_SKILLS);
-  const [pendingSkill, setPendingSkill] = useState<keyof RoleSkillsConfig | null>(null);
+  const [skills, setSkills] = useState<ButlerSkillsState>(DEFAULT_SKILLS);
+  const [isLoadingButlerSkills, setIsLoadingButlerSkills] = useState(true);
+  const [registrySkills, setRegistrySkills] = useState<SkillRegistryEntry[]>([]);
+  const [skillPreview, setSkillPreview] = useState<SkillImportPreview | null>(null);
+  const [pendingSkillContent, setPendingSkillContent] = useState('');
+  const [reuseAllRoles, setReuseAllRoles] = useState(true);
+  const [reuseRoleIds, setReuseRoleIds] = useState<string[]>([]);
+  const [pendingSkill, setPendingSkill] = useState<string | null>(null);
+  const [deleteSkillTarget, setDeleteSkillTarget] = useState<SkillRegistryEntry | null>(null);
+  const [isLoadingSkills, setIsLoadingSkills] = useState(false);
+  const [isPickingDirectory, setIsPickingDirectory] = useState(false);
+  const [isImportingSkill, setIsImportingSkill] = useState(false);
   const [settingsSavedMessage, setSettingsSavedMessage] = useState('');
   const [error, setError] = useState('');
   const templates = [
@@ -35,32 +61,140 @@ export function ButlerSettingsContent({ archivedRoles = [], onRestoreRole }: any
 
   useEffect(() => {
     let cancelled = false;
+    setIsLoadingButlerSkills(true);
     appService.getButlerSkills()
       .then(nextSkills => {
-        if (!cancelled) setSkills(nextSkills);
+        if (!cancelled) setSkills({ ...DEFAULT_SKILLS, ...nextSkills, enabledSkillIds: nextSkills.enabledSkillIds ?? [] });
       })
       .catch(() => {
         if (!cancelled) setError('Skill 配置加载失败，请稍后重试');
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoadingButlerSkills(false);
       });
     return () => {
       cancelled = true;
     };
   }, []);
 
-  const handleSkillToggle = async (key: keyof RoleSkillsConfig) => {
-    const nextSkills = { ...skills, [key]: !skills[key] };
+  useEffect(() => {
+    let cancelled = false;
+    setIsLoadingSkills(true);
+    skillService.listAllRoleSkills()
+      .then(items => {
+        if (!cancelled) setRegistrySkills(items);
+      })
+      .catch(() => {
+        if (!cancelled) setError('Skill 列表加载失败，请稍后重试');
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoadingSkills(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const saveSkills = async (nextSkills: ButlerSkillsState, pendingKey: string) => {
+    const previousSkills = skills;
     setSkills(nextSkills);
-    setPendingSkill(key);
+    setPendingSkill(pendingKey);
     setSettingsSavedMessage('');
     setError('');
     try {
       const savedSkills = await appService.updateButlerSkills(nextSkills);
-      setSkills(savedSkills);
+      setSkills({ ...DEFAULT_SKILLS, ...savedSkills, enabledSkillIds: savedSkills.enabledSkillIds ?? [] });
       setSettingsSavedMessage('Skill 配置已保存');
-      setTimeout(() => setSettingsSavedMessage(''), 1500);
+      setTimeout(() => setSettingsSavedMessage(''), MESSAGE_TIMEOUT_MS);
     } catch {
-      setSkills(skills);
+      setSkills(previousSkills);
       setError('Skill 配置保存失败，请稍后重试');
+    } finally {
+      setPendingSkill(null);
+    }
+  };
+
+  const handleSkillToggle = async (key: ButlerSkillKey) => {
+    await saveSkills({ ...skills, [key]: !skills[key] }, key);
+  };
+
+  const handleCustomSkillToggle = async (skillId: string) => {
+    const enabled = skills.enabledSkillIds.includes(skillId);
+    const nextSkillIds = enabled
+      ? skills.enabledSkillIds.filter(id => id !== skillId)
+      : [...skills.enabledSkillIds, skillId];
+    await saveSkills({ ...skills, enabledSkillIds: nextSkillIds }, skillId);
+  };
+
+  const handleSkillDirectorySelected = async () => {
+    setIsPickingDirectory(true);
+    setError('');
+    setSettingsSavedMessage('');
+    setSkillPreview(null);
+    try {
+      const picked = await skillService.pickCustomDirectory();
+      const preview = await skillService.previewCustom({ content: picked.content });
+      setPendingSkillContent(picked.content);
+      setSkillPreview(preview);
+      setReuseAllRoles(true);
+      setReuseRoleIds([BUTLER_SCOPE_ID]);
+    } catch (e) {
+      const text = typeof e === 'string' ? e : (JSON.stringify(e) ?? String(e));
+      if (text.includes('未选择 Skill 文件夹')) return;
+      setPendingSkillContent('');
+      setError(toFriendlyError(e, '未能从所选 Skill 文件夹读取 SKILL.md'));
+    } finally {
+      setIsPickingDirectory(false);
+    }
+  };
+
+  const handleConfirmImport = async (overwriteExisting = false) => {
+    if (!pendingSkillContent) return;
+    setIsImportingSkill(true);
+    setError('');
+    setSettingsSavedMessage('');
+    try {
+      const result = await skillService.importCustom({
+        content: pendingSkillContent,
+        overwriteExisting,
+        roleScope: { allRoles: reuseAllRoles, roleIds: reuseAllRoles ? [] : reuseRoleIds },
+      });
+      const items = await skillService.listAllRoleSkills();
+      setRegistrySkills(items);
+      if (result.entry) {
+        const entry = result.entry;
+        const refreshedRoles = await roleService.list();
+        refreshedRoles.forEach(item => onUpdateRole?.(item));
+        const shouldEnableButler = reuseAllRoles || reuseRoleIds.includes(BUTLER_SCOPE_ID);
+        const nextSkillIds = shouldEnableButler
+          ? (skills.enabledSkillIds.includes(entry.id) ? skills.enabledSkillIds : [...skills.enabledSkillIds, entry.id])
+          : skills.enabledSkillIds.filter(id => id !== entry.id);
+        await saveSkills({ ...skills, enabledSkillIds: nextSkillIds }, entry.id);
+      }
+      setSkillPreview(result.status === 'duplicate' ? result.preview : null);
+      setPendingSkillContent(result.status === 'duplicate' ? pendingSkillContent : '');
+      setSettingsSavedMessage(result.status === 'duplicate' ? 'Skill 已存在，已更新复用范围' : '自定义 Skill 已导入并启用');
+    } catch (e) {
+      setError(toFriendlyError(e, '导入自定义 Skill 失败，请稍后重试'));
+    } finally {
+      setIsImportingSkill(false);
+    }
+  };
+
+  const handleCustomSkillDelete = async () => {
+    if (!deleteSkillTarget) return;
+    const skillId = deleteSkillTarget.id;
+    setPendingSkill(skillId);
+    setError('');
+    setSettingsSavedMessage('');
+    try {
+      const nextSkillIds = skills.enabledSkillIds.filter(id => id !== skillId);
+      await saveSkills({ ...skills, enabledSkillIds: nextSkillIds }, skillId);
+      setDeleteSkillTarget(null);
+      setSettingsSavedMessage('自定义 Skill 已删除');
+      setTimeout(() => setSettingsSavedMessage(''), MESSAGE_TIMEOUT_MS);
+    } catch {
+      setError('删除自定义 Skill 失败，请稍后重试');
     } finally {
       setPendingSkill(null);
     }
@@ -93,6 +227,10 @@ export function ButlerSettingsContent({ archivedRoles = [], onRestoreRole }: any
       </div>
       <div className="pt-6 border-t border-slate-200/80">
         <label className="text-[14px] font-semibold text-slate-800 block mb-3">Skill 配置</label>
+        {isLoadingButlerSkills ? (
+          <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-[13px] text-slate-500 shadow-sm">正在加载 Skill 配置...</div>
+        ) : (
+          <>
         <div className="space-y-3">
           {SKILL_OPTIONS.map(option => {
             const enabled = skills[option.key];
@@ -126,6 +264,143 @@ export function ButlerSettingsContent({ archivedRoles = [], onRestoreRole }: any
             );
           })}
         </div>
+
+        <div className="mt-5 bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+          <div className="mb-4 space-y-3">
+            <div className="min-w-0">
+              <div className="text-[14.5px] font-medium text-slate-800">自定义 Skill</div>
+              <p className="mt-1 text-[12.5px] leading-relaxed text-slate-500">选择包含 SKILL.md 的文件夹后，可按应用范围启用。</p>
+            </div>
+            <button
+              type="button"
+              onClick={handleSkillDirectorySelected}
+              disabled={isImportingSkill || isPickingDirectory}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-[12px] font-medium text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+            >
+              <Upload size={14} /> {isPickingDirectory ? '选择中...' : '选择skill文件夹'}
+            </button>
+          </div>
+
+          {skillPreview && (
+            <div className="mb-3 rounded-lg border border-indigo-100 bg-indigo-50 px-3 py-3 text-[12.5px] text-slate-600">
+              <div className="font-semibold text-slate-800">预览：{skillPreview.name}</div>
+              <div className="mt-1">{skillPreview.description}</div>
+              {skillPreview.duplicate && (
+                <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-amber-700">
+                  {skillPreview.duplicate.kind === 'contentHash' ? '相同内容的 Skill 已存在。' : '同名 Skill 已存在。'}可取消或覆盖元数据。
+                </div>
+              )}
+              <div className="mt-3 rounded-md border border-indigo-100 bg-white/70 px-3 py-2">
+                <div className="mb-2 text-[12px] font-medium text-slate-700">复用到以下角色</div>
+                <label className="flex items-center gap-2 text-[12.5px] text-slate-600">
+                  <input
+                    type="checkbox"
+                    checked={reuseAllRoles}
+                    onChange={e => {
+                      setReuseAllRoles(e.target.checked);
+                      setReuseRoleIds([BUTLER_SCOPE_ID]);
+                    }}
+                    className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                  />
+                  全部角色
+                </label>
+                {!reuseAllRoles && (
+                  <div className="mt-2 space-y-1.5">
+                    <label className="flex items-center gap-2 text-[12.5px] text-slate-600">
+                      <input
+                        type="checkbox"
+                        checked={reuseRoleIds.includes(BUTLER_SCOPE_ID)}
+                        onChange={e => {
+                          setReuseRoleIds(prev => e.target.checked
+                            ? [...prev.filter(id => id !== BUTLER_SCOPE_ID), BUTLER_SCOPE_ID]
+                            : prev.filter(id => id !== BUTLER_SCOPE_ID));
+                        }}
+                        className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                      />
+                      管家
+                    </label>
+                    {activeRoles.map(item => (
+                      <label key={item.id} className="flex items-center gap-2 text-[12.5px] text-slate-600">
+                        <input
+                          type="checkbox"
+                          checked={reuseRoleIds.includes(item.id)}
+                          onChange={e => {
+                            setReuseRoleIds(prev => e.target.checked
+                              ? [...prev.filter(id => id !== item.id), item.id]
+                              : prev.filter(id => id !== item.id));
+                          }}
+                          className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                        />
+                        {item.name}
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div className="mt-3 flex justify-end gap-2">
+                <button type="button" onClick={() => { setSkillPreview(null); setPendingSkillContent(''); }} className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-600 hover:bg-slate-50">取消</button>
+                <button type="button" onClick={() => handleConfirmImport(false)} disabled={isImportingSkill} className="rounded-lg bg-indigo-600 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60">确认导入</button>
+                {skillPreview.duplicate && (
+                  <button type="button" onClick={() => handleConfirmImport(true)} disabled={isImportingSkill} className="rounded-lg bg-amber-600 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-60">覆盖元数据</button>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div className="space-y-2">
+            {isLoadingSkills && <div className="text-[12.5px] text-slate-400">正在加载自定义 Skill...</div>}
+            {!isLoadingSkills && registrySkills.length === 0 && <div className="text-[12.5px] text-slate-400">暂无自定义 Skill。</div>}
+            {registrySkills.map(item => {
+              const enabled = skills.enabledSkillIds.includes(item.id);
+              return (
+                <div key={item.id} data-testid={`custom-skill-card-${item.id}`} className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-3">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex min-w-0 flex-wrap items-center gap-2">
+                        <span className={cn('w-2.5 h-2.5 shrink-0 rounded-full', enabled ? 'bg-emerald-500' : 'bg-slate-300')} />
+                        <span className="min-w-0 break-words text-[13.5px] font-medium text-slate-800">{item.name}</span>
+                        <span className="shrink-0 text-[11px] font-medium text-slate-500 bg-white px-2 py-0.5 rounded-full border border-slate-200">自定义</span>
+                      </div>
+                    </div>
+                    <div data-testid={`custom-skill-actions-${item.id}`} className="flex shrink-0 items-center gap-2">
+                      <button
+                        type="button"
+                        aria-label={`删除 ${item.name}`}
+                        disabled={pendingSkill !== null}
+                        onClick={() => setDeleteSkillTarget(item)}
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-red-100 bg-red-50 text-red-500 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={enabled}
+                        disabled={pendingSkill !== null}
+                        onClick={() => handleCustomSkillToggle(item.id)}
+                        className={cn(
+                          'relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-60',
+                          enabled ? 'bg-indigo-600' : 'bg-slate-300',
+                        )}
+                      >
+                        <span className={cn('absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform', enabled ? 'translate-x-5' : 'translate-x-0')} />
+                        <span className="sr-only">{item.name}</span>
+                      </button>
+                    </div>
+                  </div>
+                  <div className="group relative mt-1.5">
+                    <p data-testid={`custom-skill-description-${item.id}`} className="line-clamp-2 break-words text-[12px] leading-relaxed text-slate-500">{item.description}</p>
+                    <div data-testid={`custom-skill-tooltip-${item.id}`} className="pointer-events-none absolute left-0 top-full z-20 mt-1 hidden max-w-[min(28rem,calc(100vw-3rem))] rounded-lg border border-slate-200 bg-white px-3 py-2 text-[12px] leading-relaxed text-slate-600 shadow-xl group-hover:block">
+                      {item.description}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+          </>
+        )}
         {settingsSavedMessage && (
           <div className="mt-3 rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2 text-[13px] text-emerald-700 flex items-center gap-2">
             <Check size={14} /> {settingsSavedMessage}
@@ -173,7 +448,7 @@ export function ButlerSettingsContent({ archivedRoles = [], onRestoreRole }: any
                     <p className="text-[12px] text-slate-400">已归档</p>
                   </div>
                 </div>
-                <button onClick={() => onRestoreRole(role.id)} className="px-4 py-2 rounded-lg text-[13px] font-medium text-indigo-600 hover:bg-indigo-50 border border-indigo-200 transition-colors">
+                <button onClick={() => onRestoreRole?.(role.id)} className="px-4 py-2 rounded-lg text-[13px] font-medium text-indigo-600 hover:bg-indigo-50 border border-indigo-200 transition-colors">
                   重新启用
                 </button>
               </div>
@@ -182,6 +457,37 @@ export function ButlerSettingsContent({ archivedRoles = [], onRestoreRole }: any
           </div>
         </div>
       )}
+
+      {deleteSkillTarget && (
+        <div className="fixed inset-0 z-[220] flex items-center justify-center bg-slate-900/20 backdrop-blur-sm">
+          <div role="dialog" aria-modal="true" aria-label="删除自定义 Skill" className="w-[380px] rounded-2xl bg-white p-6 shadow-2xl">
+            <h3 className="mb-3 text-[16px] font-semibold text-slate-800">删除自定义 Skill</h3>
+            <p className="mb-5 text-[14px] leading-relaxed text-slate-600">
+              确认删除「{deleteSkillTarget.name}」吗？
+            </p>
+            <div className="flex justify-end gap-3">
+              <button type="button" onClick={() => setDeleteSkillTarget(null)} disabled={pendingSkill !== null} className="rounded-lg border border-slate-200 px-5 py-2.5 text-[13px] font-medium text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60">取消</button>
+              <button
+                type="button"
+                onClick={handleCustomSkillDelete}
+                disabled={pendingSkill !== null}
+                className="rounded-lg bg-red-600 px-5 py-2.5 text-[13px] font-medium text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {pendingSkill === deleteSkillTarget.id ? '删除中...' : '确认删除'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
+}
+
+function toFriendlyError(error: unknown, fallback: string) {
+  if (error == null) return fallback;
+  const text = typeof error === 'string' ? error : (JSON.stringify(error) ?? String(error));
+  if (text.includes('frontmatter') || text.includes('SKILL.md')) {
+    return 'SKILL.md 解析失败，请检查 frontmatter 中的 name 和 description';
+  }
+  return fallback;
 }

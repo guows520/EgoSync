@@ -123,9 +123,12 @@ pub async fn update_role_skills(
     id: &str,
     input: &UpdateRoleSkillsInput,
 ) -> Result<Role, AppError> {
-    get_role(pool, id).await?;
+    let current = get_role(pool, id).await?;
 
-    let skills_config = crate::services::role_config::normalize_skills_config(input)?;
+    let skills_config = crate::services::role_config::normalize_skills_config_with_existing(
+        &current.skills_config,
+        input,
+    )?;
     let now = crate::db::settings::chrono_now_pub();
     let result = sqlx::query(
         "UPDATE roles
@@ -145,6 +148,32 @@ pub async fn update_role_skills(
     }
 
     get_role(pool, id).await
+}
+
+/// 直接写入角色 skills_config 原文（P3：删除 Skill 后清理 enabledSkillIds 死 id 时使用，
+/// 配置已由 role_config helper 规范化，故不再二次 normalize）。
+pub async fn set_role_skills_config_raw(
+    pool: &SqlitePool,
+    id: &str,
+    skills_config: &str,
+) -> Result<(), AppError> {
+    let now = crate::db::settings::chrono_now_pub();
+    let result = sqlx::query(
+        "UPDATE roles
+         SET skills_config = ?1,
+             updated_at = ?2
+         WHERE id = ?3",
+    )
+    .bind(skills_config)
+    .bind(&now)
+    .bind(id)
+    .execute(pool)
+    .await
+    .map_err(|e| AppError::DbError(format!("更新角色 Skill 配置失败: {}", e)))?;
+    if result.rows_affected() != 1 {
+        return Err(AppError::NotFound(format!("角色 {} 不存在", id)));
+    }
+    Ok(())
 }
 
 pub async fn update_role_proactivity(
@@ -409,6 +438,7 @@ mod tests {
             &UpdateRoleSkillsInput {
                 find_skills: true,
                 skill_creator: false,
+                enabled_skill_ids: None,
             },
         )
         .await
@@ -421,6 +451,37 @@ mod tests {
             false
         );
         assert_ne!(updated.updated_at, "2026-01-01T00:00:00Z");
+    }
+
+    #[tokio::test]
+    async fn test_update_role_skills_preserves_existing_extensions() {
+        let pool = setup_test_db().await;
+        let role = create_test_role(&pool, "产品经理").await;
+        sqlx::query("UPDATE roles SET skills_config = ?1 WHERE id = ?2")
+            .bind(r#"{"enabledSkillIds":["custom-a"],"permissions":{"bash":"ask"},"future":{"mcp":["x"]}}"#)
+            .bind(&role.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let updated = update_role_skills(
+            &pool,
+            &role.id,
+            &UpdateRoleSkillsInput {
+                find_skills: true,
+                skill_creator: false,
+                enabled_skill_ids: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let parsed: serde_json::Value = serde_json::from_str(&updated.skills_config).unwrap();
+        assert_eq!(parsed["enabledSkillIds"][0], "custom-a");
+        assert_eq!(parsed["permissions"]["bash"], "ask");
+        assert_eq!(parsed["future"]["mcp"][0], "x");
+        assert_eq!(parsed["meta"]["findSkills"], true);
+        assert_eq!(parsed["meta"]["skillCreator"], false);
     }
 
     #[tokio::test]

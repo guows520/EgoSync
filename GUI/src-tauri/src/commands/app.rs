@@ -43,7 +43,8 @@ pub async fn app_update_butler_skills(
     agent_config: State<'_, AgentConfigService>,
 ) -> Result<ButlerSkillsConfig, AppError> {
     let skills = crate::services::butler_config::set_butler_skills(&pool, &input).await?;
-    if let Err(e) = agent_config.sync_butler_skills(&skills) {
+    let registry = crate::db::skills::list_skills(&pool).await.unwrap_or_default();
+    if let Err(e) = agent_config.sync_butler_skills_with_registry(&skills, &registry) {
         tracing::warn!("opencode sync (butler_update_skills) failed: {}", e);
     }
     Ok(skills)

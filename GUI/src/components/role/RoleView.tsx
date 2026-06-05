@@ -8,6 +8,7 @@ import type { SourceNavigationTarget } from '../../types/chat';
 
 interface RoleViewProps {
   role: Role;
+  roles?: Role[];
   onOpenTask: () => void;
   initialTab: string | null;
   onTabConsumed: () => void;
@@ -23,6 +24,7 @@ interface RoleViewProps {
 
 export function RoleView({
   role,
+  roles,
   onOpenTask,
   initialTab,
   onTabConsumed,
@@ -101,6 +103,7 @@ export function RoleView({
           <div className="w-[40%] bg-slate-50/60 dark:bg-slate-800/60 flex flex-col backdrop-blur-sm border-l border-white/40 dark:border-slate-700/40 shadow-[-8px_0_24px_rgba(0,0,0,0.02)] animate-in slide-in-from-right-8 duration-300">
             <RoleWorkspacePanel
               role={role}
+              roles={roles}
               currentTab={openTab}
               setTab={setOpenTab}
               onOpenTask={onOpenTask}

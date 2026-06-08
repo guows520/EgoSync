@@ -27,8 +27,46 @@ export interface ChatRequest {
   conversationId?: string;
   roleId?: string;
   content: string;
+  workingDirectory?: string;
   onboardingStep?: number;
 }
+
+export interface MessageProcessEvent {
+  id: string;
+  conversationId: string;
+  messageId: string;
+  opencodeSessionId: string;
+  eventType: string;
+  toolName: string | null;
+  status: string | null;
+  summary: string;
+  rawJson: string;
+  workingDirectory: string | null;
+  createdAt: string;
+}
+
+export interface ExecutionTraceDetail {
+  label: string;
+  value: string;
+  tone?: 'normal' | 'error';
+}
+
+export type ExecutionTraceBlock =
+  | {
+      id: string;
+      type: 'narration';
+      content: string;
+    }
+  | {
+      id: string;
+      type: 'action';
+      actionType: 'tool' | 'shell' | 'read' | 'edit' | 'write' | 'skill' | 'explore';
+      title: string;
+      status?: string | null;
+      details?: ExecutionTraceDetail[];
+      previewLines?: string[];
+      detail?: string;
+    };
 
 export interface StreamPayload {
   conversationId: string;
@@ -37,9 +75,10 @@ export interface StreamPayload {
   thinking: boolean;
   /** Story 2.3: 后端切换到新 assistant 气泡时携带其 id；普通单段流式不带。 */
   messageId?: string | null;
-  phase?: 'thinking' | 'tool' | 'answering' | 'done' | 'error';
+  phase?: 'thinking' | 'tool' | 'process' | 'answering' | 'done' | 'error';
   statusText?: string;
   toolName?: string;
+  processEvent?: MessageProcessEvent;
 }
 
 export interface SourceNavigationTarget {

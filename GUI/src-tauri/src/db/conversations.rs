@@ -1,6 +1,6 @@
 use crate::db::pool::ConversationsPool;
 use crate::error::AppError;
-use crate::models::chat::{Conversation, Message};
+use crate::models::chat::{Conversation, Message, MessageProcessEvent};
 
 pub async fn create_conversation(
     pool: &ConversationsPool,
@@ -102,6 +102,12 @@ pub async fn update_message_content(
 }
 
 pub async fn delete_message(pool: &ConversationsPool, id: &str) -> Result<(), AppError> {
+    sqlx::query("DELETE FROM message_process_events WHERE message_id = ?")
+        .bind(id)
+        .execute(&**pool)
+        .await
+        .map_err(|e| AppError::DbError(format!("删除消息处理过程失败: {}", e)))?;
+
     sqlx::query("DELETE FROM messages WHERE id = ?")
         .bind(id)
         .execute(&**pool)
@@ -139,6 +145,12 @@ pub async fn update_conversation_title(
 }
 
 pub async fn delete_conversation(pool: &ConversationsPool, id: &str) -> Result<(), AppError> {
+    sqlx::query("DELETE FROM message_process_events WHERE conversation_id = ?")
+        .bind(id)
+        .execute(&**pool)
+        .await
+        .map_err(|e| AppError::DbError(format!("删除对话处理过程失败: {}", e)))?;
+
     sqlx::query("DELETE FROM messages WHERE conversation_id = ?")
         .bind(id)
         .execute(&**pool)
@@ -156,6 +168,14 @@ pub async fn delete_conversations_by_role(
     pool: &ConversationsPool,
     role_id: &str,
 ) -> Result<(), AppError> {
+    sqlx::query(
+        "DELETE FROM message_process_events WHERE conversation_id IN (SELECT id FROM conversations WHERE role_id = ?)",
+    )
+    .bind(role_id)
+    .execute(&**pool)
+    .await
+    .map_err(|e| AppError::DbError(format!("删除角色对话处理过程失败: {}", e)))?;
+
     sqlx::query(
         "DELETE FROM messages WHERE conversation_id IN (SELECT id FROM conversations WHERE role_id = ?)",
     )
@@ -279,6 +299,68 @@ pub async fn list_messages(
     Ok(rows)
 }
 
+pub async fn insert_message_process_event(
+    pool: &ConversationsPool,
+    conversation_id: &str,
+    message_id: &str,
+    opencode_session_id: &str,
+    event_type: &str,
+    tool_name: Option<&str>,
+    status: Option<&str>,
+    summary: &str,
+    raw_json: &str,
+    working_directory: Option<&str>,
+) -> Result<MessageProcessEvent, AppError> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let now = chrono_now();
+
+    sqlx::query(
+        "INSERT INTO message_process_events (id, conversation_id, message_id, opencode_session_id, event_type, tool_name, status, summary, raw_json, working_directory, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(conversation_id)
+    .bind(message_id)
+    .bind(opencode_session_id)
+    .bind(event_type)
+    .bind(tool_name)
+    .bind(status)
+    .bind(summary)
+    .bind(raw_json)
+    .bind(working_directory)
+    .bind(&now)
+    .execute(&**pool)
+    .await
+    .map_err(|e| AppError::DbError(format!("写入处理过程失败: {}", e)))?;
+
+    Ok(MessageProcessEvent {
+        id,
+        conversation_id: conversation_id.to_string(),
+        message_id: message_id.to_string(),
+        opencode_session_id: opencode_session_id.to_string(),
+        event_type: event_type.to_string(),
+        tool_name: tool_name.map(str::to_string),
+        status: status.map(str::to_string),
+        summary: summary.to_string(),
+        raw_json: raw_json.to_string(),
+        working_directory: working_directory.map(str::to_string),
+        created_at: now,
+    })
+}
+
+pub async fn list_message_process_events(
+    pool: &ConversationsPool,
+    message_id: &str,
+) -> Result<Vec<MessageProcessEvent>, AppError> {
+    let rows = sqlx::query_as::<_, MessageProcessEvent>(
+        "SELECT id, conversation_id, message_id, opencode_session_id, event_type, tool_name, status, summary, raw_json, working_directory, created_at FROM message_process_events WHERE message_id = ? ORDER BY created_at ASC, rowid ASC",
+    )
+    .bind(message_id)
+    .fetch_all(&**pool)
+    .await
+    .map_err(|e| AppError::DbError(format!("查询处理过程失败: {}", e)))?;
+    Ok(rows)
+}
+
 pub async fn get_recent_messages(
     pool: &ConversationsPool,
     conversation_id: &str,
@@ -352,6 +434,27 @@ mod tests {
             .await
             .expect("Failed to add routing_metadata column");
 
+        sqlx::raw_sql(
+            "CREATE TABLE IF NOT EXISTS message_process_events (
+                id TEXT PRIMARY KEY NOT NULL,
+                conversation_id TEXT NOT NULL,
+                message_id TEXT NOT NULL,
+                opencode_session_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                tool_name TEXT,
+                status TEXT,
+                summary TEXT NOT NULL,
+                raw_json TEXT NOT NULL,
+                working_directory TEXT,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+                FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
+            );",
+        )
+        .execute(&pool)
+        .await
+        .expect("Failed to create message_process_events table");
+
         ConversationsPool(pool)
     }
 
@@ -376,6 +479,73 @@ mod tests {
         let conv1 = get_or_create_butler_conversation(&pool).await.unwrap();
         let conv2 = get_or_create_butler_conversation(&pool).await.unwrap();
         assert_eq!(conv1.id, conv2.id);
+    }
+
+    #[tokio::test]
+    async fn process_events_are_persisted_for_later_message_inspection() {
+        let pool = setup_test_pool().await;
+        let conv = create_conversation(&pool, None).await.unwrap();
+        let msg = insert_message(&pool, &conv.id, "assistant", "", false)
+            .await
+            .unwrap();
+
+        insert_message_process_event(
+            &pool,
+            &conv.id,
+            &msg.id,
+            "ses-1",
+            "tool",
+            Some("markitdown"),
+            Some("completed"),
+            "markitdown 已完成",
+            r#"{"tool":"markitdown"}"#,
+            Some("D:\\Docs"),
+        )
+        .await
+        .unwrap();
+
+        let events = list_message_process_events(&pool, &msg.id).await.unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].conversation_id, conv.id);
+        assert_eq!(events[0].message_id, msg.id);
+        assert_eq!(events[0].opencode_session_id, "ses-1");
+        assert_eq!(events[0].event_type, "tool");
+        assert_eq!(events[0].tool_name.as_deref(), Some("markitdown"));
+        assert_eq!(events[0].status.as_deref(), Some("completed"));
+        assert_eq!(events[0].summary, "markitdown 已完成");
+        assert_eq!(events[0].working_directory.as_deref(), Some("D:\\Docs"));
+    }
+
+    #[tokio::test]
+    async fn deleting_conversation_removes_process_events_without_relying_on_foreign_keys() {
+        let pool = setup_test_pool().await;
+        sqlx::raw_sql("PRAGMA foreign_keys = OFF")
+            .execute(&pool.0)
+            .await
+            .expect("disable foreign keys for explicit cleanup test");
+        let conv = create_conversation(&pool, None).await.unwrap();
+        let msg = insert_message(&pool, &conv.id, "assistant", "处理完成", true)
+            .await
+            .unwrap();
+        insert_message_process_event(
+            &pool,
+            &conv.id,
+            &msg.id,
+            "ses-1",
+            "tool",
+            Some("markitdown"),
+            Some("completed"),
+            "markitdown 已完成",
+            r#"{"tool":"markitdown"}"#,
+            Some("D:\\Docs"),
+        )
+        .await
+        .unwrap();
+
+        delete_conversation(&pool, &conv.id).await.unwrap();
+
+        let events = list_message_process_events(&pool, &msg.id).await.unwrap();
+        assert!(events.is_empty());
     }
 
     #[tokio::test]

@@ -31,6 +31,22 @@ pub struct Message {
     pub routing_metadata: Option<String>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageProcessEvent {
+    pub id: String,
+    pub conversation_id: String,
+    pub message_id: String,
+    pub opencode_session_id: String,
+    pub event_type: String,
+    pub tool_name: Option<String>,
+    pub status: Option<String>,
+    pub summary: String,
+    pub raw_json: String,
+    pub working_directory: Option<String>,
+    pub created_at: String,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StreamPayload {
@@ -48,6 +64,8 @@ pub struct StreamPayload {
     pub status_text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub process_event: Option<MessageProcessEvent>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -66,6 +84,7 @@ pub struct ChatRequest {
     pub conversation_id: Option<String>,
     pub role_id: Option<String>,
     pub content: String,
+    pub working_directory: Option<String>,
     #[serde(default)]
     pub onboarding_step: u8,
 }

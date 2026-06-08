@@ -1,4 +1,4 @@
-import { act, render, waitFor, screen, fireEvent } from '@testing-library/react';
+import { act, render, waitFor, screen, fireEvent, within } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { ChatStream } from './ChatStream';
 import { chatService } from '../../services/chatService';
@@ -17,6 +17,8 @@ vi.mock('../../services/chatService', () => ({
     deleteConversation: vi.fn(),
     newConversation: vi.fn(),
     stopStreaming: vi.fn(),
+    pickWorkingDirectory: vi.fn(),
+    getMessageProcessEvents: vi.fn(),
   },
 }));
 
@@ -167,7 +169,7 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
     expect(onMemoryReferenceClick).toHaveBeenCalledWith('memory-2');
   });
 
-  it('thinking token 中的记忆引用显示为思考文本但不作为正文链接渲染', async () => {
+  it('thinking token 不直接展示为执行过程或正文链接', async () => {
     const getStreamHandler = captureStreamHandler();
     vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
 
@@ -178,7 +180,7 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
       getStreamHandler()({ conversationId: 'conv-butler', token: '[记忆#memory-hidden]', done: false, thinking: true });
     });
 
-    expect(screen.getByText('[记忆#memory-hidden]')).toBeInTheDocument();
+    expect(screen.queryByText('[记忆#memory-hidden]')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '打开记忆 memory-hidden' })).not.toBeInTheDocument();
   });
 
@@ -202,8 +204,613 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
     });
 
     expect(screen.getByText('正在使用 find-skills...')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /find-skills/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '打开记忆 find-skills' })).not.toBeInTheDocument();
   });
+
+  it('流式 processEvent 使用历史执行过程同一格式展示描述和操作', async () => {
+    const getStreamHandler = captureStreamHandler();
+    vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
+
+    render(<ChatStream role={null} onMemoryReferenceClick={vi.fn()} />);
+    await waitFor(() => expect(chatService.getButlerConversation).toHaveBeenCalled());
+
+    act(() => {
+      const handler = getStreamHandler();
+      handler({
+        conversationId: 'conv-butler',
+        token: '',
+        done: false,
+        thinking: false,
+        phase: 'process',
+        processEvent: {
+          id: 'stream-narration-1',
+          conversationId: 'conv-butler',
+          messageId: 'assistant-1',
+          opencodeSessionId: 'ses-1',
+          eventType: 'narration',
+          toolName: null,
+          status: null,
+          summary: '先检查 markitdown 是否已安装。',
+          rawJson: '{}',
+          workingDirectory: null,
+          createdAt: '2026-01-01T00:00:00Z',
+        },
+      } as StreamPayload);
+      handler({
+        conversationId: 'conv-butler',
+        token: '',
+        done: false,
+        thinking: false,
+        phase: 'process',
+        processEvent: {
+          id: 'stream-narration-middle',
+          conversationId: 'conv-butler',
+          messageId: 'assistant-1',
+          opencodeSessionId: 'ses-1',
+          eventType: 'narration',
+          toolName: null,
+          status: null,
+          summary: '中间描述必须保留在执行过程中。',
+          rawJson: '{}',
+          workingDirectory: null,
+          createdAt: '2026-01-01T00:00:00.500Z',
+        },
+      } as StreamPayload);
+      handler({
+        conversationId: 'conv-butler',
+        token: '',
+        done: false,
+        thinking: false,
+        phase: 'process',
+        processEvent: {
+          id: 'stream-shell-running',
+          conversationId: 'conv-butler',
+          messageId: 'assistant-1',
+          opencodeSessionId: 'ses-1',
+          eventType: 'tool',
+          toolName: 'bash',
+          status: 'running',
+          summary: '正在使用 bash...',
+          rawJson: JSON.stringify({ tool: 'bash', status: 'running', input: { command: 'pip show markitdown', description: '检查 markitdown 是否已安装' } }),
+          workingDirectory: null,
+          createdAt: '2026-01-01T00:00:01Z',
+        },
+      } as StreamPayload);
+      handler({
+        conversationId: 'conv-butler',
+        token: '',
+        done: false,
+        thinking: false,
+        phase: 'process',
+        processEvent: {
+          id: 'stream-shell-completed',
+          conversationId: 'conv-butler',
+          messageId: 'assistant-1',
+          opencodeSessionId: 'ses-1',
+          eventType: 'tool',
+          toolName: 'bash',
+          status: 'completed',
+          summary: 'bash 已完成，正在整理结果...',
+          rawJson: JSON.stringify({ tool: 'bash', status: 'completed', input: { command: 'pip show markitdown', description: '检查 markitdown 是否已安装' }, output: 'Name: markitdown\nVersion: 0.1.6' }),
+          workingDirectory: null,
+          createdAt: '2026-01-01T00:00:02Z',
+        },
+      } as StreamPayload);
+    });
+
+    expect(screen.getByRole('button', { name: '执行过程' })).toBeInTheDocument();
+    expect(screen.getByText('先检查 markitdown 是否已安装。')).toBeInTheDocument();
+    expect(screen.getByText('中间描述必须保留在执行过程中。')).toBeInTheDocument();
+    const shellCard = screen.getByRole('button', { name: /检查 markitdown 是否已安装/ });
+    expect(shellCard).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /正在使用 bash/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /bash 已完成/ })).not.toBeInTheDocument();
+
+    fireEvent.click(shellCard);
+
+    expect(screen.getByText('$ pip show markitdown')).toBeInTheDocument();
+    expect(screen.getByText(/Name: markitdown/)).toBeInTheDocument();
+    expect(screen.queryByText('Command')).not.toBeInTheDocument();
+    expect(screen.queryByText('Output')).not.toBeInTheDocument();
+  });
+
+  it('工作目录入口在输入区左下角保持低频展示', async () => {
+    vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
+
+    render(<ChatStream role={null} />);
+    await waitFor(() => expect(chatService.getButlerConversation).toHaveBeenCalled());
+
+    expect(screen.queryByText('工作目录')).not.toBeInTheDocument();
+    expect(screen.queryByText('选择工作目录')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '选择工作目录' })).toHaveTextContent('默认目录 · 选择');
+  });
+
+  it('选择工作目录后发送消息会携带该目录', async () => {
+    vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
+    vi.mocked(chatService.pickWorkingDirectory).mockResolvedValue('D:\\Workspace\\CaseA');
+    vi.mocked(chatService.sendMessage).mockResolvedValue(chatMessage({ id: 'user-1', content: '处理这个项目' }));
+    vi.mocked(chatService.getHistory).mockResolvedValue([]);
+
+    render(<ChatStream role={null} />);
+    await waitFor(() => expect(chatService.getButlerConversation).toHaveBeenCalled());
+
+    fireEvent.click(await screen.findByRole('button', { name: '选择工作目录' }));
+    expect(await screen.findByText(/CaseA/)).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...'), { target: { value: '处理这个项目' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+
+    await waitFor(() => {
+      expect(chatService.sendMessage).toHaveBeenCalledWith(expect.objectContaining({
+        content: '处理这个项目',
+        workingDirectory: 'D:\\Workspace\\CaseA',
+      }));
+    });
+  });
+
+  it('处理结束后的助手消息在顶部统一显示执行过程且默认折叠', async () => {
+    vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
+    vi.mocked(chatService.getHistory).mockResolvedValue([
+      chatMessage({ id: 'assistant-1', role: 'assistant', content: '处理完成。', thinkingContent: '先检查 markitdown 是否已安装。' }),
+    ]);
+    vi.mocked(chatService.getMessageProcessEvents).mockResolvedValue([
+      {
+        id: 'event-1',
+        conversationId: 'conv-butler',
+        messageId: 'assistant-1',
+        opencodeSessionId: 'ses-1',
+        eventType: 'tool',
+        toolName: 'markitdown',
+        status: 'completed',
+        summary: 'markitdown 已完成',
+        rawJson: '{"tool":"markitdown"}',
+        workingDirectory: 'D:\\Workspace\\CaseA',
+        createdAt: '2026-01-01T00:00:00Z',
+      },
+    ]);
+
+    render(<ChatStream role={null} />);
+
+    const message = await screen.findByTestId('chat-message-assistant-1');
+    expect(within(message).getByRole('button', { name: '执行过程' })).toBeInTheDocument();
+    expect(within(message).queryByRole('button', { name: '思考过程' })).not.toBeInTheDocument();
+    expect(within(message).queryByRole('button', { name: '查看处理过程' })).not.toBeInTheDocument();
+    expect(within(message).queryByText('先检查 markitdown 是否已安装。')).not.toBeInTheDocument();
+
+    fireEvent.click(within(message).getByRole('button', { name: '执行过程' }));
+
+    expect(within(message).queryByText('先检查 markitdown 是否已安装。')).not.toBeInTheDocument();
+    expect(await within(message).findByText('markitdown 已完成')).toBeInTheDocument();
+    expect(within(message).queryByText(/工作目录/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: '处理过程' })).not.toBeInTheDocument();
+  });
+
+  it('历史执行过程按叙述和操作交替展示且操作展开为原始指令和结果', async () => {
+    vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
+    vi.mocked(chatService.getHistory).mockResolvedValue([
+      chatMessage({
+        id: 'assistant-1',
+        role: 'assistant',
+        content: '转换完成，文件已生成：\nD:\\移动云盘同步盘\\AI应用场景\\微软\\职能\\Microsoft-Copilot-scenarios-for-Marketing.md',
+        thinkingContent: '用户要求一个PPT文件转换为Markdown格式。我应该使用skill工具来调用markitdown技能。',
+      }),
+    ]);
+    vi.mocked(chatService.getMessageProcessEvents).mockResolvedValue([
+      {
+        id: 'narration-1',
+        conversationId: 'conv-butler',
+        messageId: 'assistant-1',
+        opencodeSessionId: 'ses-1',
+        eventType: 'narration',
+        toolName: null,
+        status: null,
+        summary: '先加载 markitdown 转换能力，然后检查本机是否已安装转换工具。',
+        rawJson: '{}',
+        workingDirectory: null,
+        createdAt: '2026-01-01T00:00:00Z',
+      },
+      {
+        id: 'skill-running',
+        conversationId: 'conv-butler',
+        messageId: 'assistant-1',
+        opencodeSessionId: 'ses-1',
+        eventType: 'tool',
+        toolName: 'skill',
+        status: 'running',
+        summary: '正在使用 skill...',
+        rawJson: JSON.stringify({ tool: 'skill', status: 'running', input: { name: 'markitdown' } }),
+        workingDirectory: null,
+        createdAt: '2026-01-01T00:00:01Z',
+      },
+      {
+        id: 'skill-completed',
+        conversationId: 'conv-butler',
+        messageId: 'assistant-1',
+        opencodeSessionId: 'ses-1',
+        eventType: 'tool',
+        toolName: 'skill',
+        status: 'completed',
+        summary: 'skill 已完成，正在整理结果...',
+        rawJson: JSON.stringify({ tool: 'skill', status: 'completed', input: { name: 'markitdown' }, output: '<skill_content name="markitdown">long docs</skill_content>' }),
+        workingDirectory: null,
+        createdAt: '2026-01-01T00:00:02Z',
+      },
+      {
+        id: 'narration-2',
+        conversationId: 'conv-butler',
+        messageId: 'assistant-1',
+        opencodeSessionId: 'ses-1',
+        eventType: 'narration',
+        toolName: null,
+        status: null,
+        summary: '确认 markitdown 已安装，可以继续转换。',
+        rawJson: '{}',
+        workingDirectory: null,
+        createdAt: '2026-01-01T00:00:03Z',
+      },
+      {
+        id: 'shell-running',
+        conversationId: 'conv-butler',
+        messageId: 'assistant-1',
+        opencodeSessionId: 'ses-1',
+        eventType: 'tool',
+        toolName: 'bash',
+        status: 'running',
+        summary: '正在使用 bash...',
+        rawJson: JSON.stringify({ tool: 'bash', status: 'running', input: { command: 'pip show markitdown 2>$null; if ($LASTEXITCODE -ne 0) { echo "NOT_INSTALLED" }', description: '检查 markitdown 是否已安装' } }),
+        workingDirectory: null,
+        createdAt: '2026-01-01T00:00:04Z',
+      },
+      {
+        id: 'shell-completed',
+        conversationId: 'conv-butler',
+        messageId: 'assistant-1',
+        opencodeSessionId: 'ses-1',
+        eventType: 'tool',
+        toolName: 'bash',
+        status: 'completed',
+        summary: 'bash 已完成，正在整理结果...',
+        rawJson: JSON.stringify({ tool: 'bash', status: 'completed', input: { command: 'pip show markitdown 2>$null; if ($LASTEXITCODE -ne 0) { echo "NOT_INSTALLED" }', description: '检查 markitdown 是否已安装' }, output: 'Name: markitdown\nVersion: 0.1.6' }),
+        workingDirectory: null,
+        createdAt: '2026-01-01T00:00:05Z',
+      },
+      {
+        id: 'narration-3',
+        conversationId: 'conv-butler',
+        messageId: 'assistant-1',
+        opencodeSessionId: 'ses-1',
+        eventType: 'narration',
+        toolName: null,
+        status: null,
+        summary: '确认 Markdown 文件已生成，并读取内容用于校验转换结果。',
+        rawJson: '{}',
+        workingDirectory: null,
+        createdAt: '2026-01-01T00:00:06Z',
+      },
+      {
+        id: 'read-1',
+        conversationId: 'conv-butler',
+        messageId: 'assistant-1',
+        opencodeSessionId: 'ses-1',
+        eventType: 'tool',
+        toolName: 'read',
+        status: 'completed',
+        summary: '读取文件',
+        rawJson: JSON.stringify({ tool: 'read', status: 'completed', input: { file_path: 'D:\\移动云盘同步盘\\AI应用场景\\微软\\职能\\Microsoft-Copilot-scenarios-for-Marketing.md' } }),
+        workingDirectory: null,
+        createdAt: '2026-01-01T00:00:07Z',
+      },
+      {
+        id: 'read-2',
+        conversationId: 'conv-butler',
+        messageId: 'assistant-1',
+        opencodeSessionId: 'ses-1',
+        eventType: 'tool',
+        toolName: 'read',
+        status: 'completed',
+        summary: '继续读取文件',
+        rawJson: JSON.stringify({ tool: 'read', status: 'completed', input: { file_path: 'D:\\移动云盘同步盘\\AI应用场景\\微软\\职能\\Microsoft-Copilot-scenarios-for-Marketing.md', offset: 120 } }),
+        workingDirectory: null,
+        createdAt: '2026-01-01T00:00:08Z',
+      },
+    ]);
+
+    render(<ChatStream role={null} />);
+
+    const message = await screen.findByTestId('chat-message-assistant-1');
+    expect(within(message).getByText(/转换完成，文件已生成/)).toBeInTheDocument();
+    fireEvent.click(within(message).getByRole('button', { name: '执行过程' }));
+
+    expect(await within(message).findByText('先加载 markitdown 转换能力，然后检查本机是否已安装转换工具。')).toBeInTheDocument();
+    expect(within(message).getByRole('button', { name: /加载 markitdown 转换能力/ })).toBeInTheDocument();
+    expect(within(message).getByText('确认 markitdown 已安装，可以继续转换。')).toBeInTheDocument();
+    const shellCard = within(message).getByRole('button', { name: /检查 markitdown 是否已安装/ });
+    expect(shellCard).toBeInTheDocument();
+    expect(within(message).getByText('确认 Markdown 文件已生成，并读取内容用于校验转换结果。')).toBeInTheDocument();
+    expect(within(message).getByRole('button', { name: /^已探索 2 次读取$/ })).toBeInTheDocument();
+    expect(within(message).queryByText('读取 Microsoft-Copilot-scenarios-for-Marketing.md')).not.toBeInTheDocument();
+    expect(within(message).queryByRole('button', { name: /已探索已探索/ })).not.toBeInTheDocument();
+    expect(within(message).queryByText(/用户要求一个PPT文件转换为Markdown格式/)).not.toBeInTheDocument();
+    expect(within(message).queryByRole('button', { name: /正在使用 bash/ })).not.toBeInTheDocument();
+    expect(within(message).queryByRole('button', { name: /bash 已完成/ })).not.toBeInTheDocument();
+    expect(within(message).queryByText(/<skill_content/)).not.toBeInTheDocument();
+
+    fireEvent.click(shellCard);
+
+    expect(within(message).getByText('$ pip show markitdown 2>$null; if ($LASTEXITCODE -ne 0) { echo "NOT_INSTALLED" }')).toBeInTheDocument();
+    expect(within(message).getByText(/Name: markitdown/)).toBeInTheDocument();
+    expect(within(message).getByText(/Version: 0\.1\.6/)).toBeInTheDocument();
+    expect(within(message).queryByText('Command')).not.toBeInTheDocument();
+    expect(within(message).queryByText('Input')).not.toBeInTheDocument();
+    expect(within(message).queryByText('Output')).not.toBeInTheDocument();
+
+    fireEvent.click(within(message).getByRole('button', { name: /已探索 2 次读取/ }));
+
+    expect(within(message).getByText('读取 Microsoft-Copilot-scenarios-for-Marketing.md')).toBeInTheDocument();
+    expect(within(message).getByText('读取 Microsoft-Copilot-scenarios-for-Marketing.md offset: 120')).toBeInTheDocument();
+    const expandedReadButton = within(message).getByRole('button', { name: /已探索 2 次读取/ });
+    expect(expandedReadButton.parentElement).not.toHaveTextContent(/D:\\移动云盘同步盘/);
+  });
+
+  it('历史 Shell 失败事件展开后显示命令输出和错误且不展示 rawJson', async () => {
+    vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
+    vi.mocked(chatService.getHistory).mockResolvedValue([
+      chatMessage({ id: 'assistant-1', role: 'assistant', content: '处理失败后已重试。' }),
+    ]);
+    vi.mocked(chatService.getMessageProcessEvents).mockResolvedValue([
+      {
+        id: 'event-shell-failed',
+        conversationId: 'conv-butler',
+        messageId: 'assistant-1',
+        opencodeSessionId: 'ses-1',
+        eventType: 'tool',
+        toolName: 'bash',
+        status: 'failed',
+        summary: 'bash 失败',
+        rawJson: JSON.stringify({
+          tool: 'bash',
+          state: {
+            status: 'failed',
+            input: { command: 'npm run test:frontend' },
+            output: 'stdout text',
+            error: 'exit code 1',
+          },
+        }),
+        workingDirectory: 'D:\\Workspace\\CaseA',
+        createdAt: '2026-01-01T00:00:00Z',
+      },
+    ]);
+
+    render(<ChatStream role={null} />);
+
+    const message = await screen.findByTestId('chat-message-assistant-1');
+    fireEvent.click(within(message).getByRole('button', { name: '执行过程' }));
+    fireEvent.click(await within(message).findByRole('button', { name: /bash 失败/ }));
+
+    expect(within(message).getByText('$ npm run test:frontend')).toBeInTheDocument();
+    expect(within(message).getByText('stdout text')).toBeInTheDocument();
+    expect(within(message).getByText('exit code 1')).toBeInTheDocument();
+    expect(within(message).queryByText('Command')).not.toBeInTheDocument();
+    expect(within(message).queryByText('Output')).not.toBeInTheDocument();
+    expect(within(message).queryByText('Error')).not.toBeInTheDocument();
+    expect(within(message).queryByText(/"state"/)).not.toBeInTheDocument();
+    expect(within(message).queryByText(/"tool":"bash"/)).not.toBeInTheDocument();
+  });
+
+  it('连续 read 历史事件合并为一个已探索读取卡片', async () => {
+    vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
+    vi.mocked(chatService.getHistory).mockResolvedValue([
+      chatMessage({ id: 'assistant-1', role: 'assistant', content: '读取完成。' }),
+    ]);
+    vi.mocked(chatService.getMessageProcessEvents).mockResolvedValue([
+      {
+        id: 'read-1',
+        conversationId: 'conv-butler',
+        messageId: 'assistant-1',
+        opencodeSessionId: 'ses-1',
+        eventType: 'tool',
+        toolName: 'read',
+        status: 'completed',
+        summary: '读取第一段',
+        rawJson: JSON.stringify({ tool: 'read', state: { status: 'completed', input: { file_path: 'a.md' } } }),
+        workingDirectory: null,
+        createdAt: '2026-01-01T00:00:00Z',
+      },
+      {
+        id: 'read-2',
+        conversationId: 'conv-butler',
+        messageId: 'assistant-1',
+        opencodeSessionId: 'ses-1',
+        eventType: 'tool',
+        toolName: 'read',
+        status: 'completed',
+        summary: '读取第二段',
+        rawJson: JSON.stringify({ tool: 'read', state: { status: 'completed', input: { file_path: 'a.md', offset: 120 } } }),
+        workingDirectory: null,
+        createdAt: '2026-01-01T00:00:01Z',
+      },
+      {
+        id: 'read-3',
+        conversationId: 'conv-butler',
+        messageId: 'assistant-1',
+        opencodeSessionId: 'ses-1',
+        eventType: 'tool',
+        toolName: 'read',
+        status: 'completed',
+        summary: '读取第三段',
+        rawJson: JSON.stringify({ tool: 'read', state: { status: 'completed', input: { file_path: 'b.md' } } }),
+        workingDirectory: null,
+        createdAt: '2026-01-01T00:00:02Z',
+      },
+    ]);
+
+    render(<ChatStream role={null} />);
+
+    const message = await screen.findByTestId('chat-message-assistant-1');
+    fireEvent.click(await within(message).findByRole('button', { name: '执行过程' }));
+    const readCard = await within(message).findByRole('button', { name: /^已探索 3 次读取$/ });
+    expect(readCard).toBeInTheDocument();
+    expect(within(message).queryByText('读取 a.md')).not.toBeInTheDocument();
+    expect(within(message).queryByText('读取 b.md')).not.toBeInTheDocument();
+    expect(within(message).queryByText('读取第一段')).not.toBeInTheDocument();
+    expect(within(message).queryByRole('button', { name: /已探索已探索/ })).not.toBeInTheDocument();
+
+    fireEvent.click(readCard);
+
+    expect(within(message).getByText('读取 a.md')).toBeInTheDocument();
+    expect(within(message).getByText('读取 a.md offset: 120')).toBeInTheDocument();
+    expect(within(message).getByText('读取 b.md')).toBeInTheDocument();
+  });
+
+  it('read 历史事件从 rawPart 深层参数提取文件名且缺失时不显示状态文案', async () => {
+    vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
+    vi.mocked(chatService.getHistory).mockResolvedValue([
+      chatMessage({ id: 'assistant-1', role: 'assistant', content: '读取完成。' }),
+    ]);
+    vi.mocked(chatService.getMessageProcessEvents).mockResolvedValue([
+      {
+        id: 'read-rawpart-filepath',
+        conversationId: 'conv-butler',
+        messageId: 'assistant-1',
+        opencodeSessionId: 'ses-1',
+        eventType: 'tool',
+        toolName: 'read',
+        status: 'running',
+        summary: '正在使用 read...',
+        rawJson: JSON.stringify({
+          tool: 'read',
+          status: 'running',
+          rawPart: {
+            state: {
+              input: {
+                filePath: 'D:\\移动云盘同步盘\\AI应用场景\\微软\\职能\\Microsoft-Copilot-scenarios-for-Marketing.md',
+              },
+            },
+          },
+        }),
+        workingDirectory: null,
+        createdAt: '2026-01-01T00:00:00Z',
+      },
+      {
+        id: 'read-missing-file',
+        conversationId: 'conv-butler',
+        messageId: 'assistant-1',
+        opencodeSessionId: 'ses-1',
+        eventType: 'tool',
+        toolName: 'read',
+        status: 'completed',
+        summary: 'read 已完成，正在整理结果...',
+        rawJson: JSON.stringify({ tool: 'read', status: 'completed', rawPart: { state: { input: {} } } }),
+        workingDirectory: null,
+        createdAt: '2026-01-01T00:00:01Z',
+      },
+    ]);
+
+    render(<ChatStream role={null} />);
+
+    const message = await screen.findByTestId('chat-message-assistant-1');
+    fireEvent.click(await within(message).findByRole('button', { name: '执行过程' }));
+
+    const readCard = await within(message).findByRole('button', { name: /^已探索 2 次读取$/ });
+    expect(readCard).toBeInTheDocument();
+    expect(within(message).queryByText('读取 Microsoft-Copilot-scenarios-for-Marketing.md')).not.toBeInTheDocument();
+    expect(within(message).queryByText('读取文件')).not.toBeInTheDocument();
+
+    fireEvent.click(readCard);
+
+    expect(within(message).getByText('读取 Microsoft-Copilot-scenarios-for-Marketing.md')).toBeInTheDocument();
+    expect(within(message).getByText('读取文件')).toBeInTheDocument();
+    expect(within(message).queryByText('读取 正在使用 read...')).not.toBeInTheDocument();
+    expect(within(message).queryByText('读取 read 已完成，正在整理结果...')).not.toBeInTheDocument();
+  });
+
+  it('多个历史消息的执行过程异步返回时只更新各自消息', async () => {
+    vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
+    vi.mocked(chatService.getHistory).mockResolvedValue([
+      chatMessage({ id: 'assistant-1', role: 'assistant', content: '第一条。' }),
+      chatMessage({ id: 'assistant-2', role: 'assistant', content: '第二条。' }),
+    ]);
+    let resolveFirst: (events: Awaited<ReturnType<typeof chatService.getMessageProcessEvents>>) => void = () => {};
+    vi.mocked(chatService.getMessageProcessEvents).mockImplementation(messageId => {
+      if (messageId === 'assistant-1') {
+        return new Promise(resolve => {
+          resolveFirst = resolve;
+        });
+      }
+      return Promise.resolve([
+        {
+          id: 'event-2',
+          conversationId: 'conv-butler',
+          messageId: 'assistant-2',
+          opencodeSessionId: 'ses-2',
+          eventType: 'tool',
+          toolName: 'skill-b',
+          status: 'completed',
+          summary: '第二条处理完成',
+          rawJson: '{}',
+          workingDirectory: null,
+          createdAt: '2026-01-01T00:00:00Z',
+        },
+      ]);
+    });
+
+    render(<ChatStream role={null} />);
+    const first = await screen.findByTestId('chat-message-assistant-1');
+    const second = await screen.findByTestId('chat-message-assistant-2');
+
+    fireEvent.click(await within(second).findByRole('button', { name: '执行过程' }));
+    expect(await within(second).findByText('第二条处理完成')).toBeInTheDocument();
+    expect(within(first).queryByText('第二条处理完成')).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveFirst([
+        {
+          id: 'event-1',
+          conversationId: 'conv-butler',
+          messageId: 'assistant-1',
+          opencodeSessionId: 'ses-1',
+          eventType: 'tool',
+          toolName: 'skill-a',
+          status: 'completed',
+          summary: '第一条处理完成',
+          rawJson: '{}',
+          workingDirectory: null,
+          createdAt: '2026-01-01T00:00:00Z',
+        },
+      ]);
+    });
+
+    fireEvent.click(within(first).getByRole('button', { name: '执行过程' }));
+    expect(await within(first).findByText('第一条处理完成')).toBeInTheDocument();
+    expect(within(second).queryByText('第一条处理完成')).not.toBeInTheDocument();
+  });
+
+  it('streaming tool 状态出现时在消息顶部执行过程中默认展开', async () => {
+    const getStreamHandler = captureStreamHandler();
+    vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
+    vi.mocked(chatService.getHistory).mockResolvedValue([]);
+    vi.mocked(chatService.getMessageProcessEvents).mockResolvedValue([]);
+
+    render(<ChatStream role={null} />);
+    await waitFor(() => expect(chatService.getButlerConversation).toHaveBeenCalled());
+
+    act(() => {
+      getStreamHandler()({
+        conversationId: 'conv-butler',
+        token: '',
+        done: false,
+        thinking: false,
+        phase: 'tool',
+        statusText: '正在使用 markitdown...',
+        toolName: 'markitdown',
+      });
+    });
+
+    expect(screen.getByRole('button', { name: '执行过程' })).toBeInTheDocument();
+    expect(screen.getByText('正在使用 markitdown...')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '查看处理过程' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: '处理过程' })).not.toBeInTheDocument();
+  });
+
   it('来源导航目标存在时切换到目标对话并高亮来源消息', async () => {
     const scrollIntoView = vi.fn();
     const originalScrollIntoView = Element.prototype.scrollIntoView;
@@ -927,7 +1534,7 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
     expect(screen.getByText('新对话').closest('button')).not.toBeDisabled();
   });
 
-  it('只有 thinking token 且历史刷新失败时保留可展开思考过程并解锁输入', async () => {
+  it('只有 thinking token 且历史刷新失败时不展示原始 thinking 并解锁输入', async () => {
     vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
     vi.mocked(chatService.sendMessage).mockResolvedValue(chatMessage({ id: 'user-1', content: '他喜欢吃薯条' }));
     const getStreamHandler = captureStreamHandler();
@@ -948,11 +1555,28 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
     });
 
     await waitFor(() => expect(input).not.toBeDisabled());
-    const toggle = screen.getByRole('button', { name: '思考过程' });
-    fireEvent.click(toggle);
-    expect(screen.getByText('记录这条饮食偏好')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '执行过程' })).not.toBeInTheDocument();
+    expect(screen.queryByText('记录这条饮食偏好')).not.toBeInTheDocument();
     expect(screen.getByText('管家')).toBeInTheDocument();
     expect(screen.getByText('新对话').closest('button')).not.toBeDisabled();
+  });
+
+  it('会话初始化完成前禁用输入，避免发送被静默丢弃', async () => {
+    let resolveConversation!: () => void;
+    vi.mocked(chatService.getButlerConversation).mockImplementation(() => new Promise(resolve => {
+      resolveConversation = () => resolve(butlerConv);
+    }));
+
+    render(<ChatStream role={null} />);
+
+    const input = await screen.findByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...');
+    expect(input).toBeDisabled();
+
+    await act(async () => {
+      resolveConversation();
+    });
+
+    await waitFor(() => expect(input).not.toBeDisabled());
   });
 
   it('sendMessage 返回 assistant 时移除未落库的本地用户占位消息', async () => {
@@ -966,9 +1590,11 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
     render(<ChatStream role={null} />);
 
     const input = await screen.findByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...');
+    await waitFor(() => expect(input).not.toBeDisabled());
     fireEvent.change(input, { target: { value: '这条不会真正发送' } });
     fireEvent.keyDown(input, { key: 'Enter' });
 
+    await waitFor(() => expect(chatService.sendMessage).toHaveBeenCalled());
     expect(await screen.findByText('当前会话正在回复中，请稍后再试。')).toBeInTheDocument();
     expect(screen.queryByText('这条不会真正发送')).not.toBeInTheDocument();
     expect(input).not.toBeDisabled();
@@ -1072,6 +1698,147 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
     expect(screen.getAllByText('继续')).toHaveLength(2);
 
     resolveFirstHistoryRefresh();
+  });
+
+  it('最终气泡不显示已记录为执行过程的开场说明', async () => {
+    const getStreamHandler = captureStreamHandler();
+    vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
+    vi.mocked(chatService.getMessageProcessEvents).mockResolvedValue([]);
+    vi.mocked(chatService.getHistory).mockResolvedValue([]);
+
+    render(<ChatStream role={null} />);
+    await waitFor(() => expect(chatService.getButlerConversation).toHaveBeenCalled());
+
+    await act(async () => {
+      const handler = getStreamHandler();
+      handler({
+        conversationId: 'conv-butler',
+        token: '',
+        done: false,
+        thinking: false,
+        phase: 'process',
+        processEvent: {
+          id: 'process-opening-narration',
+          conversationId: 'conv-butler',
+          messageId: 'assistant-message-1',
+          opencodeSessionId: 'ses-1',
+          eventType: 'narration',
+          toolName: null,
+          status: null,
+          summary: '好的，我来帮你把这个 PowerPoint 文件转换成 Markdown 格式。',
+          rawJson: '{}',
+          workingDirectory: null,
+          createdAt: '2026-01-01T00:00:00Z',
+        },
+      } as StreamPayload);
+      handler({
+        conversationId: 'conv-butler',
+        token: '',
+        done: false,
+        thinking: false,
+        phase: 'process',
+        processEvent: {
+          id: 'process-shell',
+          conversationId: 'conv-butler',
+          messageId: 'assistant-message-1',
+          opencodeSessionId: 'ses-1',
+          eventType: 'tool',
+          toolName: 'bash',
+          status: 'completed',
+          summary: 'Shell执行 PPTX 到 Markdown 的转换',
+          rawJson: JSON.stringify({ tool: 'bash', status: 'completed', input: { command: 'markitdown input.pptx > output.md' } }),
+          workingDirectory: null,
+          createdAt: '2026-01-01T00:00:01Z',
+        },
+      } as StreamPayload);
+      handler({
+        conversationId: 'conv-butler',
+        messageId: 'assistant-message-1',
+        token: '好的，我来帮你把这个 PowerPoint 文件转换成 Markdown 格式。转换完成了。已保存到 output.md',
+        done: false,
+        thinking: false,
+      });
+      handler({
+        conversationId: 'conv-butler',
+        messageId: 'assistant-message-1',
+        token: '',
+        done: true,
+        thinking: false,
+      });
+    });
+
+    await waitFor(() => expect(screen.getByText('转换完成了。已保存到 output.md')).toBeInTheDocument());
+    expect(screen.queryByText(/好的，我来帮你把这个 PowerPoint 文件转换成 Markdown 格式。转换完成了/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '执行过程' }));
+    expect(screen.getByText('好的，我来帮你把这个 PowerPoint 文件转换成 Markdown 格式。')).toBeInTheDocument();
+  });
+
+  it('角色工具执行中只显示弹跳点，完成后只显示最终结果', async () => {
+    const getStreamHandler = captureStreamHandler();
+    vi.mocked(chatService.getRoleConversation).mockResolvedValue(roleConv);
+    vi.mocked(chatService.getMessageProcessEvents).mockResolvedValue([]);
+    vi.mocked(chatService.getHistory).mockResolvedValue([]);
+
+    const { container } = render(<ChatStream role={baseRole} />);
+    await waitFor(() => expect(chatService.getRoleConversation).toHaveBeenCalledWith('role-1'));
+
+    await act(async () => {
+      const handler = getStreamHandler();
+      handler({
+        conversationId: 'conv-role-1',
+        token: '',
+        done: false,
+        thinking: false,
+        phase: 'process',
+        processEvent: {
+          id: 'role-process-1',
+          conversationId: 'conv-role-1',
+          messageId: 'assistant-message-1',
+          opencodeSessionId: 'ses-role-1',
+          eventType: 'narration',
+          toolName: null,
+          status: null,
+          summary: '开始检查文件并执行转换。',
+          rawJson: '{}',
+          workingDirectory: null,
+          createdAt: '2026-01-01T00:00:00Z',
+        },
+      } as StreamPayload);
+      handler({
+        conversationId: 'conv-role-1',
+        token: '我来帮你把 PPTX 文件转换成 Markdown 格式。',
+        done: false,
+        thinking: false,
+      });
+    });
+
+    expect(screen.getByRole('button', { name: '执行过程' })).toBeInTheDocument();
+    expect(screen.getByText('开始检查文件并执行转换。')).toBeInTheDocument();
+    expect(screen.queryByText('我来帮你把 PPTX 文件转换成 Markdown 格式。')).not.toBeInTheDocument();
+    expect(container.querySelectorAll('.animate-bounce-forever')).toHaveLength(3);
+
+    await act(async () => {
+      const handler = getStreamHandler();
+      handler({
+        conversationId: 'conv-role-1',
+        messageId: 'assistant-message-1',
+        token: '转换完成。文件已保存为：D:\\AI\\output.md',
+        done: false,
+        thinking: false,
+      });
+      handler({
+        conversationId: 'conv-role-1',
+        messageId: 'assistant-message-1',
+        token: '',
+        done: true,
+        thinking: false,
+      });
+    });
+
+    await waitFor(() => expect(screen.getByText('转换完成。文件已保存为：D:\\AI\\output.md')).toBeInTheDocument());
+    expect(screen.queryByText('我来帮你把 PPTX 文件转换成 Markdown 格式。')).not.toBeInTheDocument();
+    expect(container.querySelectorAll('.animate-bounce-forever')).toHaveLength(0);
   });
 
   it('委派首段历史刷新先返回时保留等待下一段的流式状态', async () => {

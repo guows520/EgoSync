@@ -59,7 +59,8 @@ pub async fn init_conversations_db(db_path: &Path) -> Result<ConversationsPool, 
     let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
     let options = SqliteConnectOptions::from_str(&db_url)
         .map_err(|e| AppError::DbError(format!("对话数据库连接选项解析失败: {}", e)))?
-        .create_if_missing(true);
+        .create_if_missing(true)
+        .foreign_keys(true);
 
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
@@ -95,6 +96,29 @@ async fn run_conversations_migrations(pool: &SqlitePool) -> Result<(), AppError>
     let _ = sqlx::raw_sql("ALTER TABLE messages ADD COLUMN routing_metadata TEXT")
         .execute(pool)
         .await;
+
+    sqlx::raw_sql(
+        "CREATE TABLE IF NOT EXISTS message_process_events (
+            id TEXT PRIMARY KEY NOT NULL,
+            conversation_id TEXT NOT NULL,
+            message_id TEXT NOT NULL,
+            opencode_session_id TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            tool_name TEXT,
+            status TEXT,
+            summary TEXT NOT NULL,
+            raw_json TEXT NOT NULL,
+            working_directory TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+            FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_message_process_events_message_id ON message_process_events(message_id);
+        CREATE INDEX IF NOT EXISTS idx_message_process_events_conversation_id ON message_process_events(conversation_id);",
+    )
+    .execute(pool)
+    .await
+    .map_err(|e| AppError::DbError(format!("对话过程事件迁移失败: {}", e)))?;
 
     tracing::info!("对话数据库迁移执行完成");
     Ok(())
@@ -235,6 +259,19 @@ mod tests {
 
         let foreign_keys: i64 = sqlx::query_scalar("PRAGMA foreign_keys")
             .fetch_one(&pool)
+            .await
+            .expect("query foreign_keys pragma");
+        assert_eq!(foreign_keys, 1);
+    }
+
+    #[tokio::test]
+    async fn init_conversations_db_enables_foreign_keys_for_process_event_cleanup() {
+        let dir = tempdir().expect("create temp dir");
+        let db_path = dir.path().join("conversations.db");
+        let pool = init_conversations_db(&db_path).await.expect("init conversations db");
+
+        let foreign_keys: i64 = sqlx::query_scalar("PRAGMA foreign_keys")
+            .fetch_one(&pool.0)
             .await
             .expect("query foreign_keys pragma");
         assert_eq!(foreign_keys, 1);

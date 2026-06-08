@@ -240,6 +240,8 @@ pub fn run() {
             commands::llm_config::llm_config_test_connection,
             commands::chat::chat_send_message,
             commands::chat::chat_get_history,
+            commands::chat::chat_get_message_process_events,
+            commands::chat::chat_pick_working_directory,
             commands::chat::chat_get_conversation,
             commands::chat::chat_get_butler_conversation,
             commands::chat::chat_get_role_conversation,

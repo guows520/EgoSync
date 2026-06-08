@@ -14,6 +14,7 @@ use crate::llm::traits::{
     ChatCompletionMessage, ChatOptions, LlmProvider, StreamEvent, ToolCall, ToolDefinition,
 };
 use crate::models::chat::{RoleProposedPayload, StreamPayload};
+use crate::commands::chat::OpencodeSessionState;
 use crate::models::role::CreateRoleInput;
 use crate::services::secret_store;
 
@@ -39,6 +40,25 @@ fn resolve_opencode_project_dir(app_handle: &tauri::AppHandle) -> String {
     }
 }
 
+fn resolve_requested_working_directory(
+    app_handle: &tauri::AppHandle,
+    working_directory: Option<&str>,
+) -> Result<String, AppError> {
+    let Some(raw_dir) = working_directory.map(str::trim).filter(|dir| !dir.is_empty()) else {
+        return Ok(resolve_opencode_project_dir(app_handle));
+    };
+    let path = std::path::PathBuf::from(raw_dir);
+    if !path.is_dir() {
+        return Err(AppError::ValidationError(format!(
+            "工作目录不存在或不是文件夹: {}",
+            raw_dir
+        )));
+    }
+    path.canonicalize()
+        .map(|p| p.to_string_lossy().to_string())
+        .map_err(|e| AppError::ValidationError(format!("工作目录不可访问: {}", e)))
+}
+
 fn opencode_agent_key(role_id: Option<&str>) -> String {
     match role_id {
         Some(id) => crate::services::agent_config::AgentConfigService::role_to_agent_key(id),
@@ -46,15 +66,20 @@ fn opencode_agent_key(role_id: Option<&str>) -> String {
     }
 }
 
-fn remember_opencode_session(
-    sessions: &mut std::collections::HashMap<String, String>,
+fn remember_opencode_session_for_directory(
+    sessions: &mut std::collections::HashMap<String, OpencodeSessionState>,
     conversation_id: &str,
     session_id: &str,
+    working_directory: &str,
 ) -> String {
-    sessions
-        .entry(conversation_id.to_string())
+    let state = sessions.entry(conversation_id.to_string()).or_default();
+    let remembered = state
+        .sessions_by_directory
+        .entry(working_directory.to_string())
         .or_insert_with(|| session_id.to_string())
-        .clone()
+        .clone();
+    state.active_session_id = remembered.clone();
+    remembered
 }
 
 fn stream_payload_from_sse(
@@ -72,6 +97,7 @@ fn stream_payload_from_sse(
             phase: None,
             status_text: None,
             tool_name: None,
+            process_event: None,
         }),
         crate::models::agent::SseEvent::Thinking { content } => Some(StreamPayload {
             conversation_id: conversation_id.to_string(),
@@ -82,6 +108,7 @@ fn stream_payload_from_sse(
             phase: Some("thinking".to_string()),
             status_text: Some("思考中...".to_string()),
             tool_name: None,
+            process_event: None,
         }),
         crate::models::agent::SseEvent::Done => Some(StreamPayload {
             conversation_id: conversation_id.to_string(),
@@ -92,6 +119,7 @@ fn stream_payload_from_sse(
             phase: None,
             status_text: None,
             tool_name: None,
+            process_event: None,
         }),
         crate::models::agent::SseEvent::Error { message } => Some(StreamPayload {
             conversation_id: conversation_id.to_string(),
@@ -102,6 +130,7 @@ fn stream_payload_from_sse(
             phase: None,
             status_text: None,
             tool_name: None,
+            process_event: None,
         }),
         crate::models::agent::SseEvent::ToolCall { name, arguments } => {
             tracing::info!(
@@ -186,6 +215,7 @@ fn emit_stream_token(
                 None
             },
             tool_name: None,
+            process_event: None,
         },
     );
 }
@@ -231,8 +261,330 @@ fn emit_tool_status(
             } else {
                 Some(tool_name.trim().to_string())
             },
+            process_event: None,
         },
     );
+}
+
+#[derive(Debug, Clone)]
+struct ProcessEventCandidate {
+    event_type: String,
+    tool_name: Option<String>,
+    status: Option<String>,
+    summary: String,
+    raw_json: serde_json::Value,
+}
+
+fn process_tool_summary(tool_name: &str, status: &str) -> String {
+    if let Some(text) = tool_status_text(tool_name, status) {
+        return text;
+    }
+    let trimmed = tool_name.trim();
+    match status {
+        "failed" | "error" => {
+            if trimmed.is_empty() { "工具执行失败".to_string() } else { format!("{} 失败", trimmed) }
+        }
+        "cancelled" | "canceled" => {
+            if trimmed.is_empty() { "工具已取消".to_string() } else { format!("{} 已取消", trimmed) }
+        }
+        _ => {
+            if trimmed.is_empty() { "工具状态已更新".to_string() } else { format!("{} 状态已更新", trimmed) }
+        }
+    }
+}
+
+fn first_json_value<'a>(raw: &'a serde_json::Value, paths: &[&[&str]]) -> Option<&'a serde_json::Value> {
+    for path in paths {
+        let mut current = raw;
+        let mut found = true;
+        for key in *path {
+            match current.get(*key) {
+                Some(next) => current = next,
+                None => {
+                    found = false;
+                    break;
+                }
+            }
+        }
+        if found && !current.is_null() {
+            return Some(current);
+        }
+    }
+    None
+}
+
+fn extract_json_string(raw: &serde_json::Value, paths: &[&[&str]]) -> Option<String> {
+    first_json_value(raw, paths).and_then(|value| {
+        value.as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    })
+}
+
+fn normalize_read_input(tool_name: Option<&str>, input: Option<serde_json::Value>) -> Option<serde_json::Value> {
+    let Some(tool_name) = tool_name else { return input };
+    if !tool_name.eq_ignore_ascii_case("read") {
+        return input;
+    }
+    let Some(mut input) = input else { return None };
+    let serde_json::Value::Object(map) = &mut input else { return Some(input) };
+    if map.get("file_path").is_some() {
+        return Some(input);
+    }
+    for key in ["filePath", "filepath", "file_name", "filename", "path", "file", "target"] {
+        if let Some(value) = map.get(key).cloned() {
+            map.insert("file_path".to_string(), value);
+            break;
+        }
+    }
+    Some(input)
+}
+
+fn build_tool_process_event_candidate(part_raw: &serde_json::Value) -> Option<ProcessEventCandidate> {
+    let tool_name = extract_json_string(part_raw, &[&["tool"], &["toolInvocation", "toolName"], &["toolInvocation", "name"]]);
+    let status = extract_json_string(part_raw, &[&["state", "status"], &["status"]])?;
+    if !matches!(status.as_str(), "running" | "completed" | "failed" | "error" | "cancelled" | "canceled") {
+        return None;
+    }
+
+    let command = extract_json_string(part_raw, &[
+        &["command"],
+        &["state", "input", "command"],
+        &["input", "command"],
+        &["toolInvocation", "args", "command"],
+    ]);
+    let input = normalize_read_input(tool_name.as_deref(), first_json_value(part_raw, &[
+        &["input"],
+        &["state", "input"],
+        &["toolInvocation", "args"],
+    ]).cloned());
+    let output = first_json_value(part_raw, &[
+        &["output"],
+        &["state", "output"],
+        &["toolInvocation", "result", "output"],
+        &["state", "result", "output"],
+    ]).cloned();
+    let error = first_json_value(part_raw, &[
+        &["error"],
+        &["state", "error"],
+        &["stderr"],
+        &["state", "stderr"],
+        &["error", "message"],
+    ]).cloned();
+
+    let summary = process_tool_summary(tool_name.as_deref().unwrap_or(""), &status);
+    let mut normalized = serde_json::Map::new();
+    if let Some(tool_name) = &tool_name {
+        normalized.insert("tool".to_string(), serde_json::Value::String(tool_name.clone()));
+    }
+    normalized.insert("status".to_string(), serde_json::Value::String(status.clone()));
+    if let Some(command) = command {
+        normalized.insert("command".to_string(), serde_json::Value::String(command));
+    }
+    if let Some(input) = input {
+        normalized.insert("input".to_string(), input);
+    }
+    if let Some(output) = output {
+        normalized.insert("output".to_string(), output);
+    }
+    if let Some(error) = error {
+        normalized.insert("error".to_string(), error);
+    }
+    normalized.insert("rawPart".to_string(), part_raw.clone());
+
+    Some(ProcessEventCandidate {
+        event_type: "tool".to_string(),
+        tool_name,
+        status: Some(status.clone()),
+        summary,
+        raw_json: serde_json::Value::Object(normalized),
+    })
+}
+
+fn build_narration_process_event_candidate(part_raw: &serde_json::Value) -> Option<ProcessEventCandidate> {
+    let part_type = extract_json_string(part_raw, &[&["type"], &["partType"], &["part_type"]]);
+    if !matches!(part_type.as_deref(), Some("text")) {
+        return None;
+    }
+
+    let text = extract_json_string(part_raw, &[&["text"]])?;
+    let mut normalized = serde_json::Map::new();
+    normalized.insert("text".to_string(), serde_json::Value::String(text.clone()));
+    normalized.insert("rawPart".to_string(), part_raw.clone());
+
+    Some(ProcessEventCandidate {
+        event_type: "narration".to_string(),
+        tool_name: None,
+        status: None,
+        summary: text,
+        raw_json: serde_json::Value::Object(normalized),
+    })
+}
+
+fn remove_recorded_narration_prefixes(text: &mut String, narrations: &[String]) {
+    for narration in narrations {
+        let prefix = narration.trim();
+        if prefix.is_empty() {
+            continue;
+        }
+        let trimmed = text.trim_start();
+        if let Some(rest) = trimmed.strip_prefix(prefix) {
+            *text = rest.trim_start().to_string();
+        }
+    }
+}
+
+fn buffer_narration_delta(text: &mut String, has_tool_process_event: &mut bool, delta: &str) {
+    if delta.is_empty() {
+        return;
+    }
+    text.push_str(delta);
+    if text.trim().is_empty() {
+        text.clear();
+    }
+    let _ = has_tool_process_event;
+}
+
+fn should_flush_final_narration(has_tool_process_event: bool, text: &str) -> bool {
+    has_tool_process_event && !text.trim().is_empty()
+}
+
+async fn persist_process_event(
+    conv_pool: &ConversationsPool,
+    conversation_id: &str,
+    message_id: &str,
+    opencode_session_id: &str,
+    event_type: &str,
+    tool_name: Option<&str>,
+    status: Option<&str>,
+    summary: &str,
+    raw_json: &serde_json::Value,
+    working_directory: Option<&str>,
+) {
+    let raw_json = serde_json::to_string(raw_json).unwrap_or_else(|_| "{}".to_string());
+    if let Err(err) = conversations::insert_message_process_event(
+        conv_pool,
+        conversation_id,
+        message_id,
+        opencode_session_id,
+        event_type,
+        tool_name,
+        status,
+        summary,
+        &raw_json,
+        working_directory,
+    )
+    .await
+    {
+        tracing::warn!(conversation_id, message_id, error = %err, "persist process event failed");
+    }
+}
+
+fn process_event_payload(
+    conversation_id: &str,
+    message_id: &str,
+    opencode_session_id: &str,
+    candidate: &ProcessEventCandidate,
+    working_directory: Option<&str>,
+) -> crate::models::chat::MessageProcessEvent {
+    crate::models::chat::MessageProcessEvent {
+        id: uuid::Uuid::new_v4().to_string(),
+        conversation_id: conversation_id.to_string(),
+        message_id: message_id.to_string(),
+        opencode_session_id: opencode_session_id.to_string(),
+        event_type: candidate.event_type.clone(),
+        tool_name: candidate.tool_name.clone(),
+        status: candidate.status.clone(),
+        summary: candidate.summary.clone(),
+        raw_json: serde_json::to_string(&candidate.raw_json).unwrap_or_else(|_| "{}".to_string()),
+        working_directory: working_directory.map(str::to_string),
+        created_at: chrono::Utc::now().to_rfc3339(),
+    }
+}
+
+fn emit_process_event(
+    app_handle: &tauri::AppHandle,
+    conversation_id: &str,
+    process_event: crate::models::chat::MessageProcessEvent,
+) {
+    let _ = app_handle.emit(
+        "llm:stream",
+        StreamPayload {
+            conversation_id: conversation_id.to_string(),
+            token: String::new(),
+            done: false,
+            thinking: false,
+            message_id: None,
+            phase: Some("process".to_string()),
+            status_text: None,
+            tool_name: process_event.tool_name.clone(),
+            process_event: Some(process_event),
+        },
+    );
+}
+
+async fn persist_and_emit_process_event(
+    app_handle: &tauri::AppHandle,
+    conv_pool: &ConversationsPool,
+    conversation_id: &str,
+    message_id: &str,
+    opencode_session_id: &str,
+    candidate: &ProcessEventCandidate,
+    working_directory: Option<&str>,
+) {
+    emit_process_event(
+        app_handle,
+        conversation_id,
+        process_event_payload(conversation_id, message_id, opencode_session_id, candidate, working_directory),
+    );
+    persist_process_event(
+        conv_pool,
+        conversation_id,
+        message_id,
+        opencode_session_id,
+        &candidate.event_type,
+        candidate.tool_name.as_deref(),
+        candidate.status.as_deref(),
+        &candidate.summary,
+        &candidate.raw_json,
+        working_directory,
+    )
+    .await;
+}
+
+async fn flush_narration_process_event(
+    app_handle: &tauri::AppHandle,
+    conv_pool: &ConversationsPool,
+    conversation_id: &str,
+    message_id: &str,
+    opencode_session_id: &str,
+    text: &mut String,
+    working_directory: Option<&str>,
+) -> Option<String> {
+    let summary = text.trim().to_string();
+    if summary.is_empty() {
+        return None;
+    }
+    let part_raw = serde_json::json!({
+        "type": "text",
+        "text": summary,
+    });
+    text.clear();
+    if let Some(candidate) = build_narration_process_event_candidate(&part_raw) {
+        persist_and_emit_process_event(
+            app_handle,
+            conv_pool,
+            conversation_id,
+            message_id,
+            opencode_session_id,
+            &candidate,
+            working_directory,
+        )
+        .await;
+        return Some(candidate.summary);
+    }
+    None
 }
 
 fn emit_stream_done(
@@ -251,6 +603,7 @@ fn emit_stream_done(
             phase: Some("done".to_string()),
             status_text: None,
             tool_name: None,
+            process_event: None,
         },
     );
 }
@@ -384,6 +737,21 @@ fn append_completed_tail(
     }
 }
 
+fn append_completed_followup_tail(
+    app_handle: Option<&tauri::AppHandle>,
+    conversation_id: &str,
+    message_id: Option<&str>,
+    target: &mut String,
+    first_bubble_text: &str,
+    completed_text: &str,
+) {
+    let tail = completed_text
+        .strip_prefix(first_bubble_text)
+        .map(str::trim_start)
+        .unwrap_or(completed_text);
+    append_completed_tail(app_handle, conversation_id, message_id, target, tail, false);
+}
+
 fn apply_completed_message_fallback(
     app_handle: &tauri::AppHandle,
     conversation_id: &str,
@@ -392,26 +760,58 @@ fn apply_completed_message_fallback(
     text_target: &mut String,
     thinking_target: &mut String,
 ) {
+    apply_completed_followup_message_fallback(
+        Some(app_handle),
+        conversation_id,
+        message_id,
+        completed,
+        None,
+        text_target,
+        thinking_target,
+    );
+}
+
+fn apply_completed_followup_message_fallback(
+    app_handle: Option<&tauri::AppHandle>,
+    conversation_id: &str,
+    message_id: Option<&str>,
+    completed: Option<crate::models::agent::OpencodeCompletedMessage>,
+    first_bubble_text: Option<&str>,
+    text_target: &mut String,
+    thinking_target: &mut String,
+) {
     let Some(completed) = completed else {
         return;
     };
 
     append_completed_tail(
-        Some(app_handle),
+        app_handle,
         conversation_id,
         None,
         thinking_target,
         &completed.thinking,
         true,
     );
-    append_completed_tail(
-        Some(app_handle),
-        conversation_id,
-        message_id,
-        text_target,
-        &completed.text,
-        false,
-    );
+
+    if let Some(first_bubble_text) = first_bubble_text {
+        append_completed_followup_tail(
+            app_handle,
+            conversation_id,
+            message_id,
+            text_target,
+            first_bubble_text,
+            &completed.text,
+        );
+    } else {
+        append_completed_tail(
+            app_handle,
+            conversation_id,
+            message_id,
+            text_target,
+            &completed.text,
+            false,
+        );
+    }
 }
 
 fn ensure_non_empty_opencode_result(
@@ -1226,7 +1626,8 @@ async fn try_run_opencode_stream(
     user_message: &str,
     cancel_token: &CancellationToken,
     role_id: Option<&str>,
-    opencode_sessions: Arc<Mutex<std::collections::HashMap<String, String>>>,
+    working_directory: Option<&str>,
+    opencode_sessions: Arc<Mutex<std::collections::HashMap<String, OpencodeSessionState>>>,
     agent_bridge: crate::services::agent_bridge::AgentBridge,
     event_router: Arc<crate::services::event_router::EventRouter>,
     delegate_bridge: crate::services::delegate_bridge::DelegateBridge,
@@ -1273,19 +1674,32 @@ async fn try_run_opencode_stream(
         return Ok(());
     }
 
+    let project_dir = resolve_requested_working_directory(app_handle, working_directory)?;
     let session_id = {
         let sessions = opencode_sessions.lock().await;
-        sessions.get(conversation_id).cloned()
+        sessions
+            .get(conversation_id)
+            .and_then(|state| state.sessions_by_directory.get(&project_dir))
+            .cloned()
     };
     let session_id = match session_id {
-        Some(id) => id,
+        Some(id) => {
+            let mut sessions = opencode_sessions.lock().await;
+            if let Some(state) = sessions.get_mut(conversation_id) {
+                state.active_session_id = id.clone();
+            }
+            id
+        }
         None => {
             let agent = opencode_agent_key(role_id);
-            let project_dir = resolve_opencode_project_dir(app_handle);
             let session = agent_bridge.create_session(&agent, &project_dir).await?;
             let mut sessions = opencode_sessions.lock().await;
-            remember_opencode_session(&mut sessions, conversation_id, &session.id);
-            session.id
+            remember_opencode_session_for_directory(
+                &mut sessions,
+                conversation_id,
+                &session.id,
+                &project_dir,
+            )
         }
     };
     let delegation_session_registered = role_id.is_none() && !user_message_id.is_empty();
@@ -1354,11 +1768,13 @@ async fn try_run_opencode_stream(
         std::collections::HashSet::new();
     let mut processed_tool_statuses: std::collections::HashSet<String> =
         std::collections::HashSet::new();
-    // 委派两气泡：第一段"稍等…"落 assistant_message_id；delegate_to_role 激活后，
-    // 第二段（委派回复）落新建的 followup 消息，并在激活瞬间唤醒前端弹跳点。
+    let mut has_tool_process_event = false;
+    let mut pending_narration = String::new();
+    let mut recorded_action_narrations: Vec<String> = Vec::new();
     let mut bubble_state = DelegationBubbleState::default();
-    let mut followup_id: Option<String> = None;
-    let mut followup_text = String::new();
+    let mut final_message_id: Option<String> = None;
+    let mut first_bubble_text_at_split: Option<String> = None;
+    let mut final_text = String::new();
     let mut completed_response: Option<crate::models::agent::OpencodeCompletedMessage> = None;
     let mut send_result_observed = false;
     let mut delegate_workers: Vec<tokio::task::JoinHandle<()>> = Vec::new();
@@ -1372,14 +1788,13 @@ async fn try_run_opencode_stream(
                 if delegation_session_registered {
                     delegate_bridge.unregister_session(&session_id).await;
                 }
-                if let Some(fid) = followup_id.clone() {
-                    // 委派已拆分：第一气泡在拆分时已冻结，这里收尾第二气泡，避免弹跳点卡住。
+                if final_message_id.is_some() {
                     if !accumulated_thinking.is_empty() {
                         conversations::update_message_thinking(conv_pool, assistant_message_id, &accumulated_thinking).await.ok();
                     }
-                    conversations::update_message_content(conv_pool, &fid, &followup_text).await.ok();
-                    conversations::mark_message_complete(conv_pool, &fid).await.ok();
-                    emit_stream_done(app_handle, conversation_id, Some(&fid));
+                    conversations::update_message_content(conv_pool, assistant_message_id, &final_text).await.ok();
+                    conversations::mark_message_complete(conv_pool, assistant_message_id).await.ok();
+                    emit_stream_done(app_handle, conversation_id, Some(assistant_message_id));
                 } else {
                     conversations::update_message_content(conv_pool, assistant_message_id, &accumulated_text).await.ok();
                     if !accumulated_thinking.is_empty() {
@@ -1431,14 +1846,15 @@ async fn try_run_opencode_stream(
                                 None
                             }
                             BubbleSlot::Followup => {
-                                followup_text.push_str(delta);
-                                followup_id.clone()
+                                final_text.push_str(delta);
+                                final_message_id.clone()
                             }
                         };
                         if !part_id.is_empty() {
                             let entry = part_text.entry(part_id.to_string()).or_default();
                             entry.push_str(delta);
                         }
+                        buffer_narration_delta(&mut pending_narration, &mut has_tool_process_event, delta);
                         emit_stream_token(app_handle, conversation_id, emit_message_id.as_deref(), delta, false);
                     }
                     "message.updated" => {
@@ -1475,7 +1891,7 @@ async fn try_run_opencode_stream(
                                             } else {
                                                 match bubble_state.classify_message(id) {
                                                     BubbleSlot::First => (None, &mut accumulated_text, false),
-                                                    BubbleSlot::Followup => (followup_id.clone(), &mut followup_text, false),
+                                                    BubbleSlot::Followup => (final_message_id.clone(), &mut final_text, false),
                                                 }
                                             };
                                             let prev = part_text.entry(part_id.to_string()).or_default();
@@ -1483,6 +1899,9 @@ async fn try_run_opencode_stream(
                                                 let delta = text[prev.len()..].to_string();
                                                 *prev = text.to_string();
                                                 accum.push_str(&delta);
+                                                if !thinking {
+                                                    buffer_narration_delta(&mut pending_narration, &mut has_tool_process_event, &delta);
+                                                }
                                                 emit_stream_token(app_handle, conversation_id, emit_message_id.as_deref(), &delta, thinking);
                                             } else if text != prev.as_str() {
                                                 *prev = text.to_string();
@@ -1516,7 +1935,7 @@ async fn try_run_opencode_stream(
                         let (emit_message_id, accum, thinking): (Option<String>, &mut String, bool) = match part.part_type.as_str() {
                             "text" => match bubble_state.classify_message(&part.message_id) {
                                 BubbleSlot::First => (None, &mut accumulated_text, false),
-                                BubbleSlot::Followup => (followup_id.clone(), &mut followup_text, false),
+                                BubbleSlot::Followup => (final_message_id.clone(), &mut final_text, false),
                             },
                             "reasoning" | "thinking" => (None, &mut accumulated_thinking, true),
                             "tool" => {
@@ -1526,61 +1945,67 @@ async fn try_run_opencode_stream(
                                 let tool_name = part_raw
                                     .get("tool")
                                     .and_then(|v| v.as_str())
+                                    .or_else(|| part_raw.get("toolInvocation").and_then(|v| v.get("toolName")).and_then(|v| v.as_str()))
                                     .unwrap_or("");
                                 let tool_status = part_raw
                                     .get("state")
                                     .and_then(|s| s.get("status"))
                                     .and_then(|v| v.as_str())
+                                    .or_else(|| part_raw.get("status").and_then(|v| v.as_str()))
                                     .unwrap_or("");
-                                if matches!(tool_status, "running" | "completed") {
-                                    let status_key = format!("{}:{}", part.id, tool_status);
+                                if let Some(candidate) = build_tool_process_event_candidate(part_raw) {
+                                    let status_key = format!("{}:{}", part.id, candidate.status.as_deref().unwrap_or(""));
                                     if processed_tool_statuses.insert(status_key) {
-                                        emit_tool_status(app_handle, conversation_id, tool_name, tool_status);
+                                        if let Some(summary) = flush_narration_process_event(
+                                            app_handle,
+                                            conv_pool,
+                                            conversation_id,
+                                            assistant_message_id,
+                                            &session_id,
+                                            &mut pending_narration,
+                                            Some(&project_dir),
+                                        )
+                                        .await
+                                        {
+                                            recorded_action_narrations.push(summary);
+                                        }
+                                        if matches!(candidate.status.as_deref(), Some("running" | "completed")) {
+                                            emit_tool_status(app_handle, conversation_id, tool_name, tool_status);
+                                        }
+                                        persist_and_emit_process_event(
+                                            app_handle,
+                                            conv_pool,
+                                            conversation_id,
+                                            assistant_message_id,
+                                            &session_id,
+                                            &candidate,
+                                            Some(&project_dir),
+                                        )
+                                        .await;
+                                        has_tool_process_event = true;
+                                        let role_tool_active = role_id.is_some()
+                                            && matches!(candidate.status.as_deref(), Some("running" | "completed"));
+                                        if role_tool_active
+                                            && final_message_id.is_none()
+                                            && !accumulated_text.trim().is_empty()
+                                            && bubble_state.note_role_tool_active()
+                                        {
+                                            first_bubble_text_at_split = Some(accumulated_text.clone());
+                                            final_message_id = Some(assistant_message_id.to_string());
+                                            emit_stream_token(app_handle, conversation_id, Some(assistant_message_id), "", false);
+                                        }
                                     }
                                 }
-                                // 委派两气泡：delegate_to_role 进入活动态（running/completed，取最早一次）时，
-                                // 冻结第一气泡（"稍等…"）、新建 followup 气泡并发空 token 唤醒弹跳点，
-                                // 覆盖委派同步等待 PM 回复的 ~40s 窗口。仅 butler 路径启用。
                                 let delegate_active = tool_name == "delegate_to_role"
                                     && (tool_status == "running" || tool_status == "completed");
                                 if delegate_active
                                     && role_id.is_none()
                                     && bubble_state.note_delegate_active()
                                 {
-                                    if !accumulated_text.trim().is_empty() {
-                                        conversations::update_message_content(
-                                            conv_pool,
-                                            assistant_message_id,
-                                            &accumulated_text,
-                                        )
-                                        .await
-                                        .ok();
-                                        conversations::mark_message_complete(
-                                            conv_pool,
-                                            assistant_message_id,
-                                        )
-                                        .await
-                                        .ok();
-                                        emit_stream_done(app_handle, conversation_id, Some(assistant_message_id));
-                                    }
-                                    match conversations::insert_message(
-                                        conv_pool,
-                                        conversation_id,
-                                        "assistant",
-                                        "",
-                                        false,
-                                    )
-                                    .await
-                                    {
-                                        Ok(m) => {
-                                            let new_id = m.id.clone();
-                                            // 空 token 唤醒第二气泡的弹跳点（等待期间持续可见）。
-                                            emit_stream_token(app_handle, conversation_id, Some(&new_id), "", false);
-                                            followup_id = Some(new_id);
-                                        }
-                                        Err(e) => {
-                                            tracing::error!("[delegate] 创建 follow-up 消息失败: {}", e);
-                                        }
+                                    if final_message_id.is_none() {
+                                        first_bubble_text_at_split = Some(accumulated_text.clone());
+                                        final_message_id = Some(assistant_message_id.to_string());
+                                        emit_stream_token(app_handle, conversation_id, Some(assistant_message_id), "", false);
                                     }
                                 }
                                 if !claim_completed_tool_part(&mut processed_tool_parts, &part.id, part_raw) {
@@ -1655,14 +2080,14 @@ async fn try_run_opencode_stream(
                         if delegation_session_registered {
                             delegate_bridge.unregister_session(&session_id).await;
                         }
-                        if accumulated_text.is_empty() && followup_text.is_empty() {
+                        if accumulated_text.is_empty() && final_text.is_empty() {
                             let mut sessions = opencode_sessions.lock().await;
                             sessions.remove(conversation_id);
                             return Err(e);
                         }
                         let friendly = format!("\n\n抱歉，Agent 引擎返回错误：{}", summarize_error(&e.to_string()));
-                        if followup_id.is_some() {
-                            followup_text.push_str(&friendly);
+                        if final_message_id.is_some() {
+                            final_text.push_str(&friendly);
                         } else {
                             accumulated_text.push_str(&friendly);
                         }
@@ -1717,7 +2142,7 @@ async fn try_run_opencode_stream(
                 completed_response = response;
             }
             Ok(Ok(Err(e))) => {
-                if accumulated_text.is_empty() && followup_text.is_empty() {
+                if accumulated_text.is_empty() && final_text.is_empty() {
                     let mut sessions = opencode_sessions.lock().await;
                     sessions.remove(conversation_id);
                     return Err(e);
@@ -1726,8 +2151,8 @@ async fn try_run_opencode_stream(
                     "\n\n抱歉，Agent 引擎返回错误：{}",
                     summarize_error(&e.to_string())
                 );
-                if followup_id.is_some() {
-                    followup_text.push_str(&friendly);
+                if final_message_id.is_some() {
+                    final_text.push_str(&friendly);
                 } else {
                     accumulated_text.push_str(&friendly);
                 }
@@ -1736,20 +2161,21 @@ async fn try_run_opencode_stream(
         }
     }
 
-    if followup_id.is_some() {
-        apply_completed_message_fallback(
-            app_handle,
+    if final_message_id.is_some() {
+        apply_completed_followup_message_fallback(
+            Some(app_handle),
             conversation_id,
-            followup_id.as_deref(),
+            final_message_id.as_deref(),
             completed_response,
-            &mut followup_text,
+            first_bubble_text_at_split.as_deref(),
+            &mut final_text,
             &mut accumulated_thinking,
         );
         ensure_non_empty_opencode_result(
             app_handle,
             conversation_id,
-            followup_id.as_deref(),
-            &mut followup_text,
+            final_message_id.as_deref(),
+            &mut final_text,
             &accumulated_thinking,
         );
     } else {
@@ -1770,19 +2196,53 @@ async fn try_run_opencode_stream(
         );
     }
 
-    if let Some(fid) = followup_id.clone() {
-        // 委派已拆分：第一气泡（"稍等…"）在拆分时已冻结+done，这里收尾第二气泡（委派回复）。
-        if let Some(notice) = append_uncertainty_notice_if_needed(&mut followup_text) {
-            emit_stream_token(app_handle, conversation_id, Some(&fid), notice, false);
+    if final_message_id.is_some() {
+        if should_flush_final_narration(has_tool_process_event, &pending_narration) {
+            flush_narration_process_event(
+                app_handle,
+                conv_pool,
+                conversation_id,
+                assistant_message_id,
+                &session_id,
+                &mut pending_narration,
+                Some(&project_dir),
+            )
+            .await;
         }
-        conversations::update_message_content(conv_pool, &fid, &followup_text)
+        remove_recorded_narration_prefixes(&mut final_text, &recorded_action_narrations);
+        if let Some(notice) = append_uncertainty_notice_if_needed(&mut final_text) {
+            emit_stream_token(app_handle, conversation_id, Some(assistant_message_id), notice, false);
+        }
+        conversations::update_message_content(conv_pool, assistant_message_id, &final_text)
             .await
             .ok();
-        conversations::mark_message_complete(conv_pool, &fid)
+        if !accumulated_thinking.is_empty() {
+            conversations::update_message_thinking(
+                conv_pool,
+                assistant_message_id,
+                &accumulated_thinking,
+            )
             .await
             .ok();
-        emit_stream_done(app_handle, conversation_id, Some(&fid));
+        }
+        conversations::mark_message_complete(conv_pool, assistant_message_id)
+            .await
+            .ok();
+        emit_stream_done(app_handle, conversation_id, Some(assistant_message_id));
     } else {
+        if should_flush_final_narration(has_tool_process_event, &pending_narration) {
+            flush_narration_process_event(
+                app_handle,
+                conv_pool,
+                conversation_id,
+                assistant_message_id,
+                &session_id,
+                &mut pending_narration,
+                Some(&project_dir),
+            )
+            .await;
+        }
+        remove_recorded_narration_prefixes(&mut accumulated_text, &recorded_action_narrations);
         // 普通单段对话：单气泡收尾（改动前的原行为）。
         if let Some(notice) = append_uncertainty_notice_if_needed(&mut accumulated_text) {
             emit_stream_token(app_handle, conversation_id, None, notice, false);
@@ -1821,10 +2281,11 @@ pub async fn run_stream(
     // Story 2.3: 触发本轮的 user message id —— 用于在 delegate 执行后把 routing_metadata
     // 写回触发这一轮的那条 user message。仅 butler 委派路径使用，其他路径忽略。
     user_message_id: String,
-    opencode_sessions: Arc<Mutex<std::collections::HashMap<String, String>>>,
+    opencode_sessions: Arc<Mutex<std::collections::HashMap<String, OpencodeSessionState>>>,
     agent_bridge: crate::services::agent_bridge::AgentBridge,
     event_router: Arc<crate::services::event_router::EventRouter>,
     delegate_bridge: crate::services::delegate_bridge::DelegateBridge,
+    working_directory: Option<String>,
 ) -> Result<(), AppError> {
     if let Err(e) = try_run_opencode_stream(
         &app_handle,
@@ -1836,6 +2297,7 @@ pub async fn run_stream(
         &user_message,
         &cancel_token,
         role_id.as_deref(),
+        working_directory.as_deref(),
         opencode_sessions.clone(),
         agent_bridge,
         event_router,
@@ -1978,8 +2440,7 @@ pub async fn run_stream(
 
                 // Handle tool calls if any
                 if !tool_calls_received.is_empty() {
-                    // Story 2.3 P1b: 先冻结第一段（管家「稍等，我让 X 看一下」）—
-                    // 否则 follow-up 累加进同一变量会让两段在同一气泡里拼接显示。
+                    // Keep the opening text out of the visible chat bubble; the final answer reuses the same assistant message.
                     let first_bubble_text = accumulated.clone();
                     tracing::info!(
                         "[run_stream] handling_tools: conv={} assistant_msg={} first_bubble_len={} saw_thinking={} tool_calls={}",
@@ -1990,43 +2451,6 @@ pub async fn run_stream(
                         tool_calls_received.len()
                     );
                     let first_bubble_visible = !first_bubble_text.trim().is_empty();
-                    if first_bubble_visible {
-                        conversations::update_message_content(
-                            &conv_pool,
-                            &assistant_message_id,
-                            &first_bubble_text,
-                        )
-                        .await
-                        .ok();
-                        if !accumulated_thinking.is_empty() {
-                            conversations::update_message_thinking(
-                                &conv_pool,
-                                &assistant_message_id,
-                                &accumulated_thinking,
-                            )
-                            .await
-                            .ok();
-                        }
-                        conversations::mark_message_complete(&conv_pool, &assistant_message_id)
-                            .await
-                            .ok();
-                        // 通知前端第一气泡 done（仍带其 message_id，便于前端定型这桶）。
-                        emit_stream_done(
-                            &app_handle,
-                            &conversation_id,
-                            Some(&assistant_message_id),
-                        );
-                    } else {
-                        tracing::warn!(
-                            "[run_stream] empty_first_bubble_deleted: conv={} assistant_msg={} tool_calls={}",
-                            conversation_id,
-                            assistant_message_id,
-                            tool_calls_received.len()
-                        );
-                        conversations::delete_message(&conv_pool, &assistant_message_id)
-                            .await
-                            .ok();
-                    }
 
                     let only_create_role_tool = tool_calls_received.len() == 1
                         && tool_calls_received
@@ -2074,25 +2498,8 @@ pub async fn run_stream(
                         precomputed_tool_results = Some(tool_results);
                     }
 
-                    // 第二段独立消息：先建 DB 占位 + 唤醒前端弹跳点，再执行耗时的委派调用。
-                    // 这样用户在委派期间就能看到等待提示，而不是干等十几秒。
-                    let followup_msg = match conversations::insert_message(
-                        &conv_pool,
-                        &conversation_id,
-                        "assistant",
-                        "",
-                        false,
-                    )
-                    .await
-                    {
-                        Ok(m) => m,
-                        Err(e) => {
-                            tracing::error!("[delegate] 创建 follow-up 消息失败: {}", e);
-                            break;
-                        }
-                    };
-                    let followup_id = followup_msg.id.clone();
-                    emit_stream_token(&app_handle, &conversation_id, Some(&followup_id), "", false);
+                    let final_message_id = assistant_message_id.clone();
+                    emit_stream_token(&app_handle, &conversation_id, Some(&final_message_id), "", false);
 
                     let tool_results = match precomputed_tool_results {
                         Some(results) => results,
@@ -2167,16 +2574,16 @@ pub async fn run_stream(
                         }
                     });
 
-                    // Stream follow-up tokens into the second bubble
-                    let mut followup_accumulated = String::new();
+                    // Stream final response tokens into the single assistant bubble.
+                    let mut final_accumulated = String::new();
                     while let Some(event2) = rx2.recv().await {
                         match event2 {
                             StreamEvent::Token(token) => {
-                                followup_accumulated.push_str(&token);
+                                final_accumulated.push_str(&token);
                                 emit_stream_token(
                                     &app_handle,
                                     &conversation_id,
-                                    Some(&followup_id),
+                                    Some(&final_message_id),
                                     &token,
                                     false,
                                 );
@@ -2190,43 +2597,43 @@ pub async fn run_stream(
                         }
                     }
 
-                    // 落库第二段 + 通知 done（带 followup id 让前端定型这桶并触发历史回拉）。
+                    // 落库最终回复 + 通知 done（复用原 assistant id 让前端定型同一气泡）。
                     tracing::info!(
-                        "[run_stream] followup_done: conv={} followup_msg={} followup_len={}",
+                        "[run_stream] final_done: conv={} assistant_msg={} final_len={}",
                         conversation_id,
-                        followup_id,
-                        followup_accumulated.len()
+                        final_message_id,
+                        final_accumulated.len()
                     );
-                    if followup_accumulated.trim().is_empty() {
+                    if final_accumulated.trim().is_empty() {
                         tracing::warn!(
-                            "[run_stream] empty_followup: conv={} followup_msg={} tool_calls={}",
+                            "[run_stream] empty_final: conv={} assistant_msg={} tool_calls={}",
                             conversation_id,
-                            followup_id,
+                            final_message_id,
                             tool_calls_received.len()
                         );
                     }
                     if let Some(notice) =
-                        append_uncertainty_notice_if_needed(&mut followup_accumulated)
+                        append_uncertainty_notice_if_needed(&mut final_accumulated)
                     {
                         emit_stream_token(
                             &app_handle,
                             &conversation_id,
-                            Some(&followup_id),
+                            Some(&final_message_id),
                             notice,
                             false,
                         );
                     }
                     conversations::update_message_content(
                         &conv_pool,
-                        &followup_id,
-                        &followup_accumulated,
+                        &final_message_id,
+                        &final_accumulated,
                     )
                     .await
                     .ok();
-                    conversations::mark_message_complete(&conv_pool, &followup_id)
+                    conversations::mark_message_complete(&conv_pool, &final_message_id)
                         .await
                         .ok();
-                    emit_stream_done(&app_handle, &conversation_id, Some(&followup_id));
+                    emit_stream_done(&app_handle, &conversation_id, Some(&final_message_id));
                     break;
                 } else if onboarding_step.is_some() && looks_like_fake_role_creation(&accumulated) {
                     // ========== 方案 A 兜底：模型伪装了"角色创建成功"但实际没发 tool_calls ==========
@@ -2375,16 +2782,17 @@ pub async fn run_stream(
 /// 中间 `delegate_to_role` 工具经历 pending→running→completed（约 40s 等待）。
 ///
 /// 路由规则：
-/// - 委派激活前，所有 assistant 文本归第一气泡（`First`）。
-/// - `delegate_to_role` 进入活动态（running/completed，取最早一次）时切换，
-///   调用方据此冻结第一气泡、新建 followup 气泡并发空 token 唤醒弹跳点。
-/// - 委派激活后出现的**新** messageID 归 followup 气泡（`Followup`）；
-///   已知属于第一气泡的 messageID 仍保持 `First`（其残余 delta 不串桶）。
+/// - 委派激活前，所有 assistant 文本归第一段开场（`First`）。
+/// - `delegate_to_role` 进入活动态（running/completed，取最早一次）时切换；
+///   调用方据此让前端保持单个弹跳点气泡，并把后续文本作为最终结果写回同一条 assistant 消息。
+/// - 委派激活后出现的**新** messageID 归最终文本槽（`Followup`）；
+///   已知属于第一段开场的 messageID 仍保持 `First`（其残余 delta 不串桶）。
 ///
 /// 不依赖具体 DB id，只做"该归哪个气泡"的决策，便于单测；I/O 留在调用方。
 #[derive(Default)]
 struct DelegationBubbleState {
     delegated: bool,
+    role_tool_active: bool,
     first_message_id: Option<String>,
 }
 
@@ -2397,6 +2805,9 @@ enum BubbleSlot {
 impl DelegationBubbleState {
     /// 判定某条 assistant messageID 的文本应落入哪个气泡。
     fn classify_message(&mut self, message_id: &str) -> BubbleSlot {
+        if self.role_tool_active {
+            return BubbleSlot::Followup;
+        }
         if !self.delegated {
             // 委派尚未激活：记住第一条 messageID，全部归第一气泡。
             if self.first_message_id.is_none() {
@@ -2411,13 +2822,20 @@ impl DelegationBubbleState {
         }
     }
 
-    /// 标记 `delegate_to_role` 进入活动态。首次调用返回 true（调用方据此执行
-    /// 一次性的"切第二气泡 + 唤醒弹跳点"），后续重复上报返回 false。
+    /// 标记 `delegate_to_role` 进入活动态。首次调用返回 true（调用方据此切到最终文本槽），后续重复上报返回 false。
     fn note_delegate_active(&mut self) -> bool {
         if self.delegated {
             return false;
         }
         self.delegated = true;
+        true
+    }
+
+    fn note_role_tool_active(&mut self) -> bool {
+        if self.role_tool_active {
+            return false;
+        }
+        self.role_tool_active = true;
         true
     }
 
@@ -3350,20 +3768,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_delegation_bubble_state_splits_into_two_bubbles() {
-        // WHY: 管家委派两段（"稍等…" / 委派回复）来自不同 opencode messageID，
-        // 必须路由到两个气泡。实测时间线：msg_A 先出现并产出第一段文本，
-        // delegate_to_role 进入 running 时切第二气泡（唤醒弹跳点），随后 msg_B 产出第二段。
+    fn test_delegation_bubble_state_routes_final_text_after_tool_starts() {
         let mut state = DelegationBubbleState::default();
-        // round1：第一条 assistant 消息的文本属于第一气泡
         assert_eq!(state.classify_message("msg_A"), BubbleSlot::First);
         assert_eq!(state.classify_message("msg_A"), BubbleSlot::First);
-        // delegate_to_role 进入 running → 第一次返回 true（调用方据此建 followup 气泡 + 发空 token 唤醒弹跳点）
         assert!(state.note_delegate_active());
-        // completed 再次上报同一工具 → 不应再次触发 split
         assert!(!state.note_delegate_active());
-        // round2：委派回复来自新的 messageID，路由到 followup 气泡
         assert_eq!(state.classify_message("msg_B"), BubbleSlot::Followup);
+        assert_eq!(state.classify_message("msg_B"), BubbleSlot::Followup);
+    }
+
+    #[test]
+    fn test_role_tool_bubble_state_routes_final_text_after_tool_starts() {
+        let mut state = DelegationBubbleState::default();
+
+        assert_eq!(state.classify_message("msg_A"), BubbleSlot::First);
+        assert!(state.note_role_tool_active());
+        assert!(!state.note_role_tool_active());
+        assert_eq!(state.classify_message("msg_A"), BubbleSlot::Followup);
         assert_eq!(state.classify_message("msg_B"), BubbleSlot::Followup);
     }
 
@@ -3389,13 +3811,84 @@ mod tests {
         // WHY: one EgoSync conversation must keep one opencode session so the
         // Agent Loop retains context across turns instead of starting fresh.
         let mut sessions = std::collections::HashMap::new();
-        let first = remember_opencode_session(&mut sessions, "conv-1", "session-a");
-        let second = remember_opencode_session(&mut sessions, "conv-1", "session-b");
+        let first = remember_opencode_session_for_directory(
+            &mut sessions,
+            "conv-1",
+            "session-a",
+            "D:\\Work\\A",
+        );
+        let second = remember_opencode_session_for_directory(
+            &mut sessions,
+            "conv-1",
+            "session-b",
+            "D:\\Work\\A",
+        );
 
         assert_eq!(first, "session-a");
         assert_eq!(second, "session-a");
         assert_eq!(
-            sessions.get("conv-1").map(String::as_str),
+            sessions
+                .get("conv-1")
+                .and_then(|state| state.sessions_by_directory.get("D:\\Work\\A"))
+                .map(String::as_str),
+            Some("session-a")
+        );
+    }
+
+    #[test]
+    fn test_remember_opencode_session_creates_new_session_when_working_directory_changes() {
+        let mut sessions = std::collections::HashMap::new();
+        let first = remember_opencode_session_for_directory(
+            &mut sessions,
+            "conv-1",
+            "session-a",
+            "D:\\Work\\A",
+        );
+        let reused = remember_opencode_session_for_directory(
+            &mut sessions,
+            "conv-1",
+            "session-b",
+            "D:\\Work\\A",
+        );
+        let changed = remember_opencode_session_for_directory(
+            &mut sessions,
+            "conv-1",
+            "session-c",
+            "D:\\Work\\B",
+        );
+
+        assert_eq!(first, "session-a");
+        assert_eq!(reused, "session-a");
+        assert_eq!(changed, "session-c");
+    }
+
+    #[test]
+    fn test_remember_opencode_session_reuses_previous_directory_after_switching_back() {
+        let mut sessions = std::collections::HashMap::new();
+        let first = remember_opencode_session_for_directory(
+            &mut sessions,
+            "conv-1",
+            "session-a",
+            "D:\\Work\\A",
+        );
+        let changed = remember_opencode_session_for_directory(
+            &mut sessions,
+            "conv-1",
+            "session-b",
+            "D:\\Work\\B",
+        );
+        let switched_back = remember_opencode_session_for_directory(
+            &mut sessions,
+            "conv-1",
+            "session-c",
+            "D:\\Work\\A",
+        );
+
+        assert_eq!(first, "session-a");
+        assert_eq!(changed, "session-b");
+        assert_eq!(switched_back, "session-a");
+        assert_eq!(
+            sessions.get("conv-1").map(|state| state.active_session_id.as_str()),
             Some("session-a")
         );
     }
@@ -3418,6 +3911,133 @@ mod tests {
         assert!(!payload.done);
         assert!(!payload.thinking);
         assert_eq!(payload.message_id.as_deref(), Some("msg-1"));
+    }
+
+    #[test]
+    fn text_part_description_produces_narration_process_event() {
+        let part_raw = serde_json::json!({
+            "id": "part-text",
+            "type": "text",
+            "text": "先检查 markitdown 是否已安装。"
+        });
+
+        let candidate = build_narration_process_event_candidate(&part_raw)
+            .expect("user-visible text part should produce a narration process event");
+
+        assert_eq!(candidate.event_type, "narration");
+        assert_eq!(candidate.tool_name, None);
+        assert_eq!(candidate.status, None);
+        assert_eq!(candidate.summary, "先检查 markitdown 是否已安装。");
+        assert_eq!(candidate.raw_json.get("text").and_then(|v| v.as_str()), Some("先检查 markitdown 是否已安装。"));
+        assert!(candidate.raw_json.get("rawPart").is_some());
+    }
+
+    #[test]
+    fn narration_buffer_flushes_complete_description_before_tool() {
+        let mut text = String::new();
+        let mut has_tool = false;
+
+        buffer_narration_delta(&mut text, &mut has_tool, "先检查 ");
+        buffer_narration_delta(&mut text, &mut has_tool, "markitdown 是否已安装。");
+
+        assert_eq!(text, "先检查 markitdown 是否已安装。");
+        assert!(!has_tool);
+        has_tool = true;
+        assert!(has_tool);
+    }
+
+    #[test]
+    fn final_narration_flush_requires_tool_process_event() {
+        assert!(!should_flush_final_narration(false, "这是一个普通回答。"));
+        assert!(!should_flush_final_narration(true, "   "));
+        assert!(should_flush_final_narration(true, "转换完成，查看输出内容。"));
+    }
+
+    #[test]
+    fn tool_process_event_extracts_bash_failure_details() {
+        let part_raw = serde_json::json!({
+            "id": "part-shell",
+            "type": "tool",
+            "tool": "bash",
+            "state": {
+                "status": "failed",
+                "input": { "command": "npm run test:frontend" },
+                "output": "stdout text",
+                "error": "exit code 1"
+            }
+        });
+
+        let candidate = build_tool_process_event_candidate(&part_raw)
+            .expect("failed shell tool part should produce a process event");
+
+        assert_eq!(candidate.event_type, "tool");
+        assert_eq!(candidate.tool_name.as_deref(), Some("bash"));
+        assert_eq!(candidate.status.as_deref(), Some("failed"));
+        assert!(candidate.summary.contains("bash"));
+        assert!(candidate.summary.contains("失败"));
+        assert_eq!(candidate.raw_json.get("tool").and_then(|v| v.as_str()), Some("bash"));
+        assert_eq!(candidate.raw_json.get("status").and_then(|v| v.as_str()), Some("failed"));
+        assert_eq!(candidate.raw_json.get("command").and_then(|v| v.as_str()), Some("npm run test:frontend"));
+        assert_eq!(candidate.raw_json.get("output").and_then(|v| v.as_str()), Some("stdout text"));
+        assert_eq!(candidate.raw_json.get("error").and_then(|v| v.as_str()), Some("exit code 1"));
+        assert!(candidate.raw_json.get("input").is_some());
+        assert!(candidate.raw_json.get("rawPart").is_some());
+    }
+
+    #[test]
+    fn tool_process_event_extracts_completed_input_output() {
+        let part_raw = serde_json::json!({
+            "id": "part-read",
+            "type": "tool",
+            "tool": "read",
+            "state": {
+                "status": "completed",
+                "input": { "file_path": "D:\\Workspace\\a.ts" },
+                "output": "file content"
+            }
+        });
+
+        let candidate = build_tool_process_event_candidate(&part_raw)
+            .expect("completed read tool part should produce a process event");
+
+        assert_eq!(candidate.event_type, "tool");
+        assert_eq!(candidate.tool_name.as_deref(), Some("read"));
+        assert_eq!(candidate.status.as_deref(), Some("completed"));
+        assert_eq!(candidate.raw_json.get("tool").and_then(|v| v.as_str()), Some("read"));
+        assert_eq!(candidate.raw_json.get("status").and_then(|v| v.as_str()), Some("completed"));
+        assert_eq!(candidate.raw_json.get("output").and_then(|v| v.as_str()), Some("file content"));
+        assert_eq!(
+            candidate.raw_json
+                .get("input")
+                .and_then(|v| v.get("file_path"))
+                .and_then(|v| v.as_str()),
+            Some("D:\\Workspace\\a.ts")
+        );
+        assert!(candidate.raw_json.get("error").is_none());
+    }
+
+    #[test]
+    fn tool_process_event_normalizes_read_file_path_alias() {
+        let part_raw = serde_json::json!({
+            "id": "part-read",
+            "type": "tool",
+            "tool": "read",
+            "state": {
+                "status": "running",
+                "input": { "filePath": "D:\\Workspace\\alias.md" }
+            }
+        });
+
+        let candidate = build_tool_process_event_candidate(&part_raw)
+            .expect("read tool part should produce a process event");
+
+        assert_eq!(
+            candidate.raw_json
+                .get("input")
+                .and_then(|v| v.get("file_path"))
+                .and_then(|v| v.as_str()),
+            Some("D:\\Workspace\\alias.md")
+        );
     }
 
     #[test]
@@ -4761,6 +5381,54 @@ mod tests {
         );
 
         assert!(text.ends_with("是否保留。"));
+    }
+
+    #[test]
+    fn test_remove_recorded_narration_prefix_from_final_text() {
+        let mut final_text = "好的，我来帮你把这个 PowerPoint 文件转换成 Markdown 格式。转换完成了。已保存到 output.md".to_string();
+        let recorded_narrations = vec!["好的，我来帮你把这个 PowerPoint 文件转换成 Markdown 格式。".to_string()];
+
+        remove_recorded_narration_prefixes(&mut final_text, &recorded_narrations);
+
+        assert_eq!(final_text, "转换完成了。已保存到 output.md");
+    }
+
+    #[test]
+    fn test_split_followup_completed_response_uses_tail_after_first_bubble() {
+        let mut followup = String::new();
+        append_completed_followup_tail(
+            None,
+            "conversation-id",
+            Some("followup-id"),
+            &mut followup,
+            "我来帮你把 PPTX 文件转换成 Markdown 格式。",
+            "我来帮你把 PPTX 文件转换成 Markdown 格式。转换完成。文件已保存。",
+        );
+
+        assert_eq!(followup, "转换完成。文件已保存。");
+    }
+
+    #[test]
+    fn test_split_followup_completed_fallback_uses_tail_after_first_bubble() {
+        let completed = crate::models::agent::OpencodeCompletedMessage {
+            text: "我来帮你把 PPTX 文件转换成 Markdown 格式。转换完成。文件已保存。".to_string(),
+            thinking: "内部思考".to_string(),
+        };
+        let mut followup = String::new();
+        let mut thinking = String::new();
+
+        apply_completed_followup_message_fallback(
+            None,
+            "conversation-id",
+            Some("followup-id"),
+            Some(completed),
+            Some("我来帮你把 PPTX 文件转换成 Markdown 格式。"),
+            &mut followup,
+            &mut thinking,
+        );
+
+        assert_eq!(followup, "转换完成。文件已保存。");
+        assert_eq!(thinking, "内部思考");
     }
 
     #[test]

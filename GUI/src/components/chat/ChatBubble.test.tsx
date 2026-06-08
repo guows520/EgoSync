@@ -38,6 +38,13 @@ describe('ChatBubble assistant identity', () => {
     expect(screen.queryByText('管家')).not.toBeInTheDocument();
   });
 
+  it('非流式气泡不默认播放入场动画', () => {
+    const { container } = render(<ChatBubble message={assistantMsg} />);
+
+    expect(container.firstElementChild).not.toHaveClass('animate-in');
+    expect(container.firstElementChild).not.toHaveClass('slide-in-from-bottom-2');
+  });
+
   it('已有文本的流式助手气泡不显示尾部光标', () => {
     const { container } = render(<ChatBubble message={{ ...assistantMsg, isComplete: false }} isStreaming />);
 
@@ -120,33 +127,30 @@ describe('ChatBubble assistant identity', () => {
     expect(onMemoryReferenceClick).not.toHaveBeenCalled();
   });
 
-  it('assistant thinkingContent 显示为可展开的思考过程', () => {
-    render(<ChatBubble message={{ ...assistantMsg, thinkingContent: 'visible thought' }} />);
+  it('assistant thinkingContent 不再直接作为执行过程原文展示', () => {
+    render(<ChatBubble message={{ ...assistantMsg, thinkingContent: '用户要求一个PPT文件转换为Markdown格式。' }} />);
 
-    const toggle = screen.getByRole('button', { name: '思考过程' });
-    expect(toggle).toBeInTheDocument();
-    expect(screen.queryByText('visible thought')).not.toBeInTheDocument();
-
-    fireEvent.click(toggle);
-
-    expect(screen.getByText('visible thought')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '思考过程' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '查看处理过程' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '执行过程' })).not.toBeInTheDocument();
+    expect(screen.queryByText('用户要求一个PPT文件转换为Markdown格式。')).not.toBeInTheDocument();
   });
 
-  it('streaming thinking token 显示原思考中样式和实时文本', () => {
+  it('streaming thinking token 不再直接作为执行过程原文展示', () => {
     render(
       <ChatBubble
         message={{ ...assistantMsg, content: '', isComplete: false }}
         isStreaming
-        streamingThinking="streaming thought"
+        streamingThinking="我应该使用skill工具来调用markitdown技能。"
         isThinkingPhase
       />,
     );
 
-    expect(screen.getByText('思考中...')).toBeInTheDocument();
-    expect(screen.getByText('streaming thought')).toBeInTheDocument();
+    expect(screen.queryByText('思考中...')).not.toBeInTheDocument();
+    expect(screen.queryByText('我应该使用skill工具来调用markitdown技能。')).not.toBeInTheDocument();
   });
 
-  it('工具状态按通用文案显示', () => {
+  it('工具状态归入顶部执行过程且不再显示查看处理过程入口', () => {
     render(
       <ChatBubble
         message={{ ...assistantMsg, content: '', isComplete: false }}
@@ -155,6 +159,44 @@ describe('ChatBubble assistant identity', () => {
       />,
     );
 
+    expect(screen.getByRole('button', { name: '执行过程' })).toBeInTheDocument();
     expect(screen.getByText('正在使用 find-skills...')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '查看处理过程' })).not.toBeInTheDocument();
+  });
+
+  it('操作卡展开后只显示原始执行指令和实际执行结果', () => {
+    render(
+      <ChatBubble
+        message={assistantMsg}
+        executionTraceBlocks={[
+          {
+            id: 'event-shell',
+            type: 'action',
+            actionType: 'shell',
+            title: '检查 markitdown 是否已安装',
+            status: 'completed',
+            details: [
+              { label: 'Command', value: 'pip show markitdown 2>$null; if ($LASTEXITCODE -ne 0) { echo "NOT_INSTALLED" }' },
+              { label: 'Output', value: 'Name: markitdown\nVersion: 0.1.6' },
+            ],
+          },
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '执行过程' }));
+    const actionCard = screen.getByRole('button', { name: /检查 markitdown 是否已安装/ });
+    expect(actionCard).toBeInTheDocument();
+    expect(screen.queryByText(/pip show markitdown/)).not.toBeInTheDocument();
+
+    fireEvent.click(actionCard);
+
+    expect(screen.getByText('$ pip show markitdown 2>$null; if ($LASTEXITCODE -ne 0) { echo "NOT_INSTALLED" }')).toBeInTheDocument();
+    expect(screen.getByText(/Name: markitdown/)).toBeInTheDocument();
+    expect(screen.getByText(/Version: 0\.1\.6/)).toBeInTheDocument();
+    expect(screen.queryByText('Command')).not.toBeInTheDocument();
+    expect(screen.queryByText('Input')).not.toBeInTheDocument();
+    expect(screen.queryByText('Output')).not.toBeInTheDocument();
+    expect(screen.queryByText(/"tool":"bash"/)).not.toBeInTheDocument();
   });
 });

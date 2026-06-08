@@ -8,7 +8,7 @@ use tokio_util::sync::CancellationToken;
 use crate::db::conversations;
 use crate::db::pool::{ConversationsPool, DbPool};
 use crate::error::AppError;
-use crate::models::chat::{ChatRequest, Conversation, Message, TitleUpdatedPayload};
+use crate::models::chat::{ChatRequest, Conversation, Message, MessageProcessEvent, TitleUpdatedPayload};
 use crate::services::agent_config::AgentConfigService;
 use crate::services::agent_engine;
 
@@ -18,8 +18,14 @@ pub struct StreamingState(pub Arc<Mutex<HashSet<String>>>);
 #[derive(Default)]
 pub struct CancelTokens(pub Arc<Mutex<HashMap<String, CancellationToken>>>);
 
+#[derive(Default, Clone)]
+pub struct OpencodeSessionState {
+    pub active_session_id: String,
+    pub sessions_by_directory: HashMap<String, String>,
+}
+
 #[derive(Default)]
-pub struct OpencodeSessions(pub Arc<Mutex<HashMap<String, String>>>);
+pub struct OpencodeSessions(pub Arc<Mutex<HashMap<String, OpencodeSessionState>>>);
 
 /// Tracks which conversations are in onboarding mode.
 /// Key: conversation_id, Value: current onboarding step
@@ -194,7 +200,10 @@ async fn opencode_session_id_for_stop(
     conversation_id: &str,
 ) -> Option<String> {
     let sessions = opencode_sessions.0.lock().await;
-    sessions.get(conversation_id).cloned()
+    sessions
+        .get(conversation_id)
+        .map(|state| state.active_session_id.clone())
+        .filter(|id| !id.is_empty())
 }
 
 #[tauri::command]
@@ -348,6 +357,7 @@ pub async fn chat_send_message(
 
     let role_id_for_stream = request.role_id.clone();
     let user_message_id_for_stream = user_msg.id.clone();
+    let working_directory_for_stream = request.working_directory.clone();
 
     tokio::spawn(async move {
         let result = agent_engine::run_stream(
@@ -365,6 +375,7 @@ pub async fn chat_send_message(
             agent_bridge_clone,
             event_router_clone,
             delegate_bridge_clone,
+            working_directory_for_stream,
         )
         .await;
 
@@ -441,6 +452,20 @@ pub async fn chat_get_history(
     conv_pool: State<'_, ConversationsPool>,
 ) -> Result<Vec<Message>, AppError> {
     conversations::list_messages(&conv_pool, &conversation_id).await
+}
+
+#[tauri::command]
+pub async fn chat_get_message_process_events(
+    message_id: String,
+    conv_pool: State<'_, ConversationsPool>,
+) -> Result<Vec<MessageProcessEvent>, AppError> {
+    conversations::list_message_process_events(&conv_pool, &message_id).await
+}
+
+#[tauri::command]
+pub async fn chat_pick_working_directory() -> Result<Option<String>, AppError> {
+    let picked = rfd::AsyncFileDialog::new().pick_folder().await;
+    Ok(picked.map(|folder| folder.path().to_string_lossy().to_string()))
 }
 
 #[tauri::command]
@@ -621,6 +646,24 @@ mod tests {
             .execute(&pool)
             .await
             .expect("add routing_metadata");
+        sqlx::raw_sql(
+            "CREATE TABLE IF NOT EXISTS message_process_events (
+                id TEXT PRIMARY KEY NOT NULL,
+                conversation_id TEXT NOT NULL,
+                message_id TEXT NOT NULL,
+                opencode_session_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                tool_name TEXT,
+                status TEXT,
+                summary TEXT NOT NULL,
+                raw_json TEXT NOT NULL,
+                working_directory TEXT,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create message_process_events");
         ConversationsPool(pool)
     }
 
@@ -680,8 +723,26 @@ mod tests {
         let sessions = OpencodeSessions::default();
         {
             let mut map = sessions.0.lock().await;
-            map.insert("conv-1".to_string(), "session-a".to_string());
-            map.insert("conv-2".to_string(), "session-b".to_string());
+            map.insert(
+                "conv-1".to_string(),
+                OpencodeSessionState {
+                    active_session_id: "session-a".to_string(),
+                    sessions_by_directory: HashMap::from([(
+                        "D:\\Work\\A".to_string(),
+                        "session-a".to_string(),
+                    )]),
+                },
+            );
+            map.insert(
+                "conv-2".to_string(),
+                OpencodeSessionState {
+                    active_session_id: "session-b".to_string(),
+                    sessions_by_directory: HashMap::from([(
+                        "D:\\Work\\B".to_string(),
+                        "session-b".to_string(),
+                    )]),
+                },
+            );
         }
 
         let session_id = opencode_session_id_for_stop(&sessions, "conv-2").await;

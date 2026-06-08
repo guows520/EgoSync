@@ -1,9 +1,12 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { Conversation, ChatMessage, ChatRequest } from '../types/chat';
+import type { Conversation, ChatMessage, ChatRequest, MessageProcessEvent } from '../types/chat';
 
 export const chatService = {
   sendMessage: (request: ChatRequest) => invoke<ChatMessage>('chat_send_message', { request }),
   getHistory: (conversationId: string) => invoke<ChatMessage[]>('chat_get_history', { conversationId }),
+  getMessageProcessEvents: (messageId: string) =>
+    invoke<MessageProcessEvent[]>('chat_get_message_process_events', { messageId }),
+  pickWorkingDirectory: () => invoke<string | null>('chat_pick_working_directory'),
   getConversation: (conversationId: string) => invoke<Conversation | null>('chat_get_conversation', { conversationId }),
   getButlerConversation: () => invoke<Conversation>('chat_get_butler_conversation'),
   getRoleConversation: (roleId: string) =>

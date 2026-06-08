@@ -2,7 +2,7 @@ import { useState, Fragment, memo, type AnchorHTMLAttributes, type ReactNode } f
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import { cn } from '../../lib/utils';
 import { Home, ChevronRight, type LucideIcon } from 'lucide-react';
-import type { ChatMessage, StreamPayload } from '../../types/chat';
+import type { ChatMessage, ExecutionTraceBlock, StreamPayload } from '../../types/chat';
 
 const BounceDots = memo(function BounceDots() {
   return (
@@ -20,6 +20,7 @@ interface ChatBubbleProps {
   streamingThinking?: string;
   isThinkingPhase?: boolean;
   streamStatus?: Pick<StreamPayload, 'phase' | 'statusText' | 'toolName'> | null;
+  executionTraceBlocks?: ExecutionTraceBlock[];
   /** 助手气泡显示的角色名。未传时回退到「管家」。 */
   assistantName?: string;
   /** 助手气泡左上角图标。未传时回退到 Home。 */
@@ -89,22 +90,146 @@ function renderMemoryReferences(node: ReactNode, onMemoryReferenceClick?: (memor
   return node;
 }
 
+type ExecutionActionType = Extract<ExecutionTraceBlock, { type: 'action' }>['actionType'];
+
+function actionTypeLabel(type: ExecutionActionType) {
+  switch (type) {
+    case 'shell': return 'Shell';
+    case 'read': return null;
+    case 'edit': return 'Edit';
+    case 'write': return 'Write';
+    case 'skill': return 'Skill';
+    case 'explore': return 'Explore';
+    default: return 'Tool';
+  }
+}
+
+function ExecutionActionDetails({ block }: { block: Extract<ExecutionTraceBlock, { type: 'action' }> }) {
+  const details = block.details ?? [];
+  const command = details.find(detail => detail.label === 'Command')?.value;
+  const outputs = details.filter(detail => detail.label === 'Output' || detail.label === 'Error');
+  const otherDetails = details.filter(detail => detail.label !== 'Command' && detail.label !== 'Output' && detail.label !== 'Error');
+
+  return (
+    <div className="space-y-2 border-t border-slate-200 p-3 text-[11px] leading-relaxed dark:border-slate-700">
+      {command && (
+        <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-md bg-slate-100 p-2 text-slate-600 dark:bg-slate-950/60 dark:text-slate-300">
+          {`$ ${command}`}
+        </pre>
+      )}
+      {outputs.map(detail => (
+        <pre
+          key={`${detail.label}-${detail.value}`}
+          className={cn(
+            'max-h-64 overflow-auto whitespace-pre-wrap rounded-md bg-slate-100 p-2 text-slate-600 dark:bg-slate-950/60 dark:text-slate-300',
+            detail.tone === 'error' && 'bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-300',
+          )}
+        >
+          {detail.value}
+        </pre>
+      ))}
+      {!command && outputs.length === 0 && otherDetails.map(detail => (
+        <pre
+          key={`${detail.label}-${detail.value}`}
+          className={cn(
+            'max-h-64 overflow-auto whitespace-pre-wrap rounded-md bg-slate-100 p-2 text-slate-600 dark:bg-slate-950/60 dark:text-slate-300',
+            detail.tone === 'error' && 'bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-300',
+          )}
+        >
+          {detail.value}
+        </pre>
+      ))}
+    </div>
+  );
+}
+
+function ExecutionActionCard({ block }: { block: Extract<ExecutionTraceBlock, { type: 'action' }> }) {
+  const [expanded, setExpanded] = useState(false);
+  const hasDetails = Boolean(block.details?.length);
+  const label = actionTypeLabel(block.actionType);
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white/70 dark:border-slate-700 dark:bg-slate-900/40">
+      <button
+        type="button"
+        onClick={() => setExpanded(prev => !prev)}
+        className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800/60"
+      >
+        <ChevronRight size={12} className={cn('shrink-0 transition-transform', expanded && 'rotate-90')} />
+        {label && <span className="shrink-0 font-semibold">{label}</span>}
+        <span className="min-w-0 truncate">{block.title}</span>
+      </button>
+      {block.previewLines && block.previewLines.length > 0 && (
+        <div className="space-y-1 px-3 pb-2 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
+          {block.previewLines.map((line, index) => (
+            <div key={`${line}-${index}`}>{line}</div>
+          ))}
+        </div>
+      )}
+      {expanded && hasDetails && <ExecutionActionDetails block={block} />}
+      {expanded && !hasDetails && block.detail && (
+        <pre className="max-h-64 overflow-auto border-t border-slate-200 p-3 text-[11px] leading-relaxed text-slate-500 dark:border-slate-700 dark:text-slate-400">
+          {block.detail}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+export function ExecutionTrace({ blocks, defaultExpanded }: { blocks: ExecutionTraceBlock[]; defaultExpanded: boolean }) {
+  const [expanded, setExpanded] = useState(defaultExpanded);
+  return (
+    <div className="max-w-[85%]">
+      <button
+        type="button"
+        onClick={() => setExpanded(prev => !prev)}
+        className="flex items-center gap-1.5 py-1 text-xs text-slate-400 transition-colors hover:text-slate-500 dark:hover:text-slate-300"
+      >
+        <ChevronRight size={12} className={cn('transition-transform', expanded && 'rotate-90')} />
+        <span>执行过程</span>
+      </button>
+      {expanded && (
+        <div className="mt-1 space-y-2 rounded-xl border border-slate-200/60 bg-slate-50 p-3 shadow-sm dark:border-slate-700/60 dark:bg-slate-800/50">
+          {blocks.map(block => block.type === 'narration' ? (
+            <p key={block.id} className="text-xs leading-relaxed text-slate-500 whitespace-pre-wrap dark:text-slate-400">
+              {block.content}
+            </p>
+          ) : (
+            <ExecutionActionCard key={block.id} block={block} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ChatBubble({
   message,
   isStreaming,
-  streamingThinking,
   isThinkingPhase,
   streamStatus,
+  executionTraceBlocks = [],
   assistantName,
   assistantIcon,
   assistantColor,
   onMemoryReferenceClick,
 }: ChatBubbleProps) {
-  const [thinkingExpanded, setThinkingExpanded] = useState(false);
   const isUser = message.role === 'user';
-  const thinkingText = !isUser ? (streamingThinking || message.thinkingContent) : '';
-  const hasThinking = Boolean(thinkingText && thinkingText.length > 0);
   const statusText = streamStatus?.statusText;
+  const traceBlocks: ExecutionTraceBlock[] = [];
+
+  if (statusText && !isUser) {
+    traceBlocks.push({
+      id: 'stream-status',
+      type: 'action',
+      actionType: 'tool',
+      title: statusText,
+      status: 'running',
+    });
+  }
+  traceBlocks.push(...executionTraceBlocks);
+
+  const hasExecutionTrace = !isUser && traceBlocks.length > 0;
+  const executionTraceDefaultExpanded = Boolean(isStreaming && hasExecutionTrace);
 
   const AssistantIcon = assistantIcon ?? Home;
   const displayName = assistantName ?? '管家';
@@ -112,46 +237,10 @@ export function ChatBubble({
   return (
     <div className={cn(
       "flex flex-col gap-1.5",
-      !isStreaming && "animate-in slide-in-from-bottom-2",
       isUser ? "items-end" : "items-start"
     )}>
-      {hasThinking && (
-        <div className="max-w-[85%]">
-          {isThinkingPhase ? (
-            <div className="bg-slate-50 dark:bg-slate-800/50 border border-slate-200/60 dark:border-slate-700/60 rounded-xl p-3 shadow-sm">
-              <div className="flex items-center gap-2 mb-1.5">
-                <span className="text-xs font-medium text-amber-500">思考中...</span>
-                <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse" />
-              </div>
-              <div className="max-h-10 overflow-hidden flex flex-col justify-end">
-                <p className="text-xs text-slate-400 dark:text-slate-500 leading-relaxed whitespace-pre-wrap">
-                  {thinkingText}
-                </p>
-              </div>
-            </div>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setThinkingExpanded(prev => !prev)}
-              className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-500 dark:hover:text-slate-300 transition-colors py-1"
-            >
-              <ChevronRight size={12} className={cn('transition-transform', thinkingExpanded && 'rotate-90')} />
-              <span>思考过程</span>
-            </button>
-          )}
-          {thinkingExpanded && !isThinkingPhase && (
-            <div className="bg-slate-50 dark:bg-slate-800/50 border border-slate-200/60 dark:border-slate-700/60 rounded-xl p-3 mt-1 shadow-sm">
-              <p className="text-xs text-slate-400 dark:text-slate-500 leading-relaxed whitespace-pre-wrap max-h-48 overflow-y-auto">
-                {thinkingText}
-              </p>
-            </div>
-          )}
-        </div>
-      )}
-      {statusText && !isUser && (
-        <div className="max-w-[85%] rounded-xl border border-slate-200/60 bg-slate-50 px-3 py-2 text-xs text-slate-500 shadow-sm dark:border-slate-700/60 dark:bg-slate-800/50 dark:text-slate-400">
-          {statusText}
-        </div>
+      {hasExecutionTrace && (
+        <ExecutionTrace blocks={traceBlocks} defaultExpanded={executionTraceDefaultExpanded} />
       )}
       <div className={cn(
         "rounded-2xl px-5 py-3 max-w-[85%] text-[14.5px] leading-[1.7] shadow-sm",

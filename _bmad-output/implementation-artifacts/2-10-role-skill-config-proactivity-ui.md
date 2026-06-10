@@ -4,7 +4,7 @@ baseline_commit: a4fb7c7bcec93dc708c190172eb9040215bedde1
 
 # Story 2.10: 角色 Skill 配置与主动性 UI
 
-Status: review
+Status: done
 
 ## Story
 

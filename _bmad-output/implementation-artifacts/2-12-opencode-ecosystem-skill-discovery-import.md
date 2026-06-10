@@ -79,14 +79,20 @@ so that 我能复用 opencode 生态能力，同时仍由 EgoSync 管理每个�
   - [x] 导入成功后刷新 registry 列表并允许立即启用到当前角色
   - [x] 使用 inline feedback，不新增全局 toast
 
-- [x] 同步角色 agent 能力边界（AC: 5）
+- [x] ButlerSettingsContent 接入发现列表 UI（AC: 1, 2, 3, 4, 5）
+  - [x] 管家设置页增加同等“opencode 生态 Skill”发现/展开/导入/取消导入能力
+  - [x] 使用 `__butler__` scope 判断管家是否已导入，并导入到管家 `enabledSkillIds`
+  - [x] 从管家取消导入只移除管家配置，不影响 registry 与角色绑定
+
+- [x] 同步角色与管家 agent 能力边界（AC: 5）
   - [x] 更新 `AgentConfigService::build_agent_entry` 或相关 helper，使启用的 opencode Skill 被反映到 agent 配置/prompt
+  - [x] 管家通过既有 Butler registry 注入链路获得已启用 opencode Skill metadata
   - [x] 禁用后重新同步，不留下旧 prompt 声明
-  - [x] `full_sync` 必须保持导入 Skill 与角色绑定一致
+  - [x] `full_sync` 必须保持导入 Skill 与角色/管家绑定一致
 
 - [x] 测试与验证（AC: 1-7）
-  - [x] Rust 单测：目录扫描、无效项跳过、重复检测、find-skills 未启用阻断、导入 registry 写入
-  - [x] 前端测试：未启用提示、扫描结果渲染、跳过摘要、导入后可启用
+  - [x] Rust 单测：目录扫描、无效项跳过、重复检测、find-skills 未启用阻断、导入 registry 写入、管家 scope 已导入判断、管家取消导入
+  - [x] 前端测试：未启用提示、扫描结果渲染、跳过摘要、导入后可启用、管家发现/导入/取消导入
   - [x] 回归 2.10/2.11 相关测试
   - [x] 运行 `npm --prefix "GUI" run test:frontend`
   - [x] 运行 `cargo test --manifest-path "GUI/src-tauri/Cargo.toml" -- --test-threads=1`
@@ -179,10 +185,11 @@ Claude Opus 4.8 (Claude Code)
 - 复用 Story 2.11 的 `skills` registry、`skill_role_bindings` 和 `enabledSkillIds` 配置链路，新增 `sourceType="opencode"`，通过追加 `010_skills_opencode_source_type.sql` 扩展 schema，保留 `custom` 兼容。
 - 新增 opencode Skill discovery/import 后端能力：只扫描 EgoSync opencode workspace 的 `.opencode/skills/*/SKILL.md` 与用户 home 下 `~/.config/opencode/skills/*/SKILL.md`，不递归任意目录，不下载 URL，不读取远程市场。
 - 无效 Skill（缺少 `SKILL.md`、frontmatter 不完整、不可读取）进入 skipped summary，不进入可导入列表；扫描结果只返回 name/description/source summary/sourceType/imported 状态。
-- 新增 `skill_discover_opencode` / `skill_import_opencode` Tauri command 与 `skillService.discoverOpencode/importOpencode`；当前角色未启用 `find-skills` 时后端返回 validation error，前端显示启用入口且不触发扫描。
-- SettingsTab 新增 “opencode 生态 Skill” 区块，展示扫描结果、已导入状态、跳过摘要与导入按钮；导入后刷新当前角色 registry 列表与角色 `enabledSkillIds`，inline feedback 无全局 toast。
-- `AgentConfigService` 继续按 registry id 注入启用 Skill 的 name/description；opencode sourceType 走同一 registry，因此 role update/full sync 禁用后不会声明旧 Skill。
-- 已验证：`npm --prefix "GUI" run test:frontend`（15 files / 146 tests 通过）；`cargo test --manifest-path "GUI/src-tauri/Cargo.toml" -- --test-threads=1`（304 lib tests + 1 integration test 通过）；`npm --prefix "GUI" run build` 通过。
+- 新增 `skill_discover_opencode` / `skill_import_opencode` Tauri command 与 `skillService.discoverOpencode/importOpencode`；当前角色或管家未启用 `find-skills` 时后端返回 validation error，前端显示启用入口且不触发扫描。
+- SettingsTab 新增 “opencode 生态 Skill” 区块，展示扫描结果、已导入状态、跳过摘要与导入/取消导入按钮；导入后刷新当前角色 registry 列表与角色 `enabledSkillIds`，inline feedback 无全局 toast。
+- ButlerSettingsContent 新增同等 “opencode 生态 Skill” 区块，使用 `__butler__` scope 导入/取消导入管家 Skill；取消导入只移除管家配置，不删除 registry，不影响角色绑定。
+- `AgentConfigService` 继续按 registry id 注入启用 Skill 的 name/description；opencode sourceType 走同一 registry，因此 role/butler update/full sync 禁用后不会声明旧 Skill。
+- 已验证：`npm --prefix "GUI" run test:frontend`（15 files / 150 tests 通过）；`cargo test --manifest-path "GUI/src-tauri/Cargo.toml" -- --test-threads=1`（308 lib tests + 1 integration test 通过）；`npm --prefix "GUI" run build` 通过。
 
 ### File List
 
@@ -193,6 +200,8 @@ Claude Opus 4.8 (Claude Code)
 - `GUI/src-tauri/src/db/skills.rs`
 - `GUI/src-tauri/src/models/skill.rs`
 - `GUI/src-tauri/src/services/skill_registry.rs`
+- `GUI/src/components/butler/ButlerSettingsContent.test.tsx`
+- `GUI/src/components/butler/ButlerSettingsContent.tsx`
 - `GUI/src/components/role/SettingsTab.test.tsx`
 - `GUI/src/components/role/SettingsTab.tsx`
 - `GUI/src/services/skillService.ts`

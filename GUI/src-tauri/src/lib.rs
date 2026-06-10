@@ -268,6 +268,8 @@ pub fn run() {
             commands::skill::skill_list_all_role_skills,
             commands::skill::skill_pick_custom_directory,
             commands::skill::skill_preview_custom,
+            commands::skill::skill_discover_opencode,
+            commands::skill::skill_import_opencode,
             commands::skill::skill_import_custom,
             commands::skill::skill_remove_from_role,
             commands::skill::skill_delete,

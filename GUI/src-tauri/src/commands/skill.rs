@@ -3,8 +3,9 @@ use tauri::{AppHandle, Manager, State};
 use crate::db::pool::DbPool;
 use crate::error::AppError;
 use crate::models::skill::{
-    ImportCustomSkillInput, ImportCustomSkillResult, PickCustomSkillDirectoryResult,
-    PreviewCustomSkillInput, SkillImportPreview, SkillRegistryEntry,
+    DiscoverOpencodeSkillsResult, ImportCustomSkillInput, ImportCustomSkillResult,
+    ImportOpencodeSkillInput, ImportOpencodeSkillResult, PickCustomSkillDirectoryResult,
+    PreviewCustomSkillInput, SkillImportPreview, SkillRegistryEntry, BUTLER_SCOPE_ID,
 };
 use crate::services::agent_config::AgentConfigService;
 
@@ -50,6 +51,90 @@ pub async fn skill_preview_custom(
     pool: State<'_, DbPool>,
 ) -> Result<SkillImportPreview, AppError> {
     crate::services::skill_registry::preview_custom_skill(&pool, &input).await
+}
+
+fn opencode_workspace_dir(app: &AppHandle) -> Result<std::path::PathBuf, AppError> {
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|e| AppError::ValidationError(format!("获取应用数据目录失败: {}", e)))?
+        .join("opencode-workspace"))
+}
+
+fn user_home_dir() -> Result<std::path::PathBuf, AppError> {
+    dirs::home_dir().ok_or_else(|| AppError::ValidationError("无法获取用户主目录".to_string()))
+}
+
+async fn ensure_find_skills_enabled(pool: &DbPool, role_id: &str) -> Result<(), AppError> {
+    if role_id == BUTLER_SCOPE_ID {
+        let skills = crate::services::butler_config::get_butler_skills(pool).await?;
+        return if skills.find_skills {
+            Ok(())
+        } else {
+            Err(AppError::ValidationError(
+                "需要先启用 find-skills 才能发现可用 Skill".to_string(),
+            ))
+        };
+    }
+
+    let role = crate::db::roles::get_role(pool, role_id).await?;
+    if crate::services::role_config::skill_enabled(
+        &role.skills_config,
+        crate::services::role_config::FIND_SKILLS_KEY,
+    ) {
+        Ok(())
+    } else {
+        Err(AppError::ValidationError(
+            "需要先启用 find-skills 才能发现可用 Skill".to_string(),
+        ))
+    }
+}
+
+#[tauri::command]
+pub async fn skill_discover_opencode(
+    role_id: String,
+    pool: State<'_, DbPool>,
+    app: AppHandle,
+) -> Result<DiscoverOpencodeSkillsResult, AppError> {
+    ensure_find_skills_enabled(&pool, &role_id).await?;
+    let project_dir = opencode_workspace_dir(&app)?;
+    let home_dir = user_home_dir()?;
+    crate::services::skill_registry::discover_opencode_skills(&pool, &role_id, &project_dir, &home_dir).await
+}
+
+#[tauri::command]
+pub async fn skill_import_opencode(
+    role_id: String,
+    input: ImportOpencodeSkillInput,
+    pool: State<'_, DbPool>,
+    app: AppHandle,
+    agent_config: State<'_, AgentConfigService>,
+) -> Result<ImportOpencodeSkillResult, AppError> {
+    ensure_find_skills_enabled(&pool, &role_id).await?;
+    let project_dir = opencode_workspace_dir(&app)?;
+    let home_dir = user_home_dir()?;
+    let skills_root = project_dir.join(".opencode").join("skills");
+    let mut result = crate::services::skill_registry::import_opencode_skill(
+        &pool,
+        &input,
+        &skills_root,
+        &project_dir,
+        &home_dir,
+    )
+    .await?;
+    // full_sync 会按传入集合整体重建 opencode.json 的 agent 配置；若以
+    // unwrap_or_default 兜底，瞬时 DB 错误会传入空集并清空所有角色已同步的
+    // Skill 声明。因此这里用 `?` 直接失败，绝不以空集触发破坏性全量同步。
+    let registry = crate::db::skills::list_skills(&pool).await?;
+    let roles = crate::db::roles::list_all_roles(&pool).await?;
+    let butler_skills = crate::services::butler_config::get_butler_skills(&pool).await?;
+    if let Err(e) = agent_config.full_sync_with_skills(&roles, &butler_skills, &registry) {
+        // registry 写入已成功，但 opencode agent 未同步：如实告知前端 synced=false，
+        // 避免谎称"已启用"。下一次同步路径会重新落地（AC5 最终一致）。
+        tracing::warn!("opencode sync after opencode skill import failed: {}", e);
+        result.synced = false;
+    }
+    Ok(result)
 }
 
 #[tauri::command]

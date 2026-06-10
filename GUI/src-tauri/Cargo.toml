@@ -34,6 +34,7 @@ futures = "0.3"
 chrono = "0.4"
 tokio-util = "0.7"
 rfd = "0.15"
+indexmap = { version = "1", features = ["std"] }
 
 [dev-dependencies]
 tempfile = "3"

@@ -23,6 +23,8 @@ vi.mock('../../services/skillService', () => ({
     pickCustomDirectory: vi.fn(),
     previewCustom: vi.fn(),
     importCustom: vi.fn(),
+    discoverOpencode: vi.fn(),
+    importOpencode: vi.fn(),
     delete: vi.fn(),
     removeFromRole: vi.fn(),
   },
@@ -79,6 +81,12 @@ describe('SettingsTab role CRUD actions', () => {
     vi.clearAllMocks();
     vi.mocked(skillService.listRegistry).mockResolvedValue([]);
     vi.mocked(skillService.listForRole).mockResolvedValue([]);
+    const mockedSkillService = skillService as typeof skillService & {
+      discoverOpencode: ReturnType<typeof vi.fn>;
+      importOpencode: ReturnType<typeof vi.fn>;
+    };
+    mockedSkillService.discoverOpencode.mockResolvedValue({ items: [], skipped: { total: 0, reasons: [] } });
+    mockedSkillService.importOpencode.mockResolvedValue({ status: 'imported', entry: null, synced: true });
   });
 
   it('保存后调用 update 并回传更新后的角色', async () => {
@@ -605,6 +613,146 @@ describe('SettingsTab role CRUD actions', () => {
     expect(roleService.updateSkills).not.toHaveBeenCalled();
     expect(onUpdateRole).toHaveBeenCalledWith({ ...baseRole, skillsConfig: '{"enabledSkillIds":["skill-1"]}' });
     expect(onUpdateRole).toHaveBeenCalledWith({ ...secondRole, skillsConfig: '{"enabledSkillIds":["skill-1"]}' });
+  });
+
+  it('未启用 find-skills 时发现 opencode Skill 只显示启用入口且不扫描', async () => {
+    const mockedSkillService = skillService as typeof skillService & {
+      discoverOpencode: ReturnType<typeof vi.fn>;
+    };
+
+    render(<SettingsTab role={baseRole} activeRoleCount={2} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '发现 opencode Skill' }));
+
+    expect(await screen.findByText('需要先启用 find-skills 才能发现可用 Skill')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '启用 find-skills' })).toBeInTheDocument();
+    expect(mockedSkillService.discoverOpencode).not.toHaveBeenCalled();
+  });
+
+  it('启用 find-skills 后展示 opencode 扫描结果和跳过摘要，并可导入到当前角色', async () => {
+    const onUpdateRole = vi.fn();
+    const opencodeSkill = {
+      name: 'writer',
+      description: '写作助手，提供长文本润色、结构调整、标题建议和语气优化能力，描述较长时应只显示两行。',
+      sourceLocation: '全局',
+      sourcePath: 'C:/Users/Admin/.config/opencode/skills/writer/SKILL.md',
+      sourceType: 'opencode' as const,
+      contentHash: 'hash-writer',
+      alreadyImported: false,
+      duplicate: null,
+    };
+    const opencodeEntry: SkillRegistryEntry = {
+      ...customSkill,
+      id: 'skill-opencode',
+      name: 'writer',
+      description: opencodeSkill.description,
+      sourceType: 'opencode',
+      managedPath: opencodeSkill.sourcePath,
+      contentHash: 'hash-writer',
+    };
+    const enabledRole: Role = {
+      ...baseRole,
+      skillsConfig: '{"meta":{"findSkills":true,"skillCreator":false},"enabledSkillIds":[]}',
+    };
+    const refreshedRole: Role = {
+      ...enabledRole,
+      skillsConfig: '{"meta":{"findSkills":true,"skillCreator":false},"enabledSkillIds":["skill-opencode"]}',
+    };
+    const removedRole: Role = {
+      ...enabledRole,
+      skillsConfig: '{"meta":{"findSkills":true,"skillCreator":false},"enabledSkillIds":[]}',
+    };
+    vi.mocked(skillService.discoverOpencode).mockResolvedValue({
+      items: [opencodeSkill],
+      skipped: { total: 1, reasons: ['缺少 SKILL.md 的条目已跳过'] },
+    });
+    vi.mocked(skillService.importOpencode).mockResolvedValue({ status: 'imported', entry: opencodeEntry, synced: true });
+    vi.mocked(skillService.listForRole)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([opencodeEntry])
+      .mockResolvedValueOnce([]);
+    vi.mocked(roleService.list)
+      .mockResolvedValueOnce([refreshedRole])
+      .mockResolvedValueOnce([removedRole]);
+
+    const { rerender } = render(<SettingsTab role={enabledRole} activeRoleCount={2} onUpdateRole={onUpdateRole} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '发现 opencode Skill' }));
+
+    expect(await screen.findByText('writer')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '发现 opencode Skill' })).toHaveTextContent('发现');
+    expect(screen.getByRole('button', { name: '发现 opencode Skill' })).toHaveClass('whitespace-nowrap');
+    expect(screen.getByText('全局')).toBeInTheDocument();
+    expect(screen.getByText('已跳过 1 个无效 Skill：')).toBeInTheDocument();
+    expect(screen.getByText('缺少 SKILL.md 的条目已跳过')).toBeInTheDocument();
+    expect(screen.getByTestId('opencode-skill-description-hash-writer')).toHaveClass('line-clamp-2');
+    fireEvent.click(screen.getByRole('button', { name: /收起/ }));
+    expect(screen.queryByText('writer')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /展开/ }));
+    expect(screen.getByText('writer')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '导入' }));
+
+    await waitFor(() => {
+      expect(skillService.importOpencode).toHaveBeenCalledWith('role-1', {
+        sourcePath: opencodeSkill.sourcePath,
+        roleScope: { allRoles: false, roleIds: ['role-1'] },
+        expectedContentHash: 'hash-writer',
+      });
+    });
+    expect(onUpdateRole).toHaveBeenCalledWith(refreshedRole);
+    expect(await screen.findByText('opencode Skill 已导入并启用')).toBeInTheDocument();
+    rerender(<SettingsTab role={refreshedRole} activeRoleCount={2} onUpdateRole={onUpdateRole} />);
+    expect(screen.getAllByText('writer').length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: /收起/ })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '取消导入' }));
+
+    await waitFor(() => {
+      expect(skillService.removeFromRole).toHaveBeenCalledWith('skill-opencode', 'role-1');
+    });
+    expect(onUpdateRole).toHaveBeenCalledWith(removedRole);
+    expect(await screen.findByText('opencode Skill 已取消导入')).toBeInTheDocument();
+    rerender(<SettingsTab role={removedRole} activeRoleCount={2} onUpdateRole={onUpdateRole} />);
+    expect(screen.getAllByText('writer').length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: /收起/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '导入' })).toBeInTheDocument();
+  });
+
+  it('opencode Skill 已在 registry 但未启用到当前角色时仍显示导入', async () => {
+    const opencodeEntry: SkillRegistryEntry = {
+      ...customSkill,
+      id: 'skill-opencode',
+      name: 'writer',
+      description: '写作助手',
+      sourceType: 'opencode',
+      managedPath: 'managed/writer/SKILL.md',
+      contentHash: 'hash-writer',
+    };
+    const enabledRole: Role = {
+      ...baseRole,
+      skillsConfig: '{"meta":{"findSkills":true,"skillCreator":false},"enabledSkillIds":[]}',
+    };
+    vi.mocked(skillService.discoverOpencode).mockResolvedValue({
+      items: [{
+        name: 'writer',
+        description: '写作助手',
+        sourceLocation: '全局',
+        sourcePath: 'C:/Users/Admin/.config/opencode/skills/writer/SKILL.md',
+        sourceType: 'opencode',
+        contentHash: 'hash-writer',
+        alreadyImported: false,
+        duplicate: { kind: 'contentHash', existing: opencodeEntry },
+      }],
+      skipped: { total: 0, reasons: [] },
+    });
+
+    render(<SettingsTab role={enabledRole} activeRoleCount={2} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '发现 opencode Skill' }));
+
+    expect(await screen.findByText('writer')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '导入' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '取消导入' })).not.toBeInTheDocument();
   });
 
   it('切换主动性级别后持久化并回传更新后的角色', async () => {

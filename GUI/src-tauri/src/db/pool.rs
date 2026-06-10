@@ -291,14 +291,85 @@ mod tests {
         )
         .await
         .expect("create skill");
+        crate::db::skills::create_skill_with_source(
+            &pool,
+            "writer",
+            "写作助手",
+            "opencode/skills/writer/SKILL.md",
+            "hash-2",
+            crate::models::skill::SOURCE_TYPE_OPENCODE,
+        )
+        .await
+        .expect("create opencode skill");
         pool.close().await;
 
         let reopened = init_db(&db_path).await.expect("reopen db");
         let skills = crate::db::skills::list_skills(&reopened)
             .await
             .expect("list skills");
-        assert_eq!(skills.len(), 1);
-        assert_eq!(skills[0].name, "daily-review");
-        assert_eq!(skills[0].content_hash, "hash-1");
+        assert_eq!(skills.len(), 2);
+        assert!(skills.iter().any(|skill| skill.name == "daily-review" && skill.source_type == "custom"));
+        assert!(skills.iter().any(|skill| skill.name == "writer" && skill.source_type == "opencode"));
+    }
+
+    #[tokio::test]
+    async fn init_db_preserves_skill_bindings_when_upgrading_source_type_constraint() {
+        let dir = tempdir().expect("create temp dir");
+        let db_path = dir.path().join("egosync.db");
+        let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
+        let options = SqliteConnectOptions::from_str(&db_url)
+            .expect("parse db url")
+            .create_if_missing(true)
+            .foreign_keys(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .expect("connect pre-upgrade db");
+        sqlx::raw_sql(
+            "CREATE TABLE skills (
+                id TEXT PRIMARY KEY NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                source_type TEXT NOT NULL CHECK(source_type IN ('custom')),
+                managed_path TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00Z',
+                updated_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00Z'
+            );
+            CREATE TABLE skill_role_bindings (
+                skill_id TEXT NOT NULL,
+                role_id TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00Z',
+                PRIMARY KEY (skill_id, role_id),
+                FOREIGN KEY (skill_id) REFERENCES skills(id) ON DELETE CASCADE
+            );
+            INSERT INTO skills (id, name, description, source_type, managed_path, content_hash)
+            VALUES ('skill-1', 'daily-review', '日复盘助手', 'custom', 'skills/daily-review/SKILL.md', 'hash-1');
+            INSERT INTO skill_role_bindings (skill_id, role_id) VALUES ('skill-1', 'role-1');",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed pre-upgrade skills schema");
+        pool.close().await;
+
+        let upgraded = init_db(&db_path).await.expect("upgrade db");
+        let bindings: Vec<(String, String)> = sqlx::query_as(
+            "SELECT skill_id, role_id FROM skill_role_bindings ORDER BY skill_id, role_id",
+        )
+        .fetch_all(&upgraded)
+        .await
+        .expect("query bindings");
+        assert_eq!(bindings, vec![("skill-1".to_string(), "role-1".to_string())]);
+        crate::db::skills::create_skill_with_source(
+            &upgraded,
+            "writer",
+            "写作助手",
+            "opencode/skills/writer/SKILL.md",
+            "hash-2",
+            crate::models::skill::SOURCE_TYPE_OPENCODE,
+        )
+        .await
+        .expect("create opencode skill after upgrade");
     }
 }

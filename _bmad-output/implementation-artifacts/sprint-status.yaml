@@ -1,5 +1,5 @@
 # generated: 2026-05-21
-# last_updated: 2026-06-04T00:00:00+08:00
+# last_updated: 2026-06-08T21:47:21+08:00
 # project: 探索 (EgoSync)
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-21
-last_updated: 2026-06-04T10:40:00+08:00
+last_updated: 2026-06-09T22:50:00+08:00
 project: "探索 (EgoSync)"
 project_key: NOKEY
 tracking_system: file-system
@@ -75,7 +75,7 @@ development_status:
   2-9-reasoning-transparency-uncertainty: done
   2-10-role-skill-config-proactivity-ui: review
   2-11-custom-skill-md-import-role-binding: done
-  2-12-opencode-ecosystem-skill-discovery-import: ready-for-dev
+  2-12-opencode-ecosystem-skill-discovery-import: done
   2-13-mcp-server-list-role-access: ready-for-dev
   epic-2-retrospective: optional
 

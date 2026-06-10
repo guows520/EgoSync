@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
-import { AlertCircle, Check, Trash2, Upload } from 'lucide-react';
+import { AlertCircle, Check, ChevronDown, ChevronUp, Trash2, Upload } from 'lucide-react';
 import { getRoleIconComponent, normalizeColorHex } from '../../lib/roleIcons';
 import { cn } from '../../lib/utils';
 import { appService } from '../../services/appService';
 import { roleService } from '../../services/roleService';
 import { skillService } from '../../services/skillService';
 import type { ButlerSkillsConfig, Role } from '../../types/role';
-import type { SkillImportPreview, SkillRegistryEntry } from '../../types/skill';
+import type { OpencodeSkillCandidate, SkillImportPreview, SkillRegistryEntry } from '../../types/skill';
 
 type ButlerSkillsState = ButlerSkillsConfig;
 
@@ -43,6 +43,13 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
   const [isLoadingButlerSkills, setIsLoadingButlerSkills] = useState(true);
   const [registrySkills, setRegistrySkills] = useState<SkillRegistryEntry[]>([]);
   const [skillPreview, setSkillPreview] = useState<SkillImportPreview | null>(null);
+  const [opencodeSkills, setOpencodeSkills] = useState<OpencodeSkillCandidate[]>([]);
+  const [opencodeSkipped, setOpencodeSkipped] = useState<string[]>([]);
+  const [isOpencodeExpanded, setIsOpencodeExpanded] = useState(false);
+  const [needsFindSkillsPrompt, setNeedsFindSkillsPrompt] = useState(false);
+  const [isDiscoveringOpencode, setIsDiscoveringOpencode] = useState(false);
+  const [importingOpencodePath, setImportingOpencodePath] = useState('');
+  const [removingOpencodeId, setRemovingOpencodeId] = useState('');
   const [pendingSkillContent, setPendingSkillContent] = useState('');
   const [reuseAllRoles, setReuseAllRoles] = useState(true);
   const [reuseRoleIds, setReuseRoleIds] = useState<string[]>([]);
@@ -124,6 +131,97 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
       ? skills.enabledSkillIds.filter(id => id !== skillId)
       : [...skills.enabledSkillIds, skillId];
     await saveSkills({ ...skills, enabledSkillIds: nextSkillIds }, skillId);
+  };
+
+  const handleDiscoverOpencode = async () => {
+    setError('');
+    setSettingsSavedMessage('');
+    setOpencodeSkills([]);
+    setOpencodeSkipped([]);
+    setNeedsFindSkillsPrompt(false);
+    if (!skills.findSkills) {
+      setNeedsFindSkillsPrompt(true);
+      return;
+    }
+    setIsDiscoveringOpencode(true);
+    try {
+      const result = await skillService.discoverOpencode(BUTLER_SCOPE_ID);
+      setOpencodeSkills(result.items);
+      setIsOpencodeExpanded(result.items.length > 0);
+      setOpencodeSkipped(result.skipped.reasons);
+    } catch (e) {
+      setError(toFriendlyError(e, '发现 opencode Skill 失败，请稍后重试'));
+    } finally {
+      setIsDiscoveringOpencode(false);
+    }
+  };
+
+  const handleEnableFindSkills = async () => {
+    await saveSkills({ ...skills, findSkills: true }, 'findSkills');
+  };
+
+  const handleImportOpencode = async (candidate: OpencodeSkillCandidate) => {
+    if (!skills.findSkills) {
+      setNeedsFindSkillsPrompt(true);
+      return;
+    }
+    setImportingOpencodePath(candidate.sourcePath);
+    setError('');
+    setSettingsSavedMessage('');
+    try {
+      const result = await skillService.importOpencode(BUTLER_SCOPE_ID, {
+        sourcePath: candidate.sourcePath,
+        roleScope: { allRoles: false, roleIds: [BUTLER_SCOPE_ID] },
+        expectedContentHash: candidate.contentHash,
+      });
+      const items = await skillService.listAllRoleSkills();
+      setRegistrySkills(items);
+      if (result.entry) {
+        setSkills(prev => ({
+          ...prev,
+          enabledSkillIds: prev.enabledSkillIds.includes(result.entry!.id)
+            ? prev.enabledSkillIds
+            : [...prev.enabledSkillIds, result.entry!.id],
+        }));
+      }
+      const duplicate = result.entry ? { kind: 'contentHash' as const, existing: result.entry } : candidate.duplicate;
+      setOpencodeSkills(prev => prev.map(item => item.sourcePath === candidate.sourcePath ? { ...item, alreadyImported: true, duplicate } : item));
+      if (result.status === 'duplicate') {
+        setSettingsSavedMessage('Skill 已存在，已更新复用范围');
+      } else if (result.synced) {
+        setSettingsSavedMessage('opencode Skill 已导入并启用');
+      } else {
+        setSettingsSavedMessage('opencode Skill 已导入，但同步到 agent 暂时失败，将在下次同步时自动生效');
+      }
+    } catch (e) {
+      setError(toFriendlyError(e, '导入 opencode Skill 失败，请稍后重试'));
+    } finally {
+      setImportingOpencodePath('');
+    }
+  };
+
+  const handleRemoveOpencode = async (candidate: OpencodeSkillCandidate) => {
+    const skillId = candidate.duplicate?.existing.id;
+    if (!skillId) return;
+    setRemovingOpencodeId(skillId);
+    setError('');
+    setSettingsSavedMessage('');
+    try {
+      await skillService.removeFromRole(skillId, BUTLER_SCOPE_ID);
+      const items = await skillService.listAllRoleSkills();
+      setRegistrySkills(items);
+      setSkills(prev => ({
+        ...prev,
+        enabledSkillIds: prev.enabledSkillIds.filter(id => id !== skillId),
+      }));
+      setOpencodeSkills(prev => prev.map(item => item.sourcePath === candidate.sourcePath ? { ...item, alreadyImported: false } : item));
+      setSettingsSavedMessage('opencode Skill 已取消导入');
+      setTimeout(() => setSettingsSavedMessage(''), MESSAGE_TIMEOUT_MS);
+    } catch (e) {
+      setError(toFriendlyError(e, '取消导入 opencode Skill 失败，请稍后重试'));
+    } finally {
+      setRemovingOpencodeId('');
+    }
   };
 
   const handleSkillDirectorySelected = async () => {
@@ -263,6 +361,109 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
               </div>
             );
           })}
+        </div>
+
+        <div className="mt-5 bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <div className="text-[14.5px] font-medium text-slate-800">opencode 生态 Skill</div>
+              <p className="mt-1 text-[12.5px] leading-relaxed text-slate-500">扫描本机 opencode 项目级与全局 Skill 目录，不下载远程内容。</p>
+            </div>
+            <button
+              type="button"
+              title="发现 opencode Skill"
+              aria-label="发现 opencode Skill"
+              onClick={handleDiscoverOpencode}
+              disabled={isDiscoveringOpencode}
+              className="inline-flex min-w-[3.5rem] shrink-0 items-center justify-center whitespace-nowrap rounded-lg border border-slate-200 bg-white px-3 py-2 text-[12px] font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isDiscoveringOpencode ? '发现中...' : '发现'}
+            </button>
+          </div>
+          {!skills.findSkills && needsFindSkillsPrompt && (
+            <div className="mt-3 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-[12.5px] text-amber-700">
+              <div>需要先启用 find-skills 才能发现可用 Skill</div>
+              <button
+                type="button"
+                onClick={handleEnableFindSkills}
+                disabled={pendingSkill !== null}
+                className="mt-2 rounded-md bg-amber-600 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                启用 find-skills
+              </button>
+            </div>
+          )}
+          {opencodeSkipped.length > 0 && (
+            <div className="mt-3 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-[12.5px] text-amber-700">
+              <div>已跳过 {opencodeSkipped.length} 个无效 Skill：</div>
+              <ul className="mt-1 list-disc space-y-0.5 pl-4">
+                {opencodeSkipped.slice(0, 5).map((reason, index) => (
+                  <li key={`${reason}-${index}`} className="break-words">{reason}</li>
+                ))}
+              </ul>
+              {opencodeSkipped.length > 5 && (
+                <div className="mt-1 text-amber-600">…另有 {opencodeSkipped.length - 5} 项已跳过</div>
+              )}
+            </div>
+          )}
+          {opencodeSkills.length > 0 && (
+            <div className="mt-3 space-y-2">
+              <button
+                type="button"
+                onClick={() => setIsOpencodeExpanded(prev => !prev)}
+                className="flex w-full items-center justify-between rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-[12.5px] font-medium text-slate-600 hover:bg-slate-100"
+              >
+                <span>发现 {opencodeSkills.length} 个 opencode Skill</span>
+                <span className="inline-flex items-center gap-1">
+                  {isOpencodeExpanded ? '收起' : '展开'}
+                  {isOpencodeExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                </span>
+              </button>
+              {isOpencodeExpanded && opencodeSkills.map(candidate => {
+                const importedSkillId = candidate.duplicate?.existing.id;
+                const isRemoving = importedSkillId === removingOpencodeId;
+                return (
+                  <div key={candidate.sourcePath} className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="break-words text-[13.5px] font-medium text-slate-800">{candidate.name}</span>
+                          <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-500">opencode</span>
+                          <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-500">{candidate.sourceLocation}</span>
+                          {candidate.alreadyImported && <span className="rounded-full border border-emerald-100 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">已导入</span>}
+                        </div>
+                        <div className="group relative mt-1.5">
+                          <p data-testid={`opencode-skill-description-${candidate.contentHash}`} className="line-clamp-2 break-words text-[12px] leading-relaxed text-slate-500">{candidate.description}</p>
+                          <div data-testid={`opencode-skill-tooltip-${candidate.contentHash}`} className="pointer-events-none absolute left-0 top-full z-20 mt-1 hidden max-w-[min(28rem,calc(100vw-3rem))] rounded-lg border border-slate-200 bg-white px-3 py-2 text-[12px] leading-relaxed text-slate-600 shadow-xl group-hover:block">
+                            {candidate.description}
+                          </div>
+                        </div>
+                      </div>
+                      {candidate.alreadyImported ? (
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveOpencode(candidate)}
+                          disabled={!importedSkillId || removingOpencodeId !== '' || importingOpencodePath !== ''}
+                          className="shrink-0 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {isRemoving ? '取消中...' : '取消导入'}
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleImportOpencode(candidate)}
+                          disabled={importingOpencodePath !== '' || removingOpencodeId !== ''}
+                          className="shrink-0 rounded-lg bg-indigo-600 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {importingOpencodePath === candidate.sourcePath ? '导入中...' : '导入'}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         <div className="mt-5 bg-white border border-slate-200 rounded-xl p-4 shadow-sm">

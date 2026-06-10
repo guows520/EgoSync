@@ -1,5 +1,12 @@
 # Deferred Work
 
+## Deferred from: code review of 2-12-opencode-ecosystem-skill-discovery-import (2026-06-09)
+
+- **duplicate 分支 replace_bindings 跨角色解绑 (HIGH→deferred, pre-existing)**：`import_opencode_skill` 重复导入时调 `replace_bindings(skill_id, false, [当前角色])`，其语义为 DELETE 该 skill 全部绑定后只重插当前角色，会静默解绑该 Skill 已绑定的其它角色。2.11 `import_custom_skill` 使用完全相同模式 → 非本次引入，应作为统一 binding "merge vs replace" 语义问题单独立项处理。
+- **async 命令内阻塞 std::fs I/O (MED→deferred, pre-existing)**：`scan_opencode_root` / `import_opencode_skill` 在 async fn 内同步 `read_dir`/`read_to_string`，慢盘或大目录会阻塞 tokio 工作线程。既有 skill_registry 同步 I/O 模式一致，建议统一迁移到 `tokio::fs` 或 `spawn_blocking`。
+- **read_dir 权限失败静默 (LOW→deferred, pre-existing)**：目录存在但权限不可读时 `let Ok(entries) = read_dir else { return Ok(()) }`，与"目录不存在"同等静默，用户无反馈。低概率边界，可与扫描可观测性增强一并处理。
+- **content_hash 全局唯一不分 source_type (MED→deferred, 用户裁决)**：内容相同的 opencode Skill 会被 `find_skill_by_content_hash`（不分 source_type）误判为某 custom Skill 的 duplicate，返回 `entry.source_type='custom'`。用户 Decision #1 选项 1 未选改 `(content_hash, source_type)`：V1 同内容跨源场景极罕见，暂保持全局唯一；若未来生态导入增多再立项加 source_type 维度。
+
 ## Deferred from: code review of 2-6-conversation-memory-extraction (2026-05-30)
 
 - **streaming 标志插入失败永久卡死会话 (HIGH, pre-existing)**：`chat.rs` 中 `streaming.insert` 被提前到 busy 检查后、两条 `insert_message` 之前；任一 DB 写失败 `?` 提前返回时清理任务尚未 spawn，会话本进程内永久返回"我还在想上一个问题"。git 取证确认 baseline 34aab28 顺序安全，此错误顺序来自工作树未提交的前序 opencode 重构，**非 Story 2.6 引入**。⚠️ 必须在该批前序工作提交前修复（恢复 baseline 的"先插 assistant 再 insert streaming"顺序）。

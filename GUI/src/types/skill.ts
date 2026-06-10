@@ -7,7 +7,7 @@ export interface SkillRegistryEntry {
   id: string;
   name: string;
   description: string;
-  sourceType: 'custom';
+  sourceType: 'custom' | 'opencode';
   managedPath: string;
   contentHash: string;
   createdAt: string;
@@ -17,6 +17,41 @@ export interface SkillRegistryEntry {
 export interface SkillDuplicateInfo {
   kind: 'contentHash' | 'name';
   existing: SkillRegistryEntry;
+}
+
+export interface OpencodeSkillCandidate {
+  name: string;
+  description: string;
+  sourceLocation: string;
+  sourcePath: string;
+  sourceType: 'opencode';
+  contentHash: string;
+  alreadyImported: boolean;
+  duplicate: SkillDuplicateInfo | null;
+}
+
+export interface OpencodeSkillSkippedSummary {
+  total: number;
+  reasons: string[];
+}
+
+export interface DiscoverOpencodeSkillsResult {
+  items: OpencodeSkillCandidate[];
+  skipped: OpencodeSkillSkippedSummary;
+}
+
+export interface ImportOpencodeSkillInput {
+  sourcePath: string;
+  roleScope?: SkillRoleScope;
+  /** 发现时展示的 content_hash，导入时回传供后端做 TOCTOU 一致性校验。 */
+  expectedContentHash?: string;
+}
+
+export interface ImportOpencodeSkillResult {
+  status: 'imported' | 'duplicate';
+  entry: SkillRegistryEntry | null;
+  /** registry 写入后是否已成功同步到 opencode agent。false 时不应声称"已启用"。 */
+  synced: boolean;
 }
 
 export interface SkillImportPreview {

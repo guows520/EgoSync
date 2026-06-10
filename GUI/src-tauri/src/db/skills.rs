@@ -1,7 +1,7 @@
 use sqlx::SqlitePool;
 
 use crate::error::AppError;
-use crate::models::skill::SkillRegistryEntry;
+use crate::models::skill::{SkillRegistryEntry, SOURCE_TYPE_CUSTOM};
 
 const SKILL_SELECT_COLUMNS: &str =
     "id, name, description, source_type, managed_path, content_hash, created_at, updated_at";
@@ -46,11 +46,20 @@ pub async fn find_skill_by_name(
     pool: &SqlitePool,
     name: &str,
 ) -> Result<Option<SkillRegistryEntry>, AppError> {
+    find_skill_by_name_and_source(pool, name, SOURCE_TYPE_CUSTOM).await
+}
+
+pub async fn find_skill_by_name_and_source(
+    pool: &SqlitePool,
+    name: &str,
+    source_type: &str,
+) -> Result<Option<SkillRegistryEntry>, AppError> {
     sqlx::query_as::<_, SkillRegistryEntry>(&format!(
-        "SELECT {} FROM skills WHERE name = ?1 AND source_type = 'custom'",
+        "SELECT {} FROM skills WHERE name = ?1 AND source_type = ?2",
         SKILL_SELECT_COLUMNS
     ))
     .bind(name)
+    .bind(source_type)
     .fetch_optional(pool)
     .await
     .map_err(|e| AppError::DbError(format!("按名称查询 Skill 失败: {}", e)))
@@ -63,15 +72,35 @@ pub async fn create_skill(
     managed_path: &str,
     content_hash: &str,
 ) -> Result<SkillRegistryEntry, AppError> {
+    create_skill_with_source(
+        pool,
+        name,
+        description,
+        managed_path,
+        content_hash,
+        SOURCE_TYPE_CUSTOM,
+    )
+    .await
+}
+
+pub async fn create_skill_with_source(
+    pool: &SqlitePool,
+    name: &str,
+    description: &str,
+    managed_path: &str,
+    content_hash: &str,
+    source_type: &str,
+) -> Result<SkillRegistryEntry, AppError> {
     let id = uuid::Uuid::new_v4().to_string();
     let now = crate::db::settings::chrono_now_pub();
     sqlx::query(
         "INSERT INTO skills (id, name, description, source_type, managed_path, content_hash, created_at, updated_at)
-         VALUES (?1, ?2, ?3, 'custom', ?4, ?5, ?6, ?7)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
     )
     .bind(&id)
     .bind(name)
     .bind(description)
+    .bind(source_type)
     .bind(managed_path)
     .bind(content_hash)
     .bind(&now)
@@ -174,7 +203,7 @@ mod tests {
                 id TEXT PRIMARY KEY NOT NULL,
                 name TEXT NOT NULL,
                 description TEXT NOT NULL DEFAULT '',
-                source_type TEXT NOT NULL CHECK(source_type IN ('custom')),
+                source_type TEXT NOT NULL CHECK(source_type IN ('custom', 'opencode')),
                 managed_path TEXT NOT NULL,
                 content_hash TEXT NOT NULL,
                 created_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00Z',
@@ -255,5 +284,29 @@ mod tests {
         assert_eq!(updated.description, "更新后的说明");
         assert_eq!(updated.managed_path, "path2");
         assert_eq!(updated.content_hash, "hash-2");
+    }
+
+    #[tokio::test]
+    async fn create_opencode_skill_uses_existing_registry_table() {
+        let pool = setup_test_db().await;
+        let skill = create_skill_with_source(
+            &pool,
+            "daily-review",
+            "日复盘",
+            "opencode/project/daily-review/SKILL.md",
+            "hash-1",
+            "opencode",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(skill.source_type, "opencode");
+        assert_eq!(list_skills(&pool).await.unwrap(), vec![skill.clone()]);
+        assert_eq!(
+            find_skill_by_name_and_source(&pool, "daily-review", "opencode")
+                .await
+                .unwrap(),
+            Some(skill)
+        );
     }
 }

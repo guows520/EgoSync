@@ -1,6 +1,7 @@
 pub mod app_settings;
 pub mod conversations;
 pub mod memories;
+pub mod mcp_servers;
 pub mod pool;
 pub mod roles;
 pub mod settings;

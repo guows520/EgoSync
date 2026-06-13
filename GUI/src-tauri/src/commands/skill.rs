@@ -102,6 +102,24 @@ pub async fn skill_discover_opencode(
     crate::services::skill_registry::discover_opencode_skills(&pool, &role_id, &project_dir, &home_dir).await
 }
 
+async fn sync_all_agents_with_mcp(
+    pool: &DbPool,
+    agent_config: &AgentConfigService,
+    roles: &[crate::models::role::Role],
+    butler_skills: &crate::models::role::ButlerSkillsConfig,
+    registry: &[crate::models::skill::SkillRegistryEntry],
+    action: &str,
+) -> bool {
+    let mcp_prompts = crate::services::mcp_server::role_mcp_prompt_map(pool)
+        .await
+        .unwrap_or_default();
+    if let Err(e) = agent_config.full_sync_with_skills_and_mcp(roles, butler_skills, registry, &mcp_prompts) {
+        tracing::warn!("opencode sync after {} failed: {}", action, e);
+        return false;
+    }
+    true
+}
+
 #[tauri::command]
 pub async fn skill_import_opencode(
     role_id: String,
@@ -128,10 +146,9 @@ pub async fn skill_import_opencode(
     let registry = crate::db::skills::list_skills(&pool).await?;
     let roles = crate::db::roles::list_all_roles(&pool).await?;
     let butler_skills = crate::services::butler_config::get_butler_skills(&pool).await?;
-    if let Err(e) = agent_config.full_sync_with_skills(&roles, &butler_skills, &registry) {
+    if !sync_all_agents_with_mcp(&pool, &agent_config, &roles, &butler_skills, &registry, "opencode skill import").await {
         // registry 写入已成功，但 opencode agent 未同步：如实告知前端 synced=false，
         // 避免谎称"已启用"。下一次同步路径会重新落地（AC5 最终一致）。
-        tracing::warn!("opencode sync after opencode skill import failed: {}", e);
         result.synced = false;
     }
     Ok(result)
@@ -158,9 +175,7 @@ pub async fn skill_import_custom(
     let butler_skills = crate::services::butler_config::get_butler_skills(&pool)
         .await
         .unwrap_or_else(|_| crate::services::butler_config::default_butler_skills());
-    if let Err(e) = agent_config.full_sync_with_skills(&roles, &butler_skills, &registry) {
-        tracing::warn!("opencode sync after skill import failed: {}", e);
-    }
+    sync_all_agents_with_mcp(&pool, &agent_config, &roles, &butler_skills, &registry, "skill import").await;
     Ok(result)
 }
 
@@ -178,9 +193,7 @@ pub async fn skill_remove_from_role(
     let butler_skills = crate::services::butler_config::get_butler_skills(&pool)
         .await
         .unwrap_or_else(|_| crate::services::butler_config::default_butler_skills());
-    if let Err(e) = agent_config.full_sync_with_skills(&roles, &butler_skills, &registry) {
-        tracing::error!("opencode sync after skill remove from role failed: {}", e);
-    }
+    sync_all_agents_with_mcp(&pool, &agent_config, &roles, &butler_skills, &registry, "skill remove from role").await;
     Ok(())
 }
 
@@ -197,8 +210,6 @@ pub async fn skill_delete(
     let butler_skills = crate::services::butler_config::get_butler_skills(&pool)
         .await
         .unwrap_or_else(|_| crate::services::butler_config::default_butler_skills());
-    if let Err(e) = agent_config.full_sync_with_skills(&roles, &butler_skills, &registry) {
-        tracing::error!("opencode sync after skill delete failed: {}", e);
-    }
+    sync_all_agents_with_mcp(&pool, &agent_config, &roles, &butler_skills, &registry, "skill delete").await;
     Ok(())
 }

@@ -1,9 +1,11 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { SettingsTab } from './SettingsTab';
 import { roleService } from '../../services/roleService';
 import { skillService } from '../../services/skillService';
+import { mcpService } from '../../services/mcpService';
 import type { Role } from '../../types/role';
+import type { McpServer } from '../../types/mcp';
 import type { SkillRegistryEntry } from '../../types/skill';
 
 vi.mock('../../services/roleService', () => ({
@@ -26,6 +28,20 @@ vi.mock('../../services/skillService', () => ({
     discoverOpencode: vi.fn(),
     importOpencode: vi.fn(),
     delete: vi.fn(),
+    removeFromRole: vi.fn(),
+  },
+}));
+
+vi.mock('../../services/mcpService', () => ({
+  mcpService: {
+    list: vi.fn(),
+    listForRole: vi.fn(),
+    listAvailableForRole: vi.fn(),
+    create: vi.fn(),
+    update: vi.fn(),
+    delete: vi.fn(),
+    test: vi.fn(),
+    addToRole: vi.fn(),
     removeFromRole: vi.fn(),
   },
 }));
@@ -75,6 +91,26 @@ const customSkill: SkillRegistryEntry = {
   updatedAt: '2026-01-01T00:00:00Z',
 };
 
+const boundMcpServer: McpServer = {
+  id: 'mcp-calendar',
+  name: '日历 MCP',
+  serverType: 'sse',
+  commandOrUrl: 'http://localhost:8000/sse',
+  envRefs: '{"TOKEN":"env:CALENDAR_TOKEN"}',
+  description: '读取日历安排',
+  enabled: true,
+  createdAt: '2026-01-01T00:00:00Z',
+  updatedAt: '2026-01-01T00:00:00Z',
+};
+
+const availableMcpServer: McpServer = {
+  ...boundMcpServer,
+  id: 'mcp-mail',
+  name: '邮件 MCP',
+  commandOrUrl: 'http://localhost:8001/sse',
+  description: '读取邮件摘要',
+};
+
 describe('SettingsTab role CRUD actions', () => {
   beforeEach(() => {
     vi.useRealTimers();
@@ -87,6 +123,10 @@ describe('SettingsTab role CRUD actions', () => {
     };
     mockedSkillService.discoverOpencode.mockResolvedValue({ items: [], skipped: { total: 0, reasons: [] } });
     mockedSkillService.importOpencode.mockResolvedValue({ status: 'imported', entry: null, synced: true });
+    vi.mocked(mcpService.listForRole).mockResolvedValue([]);
+    vi.mocked(mcpService.listAvailableForRole).mockResolvedValue([]);
+    vi.mocked(mcpService.addToRole).mockResolvedValue(undefined);
+    vi.mocked(mcpService.removeFromRole).mockResolvedValue(undefined);
   });
 
   it('保存后调用 update 并回传更新后的角色', async () => {
@@ -292,6 +332,83 @@ describe('SettingsTab role CRUD actions', () => {
         roleScope: { allRoles: true, roleIds: [] },
       });
     });
+  });
+
+  it('只展示当前角色已启用 MCP，并通过搜索选择器添加可用 MCP', async () => {
+    vi.mocked(mcpService.listForRole)
+      .mockResolvedValueOnce([boundMcpServer])
+      .mockResolvedValueOnce([boundMcpServer, availableMcpServer]);
+    vi.mocked(mcpService.listAvailableForRole)
+      .mockResolvedValueOnce([availableMcpServer])
+      .mockResolvedValueOnce([]);
+
+    render(<SettingsTab role={baseRole} activeRoleCount={2} />);
+
+    expect(await screen.findByText('日历 MCP')).toBeInTheDocument();
+    expect(screen.queryByText('邮件 MCP')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '添加 MCP server' }));
+    expect(await screen.findByText('邮件 MCP')).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText('搜索 MCP server'), { target: { value: '邮件' } });
+    fireEvent.click(screen.getByRole('button', { name: '添加 邮件 MCP' }));
+
+    await waitFor(() => {
+      expect(mcpService.addToRole).toHaveBeenCalledWith('role-1', 'mcp-mail');
+    });
+    await waitFor(() => {
+      expect(mcpService.listForRole).toHaveBeenCalledTimes(2);
+    });
+    expect(await screen.findByText('邮件 MCP')).toBeInTheDocument();
+  });
+
+  it('可从当前角色移除已启用 MCP，不影响全局配置', async () => {
+    vi.mocked(mcpService.listForRole)
+      .mockResolvedValueOnce([boundMcpServer])
+      .mockResolvedValueOnce([]);
+
+    render(<SettingsTab role={baseRole} activeRoleCount={2} />);
+
+    expect(await screen.findByText('日历 MCP')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '移除 日历 MCP' }));
+
+    await waitFor(() => {
+      expect(mcpService.removeFromRole).toHaveBeenCalledWith('role-1', 'mcp-calendar');
+    });
+    expect(mcpService.delete).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(screen.queryByText('日历 MCP')).not.toBeInTheDocument();
+    });
+  });
+
+  it('切换角色时忽略上一角色 MCP 操作完成后的刷新结果', async () => {
+    let resolveAdd: (() => void) | undefined;
+    vi.mocked(mcpService.addToRole).mockReturnValue(new Promise<void>(resolve => { resolveAdd = resolve; }));
+    vi.mocked(mcpService.listForRole)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([boundMcpServer])
+      .mockResolvedValueOnce([availableMcpServer]);
+    vi.mocked(mcpService.listAvailableForRole)
+      .mockResolvedValueOnce([availableMcpServer])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+
+    const { rerender } = render(<SettingsTab role={baseRole} activeRoleCount={2} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '添加 MCP server' }));
+    fireEvent.click(await screen.findByRole('button', { name: '添加 邮件 MCP' }));
+    rerender(<SettingsTab role={secondRole} activeRoleCount={2} />);
+    expect(await screen.findByText('日历 MCP')).toBeInTheDocument();
+
+    await act(async () => {
+      resolveAdd?.();
+    });
+
+    await waitFor(() => {
+      expect(mcpService.listForRole).toHaveBeenCalledWith('role-1');
+      expect(mcpService.listForRole).toHaveBeenCalledWith('role-2');
+    });
+    expect(screen.getByText('日历 MCP')).toBeInTheDocument();
+    expect(screen.queryByText('邮件 MCP')).not.toBeInTheDocument();
   });
 
   it('未绑定到当前角色的自定义 Skill 不在角色设置中显示', async () => {

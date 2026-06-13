@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, Archive, Trash2, AlertCircle, Upload, ChevronDown, ChevronUp } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { ROLE_COLORS, ROLE_ICONS, getRoleIconComponent, normalizeColorHex, normalizeIconId } from '../../lib/roleIcons';
 import { roleService } from '../../services/roleService';
 import { skillService } from '../../services/skillService';
+import { mcpService } from '../../services/mcpService';
 import type { ProactivityLevel, Role, RoleSkillsConfig } from '../../types/role';
+import type { McpServer } from '../../types/mcp';
 import type { OpencodeSkillCandidate, SkillImportPreview, SkillRegistryEntry } from '../../types/skill';
 import { ProactivityToggle } from './ProactivityToggle';
 
@@ -75,14 +77,34 @@ export function SettingsTab({
   const [pendingSkill, setPendingSkill] = useState<string | null>(null);
   const [deleteSkillTarget, setDeleteSkillTarget] = useState<SkillRegistryEntry | null>(null);
   const [isSavingProactivity, setIsSavingProactivity] = useState(false);
+  const [roleMcpServers, setRoleMcpServers] = useState<McpServer[]>([]);
+  const [availableMcpServers, setAvailableMcpServers] = useState<McpServer[]>([]);
+  const [isLoadingMcpServers, setIsLoadingMcpServers] = useState(false);
+  const [isMcpPickerOpen, setIsMcpPickerOpen] = useState(false);
+  const [mcpSearch, setMcpSearch] = useState('');
+  const [pendingMcpId, setPendingMcpId] = useState<string | null>(null);
   const [settingsSavedMessage, setSettingsSavedMessage] = useState('');
   const [error, setError] = useState('');
   const [dangerAction, setDangerAction] = useState<DangerAction>(null);
   const [deleteConfirmName, setDeleteConfirmName] = useState('');
   const [isDangerSubmitting, setIsDangerSubmitting] = useState(false);
+  const activeRoleIdRef = useRef(role.id);
+
+  useEffect(() => {
+    activeRoleIdRef.current = role.id;
+  }, [role.id]);
 
   const canRemoveRole = activeRoleCount > 1;
   const deleteNameMatches = deleteConfirmName.trim() === role.name;
+  const filteredAvailableMcpServers = useMemo(() => {
+    const query = mcpSearch.trim().toLowerCase();
+    if (!query) return availableMcpServers;
+    return availableMcpServers.filter(server =>
+      server.name.toLowerCase().includes(query) ||
+      server.description.toLowerCase().includes(query) ||
+      server.commandOrUrl.toLowerCase().includes(query)
+    );
+  }, [availableMcpServers, mcpSearch]);
   const SelectedIcon = useMemo(() => getRoleIconComponent(roleIcon), [roleIcon]);
 
   useEffect(() => {
@@ -111,6 +133,12 @@ export function SettingsTab({
     setPendingSkillContent('');
     setReuseAllRoles(false);
     setReuseRoleIds([role.id]);
+    setRoleMcpServers([]);
+    setAvailableMcpServers([]);
+    setIsLoadingMcpServers(false);
+    setIsMcpPickerOpen(false);
+    setMcpSearch('');
+    setPendingMcpId(null);
   }, [role.id]);
 
   useEffect(() => {
@@ -143,6 +171,40 @@ export function SettingsTab({
       cancelled = true;
     };
   }, [role.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setIsLoadingMcpServers(true);
+    Promise.all([
+      mcpService.listForRole(role.id),
+      mcpService.listAvailableForRole(role.id),
+    ])
+      .then(([bound, available]) => {
+        if (!cancelled) {
+          setRoleMcpServers(bound);
+          setAvailableMcpServers(available);
+        }
+      })
+      .catch(e => {
+        if (!cancelled) setError(toFriendlyError(e, 'MCP server 列表加载失败，请稍后重试'));
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoadingMcpServers(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [role.id]);
+
+  const refreshMcpServers = async (roleId: string) => {
+    const [bound, available] = await Promise.all([
+      mcpService.listForRole(roleId),
+      mcpService.listAvailableForRole(roleId),
+    ]);
+    if (activeRoleIdRef.current !== roleId) return;
+    setRoleMcpServers(bound);
+    setAvailableMcpServers(available);
+  };
 
   const handleSave = async () => {
     const name = roleName.trim();
@@ -388,6 +450,44 @@ export function SettingsTab({
       setError(toFriendlyError(e, '取消导入 opencode Skill 失败，请稍后重试'));
     } finally {
       setRemovingOpencodeId('');
+    }
+  };
+
+  const handleAddMcpToRole = async (serverId: string) => {
+    const roleId = role.id;
+    setPendingMcpId(serverId);
+    setError('');
+    setSettingsSavedMessage('');
+    try {
+      await mcpService.addToRole(roleId, serverId);
+      await refreshMcpServers(roleId);
+      if (activeRoleIdRef.current !== roleId) return;
+      setMcpSearch('');
+      setIsMcpPickerOpen(false);
+      setSettingsSavedMessage('MCP server 已添加');
+      setTimeout(() => setSettingsSavedMessage(''), MESSAGE_TIMEOUT_MS);
+    } catch (e) {
+      if (activeRoleIdRef.current === roleId) setError(toFriendlyError(e, 'MCP server 添加失败，请稍后重试'));
+    } finally {
+      if (activeRoleIdRef.current === roleId) setPendingMcpId(null);
+    }
+  };
+
+  const handleRemoveMcpFromRole = async (serverId: string) => {
+    const roleId = role.id;
+    setPendingMcpId(serverId);
+    setError('');
+    setSettingsSavedMessage('');
+    try {
+      await mcpService.removeFromRole(roleId, serverId);
+      await refreshMcpServers(roleId);
+      if (activeRoleIdRef.current !== roleId) return;
+      setSettingsSavedMessage('MCP server 已移除');
+      setTimeout(() => setSettingsSavedMessage(''), MESSAGE_TIMEOUT_MS);
+    } catch (e) {
+      if (activeRoleIdRef.current === roleId) setError(toFriendlyError(e, 'MCP server 移除失败，请稍后重试'));
+    } finally {
+      if (activeRoleIdRef.current === roleId) setPendingMcpId(null);
     }
   };
 
@@ -671,6 +771,88 @@ export function SettingsTab({
             )}
           </div>
 
+          <div className="pt-6 border-t border-slate-200/80">
+            <label className="text-[14px] font-semibold text-slate-800 block mb-3">外部 MCP 工具</label>
+            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <div className="text-[14.5px] font-medium text-slate-800">当前角色可用 MCP server</div>
+                  <p className="mt-1 text-[12.5px] leading-relaxed text-slate-500">这里只展示已为当前角色启用的 MCP；全局未绑定的 server 不会出现在角色能力中。</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsMcpPickerOpen(prev => !prev)}
+                  disabled={isLoadingMcpServers}
+                  className="inline-flex shrink-0 items-center justify-center rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-[12px] font-medium text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  添加 MCP server
+                </button>
+              </div>
+
+              <div className="mt-3 space-y-2">
+                {isLoadingMcpServers && <div className="text-[12.5px] text-slate-400">正在加载 MCP server...</div>}
+                {!isLoadingMcpServers && roleMcpServers.length === 0 && <div className="text-[12.5px] text-slate-400">当前角色暂无 MCP server。</div>}
+                {roleMcpServers.map(server => (
+                  <div key={server.id} className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className={cn('w-2.5 h-2.5 rounded-full', server.enabled ? 'bg-emerald-500' : 'bg-slate-300')} />
+                          <span className="break-words text-[13.5px] font-medium text-slate-800">{server.name}</span>
+                          <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-500">{mcpServerTypeLabel(server.serverType)}</span>
+                          {!server.enabled && <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-500">已停用</span>}
+                        </div>
+                        <p className="mt-1.5 break-words text-[12px] leading-relaxed text-slate-500">{server.description || server.commandOrUrl}</p>
+                      </div>
+                      <button
+                        type="button"
+                        aria-label={`移除 ${server.name}`}
+                        onClick={() => handleRemoveMcpFromRole(server.id)}
+                        disabled={pendingMcpId !== null}
+                        className="shrink-0 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {pendingMcpId === server.id ? '移除中...' : '移除'}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {isMcpPickerOpen && (
+                <div className="mt-3 rounded-lg border border-indigo-100 bg-indigo-50 px-3 py-3">
+                  <input
+                    type="text"
+                    value={mcpSearch}
+                    onChange={e => setMcpSearch(e.target.value)}
+                    placeholder="搜索 MCP server"
+                    className="w-full rounded-lg border border-indigo-100 bg-white px-3 py-2 text-[13px] outline-none focus:border-indigo-300 focus:ring-2 focus:ring-indigo-500/20"
+                  />
+                  <div className="mt-2 space-y-2">
+                    {filteredAvailableMcpServers.length === 0 ? (
+                      <div className="text-[12.5px] text-slate-500">没有可添加的 MCP server</div>
+                    ) : filteredAvailableMcpServers.map(server => (
+                      <div key={server.id} className="flex items-start justify-between gap-3 rounded-lg border border-indigo-100 bg-white px-3 py-2">
+                        <div className="min-w-0">
+                          <div className="break-words text-[13.5px] font-medium text-slate-800">{server.name}</div>
+                          <div className="mt-1 break-words text-[12px] text-slate-500">{server.description || server.commandOrUrl}</div>
+                        </div>
+                        <button
+                          type="button"
+                          aria-label={`添加 ${server.name}`}
+                          onClick={() => handleAddMcpToRole(server.id)}
+                          disabled={pendingMcpId !== null}
+                          className="shrink-0 rounded-lg bg-indigo-600 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {pendingMcpId === server.id ? '添加中...' : '添加'}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
           <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
             <div className="mb-4 space-y-3">
               <div className="min-w-0">
@@ -921,6 +1103,12 @@ function parseSkillsConfig(raw: string): RoleSkillsConfig {
   } catch {
     return DEFAULT_SKILLS;
   }
+}
+
+function mcpServerTypeLabel(value: string) {
+  if (value === 'streamable_http') return 'Streamable HTTP';
+  if (value === 'stdio' || value === 'command') return 'stdio';
+  return 'SSE';
 }
 
 function toFriendlyError(error: unknown, fallback: string) {

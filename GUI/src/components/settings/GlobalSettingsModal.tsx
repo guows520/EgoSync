@@ -3,11 +3,30 @@ import { Plus, X, Download, Trash2, Loader2, Check, AlertCircle, ArchiveRestore 
 import { cn } from '../../lib/utils';
 import { llmConfigService } from '../../services/llmConfigService';
 import { roleService } from '../../services/roleService';
+import { mcpService } from '../../services/mcpService';
 import type { LlmConfig, CreateLlmConfigInput, UpdateLlmConfigInput } from '../../types/settings';
+import type { McpServer, McpServerType } from '../../types/mcp';
 import type { Role } from '../../types/role';
 import { getRoleIconComponent } from '../../lib/roleIcons';
 
 type TestStatus = 'idle' | 'testing' | 'success' | 'error';
+type McpForm = {
+  name: string;
+  serverType: McpServerType;
+  commandOrUrl: string;
+  envRefs: string;
+  description: string;
+  enabled: boolean;
+};
+
+const EMPTY_MCP_FORM: McpForm = {
+  name: '新 MCP server',
+  serverType: 'sse',
+  commandOrUrl: '',
+  envRefs: '{}',
+  description: '',
+  enabled: true,
+};
 
 export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRoles = [], onRestoreRole, onRefreshRoles }: any) {
   const [tab, setTab] = useState('llm');
@@ -23,6 +42,16 @@ export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRol
   const [archivedRoles, setArchivedRoles] = useState<Role[]>(initialArchivedRoles);
   const [archiveError, setArchiveError] = useState('');
   const [restoringRoleId, setRestoringRoleId] = useState<string | null>(null);
+  const [mcpServers, setMcpServers] = useState<McpServer[]>([]);
+  const [mcpForm, setMcpForm] = useState<McpForm>(EMPTY_MCP_FORM);
+  const [editingMcpId, setEditingMcpId] = useState<string | null>(null);
+  const [isEditingMcp, setIsEditingMcp] = useState(false);
+  const [isSavingMcp, setIsSavingMcp] = useState(false);
+  const [mcpError, setMcpError] = useState('');
+  const [testingMcpId, setTestingMcpId] = useState<string | null>(null);
+  const [mcpTestResult, setMcpTestResult] = useState<{ id: string; status: 'success' | 'error'; message: string } | null>(null);
+  const [pendingDeleteMcp, setPendingDeleteMcp] = useState<McpServer | null>(null);
+  const [mcpImportJson, setMcpImportJson] = useState('');
 
   const loadConfigs = useCallback(async () => {
     try {
@@ -44,10 +73,22 @@ export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRol
     }
   }, []);
 
+  const loadMcpServers = useCallback(async () => {
+    setMcpError('');
+    try {
+      const servers = await mcpService.list();
+      setMcpServers(servers);
+    } catch (e) {
+      console.error('加载 MCP server 失败:', e);
+      setMcpError('MCP server 加载失败，请稍后重试');
+    }
+  }, []);
+
   useEffect(() => {
     loadConfigs();
     loadArchivedRoles();
-  }, [loadArchivedRoles, loadConfigs]);
+    loadMcpServers();
+  }, [loadArchivedRoles, loadConfigs, loadMcpServers]);
 
   const handleEdit = (conf: LlmConfig) => {
     setEditForm({ name: conf.name, provider: conf.provider, baseUrl: conf.baseUrl, model: conf.model, apiKey: '' });
@@ -150,6 +191,123 @@ export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRol
     }
   };
 
+  const handleNewMcp = () => {
+    setMcpForm(EMPTY_MCP_FORM);
+    setEditingMcpId(null);
+    setIsEditingMcp(true);
+    setMcpError('');
+    setMcpTestResult(null);
+    setMcpImportJson('');
+  };
+
+  const handleEditMcp = (server: McpServer) => {
+    setMcpForm({
+      name: server.name,
+      serverType: normalizeMcpServerType(server.serverType),
+      commandOrUrl: server.commandOrUrl,
+      envRefs: server.envRefs || '{}',
+      description: server.description,
+      enabled: server.enabled,
+    });
+    setEditingMcpId(server.id);
+    setIsEditingMcp(true);
+    setMcpError('');
+    setMcpTestResult(null);
+    setMcpImportJson('');
+  };
+
+  const handleSaveMcp = async () => {
+    setIsSavingMcp(true);
+    setMcpError('');
+    try {
+      const input = {
+        name: mcpForm.name,
+        serverType: mcpForm.serverType,
+        commandOrUrl: mcpForm.commandOrUrl,
+        envRefs: mcpForm.envRefs,
+        description: mcpForm.description,
+        enabled: mcpForm.enabled,
+      };
+      if (editingMcpId) {
+        await mcpService.update(editingMcpId, input);
+      } else {
+        await mcpService.create(input);
+      }
+      await loadMcpServers();
+      setIsEditingMcp(false);
+      setEditingMcpId(null);
+      setMcpForm(EMPTY_MCP_FORM);
+    } catch (e) {
+      setMcpError(toFriendlyMcpError(e, 'MCP server 保存失败，请稍后重试'));
+    } finally {
+      setIsSavingMcp(false);
+    }
+  };
+
+  const handleDeleteMcp = async (id: string) => {
+    setMcpError('');
+    try {
+      await mcpService.delete(id);
+      setPendingDeleteMcp(null);
+      await loadMcpServers();
+    } catch (e) {
+      setMcpError(toFriendlyMcpError(e, 'MCP server 删除失败，请稍后重试'));
+    }
+  };
+
+  const handleToggleMcp = async (server: McpServer) => {
+    setMcpError('');
+    try {
+      await mcpService.update(server.id, { enabled: !server.enabled });
+      await loadMcpServers();
+    } catch (e) {
+      setMcpError(toFriendlyMcpError(e, 'MCP server 状态更新失败，请稍后重试'));
+    }
+  };
+
+  const handleImportMcpJson = () => {
+    setMcpError('');
+    try {
+      const imported = JSON.parse(mcpImportJson);
+      if (!imported || typeof imported !== 'object' || Array.isArray(imported)) {
+        setMcpError('MCP JSON 必须是对象');
+        return;
+      }
+      const importedServer = extractImportedMcpServer(imported as Record<string, unknown>);
+      if (!importedServer) {
+        setMcpError('MCP JSON 未包含可导入的 MCP server');
+        return;
+      }
+      const object = importedServer.config;
+      const commandOrUrl = stringValue(object.url) || stringValue(object.command) || stringValue(object.commandOrUrl);
+      const env = object.env ?? object.environment ?? object.headers ?? object.envRefs;
+      setMcpForm({
+        name: stringValue(object.name) || importedServer.name || EMPTY_MCP_FORM.name,
+        serverType: normalizeMcpServerType(stringValue(object.type) || stringValue(object.serverType)),
+        commandOrUrl,
+        envRefs: formatImportedEnvRefs(env),
+        description: stringValue(object.description),
+        enabled: typeof object.enabled === 'boolean' ? object.enabled : true,
+      });
+    } catch {
+      setMcpError('MCP JSON 格式无效');
+    }
+  };
+
+  const handleTestMcp = async (id: string) => {
+    setTestingMcpId(id);
+    setMcpTestResult(null);
+    setMcpError('');
+    try {
+      await mcpService.test(id);
+      setMcpTestResult({ id, status: 'success', message: '连接成功' });
+    } catch (e) {
+      setMcpTestResult({ id, status: 'error', message: toFriendlyMcpError(e, 'MCP server 无法连接，请检查配置') });
+    } finally {
+      setTestingMcpId(null);
+    }
+  };
+
   return (
     <div className="fixed top-0 right-0 bottom-0 left-16 z-50 animate-in slide-in-from-right duration-300">
       <div className="h-full bg-white shadow-2xl flex">
@@ -158,13 +316,28 @@ export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRol
             <h2 className="text-[16px] font-semibold text-slate-800">全局设置</h2>
           </div>
           <button onClick={() => { setTab('llm'); setIsEditing(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'llm' ? "bg-white text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 hover:bg-slate-200/50")}>模型配置 (BYOK)</button>
-          <button onClick={() => { setTab('data'); setIsEditing(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'data' ? "bg-white text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 hover:bg-slate-200/50")}>数据与主权</button>
-          <button onClick={() => { setTab('mission'); setIsEditing(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'mission' ? "bg-white text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 hover:bg-slate-200/50")}>使命宣言</button>
+          <button onClick={() => { setTab('mcp'); setIsEditing(false); setIsEditingMcp(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'mcp' ? "bg-white text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 hover:bg-slate-200/50")}>MCP 工具</button>
+          <button onClick={() => { setTab('data'); setIsEditing(false); setIsEditingMcp(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'data' ? "bg-white text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 hover:bg-slate-200/50")}>数据与主权</button>
+          <button onClick={() => { setTab('mission'); setIsEditing(false); setIsEditingMcp(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'mission' ? "bg-white text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 hover:bg-slate-200/50")}>使命宣言</button>
         </div>
         <div className="flex-1 p-10 overflow-y-auto">
           <div className="flex justify-between items-center mb-8">
-            <h3 className="text-[24px] font-semibold text-slate-800">{tab === 'llm' ? 'LLM Provider 配置' : tab === 'data' ? '数据与隐私' : '个人使命宣言'}</h3>
-            <button onClick={onClose} className="p-2 text-slate-400 hover:bg-slate-100 rounded-full transition-colors"><X size={24}/></button>
+            <h3 className="text-[24px] font-semibold text-slate-800">{tab === 'llm' ? 'LLM Provider 配置' : tab === 'mcp' ? 'MCP 工具配置' : tab === 'data' ? '数据与隐私' : '个人使命宣言'}</h3>
+            <button
+              onClick={() => {
+                if (tab === 'mcp' && isEditingMcp) {
+                  setIsEditingMcp(false);
+                  setEditingMcpId(null);
+                  setMcpForm(EMPTY_MCP_FORM);
+                  setMcpImportJson('');
+                  setMcpError('');
+                  return;
+                }
+                onClose();
+              }}
+              aria-label={tab === 'mcp' && isEditingMcp ? '返回 MCP 工具列表' : '关闭全局设置'}
+              className="p-2 text-slate-400 hover:bg-slate-100 rounded-full transition-colors"
+            ><X size={24}/></button>
           </div>
           
           {tab === 'llm' && (
@@ -185,7 +358,7 @@ export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRol
                         </div>
                         <div className="flex items-center gap-2">
                           <button onClick={() => handleTestConnection(conf.id)} disabled={testingConfigId === conf.id} className="px-3 py-1.5 text-[13px] font-medium text-slate-600 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors disabled:opacity-50">
-                            {testingConfigId === conf.id ? <Loader2 size={14} className="animate-spin" /> : '测试连接'}
+                            {testingConfigId === conf.id ? <Loader2 size={14} className="animate-loading-spin" /> : '测试连接'}
                           </button>
                           <button onClick={() => handleEdit(conf)} className="px-3 py-1.5 text-[13px] font-medium text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors">编辑</button>
                           <button onClick={() => handleDelete(conf.id)} className="px-3 py-1.5 text-[13px] font-medium text-slate-600 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">删除</button>
@@ -240,9 +413,150 @@ export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRol
                   <div className="mt-6 flex justify-end gap-3">
                     <button onClick={() => setIsEditing(false)} className="px-5 py-2.5 border border-slate-300 rounded-lg text-[13px] font-medium text-slate-700 hover:bg-slate-100 transition-colors">取消</button>
                     <button onClick={handleSave} disabled={isSaving} className="px-5 py-2.5 bg-indigo-600 text-white rounded-lg text-[13px] font-medium hover:bg-indigo-700 transition-colors shadow-sm disabled:opacity-50">
-                      {isSaving ? <Loader2 size={14} className="animate-spin inline mr-1" /> : null}
+                      {isSaving ? <Loader2 size={14} className="animate-loading-spin inline mr-1" /> : null}
                       保存配置
                     </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {tab === 'mcp' && (
+            <div className="space-y-6">
+              <div className="bg-amber-50 border border-amber-100 rounded-xl p-4 text-[13px] text-amber-800 leading-relaxed">
+                这是外部工具接入，不是 EgoSync 内部 create_role/delegate 工具。secret 只能填写 env: 引用，不会明文写入数据库、opencode.json 或日志。
+              </div>
+
+              {mcpError && (
+                <div className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-[13px] text-red-600 flex items-center gap-2">
+                  <AlertCircle size={14} /> {mcpError}
+                </div>
+              )}
+
+              {!isEditingMcp ? (
+                <div className="space-y-4">
+                  {mcpServers.length === 0 ? (
+                    <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-[13px] text-slate-400">暂无 MCP server</div>
+                  ) : mcpServers.map(server => (
+                    <div key={server.id} className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className={cn('w-2.5 h-2.5 rounded-full', server.enabled ? 'bg-emerald-500' : 'bg-slate-300')} />
+                            <span className="text-[15px] font-medium text-slate-800 break-words">{server.name}</span>
+                            <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-500">{mcpServerTypeLabel(server.serverType)}</span>
+                            {!server.enabled && <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-500">已停用</span>}
+                          </div>
+                          <p className="mt-2 break-words font-mono text-[12px] text-slate-500">{server.commandOrUrl}</p>
+                          <p className={cn('mt-1.5 break-words text-[12.5px] leading-relaxed', server.description ? 'text-slate-500' : 'text-slate-400')}>描述：{server.description || '暂无描述'}</p>
+                          {mcpTestResult?.id === server.id && (
+                            <div className={cn('mt-2 flex items-center gap-1.5 text-[12.5px]', mcpTestResult.status === 'success' ? 'text-emerald-600' : 'text-red-600')}>
+                              {mcpTestResult.status === 'success' ? <Check size={14} /> : <AlertCircle size={14} />}
+                              {mcpTestResult.message}
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2">
+                          <button
+                            type="button"
+                            role="switch"
+                            aria-checked={server.enabled}
+                            aria-label={`${server.enabled ? '停用' : '启用'} ${server.name}`}
+                            onClick={() => handleToggleMcp(server)}
+                            className={cn(
+                              'relative h-6 w-11 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500/30',
+                              server.enabled ? 'bg-indigo-600' : 'bg-slate-300'
+                            )}
+                          >
+                            <span
+                              className={cn(
+                                'absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform',
+                                server.enabled ? 'translate-x-5' : 'translate-x-0'
+                              )}
+                            />
+                          </button>
+                          <button onClick={() => handleTestMcp(server.id)} disabled={testingMcpId === server.id} className="px-3 py-1.5 text-[13px] font-medium text-slate-600 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors disabled:opacity-50">
+                            {testingMcpId === server.id ? <Loader2 size={14} className="animate-loading-spin" /> : '测试连接'}
+                          </button>
+                          <button onClick={() => handleEditMcp(server)} className="px-3 py-1.5 text-[13px] font-medium text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors">编辑</button>
+                          <button onClick={() => setPendingDeleteMcp(server)} className="px-3 py-1.5 text-[13px] font-medium text-slate-600 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">删除</button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  <button onClick={handleNewMcp} className="w-full py-4 border-2 border-dashed border-slate-200 rounded-xl text-[14px] font-medium text-slate-500 hover:border-indigo-300 hover:text-indigo-600 hover:bg-indigo-50/50 transition-all flex items-center justify-center gap-2">
+                    <Plus size={16} /> 添加 MCP server
+                  </button>
+                </div>
+              ) : (
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-6 animate-in slide-in-from-bottom-2">
+                  <h4 className="text-[16px] font-medium text-slate-800 mb-6">{editingMcpId ? '编辑 MCP server' : '新增 MCP server'}</h4>
+                  {!editingMcpId && (
+                    <div className="mb-6 rounded-xl border border-dashed border-slate-200 bg-white p-4">
+                      <label htmlFor="mcp-json-import" className="block text-[13px] font-medium text-slate-700 mb-1.5">MCP JSON</label>
+                      <textarea
+                        id="mcp-json-import"
+                        aria-label="MCP JSON"
+                        value={mcpImportJson}
+                        onChange={e => setMcpImportJson(e.target.value)}
+                        rows={4}
+                        placeholder='{ "name": "天气查询", "type": "sse", "url": "https://example.com/mcp" }'
+                        className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none font-mono resize-none"
+                      />
+                      <div className="mt-3 flex justify-end">
+                        <button onClick={handleImportMcpJson} className="px-4 py-2 rounded-lg text-[13px] font-medium text-indigo-600 hover:bg-indigo-50 border border-indigo-200 transition-colors">导入 JSON</button>
+                      </div>
+                    </div>
+                  )}
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-[13px] font-medium text-slate-700 mb-1.5">名称</label>
+                      <input type="text" value={mcpForm.name} onChange={e => setMcpForm({ ...mcpForm, name: e.target.value })} className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none" />
+                    </div>
+                    <div>
+                      <label className="block text-[13px] font-medium text-slate-700 mb-1.5">类型</label>
+                      <select value={mcpForm.serverType} onChange={e => setMcpForm({ ...mcpForm, serverType: e.target.value as McpServerType })} className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none">
+                        <option value="sse">SSE</option>
+                        <option value="streamable_http">Streamable HTTP</option>
+                        <option value="stdio">stdio</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[13px] font-medium text-slate-700 mb-1.5">URL / Command</label>
+                      <input type="text" value={mcpForm.commandOrUrl} onChange={e => setMcpForm({ ...mcpForm, commandOrUrl: e.target.value })} placeholder={isRemoteMcpType(mcpForm.serverType) ? 'http://localhost:8000/sse' : 'npx -y @modelcontextprotocol/server-filesystem'} className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none font-mono" />
+                    </div>
+                    <div>
+                      <label className="block text-[13px] font-medium text-slate-700 mb-1.5">环境变量引用 JSON</label>
+                      <textarea value={mcpForm.envRefs} onChange={e => setMcpForm({ ...mcpForm, envRefs: e.target.value })} rows={3} className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none font-mono resize-none" />
+                      <p className="mt-1.5 text-[12px] text-slate-400">示例：{`{"TOKEN":"env:CALENDAR_TOKEN"}`}</p>
+                    </div>
+                    <div>
+                      <label className="block text-[13px] font-medium text-slate-700 mb-1.5">描述（选填）</label>
+                      <textarea value={mcpForm.description} onChange={e => setMcpForm({ ...mcpForm, description: e.target.value })} rows={2} className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none resize-none" />
+                    </div>
+                  </div>
+                  <div className="mt-6 flex justify-end gap-3">
+                    <button onClick={() => setIsEditingMcp(false)} className="px-5 py-2.5 border border-slate-300 rounded-lg text-[13px] font-medium text-slate-700 hover:bg-slate-100 transition-colors">取消</button>
+                    <button onClick={handleSaveMcp} disabled={isSavingMcp} className="px-5 py-2.5 bg-indigo-600 text-white rounded-lg text-[13px] font-medium hover:bg-indigo-700 transition-colors shadow-sm disabled:opacity-50">
+                      {isSavingMcp ? <Loader2 size={14} className="animate-loading-spin inline mr-1" /> : null}
+                      保存 MCP server
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {pendingDeleteMcp && (
+                <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/30 px-4">
+                  <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
+                    <h4 className="text-[16px] font-semibold text-slate-800">确认删除 MCP server？</h4>
+                    <p className="mt-2 text-[13px] leading-relaxed text-slate-500">
+                      删除后会从全局 MCP 工具列表移除「{pendingDeleteMcp.name}」，并解除所有角色绑定。
+                    </p>
+                    <div className="mt-6 flex justify-end gap-3">
+                      <button onClick={() => setPendingDeleteMcp(null)} className="px-4 py-2 rounded-lg border border-slate-300 text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors">取消</button>
+                      <button onClick={() => handleDeleteMcp(pendingDeleteMcp.id)} className="px-4 py-2 rounded-lg bg-red-600 text-[13px] font-medium text-white hover:bg-red-700 transition-colors">确认删除</button>
+                    </div>
                   </div>
                 </div>
               )}
@@ -311,6 +625,60 @@ export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRol
   );
 }
 
+function normalizeMcpServerType(value: unknown): McpServerType {
+  if (value === 'http_sse') return 'sse';
+  if (value === 'command') return 'stdio';
+  if (value === 'streamable_http' || value === 'stdio' || value === 'sse') return value;
+  if (value === 'remote') return 'sse';
+  if (value === 'local') return 'stdio';
+  return 'sse';
+}
+
+function mcpServerTypeLabel(value: McpServerType) {
+  const normalized = normalizeMcpServerType(value);
+  if (normalized === 'streamable_http') return 'Streamable HTTP';
+  if (normalized === 'stdio') return 'stdio';
+  return 'SSE';
+}
+
+function isRemoteMcpType(value: McpServerType) {
+  return normalizeMcpServerType(value) !== 'stdio';
+}
+
+function extractImportedMcpServer(object: Record<string, unknown>) {
+  const servers = object.mcpServers;
+  if (servers && typeof servers === 'object' && !Array.isArray(servers)) {
+    const firstServer = Object.entries(servers as Record<string, unknown>).find(([, value]) => (
+      value && typeof value === 'object' && !Array.isArray(value)
+    ));
+    if (firstServer) {
+      return {
+        name: firstServer[0],
+        config: firstServer[1] as Record<string, unknown>,
+      };
+    }
+    return null;
+  }
+
+  return {
+    name: '',
+    config: object,
+  };
+}
+
+function stringValue(value: unknown) {
+  return typeof value === 'string' ? value : '';
+}
+
+function formatImportedEnvRefs(value: unknown) {
+  if (!value) return '{}';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'object' && !Array.isArray(value)) {
+    return JSON.stringify(value, null, 2);
+  }
+  return '{}';
+}
+
 function formatDateTime(value: string | null) {
   if (!value) return '未知';
   const date = new Date(value);
@@ -322,4 +690,19 @@ function formatDateTime(value: string | null) {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+function toFriendlyMcpError(error: unknown, fallback: string) {
+  if (error == null) return fallback;
+  const text = typeof error === 'string'
+    ? error
+    : error instanceof Error
+      ? error.message
+      : (JSON.stringify(error) ?? String(error));
+  if (text.includes('secret 只能保存 env: 引用')) return 'secret 只能保存 env: 引用';
+  if (text.includes('环境变量引用必须是 JSON 对象')) return '环境变量引用必须是 JSON 对象';
+  if (text.includes('MCP server 名称不能为空')) return 'MCP server 名称不能为空';
+  if (text.includes('MCP server 连接参数不能为空')) return 'MCP server 连接参数不能为空';
+  if (text.includes('无法连接') || text.includes('不可达')) return 'MCP server 无法连接，请检查配置';
+  return fallback;
 }

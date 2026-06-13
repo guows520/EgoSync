@@ -59,7 +59,7 @@ pub async fn role_create(
     }
     let registry = registry_for_sync(&pool).await;
     sync_warn(
-        agent_config.sync_role_created_with_skills(&role, &registry),
+        crate::services::mcp_server::sync_role_agent_with_mcp(&pool, &agent_config, &role, &registry).await,
         "create",
     );
     Ok(role)
@@ -89,7 +89,7 @@ pub async fn role_update(
     let role = roles::update_role(&pool, &id, &input).await?;
     let registry = registry_for_sync(&pool).await;
     sync_warn(
-        agent_config.sync_role_updated_with_skills(&role, &registry),
+        crate::services::mcp_server::sync_role_agent_with_mcp(&pool, &agent_config, &role, &registry).await,
         "update",
     );
     Ok(role)
@@ -105,7 +105,7 @@ pub async fn role_update_skills(
     let role = roles::update_role_skills(&pool, &id, &input).await?;
     let registry = registry_for_sync(&pool).await;
     sync_warn(
-        agent_config.sync_role_updated_with_skills(&role, &registry),
+        crate::services::mcp_server::sync_role_agent_with_mcp(&pool, &agent_config, &role, &registry).await,
         "update_skills",
     );
     Ok(role)
@@ -121,7 +121,7 @@ pub async fn role_update_proactivity(
     let role = roles::update_role_proactivity(&pool, &id, &input).await?;
     let registry = registry_for_sync(&pool).await;
     sync_warn(
-        agent_config.sync_role_updated_with_skills(&role, &registry),
+        crate::services::mcp_server::sync_role_agent_with_mcp(&pool, &agent_config, &role, &registry).await,
         "update_proactivity",
     );
     Ok(role)
@@ -148,7 +148,7 @@ pub async fn role_restore(
     let role = roles::restore_role(&pool, &id).await?;
     let registry = registry_for_sync(&pool).await;
     sync_warn(
-        agent_config.sync_role_created_with_skills(&role, &registry),
+        crate::services::mcp_server::sync_role_agent_with_mcp(&pool, &agent_config, &role, &registry).await,
         "restore",
     );
     Ok(role)

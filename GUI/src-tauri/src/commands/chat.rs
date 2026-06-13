@@ -13,6 +13,9 @@ use crate::services::agent_config::AgentConfigService;
 use crate::services::agent_engine;
 
 #[derive(Default)]
+pub struct OpencodeMcpScopeLock(pub Arc<Mutex<()>>);
+
+#[derive(Default)]
 pub struct StreamingState(pub Arc<Mutex<HashSet<String>>>);
 
 #[derive(Default)]
@@ -439,8 +442,9 @@ async fn maybe_enable_requested_meta_skill(
         return Ok(());
     };
     let updated = crate::db::roles::update_role_skills(main_pool, role_id, &input).await?;
+    let registry = crate::db::skills::list_skills(main_pool).await.unwrap_or_default();
     sync_role_config_warn(
-        agent_config.sync_role_updated(&updated),
+        crate::services::mcp_server::sync_role_agent_with_mcp(main_pool, agent_config, &updated, &registry).await,
         "auto_enable_skill",
     );
     Ok(())
@@ -675,6 +679,28 @@ mod tests {
             .execute(&pool)
             .await
             .expect("create roles schema");
+        sqlx::raw_sql(
+            "CREATE TABLE IF NOT EXISTS mcp_servers (
+                id TEXT PRIMARY KEY NOT NULL,
+                name TEXT NOT NULL,
+                server_type TEXT NOT NULL,
+                command_or_url TEXT NOT NULL,
+                env_refs TEXT NOT NULL DEFAULT '{}',
+                description TEXT NOT NULL DEFAULT '',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+            );
+            CREATE TABLE IF NOT EXISTS role_mcp_server_bindings (
+                server_id TEXT NOT NULL,
+                role_id TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                PRIMARY KEY (server_id, role_id)
+            );",
+        )
+        .execute(&pool)
+        .await
+        .expect("create mcp schema");
         pool
     }
 

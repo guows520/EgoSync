@@ -46,7 +46,24 @@ impl SidecarManager {
     }
 
     pub fn with_working_dir(mut self, working_dir: impl Into<PathBuf>) -> Self {
-        self.working_dir = Some(working_dir.into());
+        let working_dir = working_dir.into();
+        let global_dir = working_dir
+            .parent()
+            .map(|parent| parent.join("opencode-global"))
+            .unwrap_or_else(|| working_dir.join("opencode-global"));
+        self.extra_env.insert(
+            "XDG_CONFIG_HOME".to_string(),
+            global_dir.join("config").to_string_lossy().to_string(),
+        );
+        self.extra_env.insert(
+            "XDG_DATA_HOME".to_string(),
+            global_dir.join("data").to_string_lossy().to_string(),
+        );
+        self.extra_env.insert(
+            "XDG_CACHE_HOME".to_string(),
+            global_dir.join("cache").to_string_lossy().to_string(),
+        );
+        self.working_dir = Some(working_dir);
         self
     }
 
@@ -181,6 +198,7 @@ impl SidecarManager {
                 .arg("/c")
                 .arg(&binary)
                 .arg("serve")
+                .arg("--pure")
                 .arg("--port")
                 .arg(self.port.to_string());
             command
@@ -188,6 +206,7 @@ impl SidecarManager {
             let mut command = Command::new(&binary);
             command
                 .arg("serve")
+                .arg("--pure")
                 .arg("--port")
                 .arg(self.port.to_string());
             command
@@ -471,6 +490,24 @@ mod tests {
     }
 
     #[test]
+    fn test_sidecar_manager_isolates_opencode_global_paths_from_working_dir() {
+        let mgr = SidecarManager::new(None, Some(5000)).with_working_dir("C:\\egosync-workspace");
+
+        assert_eq!(
+            mgr.extra_env.get("XDG_CONFIG_HOME").map(String::as_str),
+            Some("C:\\opencode-global\\config")
+        );
+        assert_eq!(
+            mgr.extra_env.get("XDG_DATA_HOME").map(String::as_str),
+            Some("C:\\opencode-global\\data")
+        );
+        assert_eq!(
+            mgr.extra_env.get("XDG_CACHE_HOME").map(String::as_str),
+            Some("C:\\opencode-global\\cache")
+        );
+    }
+
+    #[test]
     fn test_sidecar_manager_stores_extra_env() {
         let mgr = SidecarManager::new(None, Some(5000))
             .with_env("EGOSYNC_DELEGATE_BRIDGE_TOKEN", "secret")
@@ -516,6 +553,16 @@ mod tests {
                 url
             );
         }
+    }
+
+    #[test]
+    fn test_start_invokes_opencode_serve_with_pure_config() {
+        let source = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/services/sidecar.rs"),
+        )
+        .expect("read sidecar.rs");
+
+        assert!(source.contains(".arg(\"--pure\")"));
     }
 
     #[cfg(target_os = "windows")]

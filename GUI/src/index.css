@@ -90,12 +90,20 @@
   40% { transform: translateY(-6px); }
 }
 
+@keyframes loading-spin {
+  to { transform: rotate(360deg); }
+}
+
 .animate-bounce-forever {
   animation-name: bounce !important;
   animation-duration: 1.4s !important;
   animation-timing-function: ease-in-out !important;
   animation-iteration-count: infinite !important;
   animation-fill-mode: both !important;
+}
+
+.animate-loading-spin {
+  animation: loading-spin 1s linear infinite !important;
 }
 
 /* Accessibility: Reduced Motion */
@@ -114,5 +122,8 @@
   .breathe {
     animation-duration: 4s !important;
     animation-iteration-count: infinite !important;
+  }
+  .animate-loading-spin {
+    animation: loading-spin 1s linear infinite !important;
   }
 }

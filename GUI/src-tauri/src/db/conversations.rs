@@ -347,6 +347,18 @@ pub async fn insert_message_process_event(
     })
 }
 
+pub async fn delete_message_process_events(
+    pool: &ConversationsPool,
+    message_id: &str,
+) -> Result<(), AppError> {
+    sqlx::query("DELETE FROM message_process_events WHERE message_id = ?")
+        .bind(message_id)
+        .execute(&**pool)
+        .await
+        .map_err(|e| AppError::DbError(format!("删除消息处理过程失败: {}", e)))?;
+    Ok(())
+}
+
 pub async fn list_message_process_events(
     pool: &ConversationsPool,
     message_id: &str,

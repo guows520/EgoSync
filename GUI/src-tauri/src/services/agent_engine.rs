@@ -1,6 +1,7 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use tokio::sync::{mpsc, Mutex};
 use tokio::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
@@ -66,16 +67,22 @@ fn opencode_agent_key(role_id: Option<&str>) -> String {
     }
 }
 
+fn opencode_session_cache_key(working_directory: &str, mcp_scope_key: &str) -> String {
+    format!("{}\n{}", working_directory, mcp_scope_key)
+}
+
 fn remember_opencode_session_for_directory(
     sessions: &mut std::collections::HashMap<String, OpencodeSessionState>,
     conversation_id: &str,
     session_id: &str,
     working_directory: &str,
+    mcp_scope_key: &str,
 ) -> String {
     let state = sessions.entry(conversation_id.to_string()).or_default();
+    let cache_key = opencode_session_cache_key(working_directory, mcp_scope_key);
     let remembered = state
         .sessions_by_directory
-        .entry(working_directory.to_string())
+        .entry(cache_key)
         .or_insert_with(|| session_id.to_string())
         .clone();
     state.active_session_id = remembered.clone();
@@ -220,8 +227,34 @@ fn emit_stream_token(
     );
 }
 
-fn tool_status_text(tool_name: &str, status: &str) -> Option<String> {
+fn display_tool_name(tool_name: &str) -> String {
     let trimmed = tool_name.trim();
+    let Some((server, tool)) = trimmed.split_once('_') else {
+        return trimmed.to_string();
+    };
+    if server.is_empty() || tool.is_empty() || is_builtin_underscore_tool(trimmed) {
+        return trimmed.to_string();
+    }
+    if server.contains('-')
+        || tool.contains('-')
+        || server.chars().any(|ch| !ch.is_ascii_alphanumeric())
+    {
+        format!("{}:{}", server, tool)
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn is_builtin_underscore_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "create_role" | "delegate_to_role" | "record_emergence_rejection"
+    )
+}
+
+fn tool_status_text(tool_name: &str, status: &str) -> Option<String> {
+    let display_name = display_tool_name(tool_name);
+    let trimmed = display_name.trim();
     match status {
         "running" => Some(if trimmed.is_empty() {
             "正在使用工具...".to_string()
@@ -256,14 +289,38 @@ fn emit_tool_status(
             message_id: None,
             phase: Some("tool".to_string()),
             status_text: Some(status_text),
-            tool_name: if tool_name.trim().is_empty() {
-                None
-            } else {
-                Some(tool_name.trim().to_string())
+            tool_name: {
+                let display_name = display_tool_name(tool_name);
+                if display_name.trim().is_empty() {
+                    None
+                } else {
+                    Some(display_name)
+                }
             },
             process_event: None,
         },
     );
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum McpSessionRetryDecision {
+    DoNotRetry,
+    RefreshRuntimeAndRetry,
+}
+
+fn mcp_session_retry_decision(
+    candidate: &ProcessEventCandidate,
+    already_retried: bool,
+) -> McpSessionRetryDecision {
+    if already_retried || !matches!(candidate.status.as_deref(), Some("failed" | "error")) {
+        return McpSessionRetryDecision::DoNotRetry;
+    }
+    let raw = candidate.raw_json.to_string().to_ascii_lowercase();
+    if raw.contains("invalid session id") || raw.contains("mcp-session-id") || raw.contains("session id") && raw.contains("invalid") {
+        McpSessionRetryDecision::RefreshRuntimeAndRetry
+    } else {
+        McpSessionRetryDecision::DoNotRetry
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -275,11 +332,141 @@ struct ProcessEventCandidate {
     raw_json: serde_json::Value,
 }
 
+#[derive(Debug, Clone, Default)]
+struct McpToolDisplayMap {
+    namespace_to_name: HashMap<String, String>,
+}
+
+impl McpToolDisplayMap {
+    fn from_servers(servers: &[crate::models::mcp::McpServer]) -> Self {
+        let mut namespace_to_name = HashMap::new();
+        for server in servers.iter().filter(|server| server.enabled) {
+            let display_name = server.name.trim();
+            if display_name.is_empty() {
+                continue;
+            }
+            for namespace in [
+                server.id.trim().to_string(),
+                display_name.to_string(),
+                opencode_safe_tool_namespace(display_name),
+            ] {
+                if !namespace.is_empty() {
+                    namespace_to_name.insert(namespace, display_name.to_string());
+                }
+            }
+        }
+        Self { namespace_to_name }
+    }
+
+    fn display_name_and_tool_for_raw_tool<'a>(&'a self, raw_tool: &'a str) -> Option<(&'a str, &'a str)> {
+        let trimmed = raw_tool.trim();
+        self.namespace_to_name
+            .iter()
+            .filter_map(|(namespace, display_name)| {
+                let prefix = format!("{}_", namespace);
+                let tool = trimmed.strip_prefix(&prefix)?;
+                if tool.is_empty() {
+                    return None;
+                }
+                Some((namespace.len(), display_name.as_str(), tool))
+            })
+            .max_by_key(|(namespace_len, _, _)| *namespace_len)
+            .map(|(_, display_name, tool)| (display_name, tool))
+    }
+
+    fn display_name_for_namespace(&self, namespace: &str) -> Option<&str> {
+        self.namespace_to_name.get(namespace.trim()).map(String::as_str)
+    }
+}
+
+fn opencode_safe_tool_namespace(namespace: &str) -> String {
+    namespace
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn display_tool_name_with_map(tool_name: &str, display_map: &McpToolDisplayMap) -> String {
+    let trimmed = tool_name.trim();
+    if let Some((display_name, tool)) = display_map.display_name_and_tool_for_raw_tool(trimmed) {
+        return format!("{}:{}", display_name, tool);
+    }
+    let Some((server, tool)) = trimmed.split_once('_') else {
+        return trimmed.to_string();
+    };
+    if server.is_empty() || tool.is_empty() || is_builtin_underscore_tool(trimmed) {
+        return trimmed.to_string();
+    }
+    if let Some(display_name) = display_map.display_name_for_namespace(server) {
+        return format!("{}:{}", display_name, tool);
+    }
+    display_tool_name(trimmed)
+}
+
+fn process_tool_summary_with_display_map(
+    tool_name: &str,
+    status: &str,
+    display_map: &McpToolDisplayMap,
+) -> String {
+    if let Some(text) = tool_status_text_with_display_map(tool_name, status, display_map) {
+        return text;
+    }
+    let display_name = display_tool_name_with_map(tool_name, display_map);
+    let trimmed = display_name.trim();
+    match status {
+        "failed" | "error" => {
+            if trimmed.is_empty() { "工具执行失败".to_string() } else { format!("{} 失败", trimmed) }
+        }
+        "cancelled" | "canceled" => {
+            if trimmed.is_empty() { "工具已取消".to_string() } else { format!("{} 已取消", trimmed) }
+        }
+        _ => {
+            if trimmed.is_empty() { "工具状态已更新".to_string() } else { format!("{} 状态已更新", trimmed) }
+        }
+    }
+}
+
+fn tool_status_text_with_display_map(
+    tool_name: &str,
+    status: &str,
+    display_map: &McpToolDisplayMap,
+) -> Option<String> {
+    let display_name = display_tool_name_with_map(tool_name, display_map);
+    let trimmed = display_name.trim();
+    match status {
+        "running" => Some(if trimmed.is_empty() {
+            "正在使用工具...".to_string()
+        } else {
+            format!("正在使用 {}...", trimmed)
+        }),
+        "completed" => Some(if trimmed.is_empty() {
+            "工具已完成，正在整理结果...".to_string()
+        } else {
+            format!("{} 已完成，正在整理结果...", trimmed)
+        }),
+        _ => None,
+    }
+}
+
+fn build_tool_process_event_candidate_with_display_map(
+    part_raw: &serde_json::Value,
+    display_map: &McpToolDisplayMap,
+) -> Option<ProcessEventCandidate> {
+    build_tool_process_event_candidate_inner(part_raw, Some(display_map))
+}
+
 fn process_tool_summary(tool_name: &str, status: &str) -> String {
     if let Some(text) = tool_status_text(tool_name, status) {
         return text;
     }
-    let trimmed = tool_name.trim();
+    let display_name = display_tool_name(tool_name);
+    let trimmed = display_name.trim();
     match status {
         "failed" | "error" => {
             if trimmed.is_empty() { "工具执行失败".to_string() } else { format!("{} 失败", trimmed) }
@@ -342,6 +529,13 @@ fn normalize_read_input(tool_name: Option<&str>, input: Option<serde_json::Value
 }
 
 fn build_tool_process_event_candidate(part_raw: &serde_json::Value) -> Option<ProcessEventCandidate> {
+    build_tool_process_event_candidate_inner(part_raw, None)
+}
+
+fn build_tool_process_event_candidate_inner(
+    part_raw: &serde_json::Value,
+    display_map: Option<&McpToolDisplayMap>,
+) -> Option<ProcessEventCandidate> {
     let tool_name = extract_json_string(part_raw, &[&["tool"], &["toolInvocation", "toolName"], &["toolInvocation", "name"]]);
     let status = extract_json_string(part_raw, &[&["state", "status"], &["status"]])?;
     if !matches!(status.as_str(), "running" | "completed" | "failed" | "error" | "cancelled" | "canceled") {
@@ -373,9 +567,17 @@ fn build_tool_process_event_candidate(part_raw: &serde_json::Value) -> Option<Pr
         &["error", "message"],
     ]).cloned();
 
-    let summary = process_tool_summary(tool_name.as_deref().unwrap_or(""), &status);
+    let raw_tool_name = tool_name.as_deref().unwrap_or("");
+    let summary = match display_map {
+        Some(display_map) => process_tool_summary_with_display_map(raw_tool_name, &status, display_map),
+        None => process_tool_summary(raw_tool_name, &status),
+    };
+    let display_tool_name = tool_name.as_deref().map(|tool_name| match display_map {
+        Some(display_map) => display_tool_name_with_map(tool_name, display_map),
+        None => display_tool_name(tool_name),
+    });
     let mut normalized = serde_json::Map::new();
-    if let Some(tool_name) = &tool_name {
+    if let Some(tool_name) = &display_tool_name {
         normalized.insert("tool".to_string(), serde_json::Value::String(tool_name.clone()));
     }
     normalized.insert("status".to_string(), serde_json::Value::String(status.clone()));
@@ -395,7 +597,7 @@ fn build_tool_process_event_candidate(part_raw: &serde_json::Value) -> Option<Pr
 
     Some(ProcessEventCandidate {
         event_type: "tool".to_string(),
-        tool_name,
+        tool_name: display_tool_name,
         status: Some(status.clone()),
         summary,
         raw_json: serde_json::Value::Object(normalized),
@@ -446,8 +648,8 @@ fn buffer_narration_delta(text: &mut String, has_tool_process_event: &mut bool, 
     let _ = has_tool_process_event;
 }
 
-fn should_flush_final_narration(has_tool_process_event: bool, text: &str) -> bool {
-    has_tool_process_event && !text.trim().is_empty()
+fn should_flush_final_narration(_has_tool_process_event: bool, _text: &str) -> bool {
+    false
 }
 
 async fn persist_process_event(
@@ -1616,6 +1818,18 @@ pub async fn resolve_default_provider(
     Ok(provider)
 }
 
+#[derive(Debug)]
+enum OpencodeStreamAttemptError {
+    Fatal(AppError),
+    InvalidMcpSession,
+}
+
+impl From<AppError> for OpencodeStreamAttemptError {
+    fn from(error: AppError) -> Self {
+        Self::Fatal(error)
+    }
+}
+
 async fn try_run_opencode_stream(
     app_handle: &tauri::AppHandle,
     conv_pool: &ConversationsPool,
@@ -1631,7 +1845,8 @@ async fn try_run_opencode_stream(
     agent_bridge: crate::services::agent_bridge::AgentBridge,
     event_router: Arc<crate::services::event_router::EventRouter>,
     delegate_bridge: crate::services::delegate_bridge::DelegateBridge,
-) -> Result<(), AppError> {
+    already_retried_mcp_session: bool,
+) -> Result<(), OpencodeStreamAttemptError> {
     let disabled_message = if let Some(rid) = role_id {
         crate::db::roles::get_role(main_pool, rid)
             .await
@@ -1675,31 +1890,47 @@ async fn try_run_opencode_stream(
     }
 
     let project_dir = resolve_requested_working_directory(app_handle, working_directory)?;
+    let mcp_scope_key = crate::services::mcp_server::mcp_scope_key_for_role(main_pool, role_id).await?;
+    let mcp_scope_lock = app_handle
+        .try_state::<crate::commands::chat::OpencodeMcpScopeLock>()
+        .map(|state| state.0.clone());
     let session_id = {
-        let sessions = opencode_sessions.lock().await;
-        sessions
-            .get(conversation_id)
-            .and_then(|state| state.sessions_by_directory.get(&project_dir))
-            .cloned()
-    };
-    let session_id = match session_id {
-        Some(id) => {
-            let mut sessions = opencode_sessions.lock().await;
-            if let Some(state) = sessions.get_mut(conversation_id) {
-                state.active_session_id = id.clone();
-            }
-            id
+        let _mcp_scope_guard = match mcp_scope_lock.as_ref() {
+            Some(lock) => Some(lock.lock().await),
+            None => None,
+        };
+        if let Some(agent_config) = app_handle.try_state::<crate::services::agent_config::AgentConfigService>() {
+            crate::services::mcp_server::sync_mcp_scope_for_role(main_pool, &agent_config, role_id)
+                .await?;
         }
-        None => {
-            let agent = opencode_agent_key(role_id);
-            let session = agent_bridge.create_session(&agent, &project_dir).await?;
-            let mut sessions = opencode_sessions.lock().await;
-            remember_opencode_session_for_directory(
-                &mut sessions,
-                conversation_id,
-                &session.id,
-                &project_dir,
-            )
+        let session_cache_key = opencode_session_cache_key(&project_dir, &mcp_scope_key);
+        let session_id = {
+            let sessions = opencode_sessions.lock().await;
+            sessions
+                .get(conversation_id)
+                .and_then(|state| state.sessions_by_directory.get(&session_cache_key))
+                .cloned()
+        };
+        match session_id {
+            Some(id) => {
+                let mut sessions = opencode_sessions.lock().await;
+                if let Some(state) = sessions.get_mut(conversation_id) {
+                    state.active_session_id = id.clone();
+                }
+                id
+            }
+            None => {
+                let agent = opencode_agent_key(role_id);
+                let session = agent_bridge.create_session(&agent, &project_dir).await?;
+                let mut sessions = opencode_sessions.lock().await;
+                remember_opencode_session_for_directory(
+                    &mut sessions,
+                    conversation_id,
+                    &session.id,
+                    &project_dir,
+                    &mcp_scope_key,
+                )
+            }
         }
     };
     let delegation_session_registered = role_id.is_none() && !user_message_id.is_empty();
@@ -1779,6 +2010,16 @@ async fn try_run_opencode_stream(
     let mut send_result_observed = false;
     let mut delegate_workers: Vec<tokio::task::JoinHandle<()>> = Vec::new();
     let delegate_lock = Arc::new(Mutex::new(()));
+
+    // 构建 MCP 工具名展示映射：把 opencode 注册的 namespace（server id / 中文名 /
+    // 安全化名）映射回用户可读的 server 名称，用于把工具名格式化为 "<server>:<tool>"。
+    let mcp_tool_display_map = match crate::db::mcp_servers::list_mcp_servers(main_pool).await {
+        Ok(servers) => McpToolDisplayMap::from_servers(&servers),
+        Err(e) => {
+            tracing::warn!("加载 MCP servers 用于工具名映射失败: {}", e);
+            McpToolDisplayMap::default()
+        }
+    };
 
     loop {
         tokio::select! {
@@ -1953,7 +2194,17 @@ async fn try_run_opencode_stream(
                                     .and_then(|v| v.as_str())
                                     .or_else(|| part_raw.get("status").and_then(|v| v.as_str()))
                                     .unwrap_or("");
-                                if let Some(candidate) = build_tool_process_event_candidate(part_raw) {
+                                if let Some(candidate) = build_tool_process_event_candidate_with_display_map(part_raw, &mcp_tool_display_map) {
+                                    if matches!(
+                                        mcp_session_retry_decision(&candidate, already_retried_mcp_session),
+                                        McpSessionRetryDecision::RefreshRuntimeAndRetry
+                                    ) {
+                                        event_router.unsubscribe(&session_id).await;
+                                        if delegation_session_registered {
+                                            delegate_bridge.unregister_session(&session_id).await;
+                                        }
+                                        return Err(OpencodeStreamAttemptError::InvalidMcpSession);
+                                    }
                                     let status_key = format!("{}:{}", part.id, candidate.status.as_deref().unwrap_or(""));
                                     if processed_tool_statuses.insert(status_key) {
                                         if let Some(summary) = flush_narration_process_event(
@@ -1970,7 +2221,11 @@ async fn try_run_opencode_stream(
                                             recorded_action_narrations.push(summary);
                                         }
                                         if matches!(candidate.status.as_deref(), Some("running" | "completed")) {
-                                            emit_tool_status(app_handle, conversation_id, tool_name, tool_status);
+                                            let display_tool_name = candidate
+                                                .tool_name
+                                                .clone()
+                                                .unwrap_or_else(|| tool_name.to_string());
+                                            emit_tool_status(app_handle, conversation_id, &display_tool_name, tool_status);
                                         }
                                         persist_and_emit_process_event(
                                             app_handle,
@@ -2083,7 +2338,7 @@ async fn try_run_opencode_stream(
                         if accumulated_text.is_empty() && final_text.is_empty() {
                             let mut sessions = opencode_sessions.lock().await;
                             sessions.remove(conversation_id);
-                            return Err(e);
+                            return Err(OpencodeStreamAttemptError::Fatal(e));
                         }
                         let friendly = format!("\n\n抱歉，Agent 引擎返回错误：{}", summarize_error(&e.to_string()));
                         if final_message_id.is_some() {
@@ -2145,7 +2400,7 @@ async fn try_run_opencode_stream(
                 if accumulated_text.is_empty() && final_text.is_empty() {
                     let mut sessions = opencode_sessions.lock().await;
                     sessions.remove(conversation_id);
-                    return Err(e);
+                    return Err(OpencodeStreamAttemptError::Fatal(e));
                 }
                 let friendly = format!(
                     "\n\n抱歉，Agent 引擎返回错误：{}",
@@ -2268,6 +2523,23 @@ async fn try_run_opencode_stream(
     Ok(())
 }
 
+async fn refresh_opencode_runtime_for_mcp_retry(
+    app_handle: &tauri::AppHandle,
+    opencode_sessions: &Arc<Mutex<std::collections::HashMap<String, OpencodeSessionState>>>,
+) -> Result<(), AppError> {
+    let Some(sidecar) = app_handle
+        .try_state::<Arc<Mutex<crate::services::sidecar::SidecarManager>>>()
+        .map(|state| state.inner().clone())
+    else {
+        opencode_sessions.lock().await.clear();
+        return Ok(());
+    };
+    let mut manager = sidecar.lock().await;
+    manager.restart().await?;
+    opencode_sessions.lock().await.clear();
+    Ok(())
+}
+
 pub async fn run_stream(
     app_handle: tauri::AppHandle,
     conv_pool: ConversationsPool,
@@ -2287,30 +2559,63 @@ pub async fn run_stream(
     delegate_bridge: crate::services::delegate_bridge::DelegateBridge,
     working_directory: Option<String>,
 ) -> Result<(), AppError> {
-    if let Err(e) = try_run_opencode_stream(
-        &app_handle,
-        &conv_pool,
-        &main_pool,
-        &conversation_id,
-        &assistant_message_id,
-        &user_message_id,
-        &user_message,
-        &cancel_token,
-        role_id.as_deref(),
-        working_directory.as_deref(),
-        opencode_sessions.clone(),
-        agent_bridge,
-        event_router,
-        delegate_bridge,
-    )
-    .await
-    {
-        tracing::warn!(
-            "opencode stream unavailable, falling back to LlmProvider: {}",
-            e
-        );
-    } else {
-        return Ok(());
+    let mut already_retried_mcp_session = false;
+    loop {
+        let result = try_run_opencode_stream(
+            &app_handle,
+            &conv_pool,
+            &main_pool,
+            &conversation_id,
+            &assistant_message_id,
+            &user_message_id,
+            &user_message,
+            &cancel_token,
+            role_id.as_deref(),
+            working_directory.as_deref(),
+            opencode_sessions.clone(),
+            agent_bridge.clone(),
+            event_router.clone(),
+            delegate_bridge.clone(),
+            already_retried_mcp_session,
+        )
+        .await;
+
+        match result {
+            Ok(()) => return Ok(()),
+            Err(OpencodeStreamAttemptError::InvalidMcpSession) if !already_retried_mcp_session => {
+                already_retried_mcp_session = true;
+                tracing::warn!(
+                    conversation_id,
+                    "MCP session invalid during opencode tool call; refreshing runtime and retrying once"
+                );
+                if let Err(e) = refresh_opencode_runtime_for_mcp_retry(&app_handle, &opencode_sessions).await {
+                    tracing::warn!(
+                        conversation_id,
+                        error = %e,
+                        "opencode runtime refresh after MCP session invalid failed"
+                    );
+                    break;
+                }
+                let _ = conversations::delete_message_process_events(&conv_pool, &assistant_message_id).await;
+                let _ = conversations::update_message_content(&conv_pool, &assistant_message_id, "").await;
+                let _ = conversations::update_message_thinking(&conv_pool, &assistant_message_id, "").await;
+                continue;
+            }
+            Err(OpencodeStreamAttemptError::InvalidMcpSession) => {
+                tracing::warn!(
+                    conversation_id,
+                    "MCP session invalid after retry; falling back to LlmProvider"
+                );
+                break;
+            }
+            Err(OpencodeStreamAttemptError::Fatal(e)) => {
+                tracing::warn!(
+                    "opencode stream unavailable, falling back to LlmProvider: {}",
+                    e
+                );
+                break;
+            }
+        }
     }
 
     let messages = match (onboarding_step, role_id.as_deref()) {
@@ -3807,6 +4112,14 @@ mod tests {
     }
 
     #[test]
+    fn test_opencode_session_cache_key_changes_when_mcp_scope_changes() {
+        let calendar_scope = opencode_session_cache_key("D:\\Work\\A", "role:pm|calendar");
+        let mail_scope = opencode_session_cache_key("D:\\Work\\A", "role:pm|mail");
+
+        assert_ne!(calendar_scope, mail_scope);
+    }
+
+    #[test]
     fn test_remember_opencode_session_reuses_existing_conversation_session() {
         // WHY: one EgoSync conversation must keep one opencode session so the
         // Agent Loop retains context across turns instead of starting fresh.
@@ -3816,12 +4129,14 @@ mod tests {
             "conv-1",
             "session-a",
             "D:\\Work\\A",
+            "role:pm|calendar",
         );
         let second = remember_opencode_session_for_directory(
             &mut sessions,
             "conv-1",
             "session-b",
             "D:\\Work\\A",
+            "role:pm|calendar",
         );
 
         assert_eq!(first, "session-a");
@@ -3829,7 +4144,7 @@ mod tests {
         assert_eq!(
             sessions
                 .get("conv-1")
-                .and_then(|state| state.sessions_by_directory.get("D:\\Work\\A"))
+                .and_then(|state| state.sessions_by_directory.get(&opencode_session_cache_key("D:\\Work\\A", "role:pm|calendar")))
                 .map(String::as_str),
             Some("session-a")
         );
@@ -3843,18 +4158,21 @@ mod tests {
             "conv-1",
             "session-a",
             "D:\\Work\\A",
+            "role:pm|calendar",
         );
         let reused = remember_opencode_session_for_directory(
             &mut sessions,
             "conv-1",
             "session-b",
             "D:\\Work\\A",
+            "role:pm|calendar",
         );
         let changed = remember_opencode_session_for_directory(
             &mut sessions,
             "conv-1",
             "session-c",
             "D:\\Work\\B",
+            "role:pm|calendar",
         );
 
         assert_eq!(first, "session-a");
@@ -3870,18 +4188,21 @@ mod tests {
             "conv-1",
             "session-a",
             "D:\\Work\\A",
+            "role:pm|calendar",
         );
         let changed = remember_opencode_session_for_directory(
             &mut sessions,
             "conv-1",
             "session-b",
             "D:\\Work\\B",
+            "role:pm|calendar",
         );
         let switched_back = remember_opencode_session_for_directory(
             &mut sessions,
             "conv-1",
             "session-c",
             "D:\\Work\\A",
+            "role:pm|calendar",
         );
 
         assert_eq!(first, "session-a");
@@ -3947,10 +4268,10 @@ mod tests {
     }
 
     #[test]
-    fn final_narration_flush_requires_tool_process_event() {
+    fn final_narration_flush_is_suppressed_after_tool_process_event() {
         assert!(!should_flush_final_narration(false, "这是一个普通回答。"));
         assert!(!should_flush_final_narration(true, "   "));
-        assert!(should_flush_final_narration(true, "转换完成，查看输出内容。"));
+        assert!(!should_flush_final_narration(true, "转换完成，查看输出内容。"));
     }
 
     #[test]
@@ -4014,6 +4335,171 @@ mod tests {
             Some("D:\\Workspace\\a.ts")
         );
         assert!(candidate.raw_json.get("error").is_none());
+    }
+
+    #[test]
+    fn tool_process_event_formats_mcp_tool_name_with_server_namespace() {
+        let part_raw = serde_json::json!({
+            "id": "part-mcp",
+            "type": "tool",
+            "tool": "12306-mcp_get-tickets",
+            "state": {
+                "status": "completed",
+                "input": { "from": "深圳", "to": "汕头" },
+                "output": "G638 深圳北 08:12 汕头 10:58"
+            }
+        });
+
+        let candidate = build_tool_process_event_candidate(&part_raw)
+            .expect("MCP tool part should produce a process event");
+
+        assert_eq!(candidate.tool_name.as_deref(), Some("12306-mcp:get-tickets"));
+        assert!(candidate.summary.contains("12306-mcp:get-tickets"));
+        assert!(!candidate.summary.contains("12306-mcp_get-tickets"));
+        assert_eq!(
+            candidate.raw_json.get("tool").and_then(|v| v.as_str()),
+            Some("12306-mcp:get-tickets")
+        );
+        assert_eq!(
+            candidate
+                .raw_json
+                .get("rawPart")
+                .and_then(|v| v.get("tool"))
+                .and_then(|v| v.as_str()),
+            Some("12306-mcp_get-tickets")
+        );
+    }
+
+    #[test]
+    fn tool_process_event_formats_mcp_tool_name_in_error_summary() {
+        let part_raw = serde_json::json!({
+            "id": "part-mcp-error",
+            "type": "tool",
+            "tool": "12306-mcp_get-tickets",
+            "state": {
+                "status": "error",
+                "input": { "from": "深圳", "to": "汕头" },
+                "error": "HTTP 500"
+            }
+        });
+
+        let candidate = build_tool_process_event_candidate(&part_raw)
+            .expect("failed MCP tool part should produce a process event");
+
+        assert_eq!(candidate.tool_name.as_deref(), Some("12306-mcp:get-tickets"));
+        assert!(candidate.summary.contains("12306-mcp:get-tickets"));
+        assert!(!candidate.summary.contains("12306-mcp_get-tickets"));
+        assert_eq!(
+            candidate.raw_json.get("tool").and_then(|v| v.as_str()),
+            Some("12306-mcp:get-tickets")
+        );
+    }
+
+    #[test]
+    fn tool_process_event_uses_mcp_display_map_for_weather_namespaces() {
+        let display_map = McpToolDisplayMap::from_servers(&[crate::models::mcp::McpServer {
+            id: "96691589-a73c-4cea-9db2-1130c875afcd".to_string(),
+            name: "天气查询".to_string(),
+            server_type: "sse".to_string(),
+            command_or_url: "https://mcp.example/weather".to_string(),
+            env_refs: "{}".to_string(),
+            description: String::new(),
+            enabled: true,
+            created_at: String::new(),
+            updated_at: String::new(),
+        }]);
+
+        for raw_tool in ["_____maps_weather", "96691589-a73c-4cea-9db2-1130c875afcd_maps_weather"] {
+            let part_raw = serde_json::json!({
+                "id": format!("part-{raw_tool}"),
+                "type": "tool",
+                "tool": raw_tool,
+                "state": {
+                    "status": "error",
+                    "input": { "city": "深圳" },
+                    "error": "Invalid session id"
+                }
+            });
+
+            let candidate = build_tool_process_event_candidate_with_display_map(&part_raw, &display_map)
+                .expect("weather MCP tool part should produce a process event");
+
+            assert_eq!(candidate.tool_name.as_deref(), Some("天气查询:maps_weather"));
+            assert!(candidate.summary.contains("天气查询:maps_weather"));
+            assert!(!candidate.summary.contains(raw_tool));
+            assert_eq!(
+                candidate.raw_json.get("tool").and_then(|v| v.as_str()),
+                Some("天气查询:maps_weather")
+            );
+            assert_eq!(
+                candidate
+                    .raw_json
+                    .get("rawPart")
+                    .and_then(|v| v.get("tool"))
+                    .and_then(|v| v.as_str()),
+                Some(raw_tool)
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_mcp_session_tool_error_requests_runtime_refresh_retry_once() {
+        let part_raw = serde_json::json!({
+            "id": "part-weather-error",
+            "type": "tool",
+            "tool": "_____maps_weather",
+            "state": {
+                "status": "error",
+                "input": { "city": "深圳" },
+                "error": "HTTP 404: Invalid OAuth error response. Raw body: {\"error\":{\"message\":\"Invalid session id.\"}}"
+            }
+        });
+        let candidate = build_tool_process_event_candidate(&part_raw)
+            .expect("invalid MCP session tool part should still parse as a process event candidate");
+
+        assert_eq!(mcp_session_retry_decision(&candidate, false), McpSessionRetryDecision::RefreshRuntimeAndRetry);
+        assert_eq!(mcp_session_retry_decision(&candidate, true), McpSessionRetryDecision::DoNotRetry);
+    }
+
+    #[test]
+    fn non_session_tool_error_does_not_request_runtime_refresh_retry() {
+        let part_raw = serde_json::json!({
+            "id": "part-weather-error",
+            "type": "tool",
+            "tool": "_____maps_weather",
+            "state": {
+                "status": "error",
+                "input": { "city": "深圳" },
+                "error": "HTTP 500: upstream unavailable"
+            }
+        });
+        let candidate = build_tool_process_event_candidate(&part_raw)
+            .expect("generic MCP tool error should still parse as a process event candidate");
+
+        assert_eq!(mcp_session_retry_decision(&candidate, false), McpSessionRetryDecision::DoNotRetry);
+    }
+
+    #[test]
+    fn tool_process_event_keeps_builtin_underscore_tool_name() {
+        let part_raw = serde_json::json!({
+            "id": "part-role",
+            "type": "tool",
+            "tool": "delegate_to_role",
+            "state": {
+                "status": "running",
+                "input": { "roleId": "father" }
+            }
+        });
+
+        let candidate = build_tool_process_event_candidate(&part_raw)
+            .expect("builtin tool part should produce a process event");
+
+        assert_eq!(candidate.tool_name.as_deref(), Some("delegate_to_role"));
+        assert!(candidate.summary.contains("delegate_to_role"));
+        assert_eq!(
+            candidate.raw_json.get("tool").and_then(|v| v.as_str()),
+            Some("delegate_to_role")
+        );
     }
 
     #[test]

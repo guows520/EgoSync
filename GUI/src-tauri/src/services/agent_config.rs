@@ -1,8 +1,10 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 use crate::error::AppError;
+use crate::models::mcp::McpServer;
 use crate::models::role::{ButlerSkillsConfig, Role};
 use crate::models::skill::SkillRegistryEntry;
 
@@ -207,12 +209,28 @@ impl AgentConfigService {
         }
     }
 
+    fn butler_only_tools() -> Value {
+        json!({
+            "create_role": false,
+            "delegate_to_role": false,
+            "record_emergence_rejection": false
+        })
+    }
+
     /// Build an opencode agent entry from a `Role`.
     pub fn build_agent_entry(role: &Role) -> Value {
         Self::build_agent_entry_with_skills(role, &[])
     }
 
     pub fn build_agent_entry_with_skills(role: &Role, registry: &[SkillRegistryEntry]) -> Value {
+        Self::build_agent_entry_with_skills_and_mcp(role, registry, &[])
+    }
+
+    pub fn build_agent_entry_with_skills_and_mcp(
+        role: &Role,
+        registry: &[SkillRegistryEntry],
+        mcp_lines: &[String],
+    ) -> Value {
         let mut prompt_parts: Vec<String> = Vec::new();
         prompt_parts.push(format!("角色名: {}", role.name));
         if !role.goal.is_empty() {
@@ -230,6 +248,12 @@ impl AgentConfigService {
             crate::services::role_config::enabled_skill_ids_from_config(&role.skills_config);
         let custom_skill_lines = Self::custom_skill_lines(&custom_skill_ids, registry);
         Self::push_custom_skill_prompt(&mut prompt_parts, &custom_skill_lines);
+        if !mcp_lines.is_empty() {
+            prompt_parts.push(format!(
+                "[外部 MCP 工具]\n{}\n只能使用以上为当前角色启用的外部 MCP server；不要声明或调用未启用的外部工具。",
+                mcp_lines.join("\n")
+            ));
+        }
         let prompt = prompt_parts.join("\n");
 
         let permission = Self::parse_permissions(&role.skills_config);
@@ -378,6 +402,32 @@ impl AgentConfigService {
         self.sync_role_created_with_skills(role, registry)
     }
 
+    pub fn sync_role_updated_with_skills_and_mcp(
+        &self,
+        role: &Role,
+        registry: &[SkillRegistryEntry],
+        mcp_lines: &[String],
+    ) -> Result<(), AppError> {
+        let mut config = self.load()?;
+        let agents = config.as_object_mut().and_then(|o| {
+            o.entry("agent")
+                .or_insert_with(|| json!({}))
+                .as_object_mut()
+        });
+        let Some(agents) = agents else {
+            return Err(AppError::SidecarError(
+                "opencode.json agent 段格式异常".to_string(),
+            ));
+        };
+        let key = Self::role_to_agent_key(&role.id);
+        let mut entry = Self::build_agent_entry_with_skills_and_mcp(role, registry, mcp_lines);
+        entry.as_object_mut().map(|o| {
+            o.insert("tools".to_string(), Self::butler_only_tools());
+        });
+        agents.insert(key, entry);
+        self.save(&config)
+    }
+
     pub fn sync_role_archived(&self, role_id: &str) -> Result<(), AppError> {
         let mut config = self.load()?;
         let agents = config
@@ -488,6 +538,21 @@ impl AgentConfigService {
         butler_skills: &ButlerSkillsConfig,
         registry: &[SkillRegistryEntry],
     ) -> Result<(), AppError> {
+        self.full_sync_with_skills_and_mcp(
+            roles,
+            butler_skills,
+            registry,
+            &std::collections::HashMap::new(),
+        )
+    }
+
+    pub fn full_sync_with_skills_and_mcp(
+        &self,
+        roles: &[Role],
+        butler_skills: &ButlerSkillsConfig,
+        registry: &[SkillRegistryEntry],
+        role_mcp_prompts: &std::collections::HashMap<String, Vec<String>>,
+    ) -> Result<(), AppError> {
         let mut config = self.load()?;
         let root = config
             .as_object_mut()
@@ -500,37 +565,161 @@ impl AgentConfigService {
             Self::build_butler_entry_with_skills(butler_skills, registry),
         );
 
-        // Butler-exclusive tools that role agents must NOT see
-        let butler_only_tools = json!({
-            "create_role": false,
-            "delegate_to_role": false,
-            "record_emergence_rejection": false
-        });
-
-        // Sync each role
         for role in roles {
             let key = Self::role_to_agent_key(&role.id);
-            let mut entry = Self::build_agent_entry_with_skills(role, registry);
+            let empty_mcp_lines = Vec::new();
+            let mcp_lines = role_mcp_prompts
+                .get(&role.id)
+                .unwrap_or(&empty_mcp_lines);
+            let mut entry = Self::build_agent_entry_with_skills_and_mcp(role, registry, mcp_lines);
             if role.status == "archived" {
                 entry
                     .as_object_mut()
                     .map(|o| o.insert("disable".to_string(), json!(true)));
             }
-            // Disable butler-exclusive custom tools for role agents
             entry
                 .as_object_mut()
-                .map(|o| o.insert("tools".to_string(), butler_only_tools.clone()));
+                .map(|o| o.insert("tools".to_string(), Self::butler_only_tools()));
             agents.insert(key, entry);
         }
 
         root.insert("agent".to_string(), Value::Object(agents));
-
-        // Remove legacy MCP config if present (migration from MCP → custom tools)
-        root.remove("mcp");
+        Self::remove_legacy_internal_mcp(root);
         root.remove("tools");
 
         self.save(&config)
     }
+
+    fn mcp_config_key(server: &McpServer) -> String {
+        let key = server.name.trim();
+        if key.is_empty() {
+            server.id.clone()
+        } else {
+            key.to_string()
+        }
+    }
+
+    pub fn sync_external_mcp_servers(&self, servers: &[McpServer]) -> Result<(), AppError> {
+        let mut config = self.load()?;
+        let root = config
+            .as_object_mut()
+            .ok_or_else(|| AppError::SidecarError("opencode.json 不是 object".to_string()))?;
+        Self::remove_legacy_internal_mcp(root);
+        let mcp = root.entry("mcp").or_insert_with(|| json!({}));
+        let mcp = mcp.as_object_mut().ok_or_else(|| {
+            AppError::SidecarError("opencode.json mcp 段不是 object".to_string())
+        })?;
+        let managed_ids: HashSet<String> = servers.iter().map(|server| server.id.clone()).collect();
+        let managed_keys: HashSet<String> = servers.iter().map(Self::mcp_config_key).collect();
+        let enabled_keys: HashSet<String> = servers
+            .iter()
+            .filter(|server| server.enabled)
+            .map(Self::mcp_config_key)
+            .collect();
+        let keys_to_remove: Vec<String> = mcp
+            .iter()
+            .filter(|(key, value)| {
+                value.get("managedByEgosync").and_then(Value::as_bool) == Some(true)
+                    && (!managed_keys.contains(*key)
+                        || !enabled_keys.contains(*key)
+                        || managed_ids.contains(*key))
+            })
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in keys_to_remove {
+            mcp.remove(&key);
+        }
+        for server in servers.iter().filter(|server| server.enabled) {
+            mcp.insert(
+                Self::mcp_config_key(server),
+                crate::services::mcp_server::mcp_server_config_for_opencode(server),
+            );
+        }
+        self.save(&config)
+    }
+
+    fn remove_legacy_internal_mcp(root: &mut Map<String, Value>) {
+        if let Some(mcp) = root.get_mut("mcp").and_then(Value::as_object_mut) {
+            mcp.remove("egosync");
+            mcp.retain(|_, value| {
+                value
+                    .get("managedByEgosync")
+                    .and_then(Value::as_bool)
+                    .map(|managed| {
+                        if !managed {
+                            return true;
+                        }
+                        value
+                            .get("url")
+                            .and_then(Value::as_str)
+                            .map(|url| {
+                                !url.contains("127.0.0.1:4097") && !url.contains("localhost:4097")
+                            })
+                            .unwrap_or(true)
+                    })
+                    .unwrap_or(true)
+            });
+            if mcp.is_empty() {
+                root.remove("mcp");
+            }
+        }
+    }
+}
+
+/// 清理 legacy 应用根目录 `opencode.json`（如
+/// `%APPDATA%\com.egosync.app\opencode.json`）中由 EgoSync 托管的 MCP 项。
+///
+/// opencode 会从工作目录沿父目录链向上合并所有 `opencode.json`，导致 legacy
+/// 文件里残留的 `managedByEgosync == true` MCP key 与私有 workspace 的同名/同 URL
+/// MCP 重复注册（Invalid session id / HTTP 404）。
+///
+/// 安全约束：只删除 `mcp` 段中 `managedByEgosync == true` 的 key，绝不读取/改写
+/// `provider`、`model`、`$schema` 以及用户自有（非 managed）MCP 项；不打印任何
+/// secret。文件不存在时为 no-op。
+pub fn purge_legacy_managed_mcp(legacy_config_path: &std::path::Path) -> Result<(), AppError> {
+    if !legacy_config_path.exists() {
+        return Ok(());
+    }
+    let raw = std::fs::read_to_string(legacy_config_path).map_err(|e| {
+        AppError::SidecarError(format!("读取 legacy opencode.json 失败: {}", e))
+    })?;
+    let mut config: Value = serde_json::from_str(&raw).map_err(|e| {
+        AppError::SidecarError(format!("解析 legacy opencode.json 失败: {}", e))
+    })?;
+    let Some(root) = config.as_object_mut() else {
+        return Ok(());
+    };
+    let mut removed = 0usize;
+    if let Some(mcp) = root.get_mut("mcp").and_then(Value::as_object_mut) {
+        let before = mcp.len();
+        mcp.retain(|_, value| {
+            value.get("managedByEgosync").and_then(Value::as_bool) != Some(true)
+        });
+        removed = before - mcp.len();
+        if mcp.is_empty() {
+            root.remove("mcp");
+        }
+    }
+    if removed == 0 {
+        // 没有需要清理的项，避免无谓改写文件。
+        return Ok(());
+    }
+    let tmp = legacy_config_path.with_extension("json.tmp");
+    let pretty = serde_json::to_string_pretty(&config).map_err(|e| {
+        AppError::SidecarError(format!("序列化 legacy opencode.json 失败: {}", e))
+    })?;
+    std::fs::write(&tmp, pretty).map_err(|e| {
+        AppError::SidecarError(format!("写入 legacy opencode.json.tmp 失败: {}", e))
+    })?;
+    std::fs::rename(&tmp, legacy_config_path).map_err(|e| {
+        AppError::SidecarError(format!("rename legacy opencode.json 失败: {}", e))
+    })?;
+    tracing::info!(
+        "已清理 legacy opencode.json 中 {} 个 EgoSync 托管 MCP 项: {}",
+        removed,
+        legacy_config_path.display()
+    );
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1045,19 +1234,20 @@ mod tests {
     }
 
     #[test]
-    fn full_sync_removes_legacy_mcp_config() {
-        // WHY: migration from MCP to custom tools must clean up old config.
+    fn full_sync_preserves_external_mcp_and_removes_legacy_egosync_host() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("opencode.json");
         let svc = AgentConfigService::new(path.clone());
 
-        // Seed legacy MCP config
-        let legacy = json!({
+        let existing = json!({
             "agent": {},
-            "mcp": { "egosync": { "type": "remote", "url": "http://127.0.0.1:4097/mcp" } },
+            "mcp": {
+                "context7": { "type": "remote", "url": "https://example.invalid/mcp" },
+                "egosync": { "type": "remote", "url": "http://127.0.0.1:4097/mcp" }
+            },
             "tools": { "egosync*": true }
         });
-        std::fs::write(&path, serde_json::to_string_pretty(&legacy).unwrap()).unwrap();
+        std::fs::write(&path, serde_json::to_string_pretty(&existing).unwrap()).unwrap();
 
         svc.full_sync(
             &[],
@@ -1070,11 +1260,225 @@ mod tests {
         .unwrap();
 
         let config = svc.load().unwrap();
-        assert!(config.get("mcp").is_none(), "MCP config must be removed");
-        assert!(
-            config.get("tools").is_none(),
-            "global tools config must be removed"
+        assert_eq!(
+            config["mcp"]["context7"],
+            json!({ "type": "remote", "url": "https://example.invalid/mcp" })
         );
+        assert!(config["mcp"].get("egosync").is_none());
+        assert!(config.get("tools").is_none());
+    }
+
+    #[test]
+    fn sync_external_mcp_servers_removes_disabled_and_deleted_managed_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("opencode.json");
+        let svc = AgentConfigService::new(path.clone());
+
+        let existing = json!({
+            "agent": {},
+            "mcp": {
+                "alive": {
+                    "type": "remote",
+                    "url": "https://alive.example/mcp",
+                    "managedByEgosync": true
+                },
+                "disabled": {
+                    "type": "remote",
+                    "url": "https://disabled.example/mcp",
+                    "managedByEgosync": true
+                },
+                "deleted": {
+                    "type": "remote",
+                    "url": "https://deleted.example/mcp",
+                    "managedByEgosync": true
+                },
+                "context7": { "type": "remote", "url": "https://example.invalid/mcp" }
+            }
+        });
+        std::fs::write(&path, serde_json::to_string_pretty(&existing).unwrap()).unwrap();
+
+        let servers = vec![
+            McpServer {
+                id: "alive".to_string(),
+                name: "日历".to_string(),
+                server_type: "http_sse".to_string(),
+                command_or_url: "https://alive.example/mcp".to_string(),
+                env_refs: "{}".to_string(),
+                description: String::new(),
+                enabled: true,
+                created_at: String::new(),
+                updated_at: String::new(),
+            },
+            McpServer {
+                id: "disabled".to_string(),
+                name: "邮件".to_string(),
+                server_type: "http_sse".to_string(),
+                command_or_url: "https://disabled.example/mcp".to_string(),
+                env_refs: "{}".to_string(),
+                description: String::new(),
+                enabled: false,
+                created_at: String::new(),
+                updated_at: String::new(),
+            },
+        ];
+
+        svc.sync_external_mcp_servers(&servers).unwrap();
+
+        let config = svc.load().unwrap();
+        assert_eq!(
+            config["mcp"]["日历"],
+            json!({
+                "type": "remote",
+                "url": "https://alive.example/mcp",
+                "managedByEgosync": true
+            })
+        );
+        assert!(config["mcp"].get("alive").is_none());
+        assert!(config["mcp"].get("disabled").is_none());
+        assert!(config["mcp"].get("deleted").is_none());
+        assert_eq!(
+            config["mcp"]["context7"],
+            json!({ "type": "remote", "url": "https://example.invalid/mcp" })
+        );
+    }
+
+    #[test]
+    fn sync_external_mcp_servers_uses_readable_server_name_key_and_removes_uuid_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("opencode.json");
+        let svc = AgentConfigService::new(path.clone());
+        let uuid = "26e86cce-330c-4776-99c4-0b5de7bc88aa";
+
+        let existing = json!({
+            "agent": {},
+            "mcp": {
+                uuid: {
+                    "type": "remote",
+                    "url": "https://old.example/mcp",
+                    "managedByEgosync": true
+                },
+                "context7": { "type": "remote", "url": "https://example.invalid/mcp" }
+            }
+        });
+        std::fs::write(&path, serde_json::to_string_pretty(&existing).unwrap()).unwrap();
+
+        let servers = vec![McpServer {
+            id: uuid.to_string(),
+            name: "12306-mcp".to_string(),
+            server_type: "streamable_http".to_string(),
+            command_or_url: "https://mcp.api-inference.modelscope.net/abf4b0a8cb864b/mcp".to_string(),
+            env_refs: "{}".to_string(),
+            description: String::new(),
+            enabled: true,
+            created_at: String::new(),
+            updated_at: String::new(),
+        }];
+
+        svc.sync_external_mcp_servers(&servers).unwrap();
+
+        let config = svc.load().unwrap();
+        assert_eq!(
+            config["mcp"]["12306-mcp"],
+            json!({
+                "type": "remote",
+                "url": "https://mcp.api-inference.modelscope.net/abf4b0a8cb864b/mcp",
+                "managedByEgosync": true
+            })
+        );
+        assert!(config["mcp"].get(uuid).is_none());
+        assert_eq!(
+            config["mcp"]["context7"],
+            json!({ "type": "remote", "url": "https://example.invalid/mcp" })
+        );
+    }
+
+    // ── purge_legacy_managed_mcp ──────────────────────────────────
+
+    #[test]
+    fn purge_legacy_managed_mcp_removes_only_managed_keys() {
+        // WHY: 祖先目录链上的 legacy `com.egosync.app\opencode.json` 会被 opencode
+        // 向上合并，其中 managedByEgosync==true 的 UUID MCP key 与私有 workspace
+        // 的同一天气 MCP URL 重复注册 → Invalid session id / HTTP 404。
+        // 清理时只能删除 managed key，保留 provider/model 与用户自有（非 managed）MCP。
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("opencode.json");
+
+        let existing = json!({
+            "$schema": "https://opencode.ai/config.json",
+            "model": "openai/gpt-4o",
+            "provider": {
+                "openai": { "options": { "apiKey": "env:OPENAI_API_KEY" } }
+            },
+            "mcp": {
+                "96691589-a73c-4cea-9db2-1130c875afcd": {
+                    "type": "remote",
+                    "url": "https://mcp.api-inference.modelscope.net/09dc472736e246/mcp",
+                    "managedByEgosync": true
+                },
+                "user-own": {
+                    "type": "remote",
+                    "url": "https://user.example/mcp"
+                }
+            }
+        });
+        std::fs::write(&path, serde_json::to_string_pretty(&existing).unwrap()).unwrap();
+
+        purge_legacy_managed_mcp(&path).unwrap();
+
+        let config: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        // managed key 被移除
+        assert!(config["mcp"]
+            .get("96691589-a73c-4cea-9db2-1130c875afcd")
+            .is_none());
+        // 非 managed 用户 MCP 原样保留
+        assert_eq!(
+            config["mcp"]["user-own"],
+            json!({ "type": "remote", "url": "https://user.example/mcp" })
+        );
+        // provider/model 段原样保留
+        assert_eq!(config["model"], "openai/gpt-4o");
+        assert_eq!(
+            config["provider"]["openai"]["options"]["apiKey"],
+            "env:OPENAI_API_KEY"
+        );
+        assert_eq!(config["$schema"], "https://opencode.ai/config.json");
+    }
+
+    #[test]
+    fn purge_legacy_managed_mcp_drops_empty_mcp_section() {
+        // WHY: 当 legacy 文件里只剩 managed MCP 时，清理后应移除空的 mcp 段，
+        // 避免向上合并引入空对象。
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("opencode.json");
+
+        let existing = json!({
+            "model": "openai/gpt-4o",
+            "mcp": {
+                "managed-only": {
+                    "type": "remote",
+                    "url": "https://x.example/mcp",
+                    "managedByEgosync": true
+                }
+            }
+        });
+        std::fs::write(&path, serde_json::to_string_pretty(&existing).unwrap()).unwrap();
+
+        purge_legacy_managed_mcp(&path).unwrap();
+
+        let config: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(config.get("mcp").is_none());
+        assert_eq!(config["model"], "openai/gpt-4o");
+    }
+
+    #[test]
+    fn purge_legacy_managed_mcp_noop_when_file_missing() {
+        // WHY: 没有 legacy 文件是正常的（clean install），不应报错。
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("opencode.json");
+        purge_legacy_managed_mcp(&path).unwrap();
+        assert!(!path.exists());
     }
 
     // ── sync_llm_provider ─────────────────────────────────────────

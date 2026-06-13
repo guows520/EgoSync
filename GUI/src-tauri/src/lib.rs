@@ -55,6 +55,7 @@ pub fn run() {
 
             app.manage(pool.clone());
             app.manage(conv_pool.clone());
+            app.manage(commands::chat::OpencodeMcpScopeLock::default());
             app.manage(commands::chat::StreamingState::default());
             app.manage(commands::chat::CancelTokens::default());
             app.manage(commands::chat::OpencodeSessions::default());
@@ -72,12 +73,28 @@ pub fn run() {
             );
             app.manage(delegate_bridge.clone());
 
+            let opencode_workspace_dir = app_data_dir.join("opencode-workspace");
+
+            // ── 清理 legacy app-root opencode.json 中的 EgoSync 托管 MCP ──
+            // opencode 会沿父目录链向上合并 `opencode.json`，legacy
+            // `%APPDATA%\com.egosync.app\opencode.json` 里残留的 managedByEgosync
+            // MCP 会与私有 workspace 的同一 MCP 重复注册（Invalid session id / 404）。
+            // 只删除 managed key，保留 provider/model 与用户自有 MCP。
+            {
+                let legacy_config_path = app_data_dir.join("opencode.json");
+                if let Err(e) =
+                    services::agent_config::purge_legacy_managed_mcp(&legacy_config_path)
+                {
+                    tracing::warn!("清理 legacy opencode.json 失败（降级继续）: {}", e);
+                }
+            }
+
             // ── AgentConfig: sync roles → opencode.json (non-blocking) ──
             // All opencode config (agents, provider, model) goes into
             // the project-level config that opencode reads for EgoSync sessions.
             // Custom tools (.opencode/tools/) provide egosync-specific tools
             // directly, replacing the previous MCP approach.
-            let opencode_config_path = app_data_dir.join("opencode.json");
+            let opencode_config_path = opencode_workspace_dir.join("opencode.json");
             let agent_config =
                 services::agent_config::AgentConfigService::new(opencode_config_path);
             {
@@ -99,12 +116,23 @@ pub fn run() {
                     tracing::warn!("Failed to load Skill registry for opencode sync: {}", e);
                     Vec::new()
                 });
+                let role_mcp_prompts = tauri::async_runtime::block_on(async {
+                    services::mcp_server::role_mcp_prompt_map(pool_ref).await
+                })
+                .unwrap_or_else(|e| {
+                    tracing::warn!("Failed to load role MCP bindings for opencode sync: {}", e);
+                    std::collections::HashMap::new()
+                });
+                tauri::async_runtime::block_on(async {
+                    services::mcp_server::sync_enabled_mcp_to_opencode(pool_ref, &agent_config).await;
+                });
                 match all_roles {
                     Ok(roles) => {
-                        if let Err(e) = agent_config.full_sync_with_skills(
+                        if let Err(e) = agent_config.full_sync_with_skills_and_mcp(
                             &roles,
                             &butler_skills,
                             &skill_registry,
+                            &role_mcp_prompts,
                         ) {
                             tracing::warn!("opencode.json full sync failed (degraded): {}", e);
                         }
@@ -127,8 +155,6 @@ pub fn run() {
                     services::llm_config::sync_default_to_opencode(pool_ref, ac_ref).await;
                 });
             }
-
-            let opencode_workspace_dir = app_data_dir.join("opencode-workspace");
 
             // ── Custom tools: write .opencode/tools/ into opencode-workspace ──
             // opencode discovers custom tools from .opencode/tools/*.ts in the
@@ -263,6 +289,15 @@ pub fn run() {
             commands::role::role_archive,
             commands::role::role_restore,
             commands::role::role_delete,
+            commands::mcp::mcp_server_list,
+            commands::mcp::mcp_server_list_for_role,
+            commands::mcp::mcp_server_list_available_for_role,
+            commands::mcp::mcp_server_create,
+            commands::mcp::mcp_server_update,
+            commands::mcp::mcp_server_delete,
+            commands::mcp::mcp_server_test,
+            commands::mcp::mcp_server_add_to_role,
+            commands::mcp::mcp_server_remove_from_role,
             commands::skill::skill_list_registry,
             commands::skill::skill_list_for_role,
             commands::skill::skill_list_all_role_skills,
@@ -303,5 +338,36 @@ mod tests {
     fn app_compiles() {
         // 验证 crate 可编译，依赖无冲突
         assert!(true);
+    }
+
+    #[test]
+    fn opencode_config_path_lives_in_sidecar_workspace() {
+        let source = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs"),
+        )
+        .expect("read lib.rs");
+
+        assert!(source.contains(
+            "let opencode_config_path = opencode_workspace_dir.join(\"opencode.json\");"
+        ));
+        assert!(!source.contains(
+            "let opencode_config_path = app_data_dir.join(\"opencode.json\");"
+        ));
+    }
+
+    #[test]
+    fn startup_purges_legacy_managed_mcp_from_app_root() {
+        // WHY: legacy `%APPDATA%\com.egosync.app\opencode.json` 会被 opencode 向上
+        // 合并，残留 managed MCP 导致天气 MCP 重复注册。启动时必须清理它，且作用于
+        // app_data_dir 根目录（而非私有 workspace）。
+        let source = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs"),
+        )
+        .expect("read lib.rs");
+
+        assert!(source.contains(
+            "let legacy_config_path = app_data_dir.join(\"opencode.json\");"
+        ));
+        assert!(source.contains("purge_legacy_managed_mcp(&legacy_config_path)"));
     }
 }

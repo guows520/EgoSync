@@ -1,0 +1,2663 @@
+diff --git a/GUI/src-tauri/src/commands/chat.rs b/GUI/src-tauri/src/commands/chat.rs
+index baf0b6d..5e7cdda 100644
+--- a/GUI/src-tauri/src/commands/chat.rs
++++ b/GUI/src-tauri/src/commands/chat.rs
+@@ -12,6 +12,9 @@ use crate::models::chat::{ChatRequest, Conversation, Message, MessageProcessEven
+ use crate::services::agent_config::AgentConfigService;
+ use crate::services::agent_engine;
+ 
++#[derive(Default)]
++pub struct OpencodeMcpScopeLock(pub Arc<Mutex<()>>);
++
+ #[derive(Default)]
+ pub struct StreamingState(pub Arc<Mutex<HashSet<String>>>);
+ 
+@@ -439,8 +442,9 @@ async fn maybe_enable_requested_meta_skill(
+         return Ok(());
+     };
+     let updated = crate::db::roles::update_role_skills(main_pool, role_id, &input).await?;
++    let registry = crate::db::skills::list_skills(main_pool).await.unwrap_or_default();
+     sync_role_config_warn(
+-        agent_config.sync_role_updated(&updated),
++        crate::services::mcp_server::sync_role_agent_with_mcp(main_pool, agent_config, &updated, &registry).await,
+         "auto_enable_skill",
+     );
+     Ok(())
+@@ -675,6 +679,28 @@ mod tests {
+             .execute(&pool)
+             .await
+             .expect("create roles schema");
++        sqlx::raw_sql(
++            "CREATE TABLE IF NOT EXISTS mcp_servers (
++                id TEXT PRIMARY KEY NOT NULL,
++                name TEXT NOT NULL,
++                server_type TEXT NOT NULL,
++                command_or_url TEXT NOT NULL,
++                env_refs TEXT NOT NULL DEFAULT '{}',
++                description TEXT NOT NULL DEFAULT '',
++                enabled INTEGER NOT NULL DEFAULT 1,
++                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
++                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
++            );
++            CREATE TABLE IF NOT EXISTS role_mcp_server_bindings (
++                server_id TEXT NOT NULL,
++                role_id TEXT NOT NULL,
++                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
++                PRIMARY KEY (server_id, role_id)
++            );",
++        )
++        .execute(&pool)
++        .await
++        .expect("create mcp schema");
+         pool
+     }
+ 
+diff --git a/GUI/src-tauri/src/commands/mod.rs b/GUI/src-tauri/src/commands/mod.rs
+index 22eb849..4917ef1 100644
+--- a/GUI/src-tauri/src/commands/mod.rs
++++ b/GUI/src-tauri/src/commands/mod.rs
+@@ -2,6 +2,7 @@ pub mod app;
+ pub mod chat;
+ pub mod llm_config;
+ pub mod memory;
++pub mod mcp;
+ pub mod role;
+ pub mod secret;
+ pub mod skill;
+diff --git a/GUI/src-tauri/src/commands/role.rs b/GUI/src-tauri/src/commands/role.rs
+index b7d9975..bc690a9 100644
+--- a/GUI/src-tauri/src/commands/role.rs
++++ b/GUI/src-tauri/src/commands/role.rs
+@@ -59,7 +59,7 @@ pub async fn role_create(
+     }
+     let registry = registry_for_sync(&pool).await;
+     sync_warn(
+-        agent_config.sync_role_created_with_skills(&role, &registry),
++        crate::services::mcp_server::sync_role_agent_with_mcp(&pool, &agent_config, &role, &registry).await,
+         "create",
+     );
+     Ok(role)
+@@ -89,7 +89,7 @@ pub async fn role_update(
+     let role = roles::update_role(&pool, &id, &input).await?;
+     let registry = registry_for_sync(&pool).await;
+     sync_warn(
+-        agent_config.sync_role_updated_with_skills(&role, &registry),
++        crate::services::mcp_server::sync_role_agent_with_mcp(&pool, &agent_config, &role, &registry).await,
+         "update",
+     );
+     Ok(role)
+@@ -105,7 +105,7 @@ pub async fn role_update_skills(
+     let role = roles::update_role_skills(&pool, &id, &input).await?;
+     let registry = registry_for_sync(&pool).await;
+     sync_warn(
+-        agent_config.sync_role_updated_with_skills(&role, &registry),
++        crate::services::mcp_server::sync_role_agent_with_mcp(&pool, &agent_config, &role, &registry).await,
+         "update_skills",
+     );
+     Ok(role)
+@@ -121,7 +121,7 @@ pub async fn role_update_proactivity(
+     let role = roles::update_role_proactivity(&pool, &id, &input).await?;
+     let registry = registry_for_sync(&pool).await;
+     sync_warn(
+-        agent_config.sync_role_updated_with_skills(&role, &registry),
++        crate::services::mcp_server::sync_role_agent_with_mcp(&pool, &agent_config, &role, &registry).await,
+         "update_proactivity",
+     );
+     Ok(role)
+@@ -148,7 +148,7 @@ pub async fn role_restore(
+     let role = roles::restore_role(&pool, &id).await?;
+     let registry = registry_for_sync(&pool).await;
+     sync_warn(
+-        agent_config.sync_role_created_with_skills(&role, &registry),
++        crate::services::mcp_server::sync_role_agent_with_mcp(&pool, &agent_config, &role, &registry).await,
+         "restore",
+     );
+     Ok(role)
+diff --git a/GUI/src-tauri/src/commands/skill.rs b/GUI/src-tauri/src/commands/skill.rs
+index d29d4fc..bbc7e7b 100644
+--- a/GUI/src-tauri/src/commands/skill.rs
++++ b/GUI/src-tauri/src/commands/skill.rs
+@@ -102,6 +102,24 @@ pub async fn skill_discover_opencode(
+     crate::services::skill_registry::discover_opencode_skills(&pool, &role_id, &project_dir, &home_dir).await
+ }
+ 
++async fn sync_all_agents_with_mcp(
++    pool: &DbPool,
++    agent_config: &AgentConfigService,
++    roles: &[crate::models::role::Role],
++    butler_skills: &crate::models::role::ButlerSkillsConfig,
++    registry: &[crate::models::skill::SkillRegistryEntry],
++    action: &str,
++) -> bool {
++    let mcp_prompts = crate::services::mcp_server::role_mcp_prompt_map(pool)
++        .await
++        .unwrap_or_default();
++    if let Err(e) = agent_config.full_sync_with_skills_and_mcp(roles, butler_skills, registry, &mcp_prompts) {
++        tracing::warn!("opencode sync after {} failed: {}", action, e);
++        return false;
++    }
++    true
++}
++
+ #[tauri::command]
+ pub async fn skill_import_opencode(
+     role_id: String,
+@@ -128,10 +146,9 @@ pub async fn skill_import_opencode(
+     let registry = crate::db::skills::list_skills(&pool).await?;
+     let roles = crate::db::roles::list_all_roles(&pool).await?;
+     let butler_skills = crate::services::butler_config::get_butler_skills(&pool).await?;
+-    if let Err(e) = agent_config.full_sync_with_skills(&roles, &butler_skills, &registry) {
++    if !sync_all_agents_with_mcp(&pool, &agent_config, &roles, &butler_skills, &registry, "opencode skill import").await {
+         // registry 写入已成功，但 opencode agent 未同步：如实告知前端 synced=false，
+         // 避免谎称"已启用"。下一次同步路径会重新落地（AC5 最终一致）。
+-        tracing::warn!("opencode sync after opencode skill import failed: {}", e);
+         result.synced = false;
+     }
+     Ok(result)
+@@ -158,9 +175,7 @@ pub async fn skill_import_custom(
+     let butler_skills = crate::services::butler_config::get_butler_skills(&pool)
+         .await
+         .unwrap_or_else(|_| crate::services::butler_config::default_butler_skills());
+-    if let Err(e) = agent_config.full_sync_with_skills(&roles, &butler_skills, &registry) {
+-        tracing::warn!("opencode sync after skill import failed: {}", e);
+-    }
++    sync_all_agents_with_mcp(&pool, &agent_config, &roles, &butler_skills, &registry, "skill import").await;
+     Ok(result)
+ }
+ 
+@@ -178,9 +193,7 @@ pub async fn skill_remove_from_role(
+     let butler_skills = crate::services::butler_config::get_butler_skills(&pool)
+         .await
+         .unwrap_or_else(|_| crate::services::butler_config::default_butler_skills());
+-    if let Err(e) = agent_config.full_sync_with_skills(&roles, &butler_skills, &registry) {
+-        tracing::error!("opencode sync after skill remove from role failed: {}", e);
+-    }
++    sync_all_agents_with_mcp(&pool, &agent_config, &roles, &butler_skills, &registry, "skill remove from role").await;
+     Ok(())
+ }
+ 
+@@ -197,8 +210,6 @@ pub async fn skill_delete(
+     let butler_skills = crate::services::butler_config::get_butler_skills(&pool)
+         .await
+         .unwrap_or_else(|_| crate::services::butler_config::default_butler_skills());
+-    if let Err(e) = agent_config.full_sync_with_skills(&roles, &butler_skills, &registry) {
+-        tracing::error!("opencode sync after skill delete failed: {}", e);
+-    }
++    sync_all_agents_with_mcp(&pool, &agent_config, &roles, &butler_skills, &registry, "skill delete").await;
+     Ok(())
+ }
+diff --git a/GUI/src-tauri/src/db/mod.rs b/GUI/src-tauri/src/db/mod.rs
+index 66243f9..dd3ed93 100644
+--- a/GUI/src-tauri/src/db/mod.rs
++++ b/GUI/src-tauri/src/db/mod.rs
+@@ -1,6 +1,7 @@
+ pub mod app_settings;
+ pub mod conversations;
+ pub mod memories;
++pub mod mcp_servers;
+ pub mod pool;
+ pub mod roles;
+ pub mod settings;
+diff --git a/GUI/src-tauri/src/lib.rs b/GUI/src-tauri/src/lib.rs
+index 882c330..c5e9561 100644
+--- a/GUI/src-tauri/src/lib.rs
++++ b/GUI/src-tauri/src/lib.rs
+@@ -55,6 +55,7 @@ pub fn run() {
+ 
+             app.manage(pool.clone());
+             app.manage(conv_pool.clone());
++            app.manage(commands::chat::OpencodeMcpScopeLock::default());
+             app.manage(commands::chat::StreamingState::default());
+             app.manage(commands::chat::CancelTokens::default());
+             app.manage(commands::chat::OpencodeSessions::default());
+@@ -99,12 +100,23 @@ pub fn run() {
+                     tracing::warn!("Failed to load Skill registry for opencode sync: {}", e);
+                     Vec::new()
+                 });
++                let role_mcp_prompts = tauri::async_runtime::block_on(async {
++                    services::mcp_server::role_mcp_prompt_map(pool_ref).await
++                })
++                .unwrap_or_else(|e| {
++                    tracing::warn!("Failed to load role MCP bindings for opencode sync: {}", e);
++                    std::collections::HashMap::new()
++                });
++                tauri::async_runtime::block_on(async {
++                    services::mcp_server::sync_enabled_mcp_to_opencode(pool_ref, &agent_config).await;
++                });
+                 match all_roles {
+                     Ok(roles) => {
+-                        if let Err(e) = agent_config.full_sync_with_skills(
++                        if let Err(e) = agent_config.full_sync_with_skills_and_mcp(
+                             &roles,
+                             &butler_skills,
+                             &skill_registry,
++                            &role_mcp_prompts,
+                         ) {
+                             tracing::warn!("opencode.json full sync failed (degraded): {}", e);
+                         }
+@@ -263,6 +275,15 @@ pub fn run() {
+             commands::role::role_archive,
+             commands::role::role_restore,
+             commands::role::role_delete,
++            commands::mcp::mcp_server_list,
++            commands::mcp::mcp_server_list_for_role,
++            commands::mcp::mcp_server_list_available_for_role,
++            commands::mcp::mcp_server_create,
++            commands::mcp::mcp_server_update,
++            commands::mcp::mcp_server_delete,
++            commands::mcp::mcp_server_test,
++            commands::mcp::mcp_server_add_to_role,
++            commands::mcp::mcp_server_remove_from_role,
+             commands::skill::skill_list_registry,
+             commands::skill::skill_list_for_role,
+             commands::skill::skill_list_all_role_skills,
+diff --git a/GUI/src-tauri/src/models/mod.rs b/GUI/src-tauri/src/models/mod.rs
+index ff881db..5f2fd24 100644
+--- a/GUI/src-tauri/src/models/mod.rs
++++ b/GUI/src-tauri/src/models/mod.rs
+@@ -1,6 +1,7 @@
+ pub mod agent;
+ pub mod chat;
+ pub mod memory;
++pub mod mcp;
+ pub mod role;
+ pub mod settings;
+ pub mod skill;
+diff --git a/GUI/src-tauri/src/services/agent_config.rs b/GUI/src-tauri/src/services/agent_config.rs
+index ff06016..a56ad49 100644
+--- a/GUI/src-tauri/src/services/agent_config.rs
++++ b/GUI/src-tauri/src/services/agent_config.rs
+@@ -1,8 +1,10 @@
++use std::collections::HashSet;
+ use std::path::PathBuf;
+ 
+-use serde_json::{json, Value};
++use serde_json::{json, Map, Value};
+ 
+ use crate::error::AppError;
++use crate::models::mcp::McpServer;
+ use crate::models::role::{ButlerSkillsConfig, Role};
+ use crate::models::skill::SkillRegistryEntry;
+ 
+@@ -207,12 +209,28 @@ impl AgentConfigService {
+         }
+     }
+ 
++    fn butler_only_tools() -> Value {
++        json!({
++            "create_role": false,
++            "delegate_to_role": false,
++            "record_emergence_rejection": false
++        })
++    }
++
+     /// Build an opencode agent entry from a `Role`.
+     pub fn build_agent_entry(role: &Role) -> Value {
+         Self::build_agent_entry_with_skills(role, &[])
+     }
+ 
+     pub fn build_agent_entry_with_skills(role: &Role, registry: &[SkillRegistryEntry]) -> Value {
++        Self::build_agent_entry_with_skills_and_mcp(role, registry, &[])
++    }
++
++    pub fn build_agent_entry_with_skills_and_mcp(
++        role: &Role,
++        registry: &[SkillRegistryEntry],
++        mcp_lines: &[String],
++    ) -> Value {
+         let mut prompt_parts: Vec<String> = Vec::new();
+         prompt_parts.push(format!("角色名: {}", role.name));
+         if !role.goal.is_empty() {
+@@ -230,6 +248,12 @@ impl AgentConfigService {
+             crate::services::role_config::enabled_skill_ids_from_config(&role.skills_config);
+         let custom_skill_lines = Self::custom_skill_lines(&custom_skill_ids, registry);
+         Self::push_custom_skill_prompt(&mut prompt_parts, &custom_skill_lines);
++        if !mcp_lines.is_empty() {
++            prompt_parts.push(format!(
++                "[外部 MCP 工具]\n{}\n只能使用以上为当前角色启用的外部 MCP server；不要声明或调用未启用的外部工具。",
++                mcp_lines.join("\n")
++            ));
++        }
+         let prompt = prompt_parts.join("\n");
+ 
+         let permission = Self::parse_permissions(&role.skills_config);
+@@ -378,6 +402,32 @@ impl AgentConfigService {
+         self.sync_role_created_with_skills(role, registry)
+     }
+ 
++    pub fn sync_role_updated_with_skills_and_mcp(
++        &self,
++        role: &Role,
++        registry: &[SkillRegistryEntry],
++        mcp_lines: &[String],
++    ) -> Result<(), AppError> {
++        let mut config = self.load()?;
++        let agents = config.as_object_mut().and_then(|o| {
++            o.entry("agent")
++                .or_insert_with(|| json!({}))
++                .as_object_mut()
++        });
++        let Some(agents) = agents else {
++            return Err(AppError::SidecarError(
++                "opencode.json agent 段格式异常".to_string(),
++            ));
++        };
++        let key = Self::role_to_agent_key(&role.id);
++        let mut entry = Self::build_agent_entry_with_skills_and_mcp(role, registry, mcp_lines);
++        entry.as_object_mut().map(|o| {
++            o.insert("tools".to_string(), Self::butler_only_tools());
++        });
++        agents.insert(key, entry);
++        self.save(&config)
++    }
++
+     pub fn sync_role_archived(&self, role_id: &str) -> Result<(), AppError> {
+         let mut config = self.load()?;
+         let agents = config
+@@ -487,6 +537,21 @@ impl AgentConfigService {
+         roles: &[Role],
+         butler_skills: &ButlerSkillsConfig,
+         registry: &[SkillRegistryEntry],
++    ) -> Result<(), AppError> {
++        self.full_sync_with_skills_and_mcp(
++            roles,
++            butler_skills,
++            registry,
++            &std::collections::HashMap::new(),
++        )
++    }
++
++    pub fn full_sync_with_skills_and_mcp(
++        &self,
++        roles: &[Role],
++        butler_skills: &ButlerSkillsConfig,
++        registry: &[SkillRegistryEntry],
++        role_mcp_prompts: &std::collections::HashMap<String, Vec<String>>,
+     ) -> Result<(), AppError> {
+         let mut config = self.load()?;
+         let root = config
+@@ -500,37 +565,93 @@ impl AgentConfigService {
+             Self::build_butler_entry_with_skills(butler_skills, registry),
+         );
+ 
+-        // Butler-exclusive tools that role agents must NOT see
+-        let butler_only_tools = json!({
+-            "create_role": false,
+-            "delegate_to_role": false,
+-            "record_emergence_rejection": false
+-        });
+-
+-        // Sync each role
+         for role in roles {
+             let key = Self::role_to_agent_key(&role.id);
+-            let mut entry = Self::build_agent_entry_with_skills(role, registry);
++            let empty_mcp_lines = Vec::new();
++            let mcp_lines = role_mcp_prompts
++                .get(&role.id)
++                .unwrap_or(&empty_mcp_lines);
++            let mut entry = Self::build_agent_entry_with_skills_and_mcp(role, registry, mcp_lines);
+             if role.status == "archived" {
+                 entry
+                     .as_object_mut()
+                     .map(|o| o.insert("disable".to_string(), json!(true)));
+             }
+-            // Disable butler-exclusive custom tools for role agents
+             entry
+                 .as_object_mut()
+-                .map(|o| o.insert("tools".to_string(), butler_only_tools.clone()));
++                .map(|o| o.insert("tools".to_string(), Self::butler_only_tools()));
+             agents.insert(key, entry);
+         }
+ 
+         root.insert("agent".to_string(), Value::Object(agents));
+-
+-        // Remove legacy MCP config if present (migration from MCP → custom tools)
+-        root.remove("mcp");
++        Self::remove_legacy_internal_mcp(root);
+         root.remove("tools");
+ 
+         self.save(&config)
+     }
++
++    pub fn sync_external_mcp_servers(&self, servers: &[McpServer]) -> Result<(), AppError> {
++        let mut config = self.load()?;
++        let root = config
++            .as_object_mut()
++            .ok_or_else(|| AppError::SidecarError("opencode.json 不是 object".to_string()))?;
++        Self::remove_legacy_internal_mcp(root);
++        let mcp = root.entry("mcp").or_insert_with(|| json!({}));
++        let mcp = mcp.as_object_mut().ok_or_else(|| {
++            AppError::SidecarError("opencode.json mcp 段不是 object".to_string())
++        })?;
++        let managed_ids: HashSet<String> = servers.iter().map(|server| server.id.clone()).collect();
++        let enabled_ids: HashSet<String> = servers
++            .iter()
++            .filter(|server| server.enabled)
++            .map(|server| server.id.clone())
++            .collect();
++        let keys_to_remove: Vec<String> = mcp
++            .iter()
++            .filter(|(key, value)| {
++                value.get("managedByEgosync").and_then(Value::as_bool) == Some(true)
++                    && (!managed_ids.contains(*key) || !enabled_ids.contains(*key))
++            })
++            .map(|(key, _)| key.clone())
++            .collect();
++        for key in keys_to_remove {
++            mcp.remove(&key);
++        }
++        for server in servers.iter().filter(|server| server.enabled) {
++            mcp.insert(
++                server.id.clone(),
++                crate::services::mcp_server::mcp_server_config_for_opencode(server),
++            );
++        }
++        self.save(&config)
++    }
++
++    fn remove_legacy_internal_mcp(root: &mut Map<String, Value>) {
++        if let Some(mcp) = root.get_mut("mcp").and_then(Value::as_object_mut) {
++            mcp.remove("egosync");
++            mcp.retain(|_, value| {
++                value
++                    .get("managedByEgosync")
++                    .and_then(Value::as_bool)
++                    .map(|managed| {
++                        if !managed {
++                            return true;
++                        }
++                        value
++                            .get("url")
++                            .and_then(Value::as_str)
++                            .map(|url| {
++                                !url.contains("127.0.0.1:4097") && !url.contains("localhost:4097")
++                            })
++                            .unwrap_or(true)
++                    })
++                    .unwrap_or(true)
++            });
++            if mcp.is_empty() {
++                root.remove("mcp");
++            }
++        }
++    }
+ }
+ 
+ #[cfg(test)]
+@@ -1045,19 +1166,20 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn full_sync_removes_legacy_mcp_config() {
+-        // WHY: migration from MCP to custom tools must clean up old config.
++    fn full_sync_preserves_external_mcp_and_removes_legacy_egosync_host() {
+         let dir = tempfile::tempdir().unwrap();
+         let path = dir.path().join("opencode.json");
+         let svc = AgentConfigService::new(path.clone());
+ 
+-        // Seed legacy MCP config
+-        let legacy = json!({
++        let existing = json!({
+             "agent": {},
+-            "mcp": { "egosync": { "type": "remote", "url": "http://127.0.0.1:4097/mcp" } },
++            "mcp": {
++                "context7": { "type": "remote", "url": "https://example.invalid/mcp" },
++                "egosync": { "type": "remote", "url": "http://127.0.0.1:4097/mcp" }
++            },
+             "tools": { "egosync*": true }
+         });
+-        std::fs::write(&path, serde_json::to_string_pretty(&legacy).unwrap()).unwrap();
++        std::fs::write(&path, serde_json::to_string_pretty(&existing).unwrap()).unwrap();
+ 
+         svc.full_sync(
+             &[],
+@@ -1070,10 +1192,84 @@ mod tests {
+         .unwrap();
+ 
+         let config = svc.load().unwrap();
+-        assert!(config.get("mcp").is_none(), "MCP config must be removed");
+-        assert!(
+-            config.get("tools").is_none(),
+-            "global tools config must be removed"
++        assert_eq!(
++            config["mcp"]["context7"],
++            json!({ "type": "remote", "url": "https://example.invalid/mcp" })
++        );
++        assert!(config["mcp"].get("egosync").is_none());
++        assert!(config.get("tools").is_none());
++    }
++
++    #[test]
++    fn sync_external_mcp_servers_removes_disabled_and_deleted_managed_entries() {
++        let dir = tempfile::tempdir().unwrap();
++        let path = dir.path().join("opencode.json");
++        let svc = AgentConfigService::new(path.clone());
++
++        let existing = json!({
++            "agent": {},
++            "mcp": {
++                "alive": {
++                    "type": "remote",
++                    "url": "https://alive.example/mcp",
++                    "managedByEgosync": true
++                },
++                "disabled": {
++                    "type": "remote",
++                    "url": "https://disabled.example/mcp",
++                    "managedByEgosync": true
++                },
++                "deleted": {
++                    "type": "remote",
++                    "url": "https://deleted.example/mcp",
++                    "managedByEgosync": true
++                },
++                "context7": { "type": "remote", "url": "https://example.invalid/mcp" }
++            }
++        });
++        std::fs::write(&path, serde_json::to_string_pretty(&existing).unwrap()).unwrap();
++
++        let servers = vec![
++            McpServer {
++                id: "alive".to_string(),
++                name: "日历".to_string(),
++                server_type: "http_sse".to_string(),
++                command_or_url: "https://alive.example/mcp".to_string(),
++                env_refs: "{}".to_string(),
++                description: String::new(),
++                enabled: true,
++                created_at: String::new(),
++                updated_at: String::new(),
++            },
++            McpServer {
++                id: "disabled".to_string(),
++                name: "邮件".to_string(),
++                server_type: "http_sse".to_string(),
++                command_or_url: "https://disabled.example/mcp".to_string(),
++                env_refs: "{}".to_string(),
++                description: String::new(),
++                enabled: false,
++                created_at: String::new(),
++                updated_at: String::new(),
++            },
++        ];
++
++        svc.sync_external_mcp_servers(&servers).unwrap();
++
++        let config = svc.load().unwrap();
++        assert_eq!(
++            config["mcp"]["alive"],
++            json!({
++                "type": "remote",
++                "url": "https://alive.example/mcp",
++                "managedByEgosync": true
++            })
++        );
++        assert!(config["mcp"].get("disabled").is_none());
++        assert!(config["mcp"].get("deleted").is_none());
++        assert_eq!(
++            config["mcp"]["context7"],
++            json!({ "type": "remote", "url": "https://example.invalid/mcp" })
+         );
+     }
+ 
+diff --git a/GUI/src-tauri/src/services/agent_engine.rs b/GUI/src-tauri/src/services/agent_engine.rs
+index f0f71eb..c839ac3 100644
+--- a/GUI/src-tauri/src/services/agent_engine.rs
++++ b/GUI/src-tauri/src/services/agent_engine.rs
+@@ -1,6 +1,6 @@
+ use std::sync::Arc;
+ 
+-use tauri::Emitter;
++use tauri::{Emitter, Manager};
+ use tokio::sync::{mpsc, Mutex};
+ use tokio::time::{Duration, Instant};
+ use tokio_util::sync::CancellationToken;
+@@ -66,16 +66,22 @@ fn opencode_agent_key(role_id: Option<&str>) -> String {
+     }
+ }
+ 
++fn opencode_session_cache_key(working_directory: &str, mcp_scope_key: &str) -> String {
++    format!("{}\n{}", working_directory, mcp_scope_key)
++}
++
+ fn remember_opencode_session_for_directory(
+     sessions: &mut std::collections::HashMap<String, OpencodeSessionState>,
+     conversation_id: &str,
+     session_id: &str,
+     working_directory: &str,
++    mcp_scope_key: &str,
+ ) -> String {
+     let state = sessions.entry(conversation_id.to_string()).or_default();
++    let cache_key = opencode_session_cache_key(working_directory, mcp_scope_key);
+     let remembered = state
+         .sessions_by_directory
+-        .entry(working_directory.to_string())
++        .entry(cache_key)
+         .or_insert_with(|| session_id.to_string())
+         .clone();
+     state.active_session_id = remembered.clone();
+@@ -1675,11 +1681,24 @@ async fn try_run_opencode_stream(
+     }
+ 
+     let project_dir = resolve_requested_working_directory(app_handle, working_directory)?;
++    let mcp_scope_key = crate::services::mcp_server::mcp_scope_key_for_role(main_pool, role_id).await?;
++    let mcp_scope_lock = app_handle
++        .try_state::<crate::commands::chat::OpencodeMcpScopeLock>()
++        .map(|state| state.0.clone());
++    let _mcp_scope_guard = match mcp_scope_lock.as_ref() {
++        Some(lock) => Some(lock.lock().await),
++        None => None,
++    };
++    if let Some(agent_config) = app_handle.try_state::<crate::services::agent_config::AgentConfigService>() {
++        crate::services::mcp_server::sync_mcp_scope_for_role(main_pool, &agent_config, role_id)
++            .await?;
++    }
++    let session_cache_key = opencode_session_cache_key(&project_dir, &mcp_scope_key);
+     let session_id = {
+         let sessions = opencode_sessions.lock().await;
+         sessions
+             .get(conversation_id)
+-            .and_then(|state| state.sessions_by_directory.get(&project_dir))
++            .and_then(|state| state.sessions_by_directory.get(&session_cache_key))
+             .cloned()
+     };
+     let session_id = match session_id {
+@@ -1699,6 +1718,7 @@ async fn try_run_opencode_stream(
+                 conversation_id,
+                 &session.id,
+                 &project_dir,
++                &mcp_scope_key,
+             )
+         }
+     };
+@@ -3806,6 +3826,14 @@ mod tests {
+         assert_eq!(opencode_agent_key(Some("abc-123")), "role-abc-123");
+     }
+ 
++    #[test]
++    fn test_opencode_session_cache_key_changes_when_mcp_scope_changes() {
++        let calendar_scope = opencode_session_cache_key("D:\\Work\\A", "role:pm|calendar");
++        let mail_scope = opencode_session_cache_key("D:\\Work\\A", "role:pm|mail");
++
++        assert_ne!(calendar_scope, mail_scope);
++    }
++
+     #[test]
+     fn test_remember_opencode_session_reuses_existing_conversation_session() {
+         // WHY: one EgoSync conversation must keep one opencode session so the
+@@ -3816,12 +3844,14 @@ mod tests {
+             "conv-1",
+             "session-a",
+             "D:\\Work\\A",
++            "role:pm|calendar",
+         );
+         let second = remember_opencode_session_for_directory(
+             &mut sessions,
+             "conv-1",
+             "session-b",
+             "D:\\Work\\A",
++            "role:pm|calendar",
+         );
+ 
+         assert_eq!(first, "session-a");
+@@ -3829,7 +3859,7 @@ mod tests {
+         assert_eq!(
+             sessions
+                 .get("conv-1")
+-                .and_then(|state| state.sessions_by_directory.get("D:\\Work\\A"))
++                .and_then(|state| state.sessions_by_directory.get(&opencode_session_cache_key("D:\\Work\\A", "role:pm|calendar")))
+                 .map(String::as_str),
+             Some("session-a")
+         );
+@@ -3843,18 +3873,21 @@ mod tests {
+             "conv-1",
+             "session-a",
+             "D:\\Work\\A",
++            "role:pm|calendar",
+         );
+         let reused = remember_opencode_session_for_directory(
+             &mut sessions,
+             "conv-1",
+             "session-b",
+             "D:\\Work\\A",
++            "role:pm|calendar",
+         );
+         let changed = remember_opencode_session_for_directory(
+             &mut sessions,
+             "conv-1",
+             "session-c",
+             "D:\\Work\\B",
++            "role:pm|calendar",
+         );
+ 
+         assert_eq!(first, "session-a");
+@@ -3870,18 +3903,21 @@ mod tests {
+             "conv-1",
+             "session-a",
+             "D:\\Work\\A",
++            "role:pm|calendar",
+         );
+         let changed = remember_opencode_session_for_directory(
+             &mut sessions,
+             "conv-1",
+             "session-b",
+             "D:\\Work\\B",
++            "role:pm|calendar",
+         );
+         let switched_back = remember_opencode_session_for_directory(
+             &mut sessions,
+             "conv-1",
+             "session-c",
+             "D:\\Work\\A",
++            "role:pm|calendar",
+         );
+ 
+         assert_eq!(first, "session-a");
+diff --git a/GUI/src-tauri/src/services/mod.rs b/GUI/src-tauri/src/services/mod.rs
+index 3c24fd1..795fd56 100644
+--- a/GUI/src-tauri/src/services/mod.rs
++++ b/GUI/src-tauri/src/services/mod.rs
+@@ -7,6 +7,7 @@ pub mod event_router;
+ pub mod llm_config;
+ pub mod memory_pipeline;
+ pub mod memory_query;
++pub mod mcp_server;
+ pub mod role_config;
+ pub mod secret_store;
+ pub mod sidecar;
+diff --git a/GUI/src/components/role/SettingsTab.test.tsx b/GUI/src/components/role/SettingsTab.test.tsx
+index 132323e..ba752d2 100644
+--- a/GUI/src/components/role/SettingsTab.test.tsx
++++ b/GUI/src/components/role/SettingsTab.test.tsx
+@@ -3,7 +3,9 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
+ import { SettingsTab } from './SettingsTab';
+ import { roleService } from '../../services/roleService';
+ import { skillService } from '../../services/skillService';
++import { mcpService } from '../../services/mcpService';
+ import type { Role } from '../../types/role';
++import type { McpServer } from '../../types/mcp';
+ import type { SkillRegistryEntry } from '../../types/skill';
+ 
+ vi.mock('../../services/roleService', () => ({
+@@ -30,6 +32,20 @@ vi.mock('../../services/skillService', () => ({
+   },
+ }));
+ 
++vi.mock('../../services/mcpService', () => ({
++  mcpService: {
++    list: vi.fn(),
++    listForRole: vi.fn(),
++    listAvailableForRole: vi.fn(),
++    create: vi.fn(),
++    update: vi.fn(),
++    delete: vi.fn(),
++    test: vi.fn(),
++    addToRole: vi.fn(),
++    removeFromRole: vi.fn(),
++  },
++}));
++
+ const baseRole: Role = {
+   id: 'role-1',
+   name: '产品经理',
+@@ -75,6 +91,26 @@ const customSkill: SkillRegistryEntry = {
+   updatedAt: '2026-01-01T00:00:00Z',
+ };
+ 
++const boundMcpServer: McpServer = {
++  id: 'mcp-calendar',
++  name: '日历 MCP',
++  serverType: 'http_sse',
++  commandOrUrl: 'http://localhost:8000/sse',
++  envRefs: '{"TOKEN":"env:CALENDAR_TOKEN"}',
++  description: '读取日历安排',
++  enabled: true,
++  createdAt: '2026-01-01T00:00:00Z',
++  updatedAt: '2026-01-01T00:00:00Z',
++};
++
++const availableMcpServer: McpServer = {
++  ...boundMcpServer,
++  id: 'mcp-mail',
++  name: '邮件 MCP',
++  commandOrUrl: 'http://localhost:8001/sse',
++  description: '读取邮件摘要',
++};
++
+ describe('SettingsTab role CRUD actions', () => {
+   beforeEach(() => {
+     vi.useRealTimers();
+@@ -87,6 +123,10 @@ describe('SettingsTab role CRUD actions', () => {
+     };
+     mockedSkillService.discoverOpencode.mockResolvedValue({ items: [], skipped: { total: 0, reasons: [] } });
+     mockedSkillService.importOpencode.mockResolvedValue({ status: 'imported', entry: null, synced: true });
++    vi.mocked(mcpService.listForRole).mockResolvedValue([]);
++    vi.mocked(mcpService.listAvailableForRole).mockResolvedValue([]);
++    vi.mocked(mcpService.addToRole).mockResolvedValue(undefined);
++    vi.mocked(mcpService.removeFromRole).mockResolvedValue(undefined);
+   });
+ 
+   it('保存后调用 update 并回传更新后的角色', async () => {
+@@ -294,6 +334,52 @@ describe('SettingsTab role CRUD actions', () => {
+     });
+   });
+ 
++  it('只展示当前角色已启用 MCP，并通过搜索选择器添加可用 MCP', async () => {
++    vi.mocked(mcpService.listForRole)
++      .mockResolvedValueOnce([boundMcpServer])
++      .mockResolvedValueOnce([boundMcpServer, availableMcpServer]);
++    vi.mocked(mcpService.listAvailableForRole)
++      .mockResolvedValueOnce([availableMcpServer])
++      .mockResolvedValueOnce([]);
++
++    render(<SettingsTab role={baseRole} activeRoleCount={2} />);
++
++    expect(await screen.findByText('日历 MCP')).toBeInTheDocument();
++    expect(screen.queryByText('邮件 MCP')).not.toBeInTheDocument();
++
++    fireEvent.click(screen.getByRole('button', { name: '添加 MCP server' }));
++    expect(await screen.findByText('邮件 MCP')).toBeInTheDocument();
++    fireEvent.change(screen.getByPlaceholderText('搜索 MCP server'), { target: { value: '邮件' } });
++    fireEvent.click(screen.getByRole('button', { name: '添加 邮件 MCP' }));
++
++    await waitFor(() => {
++      expect(mcpService.addToRole).toHaveBeenCalledWith('role-1', 'mcp-mail');
++    });
++    await waitFor(() => {
++      expect(mcpService.listForRole).toHaveBeenCalledTimes(2);
++    });
++    expect(await screen.findByText('邮件 MCP')).toBeInTheDocument();
++  });
++
++  it('可从当前角色移除已启用 MCP，不影响全局配置', async () => {
++    vi.mocked(mcpService.listForRole)
++      .mockResolvedValueOnce([boundMcpServer])
++      .mockResolvedValueOnce([]);
++
++    render(<SettingsTab role={baseRole} activeRoleCount={2} />);
++
++    expect(await screen.findByText('日历 MCP')).toBeInTheDocument();
++    fireEvent.click(screen.getByRole('button', { name: '移除 日历 MCP' }));
++
++    await waitFor(() => {
++      expect(mcpService.removeFromRole).toHaveBeenCalledWith('role-1', 'mcp-calendar');
++    });
++    expect(mcpService.delete).not.toHaveBeenCalled();
++    await waitFor(() => {
++      expect(screen.queryByText('日历 MCP')).not.toBeInTheDocument();
++    });
++  });
++
+   it('未绑定到当前角色的自定义 Skill 不在角色设置中显示', async () => {
+     vi.mocked(skillService.listRegistry).mockResolvedValue([customSkill]);
+     vi.mocked(skillService.listForRole).mockResolvedValue([]);
+diff --git a/GUI/src/components/role/SettingsTab.tsx b/GUI/src/components/role/SettingsTab.tsx
+index 3162e9b..6b5918a 100644
+--- a/GUI/src/components/role/SettingsTab.tsx
++++ b/GUI/src/components/role/SettingsTab.tsx
+@@ -4,7 +4,9 @@ import { cn } from '../../lib/utils';
+ import { ROLE_COLORS, ROLE_ICONS, getRoleIconComponent, normalizeColorHex, normalizeIconId } from '../../lib/roleIcons';
+ import { roleService } from '../../services/roleService';
+ import { skillService } from '../../services/skillService';
++import { mcpService } from '../../services/mcpService';
+ import type { ProactivityLevel, Role, RoleSkillsConfig } from '../../types/role';
++import type { McpServer } from '../../types/mcp';
+ import type { OpencodeSkillCandidate, SkillImportPreview, SkillRegistryEntry } from '../../types/skill';
+ import { ProactivityToggle } from './ProactivityToggle';
+ 
+@@ -75,6 +77,12 @@ export function SettingsTab({
+   const [pendingSkill, setPendingSkill] = useState<string | null>(null);
+   const [deleteSkillTarget, setDeleteSkillTarget] = useState<SkillRegistryEntry | null>(null);
+   const [isSavingProactivity, setIsSavingProactivity] = useState(false);
++  const [roleMcpServers, setRoleMcpServers] = useState<McpServer[]>([]);
++  const [availableMcpServers, setAvailableMcpServers] = useState<McpServer[]>([]);
++  const [isLoadingMcpServers, setIsLoadingMcpServers] = useState(false);
++  const [isMcpPickerOpen, setIsMcpPickerOpen] = useState(false);
++  const [mcpSearch, setMcpSearch] = useState('');
++  const [pendingMcpId, setPendingMcpId] = useState<string | null>(null);
+   const [settingsSavedMessage, setSettingsSavedMessage] = useState('');
+   const [error, setError] = useState('');
+   const [dangerAction, setDangerAction] = useState<DangerAction>(null);
+@@ -83,6 +91,15 @@ export function SettingsTab({
+ 
+   const canRemoveRole = activeRoleCount > 1;
+   const deleteNameMatches = deleteConfirmName.trim() === role.name;
++  const filteredAvailableMcpServers = useMemo(() => {
++    const query = mcpSearch.trim().toLowerCase();
++    if (!query) return availableMcpServers;
++    return availableMcpServers.filter(server =>
++      server.name.toLowerCase().includes(query) ||
++      server.description.toLowerCase().includes(query) ||
++      server.commandOrUrl.toLowerCase().includes(query)
++    );
++  }, [availableMcpServers, mcpSearch]);
+   const SelectedIcon = useMemo(() => getRoleIconComponent(roleIcon), [roleIcon]);
+ 
+   useEffect(() => {
+@@ -111,6 +128,12 @@ export function SettingsTab({
+     setPendingSkillContent('');
+     setReuseAllRoles(false);
+     setReuseRoleIds([role.id]);
++    setRoleMcpServers([]);
++    setAvailableMcpServers([]);
++    setIsLoadingMcpServers(false);
++    setIsMcpPickerOpen(false);
++    setMcpSearch('');
++    setPendingMcpId(null);
+   }, [role.id]);
+ 
+   useEffect(() => {
+@@ -144,6 +167,39 @@ export function SettingsTab({
+     };
+   }, [role.id]);
+ 
++  useEffect(() => {
++    let cancelled = false;
++    setIsLoadingMcpServers(true);
++    Promise.all([
++      mcpService.listForRole(role.id),
++      mcpService.listAvailableForRole(role.id),
++    ])
++      .then(([bound, available]) => {
++        if (!cancelled) {
++          setRoleMcpServers(bound);
++          setAvailableMcpServers(available);
++        }
++      })
++      .catch(e => {
++        if (!cancelled) setError(toFriendlyError(e, 'MCP server 列表加载失败，请稍后重试'));
++      })
++      .finally(() => {
++        if (!cancelled) setIsLoadingMcpServers(false);
++      });
++    return () => {
++      cancelled = true;
++    };
++  }, [role.id]);
++
++  const refreshMcpServers = async () => {
++    const [bound, available] = await Promise.all([
++      mcpService.listForRole(role.id),
++      mcpService.listAvailableForRole(role.id),
++    ]);
++    setRoleMcpServers(bound);
++    setAvailableMcpServers(available);
++  };
++
+   const handleSave = async () => {
+     const name = roleName.trim();
+     if (!name) {
+@@ -391,6 +447,40 @@ export function SettingsTab({
+     }
+   };
+ 
++  const handleAddMcpToRole = async (serverId: string) => {
++    setPendingMcpId(serverId);
++    setError('');
++    setSettingsSavedMessage('');
++    try {
++      await mcpService.addToRole(role.id, serverId);
++      await refreshMcpServers();
++      setMcpSearch('');
++      setIsMcpPickerOpen(false);
++      setSettingsSavedMessage('MCP server 已添加');
++      setTimeout(() => setSettingsSavedMessage(''), MESSAGE_TIMEOUT_MS);
++    } catch (e) {
++      setError(toFriendlyError(e, 'MCP server 添加失败，请稍后重试'));
++    } finally {
++      setPendingMcpId(null);
++    }
++  };
++
++  const handleRemoveMcpFromRole = async (serverId: string) => {
++    setPendingMcpId(serverId);
++    setError('');
++    setSettingsSavedMessage('');
++    try {
++      await mcpService.removeFromRole(role.id, serverId);
++      await refreshMcpServers();
++      setSettingsSavedMessage('MCP server 已移除');
++      setTimeout(() => setSettingsSavedMessage(''), MESSAGE_TIMEOUT_MS);
++    } catch (e) {
++      setError(toFriendlyError(e, 'MCP server 移除失败，请稍后重试'));
++    } finally {
++      setPendingMcpId(null);
++    }
++  };
++
+   const handleProactivityChange = async (nextLevel: ProactivityLevel) => {
+     if (nextLevel === proactivityLevel) return;
+     const previousLevel = proactivityLevel;
+@@ -671,6 +761,87 @@ export function SettingsTab({
+             )}
+           </div>
+ 
++          <div className="pt-6 border-t border-slate-200/80">
++            <label className="text-[14px] font-semibold text-slate-800 block mb-3">外部 MCP 工具</label>
++            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
++              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
++                <div>
++                  <div className="text-[14.5px] font-medium text-slate-800">当前角色可用 MCP server</div>
++                  <p className="mt-1 text-[12.5px] leading-relaxed text-slate-500">这里只展示已为当前角色启用的 MCP；全局未绑定的 server 不会出现在角色能力中。</p>
++                </div>
++                <button
++                  type="button"
++                  onClick={() => setIsMcpPickerOpen(prev => !prev)}
++                  disabled={isLoadingMcpServers}
++                  className="inline-flex shrink-0 items-center justify-center rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-[12px] font-medium text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
++                >
++                  添加 MCP server
++                </button>
++              </div>
++
++              <div className="mt-3 space-y-2">
++                {isLoadingMcpServers && <div className="text-[12.5px] text-slate-400">正在加载 MCP server...</div>}
++                {!isLoadingMcpServers && roleMcpServers.length === 0 && <div className="text-[12.5px] text-slate-400">当前角色暂无 MCP server。</div>}
++                {roleMcpServers.map(server => (
++                  <div key={server.id} className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-3">
++                    <div className="flex items-start justify-between gap-3">
++                      <div className="min-w-0 flex-1">
++                        <div className="flex flex-wrap items-center gap-2">
++                          <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
++                          <span className="break-words text-[13.5px] font-medium text-slate-800">{server.name}</span>
++                          <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-500">{server.serverType === 'http_sse' ? 'HTTP/SSE' : 'Command'}</span>
++                        </div>
++                        <p className="mt-1.5 break-words text-[12px] leading-relaxed text-slate-500">{server.description || server.commandOrUrl}</p>
++                      </div>
++                      <button
++                        type="button"
++                        aria-label={`移除 ${server.name}`}
++                        onClick={() => handleRemoveMcpFromRole(server.id)}
++                        disabled={pendingMcpId !== null}
++                        className="shrink-0 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
++                      >
++                        {pendingMcpId === server.id ? '移除中...' : '移除'}
++                      </button>
++                    </div>
++                  </div>
++                ))}
++              </div>
++
++              {isMcpPickerOpen && (
++                <div className="mt-3 rounded-lg border border-indigo-100 bg-indigo-50 px-3 py-3">
++                  <input
++                    type="text"
++                    value={mcpSearch}
++                    onChange={e => setMcpSearch(e.target.value)}
++                    placeholder="搜索 MCP server"
++                    className="w-full rounded-lg border border-indigo-100 bg-white px-3 py-2 text-[13px] outline-none focus:border-indigo-300 focus:ring-2 focus:ring-indigo-500/20"
++                  />
++                  <div className="mt-2 space-y-2">
++                    {filteredAvailableMcpServers.length === 0 ? (
++                      <div className="text-[12.5px] text-slate-500">没有可添加的 MCP server</div>
++                    ) : filteredAvailableMcpServers.map(server => (
++                      <div key={server.id} className="flex items-start justify-between gap-3 rounded-lg border border-indigo-100 bg-white px-3 py-2">
++                        <div className="min-w-0">
++                          <div className="break-words text-[13.5px] font-medium text-slate-800">{server.name}</div>
++                          <div className="mt-1 break-words text-[12px] text-slate-500">{server.description || server.commandOrUrl}</div>
++                        </div>
++                        <button
++                          type="button"
++                          aria-label={`添加 ${server.name}`}
++                          onClick={() => handleAddMcpToRole(server.id)}
++                          disabled={pendingMcpId !== null}
++                          className="shrink-0 rounded-lg bg-indigo-600 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
++                        >
++                          {pendingMcpId === server.id ? '添加中...' : '添加'}
++                        </button>
++                      </div>
++                    ))}
++                  </div>
++                </div>
++              )}
++            </div>
++          </div>
++
+           <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+             <div className="mb-4 space-y-3">
+               <div className="min-w-0">
+diff --git a/GUI/src/components/settings/GlobalSettingsModal.test.tsx b/GUI/src/components/settings/GlobalSettingsModal.test.tsx
+index 723f1c0..1701eb7 100644
+--- a/GUI/src/components/settings/GlobalSettingsModal.test.tsx
++++ b/GUI/src/components/settings/GlobalSettingsModal.test.tsx
+@@ -3,6 +3,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
+ import { GlobalSettingsModal } from './GlobalSettingsModal';
+ import { llmConfigService } from '../../services/llmConfigService';
+ import { roleService } from '../../services/roleService';
++import { mcpService } from '../../services/mcpService';
+ import type { Role } from '../../types/role';
+ 
+ vi.mock('../../services/llmConfigService', () => ({
+@@ -23,6 +24,20 @@ vi.mock('../../services/roleService', () => ({
+   },
+ }));
+ 
++vi.mock('../../services/mcpService', () => ({
++  mcpService: {
++    list: vi.fn(),
++    listForRole: vi.fn(),
++    listAvailableForRole: vi.fn(),
++    create: vi.fn(),
++    update: vi.fn(),
++    delete: vi.fn(),
++    test: vi.fn(),
++    addToRole: vi.fn(),
++    removeFromRole: vi.fn(),
++  },
++}));
++
+ const archivedRole: Role = {
+   id: 'role-archived',
+   name: '学习者',
+@@ -44,6 +59,7 @@ describe('GlobalSettingsModal archived roles', () => {
+     vi.clearAllMocks();
+     vi.mocked(llmConfigService.list).mockResolvedValue([]);
+     vi.mocked(roleService.listArchived).mockResolvedValue([archivedRole]);
++    vi.mocked(mcpService.list).mockResolvedValue([]);
+   });
+ 
+   it('打开设置时加载归档角色并可恢复', async () => {
+@@ -78,4 +94,18 @@ describe('GlobalSettingsModal archived roles', () => {
+ 
+     expect(await screen.findByText('暂无归档角色')).toBeInTheDocument();
+   });
+-});
+\ No newline at end of file
++
++  it('展示 MCP 工具标签入口并预留全局管理区块', async () => {
++    render(
++      <GlobalSettingsModal
++        onClose={vi.fn()}
++      />
++    );
++
++    fireEvent.click(screen.getByRole('button', { name: 'MCP 工具' }));
++
++    expect(screen.getByRole('button', { name: 'MCP 工具' })).toBeInTheDocument();
++    expect(screen.getByText('MCP 工具配置')).toBeInTheDocument();
++    expect(screen.getByText(/这是外部工具接入，不是 EgoSync 内部 create_role\/delegate 工具/)).toBeInTheDocument();
++  });
++});
+diff --git a/GUI/src/components/settings/GlobalSettingsModal.tsx b/GUI/src/components/settings/GlobalSettingsModal.tsx
+index 52437ef..a321f70 100644
+--- a/GUI/src/components/settings/GlobalSettingsModal.tsx
++++ b/GUI/src/components/settings/GlobalSettingsModal.tsx
+@@ -3,11 +3,30 @@ import { Plus, X, Download, Trash2, Loader2, Check, AlertCircle, ArchiveRestore
+ import { cn } from '../../lib/utils';
+ import { llmConfigService } from '../../services/llmConfigService';
+ import { roleService } from '../../services/roleService';
++import { mcpService } from '../../services/mcpService';
+ import type { LlmConfig, CreateLlmConfigInput, UpdateLlmConfigInput } from '../../types/settings';
++import type { McpServer, McpServerType } from '../../types/mcp';
+ import type { Role } from '../../types/role';
+ import { getRoleIconComponent } from '../../lib/roleIcons';
+ 
+ type TestStatus = 'idle' | 'testing' | 'success' | 'error';
++type McpForm = {
++  name: string;
++  serverType: McpServerType;
++  commandOrUrl: string;
++  envRefs: string;
++  description: string;
++  enabled: boolean;
++};
++
++const EMPTY_MCP_FORM: McpForm = {
++  name: '新 MCP server',
++  serverType: 'http_sse',
++  commandOrUrl: '',
++  envRefs: '{}',
++  description: '',
++  enabled: true,
++};
+ 
+ export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRoles = [], onRestoreRole, onRefreshRoles }: any) {
+   const [tab, setTab] = useState('llm');
+@@ -23,6 +42,14 @@ export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRol
+   const [archivedRoles, setArchivedRoles] = useState<Role[]>(initialArchivedRoles);
+   const [archiveError, setArchiveError] = useState('');
+   const [restoringRoleId, setRestoringRoleId] = useState<string | null>(null);
++  const [mcpServers, setMcpServers] = useState<McpServer[]>([]);
++  const [mcpForm, setMcpForm] = useState<McpForm>(EMPTY_MCP_FORM);
++  const [editingMcpId, setEditingMcpId] = useState<string | null>(null);
++  const [isEditingMcp, setIsEditingMcp] = useState(false);
++  const [isSavingMcp, setIsSavingMcp] = useState(false);
++  const [mcpError, setMcpError] = useState('');
++  const [testingMcpId, setTestingMcpId] = useState<string | null>(null);
++  const [mcpTestResult, setMcpTestResult] = useState<{ id: string; status: 'success' | 'error'; message: string } | null>(null);
+ 
+   const loadConfigs = useCallback(async () => {
+     try {
+@@ -44,10 +71,22 @@ export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRol
+     }
+   }, []);
+ 
++  const loadMcpServers = useCallback(async () => {
++    setMcpError('');
++    try {
++      const servers = await mcpService.list();
++      setMcpServers(servers);
++    } catch (e) {
++      console.error('加载 MCP server 失败:', e);
++      setMcpError('MCP server 加载失败，请稍后重试');
++    }
++  }, []);
++
+   useEffect(() => {
+     loadConfigs();
+     loadArchivedRoles();
+-  }, [loadArchivedRoles, loadConfigs]);
++    loadMcpServers();
++  }, [loadArchivedRoles, loadConfigs, loadMcpServers]);
+ 
+   const handleEdit = (conf: LlmConfig) => {
+     setEditForm({ name: conf.name, provider: conf.provider, baseUrl: conf.baseUrl, model: conf.model, apiKey: '' });
+@@ -150,6 +189,81 @@ export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRol
+     }
+   };
+ 
++  const handleNewMcp = () => {
++    setMcpForm(EMPTY_MCP_FORM);
++    setEditingMcpId(null);
++    setIsEditingMcp(true);
++    setMcpError('');
++    setMcpTestResult(null);
++  };
++
++  const handleEditMcp = (server: McpServer) => {
++    setMcpForm({
++      name: server.name,
++      serverType: server.serverType,
++      commandOrUrl: server.commandOrUrl,
++      envRefs: server.envRefs || '{}',
++      description: server.description,
++      enabled: server.enabled,
++    });
++    setEditingMcpId(server.id);
++    setIsEditingMcp(true);
++    setMcpError('');
++    setMcpTestResult(null);
++  };
++
++  const handleSaveMcp = async () => {
++    setIsSavingMcp(true);
++    setMcpError('');
++    try {
++      const input = {
++        name: mcpForm.name,
++        serverType: mcpForm.serverType,
++        commandOrUrl: mcpForm.commandOrUrl,
++        envRefs: mcpForm.envRefs,
++        description: mcpForm.description,
++        enabled: mcpForm.enabled,
++      };
++      if (editingMcpId) {
++        await mcpService.update(editingMcpId, input);
++      } else {
++        await mcpService.create(input);
++      }
++      await loadMcpServers();
++      setIsEditingMcp(false);
++      setEditingMcpId(null);
++      setMcpForm(EMPTY_MCP_FORM);
++    } catch (e) {
++      setMcpError(toFriendlyMcpError(e, 'MCP server 保存失败，请稍后重试'));
++    } finally {
++      setIsSavingMcp(false);
++    }
++  };
++
++  const handleDeleteMcp = async (id: string) => {
++    setMcpError('');
++    try {
++      await mcpService.delete(id);
++      await loadMcpServers();
++    } catch (e) {
++      setMcpError(toFriendlyMcpError(e, 'MCP server 删除失败，请稍后重试'));
++    }
++  };
++
++  const handleTestMcp = async (id: string) => {
++    setTestingMcpId(id);
++    setMcpTestResult(null);
++    setMcpError('');
++    try {
++      await mcpService.test(id);
++      setMcpTestResult({ id, status: 'success', message: '连接成功' });
++    } catch (e) {
++      setMcpTestResult({ id, status: 'error', message: toFriendlyMcpError(e, 'MCP server 无法连接，请检查配置') });
++    } finally {
++      setTestingMcpId(null);
++    }
++  };
++
+   return (
+     <div className="fixed top-0 right-0 bottom-0 left-16 z-50 animate-in slide-in-from-right duration-300">
+       <div className="h-full bg-white shadow-2xl flex">
+@@ -158,12 +272,13 @@ export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRol
+             <h2 className="text-[16px] font-semibold text-slate-800">全局设置</h2>
+           </div>
+           <button onClick={() => { setTab('llm'); setIsEditing(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'llm' ? "bg-white text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 hover:bg-slate-200/50")}>模型配置 (BYOK)</button>
+-          <button onClick={() => { setTab('data'); setIsEditing(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'data' ? "bg-white text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 hover:bg-slate-200/50")}>数据与主权</button>
+-          <button onClick={() => { setTab('mission'); setIsEditing(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'mission' ? "bg-white text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 hover:bg-slate-200/50")}>使命宣言</button>
++          <button onClick={() => { setTab('mcp'); setIsEditing(false); setIsEditingMcp(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'mcp' ? "bg-white text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 hover:bg-slate-200/50")}>MCP 工具</button>
++          <button onClick={() => { setTab('data'); setIsEditing(false); setIsEditingMcp(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'data' ? "bg-white text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 hover:bg-slate-200/50")}>数据与主权</button>
++          <button onClick={() => { setTab('mission'); setIsEditing(false); setIsEditingMcp(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'mission' ? "bg-white text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 hover:bg-slate-200/50")}>使命宣言</button>
+         </div>
+         <div className="flex-1 p-10 overflow-y-auto">
+           <div className="flex justify-between items-center mb-8">
+-            <h3 className="text-[24px] font-semibold text-slate-800">{tab === 'llm' ? 'LLM Provider 配置' : tab === 'data' ? '数据与隐私' : '个人使命宣言'}</h3>
++            <h3 className="text-[24px] font-semibold text-slate-800">{tab === 'llm' ? 'LLM Provider 配置' : tab === 'mcp' ? 'MCP 工具配置' : tab === 'data' ? '数据与隐私' : '个人使命宣言'}</h3>
+             <button onClick={onClose} className="p-2 text-slate-400 hover:bg-slate-100 rounded-full transition-colors"><X size={24}/></button>
+           </div>
+           
+@@ -249,6 +364,100 @@ export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRol
+             </div>
+           )}
+ 
++          {tab === 'mcp' && (
++            <div className="space-y-6">
++              <div className="bg-amber-50 border border-amber-100 rounded-xl p-4 text-[13px] text-amber-800 leading-relaxed">
++                这是外部工具接入，不是 EgoSync 内部 create_role/delegate 工具。secret 只能填写 env: 或 keyring: 引用，不会明文写入数据库、opencode.json 或日志。
++              </div>
++
++              {mcpError && (
++                <div className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-[13px] text-red-600 flex items-center gap-2">
++                  <AlertCircle size={14} /> {mcpError}
++                </div>
++              )}
++
++              {!isEditingMcp ? (
++                <div className="space-y-4">
++                  {mcpServers.length === 0 ? (
++                    <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-[13px] text-slate-400">暂无 MCP server</div>
++                  ) : mcpServers.map(server => (
++                    <div key={server.id} className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
++                      <div className="flex items-start justify-between gap-4">
++                        <div className="min-w-0">
++                          <div className="flex flex-wrap items-center gap-2">
++                            <span className={cn('w-2.5 h-2.5 rounded-full', server.enabled ? 'bg-emerald-500' : 'bg-slate-300')} />
++                            <span className="text-[15px] font-medium text-slate-800 break-words">{server.name}</span>
++                            <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-500">{server.serverType === 'http_sse' ? 'HTTP/SSE' : 'Command'}</span>
++                            {!server.enabled && <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-500">已停用</span>}
++                          </div>
++                          <p className="mt-2 break-words font-mono text-[12px] text-slate-500">{server.commandOrUrl}</p>
++                          {server.description && <p className="mt-1.5 break-words text-[12.5px] leading-relaxed text-slate-500">{server.description}</p>}
++                          {mcpTestResult?.id === server.id && (
++                            <div className={cn('mt-2 flex items-center gap-1.5 text-[12.5px]', mcpTestResult.status === 'success' ? 'text-emerald-600' : 'text-red-600')}>
++                              {mcpTestResult.status === 'success' ? <Check size={14} /> : <AlertCircle size={14} />}
++                              {mcpTestResult.message}
++                            </div>
++                          )}
++                        </div>
++                        <div className="flex shrink-0 items-center gap-2">
++                          <button onClick={() => handleTestMcp(server.id)} disabled={testingMcpId === server.id} className="px-3 py-1.5 text-[13px] font-medium text-slate-600 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors disabled:opacity-50">
++                            {testingMcpId === server.id ? <Loader2 size={14} className="animate-spin" /> : '测试连接'}
++                          </button>
++                          <button onClick={() => handleEditMcp(server)} className="px-3 py-1.5 text-[13px] font-medium text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors">编辑</button>
++                          <button onClick={() => handleDeleteMcp(server.id)} className="px-3 py-1.5 text-[13px] font-medium text-slate-600 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">删除</button>
++                        </div>
++                      </div>
++                    </div>
++                  ))}
++                  <button onClick={handleNewMcp} className="w-full py-4 border-2 border-dashed border-slate-200 rounded-xl text-[14px] font-medium text-slate-500 hover:border-indigo-300 hover:text-indigo-600 hover:bg-indigo-50/50 transition-all flex items-center justify-center gap-2">
++                    <Plus size={16} /> 添加 MCP server
++                  </button>
++                </div>
++              ) : (
++                <div className="bg-slate-50 border border-slate-200 rounded-xl p-6 animate-in slide-in-from-bottom-2">
++                  <h4 className="text-[16px] font-medium text-slate-800 mb-6">{editingMcpId ? '编辑 MCP server' : '新增 MCP server'}</h4>
++                  <div className="space-y-4">
++                    <div>
++                      <label className="block text-[13px] font-medium text-slate-700 mb-1.5">名称</label>
++                      <input type="text" value={mcpForm.name} onChange={e => setMcpForm({ ...mcpForm, name: e.target.value })} className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none" />
++                    </div>
++                    <div>
++                      <label className="block text-[13px] font-medium text-slate-700 mb-1.5">类型</label>
++                      <select value={mcpForm.serverType} onChange={e => setMcpForm({ ...mcpForm, serverType: e.target.value as McpServerType })} className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none">
++                        <option value="http_sse">HTTP/SSE</option>
++                        <option value="command">Command</option>
++                      </select>
++                    </div>
++                    <div>
++                      <label className="block text-[13px] font-medium text-slate-700 mb-1.5">URL / Command</label>
++                      <input type="text" value={mcpForm.commandOrUrl} onChange={e => setMcpForm({ ...mcpForm, commandOrUrl: e.target.value })} placeholder={mcpForm.serverType === 'http_sse' ? 'http://localhost:8000/sse' : 'npx -y @modelcontextprotocol/server-filesystem'} className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none font-mono" />
++                    </div>
++                    <div>
++                      <label className="block text-[13px] font-medium text-slate-700 mb-1.5">环境变量引用 JSON</label>
++                      <textarea value={mcpForm.envRefs} onChange={e => setMcpForm({ ...mcpForm, envRefs: e.target.value })} rows={3} className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none font-mono resize-none" />
++                      <p className="mt-1.5 text-[12px] text-slate-400">示例：{`{"TOKEN":"env:CALENDAR_TOKEN"}`} 或 {`{"TOKEN":"keyring:calendar-token"}`}</p>
++                    </div>
++                    <div>
++                      <label className="block text-[13px] font-medium text-slate-700 mb-1.5">说明</label>
++                      <textarea value={mcpForm.description} onChange={e => setMcpForm({ ...mcpForm, description: e.target.value })} rows={2} className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none resize-none" />
++                    </div>
++                    <label className="flex items-center gap-2 text-[13px] text-slate-600">
++                      <input type="checkbox" checked={mcpForm.enabled} onChange={e => setMcpForm({ ...mcpForm, enabled: e.target.checked })} className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500" />
++                      启用
++                    </label>
++                  </div>
++                  <div className="mt-6 flex justify-end gap-3">
++                    <button onClick={() => setIsEditingMcp(false)} className="px-5 py-2.5 border border-slate-300 rounded-lg text-[13px] font-medium text-slate-700 hover:bg-slate-100 transition-colors">取消</button>
++                    <button onClick={handleSaveMcp} disabled={isSavingMcp} className="px-5 py-2.5 bg-indigo-600 text-white rounded-lg text-[13px] font-medium hover:bg-indigo-700 transition-colors shadow-sm disabled:opacity-50">
++                      {isSavingMcp ? <Loader2 size={14} className="animate-spin inline mr-1" /> : null}
++                      保存 MCP server
++                    </button>
++                  </div>
++                </div>
++              )}
++            </div>
++          )}
++
+           {tab === 'data' && (
+             <div className="space-y-8">
+               <div>
+@@ -323,3 +532,14 @@ function formatDateTime(value: string | null) {
+     minute: '2-digit',
+   });
+ }
++
++function toFriendlyMcpError(error: unknown, fallback: string) {
++  if (error == null) return fallback;
++  const text = typeof error === 'string' ? error : (JSON.stringify(error) ?? String(error));
++  if (text.includes('secret 只能保存 keyring: 或 env: 引用')) return 'secret 只能保存 keyring: 或 env: 引用';
++  if (text.includes('环境变量引用必须是 JSON 对象')) return '环境变量引用必须是 JSON 对象';
++  if (text.includes('MCP server 名称不能为空')) return 'MCP server 名称不能为空';
++  if (text.includes('MCP server 连接参数不能为空')) return 'MCP server 连接参数不能为空';
++  if (text.includes('无法连接') || text.includes('不可达')) return 'MCP server 无法连接，请检查配置';
++  return fallback;
++}
+diff --git a/GUI/src-tauri/migrations/011_mcp_servers.sql b/GUI/src-tauri/migrations/011_mcp_servers.sql
+new file mode 100644
+index 0000000..393000a
+--- /dev/null
++++ b/GUI/src-tauri/migrations/011_mcp_servers.sql
+@@ -0,0 +1,24 @@
++CREATE TABLE IF NOT EXISTS mcp_servers (
++    id TEXT PRIMARY KEY NOT NULL,
++    name TEXT NOT NULL,
++    server_type TEXT NOT NULL CHECK(server_type IN ('http_sse', 'command')),
++    command_or_url TEXT NOT NULL,
++    env_refs TEXT NOT NULL DEFAULT '{}',
++    description TEXT NOT NULL DEFAULT '',
++    enabled INTEGER NOT NULL DEFAULT 1,
++    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
++    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
++);
++
++CREATE INDEX IF NOT EXISTS idx_mcp_servers_enabled ON mcp_servers(enabled);
++CREATE INDEX IF NOT EXISTS idx_mcp_servers_type ON mcp_servers(server_type);
++
++CREATE TABLE IF NOT EXISTS role_mcp_server_bindings (
++    server_id TEXT NOT NULL,
++    role_id TEXT NOT NULL,
++    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
++    PRIMARY KEY (server_id, role_id),
++    FOREIGN KEY (server_id) REFERENCES mcp_servers(id) ON DELETE CASCADE
++);
++
++CREATE INDEX IF NOT EXISTS idx_role_mcp_server_bindings_role_id ON role_mcp_server_bindings(role_id);
+diff --git a/GUI/src-tauri/src/commands/mcp.rs b/GUI/src-tauri/src/commands/mcp.rs
+new file mode 100644
+index 0000000..a8e5148
+--- /dev/null
++++ b/GUI/src-tauri/src/commands/mcp.rs
+@@ -0,0 +1,80 @@
++use tauri::State;
++
++use crate::db::pool::DbPool;
++use crate::error::AppError;
++use crate::models::mcp::{CreateMcpServerInput, McpServer, UpdateMcpServerInput};
++use crate::services::agent_config::AgentConfigService;
++
++#[tauri::command]
++pub async fn mcp_server_list(pool: State<'_, DbPool>) -> Result<Vec<McpServer>, AppError> {
++    crate::services::mcp_server::list_servers(&pool).await
++}
++
++#[tauri::command]
++pub async fn mcp_server_list_for_role(
++    role_id: String,
++    pool: State<'_, DbPool>,
++) -> Result<Vec<McpServer>, AppError> {
++    crate::services::mcp_server::list_servers_for_role(&pool, &role_id).await
++}
++
++#[tauri::command]
++pub async fn mcp_server_list_available_for_role(
++    role_id: String,
++    pool: State<'_, DbPool>,
++) -> Result<Vec<McpServer>, AppError> {
++    crate::services::mcp_server::list_available_servers_for_role(&pool, &role_id).await
++}
++
++#[tauri::command]
++pub async fn mcp_server_create(
++    input: CreateMcpServerInput,
++    pool: State<'_, DbPool>,
++    agent_config: State<'_, AgentConfigService>,
++) -> Result<McpServer, AppError> {
++    crate::services::mcp_server::create_server(&pool, &agent_config, input).await
++}
++
++#[tauri::command]
++pub async fn mcp_server_update(
++    id: String,
++    input: UpdateMcpServerInput,
++    pool: State<'_, DbPool>,
++    agent_config: State<'_, AgentConfigService>,
++) -> Result<McpServer, AppError> {
++    crate::services::mcp_server::update_server(&pool, &agent_config, &id, input).await
++}
++
++#[tauri::command]
++pub async fn mcp_server_delete(
++    id: String,
++    pool: State<'_, DbPool>,
++    agent_config: State<'_, AgentConfigService>,
++) -> Result<(), AppError> {
++    crate::services::mcp_server::delete_server(&pool, &agent_config, &id).await
++}
++
++#[tauri::command]
++pub async fn mcp_server_test(id: String, pool: State<'_, DbPool>) -> Result<(), AppError> {
++    crate::services::mcp_server::test_server(&pool, &id).await
++}
++
++#[tauri::command]
++pub async fn mcp_server_add_to_role(
++    role_id: String,
++    server_id: String,
++    pool: State<'_, DbPool>,
++    agent_config: State<'_, AgentConfigService>,
++) -> Result<(), AppError> {
++    crate::services::mcp_server::add_to_role(&pool, &agent_config, &role_id, &server_id).await
++}
++
++#[tauri::command]
++pub async fn mcp_server_remove_from_role(
++    role_id: String,
++    server_id: String,
++    pool: State<'_, DbPool>,
++    agent_config: State<'_, AgentConfigService>,
++) -> Result<(), AppError> {
++    crate::services::mcp_server::remove_from_role(&pool, &agent_config, &role_id, &server_id).await
++}
+diff --git a/GUI/src-tauri/src/db/mcp_servers.rs b/GUI/src-tauri/src/db/mcp_servers.rs
+new file mode 100644
+index 0000000..9399fc9
+--- /dev/null
++++ b/GUI/src-tauri/src/db/mcp_servers.rs
+@@ -0,0 +1,259 @@
++use sqlx::SqlitePool;
++
++use crate::error::AppError;
++use crate::models::mcp::McpServer;
++
++const MCP_SELECT_COLUMNS: &str = "id, name, server_type, command_or_url, env_refs, description, enabled, created_at, updated_at";
++
++pub async fn list_mcp_servers(pool: &SqlitePool) -> Result<Vec<McpServer>, AppError> {
++    sqlx::query_as::<_, McpServer>(&format!(
++        "SELECT {} FROM mcp_servers ORDER BY created_at ASC",
++        MCP_SELECT_COLUMNS
++    ))
++    .fetch_all(pool)
++    .await
++    .map_err(|e| AppError::DbError(format!("查询 MCP server 失败: {}", e)))
++}
++
++pub async fn get_mcp_server(pool: &SqlitePool, id: &str) -> Result<McpServer, AppError> {
++    sqlx::query_as::<_, McpServer>(&format!(
++        "SELECT {} FROM mcp_servers WHERE id = ?1",
++        MCP_SELECT_COLUMNS
++    ))
++    .bind(id)
++    .fetch_optional(pool)
++    .await
++    .map_err(|e| AppError::DbError(format!("查询 MCP server 失败: {}", e)))?
++    .ok_or_else(|| AppError::NotFound(format!("MCP server {} 不存在", id)))
++}
++
++pub async fn insert_mcp_server(pool: &SqlitePool, server: &McpServer) -> Result<(), AppError> {
++    sqlx::query(
++        "INSERT INTO mcp_servers (id, name, server_type, command_or_url, env_refs, description, enabled, created_at, updated_at)
++         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
++    )
++    .bind(&server.id)
++    .bind(&server.name)
++    .bind(&server.server_type)
++    .bind(&server.command_or_url)
++    .bind(&server.env_refs)
++    .bind(&server.description)
++    .bind(server.enabled)
++    .bind(&server.created_at)
++    .bind(&server.updated_at)
++    .execute(pool)
++    .await
++    .map_err(|e| AppError::DbError(format!("保存 MCP server 失败: {}", e)))?;
++    Ok(())
++}
++
++pub async fn update_mcp_server(pool: &SqlitePool, server: &McpServer) -> Result<(), AppError> {
++    let now = crate::db::settings::chrono_now_pub();
++    let result = sqlx::query(
++        "UPDATE mcp_servers
++         SET name = ?1,
++             server_type = ?2,
++             command_or_url = ?3,
++             env_refs = ?4,
++             description = ?5,
++             enabled = ?6,
++             updated_at = ?7
++         WHERE id = ?8",
++    )
++    .bind(&server.name)
++    .bind(&server.server_type)
++    .bind(&server.command_or_url)
++    .bind(&server.env_refs)
++    .bind(&server.description)
++    .bind(server.enabled)
++    .bind(&now)
++    .bind(&server.id)
++    .execute(pool)
++    .await
++    .map_err(|e| AppError::DbError(format!("更新 MCP server 失败: {}", e)))?;
++
++    if result.rows_affected() == 0 {
++        return Err(AppError::NotFound(format!("MCP server {} 不存在", server.id)));
++    }
++    Ok(())
++}
++
++pub async fn delete_mcp_server(pool: &SqlitePool, id: &str) -> Result<(), AppError> {
++    let result = sqlx::query("DELETE FROM mcp_servers WHERE id = ?1")
++        .bind(id)
++        .execute(pool)
++        .await
++        .map_err(|e| AppError::DbError(format!("删除 MCP server 失败: {}", e)))?;
++
++    if result.rows_affected() == 0 {
++        return Err(AppError::NotFound(format!("MCP server {} 不存在", id)));
++    }
++    Ok(())
++}
++
++pub async fn list_mcp_servers_for_role(
++    pool: &SqlitePool,
++    role_id: &str,
++) -> Result<Vec<McpServer>, AppError> {
++    sqlx::query_as::<_, McpServer>(&format!(
++        "SELECT {} FROM mcp_servers
++         INNER JOIN role_mcp_server_bindings ON role_mcp_server_bindings.server_id = mcp_servers.id
++         WHERE role_mcp_server_bindings.role_id = ?1
++           AND mcp_servers.enabled = 1
++         ORDER BY role_mcp_server_bindings.created_at ASC",
++        prefixed_columns()
++    ))
++    .bind(role_id)
++    .fetch_all(pool)
++    .await
++    .map_err(|e| AppError::DbError(format!("查询角色 MCP server 失败: {}", e)))
++}
++
++pub async fn list_available_mcp_servers_for_role(
++    pool: &SqlitePool,
++    role_id: &str,
++) -> Result<Vec<McpServer>, AppError> {
++    sqlx::query_as::<_, McpServer>(&format!(
++        "SELECT {} FROM mcp_servers
++         WHERE enabled = 1
++           AND id NOT IN (SELECT server_id FROM role_mcp_server_bindings WHERE role_id = ?1)
++         ORDER BY created_at ASC",
++        MCP_SELECT_COLUMNS
++    ))
++    .bind(role_id)
++    .fetch_all(pool)
++    .await
++    .map_err(|e| AppError::DbError(format!("查询可添加 MCP server 失败: {}", e)))
++}
++
++pub async fn add_mcp_server_to_role(
++    pool: &SqlitePool,
++    role_id: &str,
++    server_id: &str,
++) -> Result<(), AppError> {
++    get_mcp_server(pool, server_id).await?;
++    crate::db::roles::get_role(pool, role_id).await?;
++    let now = crate::db::settings::chrono_now_pub();
++    sqlx::query(
++        "INSERT OR IGNORE INTO role_mcp_server_bindings (server_id, role_id, created_at)
++         VALUES (?1, ?2, ?3)",
++    )
++    .bind(server_id)
++    .bind(role_id)
++    .bind(now)
++    .execute(pool)
++    .await
++    .map_err(|e| AppError::DbError(format!("启用角色 MCP server 失败: {}", e)))?;
++    Ok(())
++}
++
++pub async fn remove_mcp_server_from_role(
++    pool: &SqlitePool,
++    role_id: &str,
++    server_id: &str,
++) -> Result<(), AppError> {
++    sqlx::query("DELETE FROM role_mcp_server_bindings WHERE server_id = ?1 AND role_id = ?2")
++        .bind(server_id)
++        .bind(role_id)
++        .execute(pool)
++        .await
++        .map_err(|e| AppError::DbError(format!("移除角色 MCP server 失败: {}", e)))?;
++    Ok(())
++}
++
++pub async fn role_enabled_mcp_lines(pool: &SqlitePool, role_id: &str) -> Result<Vec<String>, AppError> {
++    let servers = list_mcp_servers_for_role(pool, role_id).await?;
++    Ok(servers
++        .into_iter()
++        .filter(|server| server.enabled)
++        .map(|server| format!("- {}（{}）：{}", server.name, server.server_type, server.description))
++        .collect())
++}
++
++fn prefixed_columns() -> String {
++    MCP_SELECT_COLUMNS
++        .split(", ")
++        .map(|column| format!("mcp_servers.{}", column))
++        .collect::<Vec<_>>()
++        .join(", ")
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use sqlx::sqlite::SqlitePoolOptions;
++
++    async fn setup_test_db() -> SqlitePool {
++        let pool = SqlitePoolOptions::new()
++            .max_connections(1)
++            .connect("sqlite::memory:")
++            .await
++            .unwrap();
++        sqlx::raw_sql(
++            "CREATE TABLE roles (
++                id TEXT PRIMARY KEY NOT NULL,
++                name TEXT NOT NULL,
++                icon TEXT NOT NULL DEFAULT 'target',
++                color TEXT NOT NULL DEFAULT '#4F46E5',
++                goal TEXT NOT NULL DEFAULT '',
++                personality_prompt TEXT NOT NULL DEFAULT '',
++                status TEXT NOT NULL DEFAULT 'active',
++                energy INTEGER NOT NULL DEFAULT 100,
++                skills_config TEXT NOT NULL DEFAULT '{}',
++                proactivity_level TEXT NOT NULL DEFAULT 'moderate',
++                archived_at TEXT,
++                created_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00Z',
++                updated_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00Z'
++            );
++            CREATE TABLE mcp_servers (
++                id TEXT PRIMARY KEY NOT NULL,
++                name TEXT NOT NULL,
++                server_type TEXT NOT NULL,
++                command_or_url TEXT NOT NULL,
++                env_refs TEXT NOT NULL DEFAULT '{}',
++                description TEXT NOT NULL DEFAULT '',
++                enabled INTEGER NOT NULL DEFAULT 1,
++                created_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00Z',
++                updated_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00Z'
++            );
++            CREATE TABLE role_mcp_server_bindings (
++                server_id TEXT NOT NULL,
++                role_id TEXT NOT NULL,
++                created_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00Z',
++                PRIMARY KEY (server_id, role_id)
++            );
++            INSERT INTO roles (id, name) VALUES ('role-1', '产品经理');",
++        )
++        .execute(&pool)
++        .await
++        .unwrap();
++        pool
++    }
++
++    fn server(id: &str, enabled: bool) -> McpServer {
++        McpServer {
++            id: id.to_string(),
++            name: "日历".to_string(),
++            server_type: "http_sse".to_string(),
++            command_or_url: "http://localhost:8000/sse".to_string(),
++            env_refs: r#"{"CALENDAR_TOKEN":"env:CALENDAR_TOKEN"}"#.to_string(),
++            description: "读取日历".to_string(),
++            enabled,
++            created_at: "2026-01-01T00:00:00Z".to_string(),
++            updated_at: "2026-01-01T00:00:00Z".to_string(),
++        }
++    }
++
++    #[tokio::test]
++    async fn role_binding_keeps_server_config_out_of_role_skills_config() {
++        let pool = setup_test_db().await;
++        insert_mcp_server(&pool, &server("mcp-1", true)).await.unwrap();
++        add_mcp_server_to_role(&pool, "role-1", "mcp-1").await.unwrap();
++
++        let bound = list_mcp_servers_for_role(&pool, "role-1").await.unwrap();
++        let role = crate::db::roles::get_role(&pool, "role-1").await.unwrap();
++
++        assert_eq!(bound.len(), 1);
++        assert_eq!(role.skills_config, "{}");
++    }
++}
+diff --git a/GUI/src-tauri/src/models/mcp.rs b/GUI/src-tauri/src/models/mcp.rs
+new file mode 100644
+index 0000000..f2ba66c
+--- /dev/null
++++ b/GUI/src-tauri/src/models/mcp.rs
+@@ -0,0 +1,39 @@
++use serde::{Deserialize, Serialize};
++
++#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, PartialEq)]
++#[serde(rename_all = "camelCase")]
++pub struct McpServer {
++    pub id: String,
++    pub name: String,
++    pub server_type: String,
++    pub command_or_url: String,
++    pub env_refs: String,
++    pub description: String,
++    pub enabled: bool,
++    pub created_at: String,
++    pub updated_at: String,
++}
++
++#[derive(Debug, Clone, Deserialize)]
++#[serde(rename_all = "camelCase")]
++pub struct CreateMcpServerInput {
++    pub name: String,
++    pub server_type: String,
++    pub command_or_url: String,
++    #[serde(default)]
++    pub env_refs: Option<String>,
++    #[serde(default)]
++    pub description: Option<String>,
++    pub enabled: bool,
++}
++
++#[derive(Debug, Clone, Deserialize)]
++#[serde(rename_all = "camelCase")]
++pub struct UpdateMcpServerInput {
++    pub name: Option<String>,
++    pub server_type: Option<String>,
++    pub command_or_url: Option<String>,
++    pub env_refs: Option<String>,
++    pub description: Option<String>,
++    pub enabled: Option<bool>,
++}
+diff --git a/GUI/src-tauri/src/services/mcp_server.rs b/GUI/src-tauri/src/services/mcp_server.rs
+new file mode 100644
+index 0000000..2ba9a1a
+--- /dev/null
++++ b/GUI/src-tauri/src/services/mcp_server.rs
+@@ -0,0 +1,705 @@
++use std::{collections::HashMap, process::Stdio};
++
++use serde_json::{json, Map, Value};
++use sqlx::SqlitePool;
++use tokio::process::Command;
++
++use crate::db::mcp_servers as db;
++use crate::error::AppError;
++use crate::models::mcp::{CreateMcpServerInput, McpServer, UpdateMcpServerInput};
++use crate::services::agent_config::AgentConfigService;
++
++const SECRET_MARKERS: &[&str] = &[
++    "token=",
++    "api_key=",
++    "api-key=",
++    "secret=",
++    "password=",
++    "passwd=",
++    "bearer ",
++    "?token=",
++    "&token=",
++    "?api_key=",
++    "&api_key=",
++    "?api-key=",
++    "&api-key=",
++    "?secret=",
++    "&secret=",
++    "?password=",
++    "&password=",
++];
++
++pub async fn list_servers(pool: &SqlitePool) -> Result<Vec<McpServer>, AppError> {
++    db::list_mcp_servers(pool).await
++}
++
++pub async fn list_servers_for_role(
++    pool: &SqlitePool,
++    role_id: &str,
++) -> Result<Vec<McpServer>, AppError> {
++    db::list_mcp_servers_for_role(pool, role_id).await
++}
++
++pub async fn list_available_servers_for_role(
++    pool: &SqlitePool,
++    role_id: &str,
++) -> Result<Vec<McpServer>, AppError> {
++    db::list_available_mcp_servers_for_role(pool, role_id).await
++}
++
++pub async fn create_server(
++    pool: &SqlitePool,
++    agent_config: &AgentConfigService,
++    input: CreateMcpServerInput,
++) -> Result<McpServer, AppError> {
++    let id = uuid::Uuid::new_v4().to_string();
++    let now = crate::db::settings::chrono_now_pub();
++    let server = McpServer {
++        id,
++        name: normalized_name(&input.name)?,
++        server_type: normalized_server_type(&input.server_type)?,
++        command_or_url: normalized_command_or_url(&input.command_or_url)?,
++        env_refs: normalize_env_refs(input.env_refs.as_deref())?,
++        description: {
++            let description = input.description.unwrap_or_default().trim().to_string();
++            ensure_no_secret_like(&description, "MCP server 说明")?;
++            description
++        },
++        enabled: input.enabled,
++        created_at: now.clone(),
++        updated_at: now,
++    };
++    db::insert_mcp_server(pool, &server).await?;
++    sync_enabled_mcp_to_opencode(pool, agent_config).await;
++    Ok(server)
++}
++
++pub async fn update_server(
++    pool: &SqlitePool,
++    agent_config: &AgentConfigService,
++    id: &str,
++    input: UpdateMcpServerInput,
++) -> Result<McpServer, AppError> {
++    let mut server = db::get_mcp_server(pool, id).await?;
++    if let Some(name) = input.name {
++        server.name = normalized_name(&name)?;
++    }
++    if let Some(server_type) = input.server_type {
++        server.server_type = normalized_server_type(&server_type)?;
++    }
++    if let Some(command_or_url) = input.command_or_url {
++        server.command_or_url = normalized_command_or_url(&command_or_url)?;
++    }
++    if let Some(env_refs) = input.env_refs.as_deref() {
++        server.env_refs = normalize_env_refs(Some(env_refs))?;
++    }
++    if let Some(description) = input.description {
++        let description = description.trim().to_string();
++        ensure_no_secret_like(&description, "MCP server 说明")?;
++        server.description = description;
++    }
++    if let Some(enabled) = input.enabled {
++        server.enabled = enabled;
++    }
++    db::update_mcp_server(pool, &server).await?;
++    let updated = db::get_mcp_server(pool, id).await?;
++    sync_enabled_mcp_to_opencode(pool, agent_config).await;
++    sync_all_role_agents(pool, agent_config).await;
++    Ok(updated)
++}
++
++pub async fn delete_server(
++    pool: &SqlitePool,
++    agent_config: &AgentConfigService,
++    id: &str,
++) -> Result<(), AppError> {
++    db::delete_mcp_server(pool, id).await?;
++    sync_enabled_mcp_to_opencode(pool, agent_config).await;
++    sync_all_role_agents(pool, agent_config).await;
++    Ok(())
++}
++
++pub async fn test_server(pool: &SqlitePool, id: &str) -> Result<(), AppError> {
++    let server = db::get_mcp_server(pool, id).await?;
++    match server.server_type.as_str() {
++        "http_sse" => {
++            let response = reqwest::Client::new()
++                .get(&server.command_or_url)
++                .timeout(std::time::Duration::from_secs(5))
++                .send()
++                .await
++                .map_err(|_| AppError::ValidationError("MCP server 无法连接，请检查 URL 或网络状态".to_string()))?;
++            if response.status().is_success() {
++                Ok(())
++            } else {
++                Err(AppError::ValidationError(format!(
++                    "MCP server 返回 HTTP {}，请检查服务配置",
++                    response.status().as_u16()
++                )))
++            }
++        }
++        "command" => test_command_server(&server.command_or_url).await,
++        _ => Err(AppError::ValidationError("MCP server 类型不支持".to_string())),
++    }
++}
++
++fn shell_command(command: &str) -> Command {
++    #[cfg(target_os = "windows")]
++    {
++        let mut shell = Command::new("cmd");
++        shell.arg("/C").arg(command);
++        shell
++    }
++
++    #[cfg(not(target_os = "windows"))]
++    {
++        let mut shell = Command::new("sh");
++        shell.arg("-c").arg(command);
++        shell
++    }
++}
++
++async fn test_command_server(command: &str) -> Result<(), AppError> {
++    let trimmed = command.trim();
++    if trimmed.is_empty() {
++        return Err(AppError::ValidationError("MCP command 不能为空".to_string()));
++    }
++
++    let mut child = shell_command(trimmed)
++        .stdin(Stdio::null())
++        .stdout(Stdio::null())
++        .stderr(Stdio::null())
++        .kill_on_drop(true)
++        .spawn()
++        .map_err(|e| {
++            AppError::ValidationError(format!(
++                "MCP command 无法启动，请检查命令是否存在或依赖是否可用: {}",
++                e
++            ))
++        })?;
++
++    match tokio::time::timeout(std::time::Duration::from_secs(2), child.wait()).await {
++        Ok(Ok(status)) if status.success() => Err(AppError::ValidationError(
++            "MCP command 启动后立即退出，请检查它是否能长期运行".to_string(),
++        )),
++        Ok(Ok(status)) => Err(AppError::ValidationError(format!(
++            "MCP command 启动失败（退出码 {}），请检查命令配置",
++            status
++                .code()
++                .map(|code| code.to_string())
++                .unwrap_or_else(|| "unknown".to_string())
++        ))),
++        Ok(Err(e)) => Err(AppError::ValidationError(format!(
++            "等待 MCP command 进程状态失败: {}",
++            e
++        ))),
++        Err(_) => {
++            let _ = child.kill().await;
++            Ok(())
++        }
++    }
++}
++
++pub async fn add_to_role(
++    pool: &SqlitePool,
++    agent_config: &AgentConfigService,
++    role_id: &str,
++    server_id: &str,
++) -> Result<(), AppError> {
++    let server = db::get_mcp_server(pool, server_id).await?;
++    if !server.enabled {
++        return Err(AppError::ValidationError("该 MCP server 已全局停用，不能添加到角色".to_string()));
++    }
++    db::add_mcp_server_to_role(pool, role_id, server_id).await?;
++    sync_role_agent(pool, agent_config, role_id).await;
++    Ok(())
++}
++
++pub async fn remove_from_role(
++    pool: &SqlitePool,
++    agent_config: &AgentConfigService,
++    role_id: &str,
++    server_id: &str,
++) -> Result<(), AppError> {
++    db::remove_mcp_server_from_role(pool, role_id, server_id).await?;
++    sync_role_agent(pool, agent_config, role_id).await;
++    Ok(())
++}
++
++pub async fn role_mcp_prompt_map(
++    pool: &SqlitePool,
++) -> Result<HashMap<String, Vec<String>>, AppError> {
++    let roles = crate::db::roles::list_all_roles(pool).await?;
++    let mut map = HashMap::new();
++    for role in roles {
++        let lines = db::role_enabled_mcp_lines(pool, &role.id).await?;
++        if !lines.is_empty() {
++            map.insert(role.id, lines);
++        }
++    }
++    Ok(map)
++}
++
++pub async fn sync_role_agent_with_mcp(
++    pool: &SqlitePool,
++    agent_config: &AgentConfigService,
++    role: &crate::models::role::Role,
++    registry: &[crate::models::skill::SkillRegistryEntry],
++) -> Result<(), AppError> {
++    let mcp_lines = db::role_enabled_mcp_lines(pool, &role.id).await?;
++    agent_config.sync_role_updated_with_skills_and_mcp(role, registry, &mcp_lines)
++}
++
++pub async fn sync_mcp_scope_for_role(
++    pool: &SqlitePool,
++    agent_config: &AgentConfigService,
++    role_id: Option<&str>,
++) -> Result<(), AppError> {
++    let servers = match role_id {
++        Some(role_id) => db::list_mcp_servers_for_role(pool, role_id).await?,
++        None => db::list_mcp_servers(pool).await?,
++    };
++    agent_config.sync_external_mcp_servers(&servers)
++}
++
++pub async fn mcp_scope_key_for_role(
++    pool: &SqlitePool,
++    role_id: Option<&str>,
++) -> Result<String, AppError> {
++    let mut servers = match role_id {
++        Some(role_id) => db::list_mcp_servers_for_role(pool, role_id).await?,
++        None => db::list_mcp_servers(pool).await?,
++    }
++    .into_iter()
++    .filter(|server| server.enabled)
++    .map(|server| server.id)
++    .collect::<Vec<_>>();
++    servers.sort();
++    let scope_owner = role_id
++        .map(|id| format!("role:{}", id))
++        .unwrap_or_else(|| "butler".to_string());
++    Ok(format!("{}|{}", scope_owner, servers.join(",")))
++}
++
++pub async fn sync_enabled_mcp_to_opencode(
++    pool: &SqlitePool,
++    agent_config: &AgentConfigService,
++) {
++    match db::list_mcp_servers(pool).await {
++        Ok(servers) => {
++            if let Err(e) = agent_config.sync_external_mcp_servers(&servers) {
++                tracing::warn!("sync MCP servers to opencode.json failed: {}", e);
++            }
++        }
++        Err(e) => tracing::warn!("load MCP servers for opencode sync failed: {}", e),
++    }
++}
++
++async fn sync_role_agent(pool: &SqlitePool, agent_config: &AgentConfigService, role_id: &str) {
++    let result: Result<(), AppError> = (|| async {
++        let role = crate::db::roles::get_role(pool, role_id).await?;
++        let registry = crate::db::skills::list_skills(pool).await.unwrap_or_default();
++        let mcp_lines = db::role_enabled_mcp_lines(pool, role_id).await?;
++        agent_config.sync_role_updated_with_skills_and_mcp(&role, &registry, &mcp_lines)
++    })()
++    .await;
++    if let Err(e) = result {
++        tracing::warn!("sync role MCP prompt failed: {}", e);
++    }
++}
++
++pub async fn sync_all_role_agents(pool: &SqlitePool, agent_config: &AgentConfigService) {
++    let result: Result<(), AppError> = (|| async {
++        let roles = crate::db::roles::list_all_roles(pool).await?;
++        let registry = crate::db::skills::list_skills(pool).await.unwrap_or_default();
++        let butler_skills = crate::services::butler_config::get_butler_skills(pool).await?;
++        let mcp_prompts = role_mcp_prompt_map(pool).await?;
++        agent_config.full_sync_with_skills_and_mcp(&roles, &butler_skills, &registry, &mcp_prompts)
++    })()
++    .await;
++    if let Err(e) = result {
++        tracing::warn!("full role MCP prompt sync failed: {}", e);
++    }
++}
++
++fn ensure_no_secret_like(value: &str, field: &str) -> Result<(), AppError> {
++    let lowered = value.to_ascii_lowercase();
++    if lowered.starts_with("sk-")
++        || SECRET_MARKERS.iter().any(|marker| lowered.contains(marker))
++    {
++        return Err(AppError::ValidationError(format!("{} 不能包含密钥或令牌，请改用 env: 或 keyring: 引用", field)));
++    }
++    Ok(())
++}
++
++fn normalized_name(name: &str) -> Result<String, AppError> {
++    let trimmed = name.trim();
++    if trimmed.is_empty() {
++        return Err(AppError::ValidationError("MCP server 名称不能为空".to_string()));
++    }
++    ensure_no_secret_like(trimmed, "MCP server 名称")?;
++    Ok(trimmed.to_string())
++}
++
++fn normalized_server_type(server_type: &str) -> Result<String, AppError> {
++    let trimmed = server_type.trim();
++    if matches!(trimmed, "http_sse" | "command") {
++        Ok(trimmed.to_string())
++    } else {
++        Err(AppError::ValidationError("MCP server 类型必须是 HTTP/SSE 或 command".to_string()))
++    }
++}
++
++fn normalized_command_or_url(value: &str) -> Result<String, AppError> {
++    let trimmed = value.trim();
++    if trimmed.is_empty() {
++        return Err(AppError::ValidationError("MCP server 连接参数不能为空".to_string()));
++    }
++    ensure_no_secret_like(trimmed, "MCP server 连接参数")?;
++    Ok(trimmed.to_string())
++}
++
++fn normalize_env_refs(raw: Option<&str>) -> Result<String, AppError> {
++    let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
++        return Ok("{}".to_string());
++    };
++    let parsed: Value = serde_json::from_str(raw)
++        .map_err(|_| AppError::ValidationError("环境变量引用必须是 JSON 对象".to_string()))?;
++    let Some(object) = parsed.as_object() else {
++        return Err(AppError::ValidationError("环境变量引用必须是 JSON 对象".to_string()));
++    };
++    for value in object.values() {
++        let Some(reference) = value.as_str() else {
++            return Err(AppError::ValidationError("secret 只能保存 keyring: 或 env: 引用".to_string()));
++        };
++        if !(reference.starts_with("env:") || reference.starts_with("keyring:")) {
++            return Err(AppError::ValidationError("secret 只能保存 keyring: 或 env: 引用".to_string()));
++        }
++    }
++    serde_json::to_string(&Value::Object(object.clone()))
++        .map_err(|e| AppError::ValidationError(format!("环境变量引用序列化失败: {}", e)))
++}
++
++pub fn mcp_server_config_for_opencode(server: &McpServer) -> Value {
++    let env = env_refs_to_opencode_env(&server.env_refs);
++    let mut object = Map::new();
++    match server.server_type.as_str() {
++        "command" => {
++            object.insert("type".to_string(), json!("local"));
++            object.insert("command".to_string(), json!(server.command_or_url));
++        }
++        _ => {
++            object.insert("type".to_string(), json!("remote"));
++            object.insert("url".to_string(), json!(server.command_or_url));
++        }
++    }
++    if !env.is_empty() {
++        object.insert("env".to_string(), Value::Object(env));
++    }
++    object.insert("managedByEgosync".to_string(), json!(true));
++    Value::Object(object)
++}
++
++fn env_refs_to_opencode_env(raw: &str) -> Map<String, Value> {
++    let parsed = serde_json::from_str::<Value>(raw).unwrap_or_else(|_| json!({}));
++    parsed
++        .as_object()
++        .map(|object| {
++            object
++                .iter()
++                .filter_map(|(key, value)| {
++                    value.as_str().map(|reference| {
++                        let rendered = reference
++                            .strip_prefix("env:")
++                            .map(|name| format!("${{{}}}", name))
++                            .or_else(|| reference.strip_prefix("keyring:").map(|name| format!("${{{}}}", name)))
++                            .unwrap_or_default();
++                        (key.clone(), Value::String(rendered))
++                    })
++                })
++                .collect()
++        })
++        .unwrap_or_default()
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use sqlx::sqlite::SqlitePoolOptions;
++
++    fn test_server_record(id: &str, name: &str) -> McpServer {
++        McpServer {
++            id: id.to_string(),
++            name: name.to_string(),
++            server_type: "http_sse".to_string(),
++            command_or_url: format!("https://{}.example/mcp", id),
++            env_refs: "{}".to_string(),
++            description: String::new(),
++            enabled: true,
++            created_at: "2026-01-01T00:00:00Z".to_string(),
++            updated_at: "2026-01-01T00:00:00Z".to_string(),
++        }
++    }
++
++    async fn setup_test_db() -> SqlitePool {
++        let pool = SqlitePoolOptions::new()
++            .max_connections(1)
++            .connect("sqlite::memory:")
++            .await
++            .unwrap();
++        sqlx::raw_sql(
++            "CREATE TABLE roles (
++                id TEXT PRIMARY KEY NOT NULL,
++                name TEXT NOT NULL,
++                icon TEXT NOT NULL DEFAULT 'target',
++                color TEXT NOT NULL DEFAULT '#4F46E5',
++                goal TEXT NOT NULL DEFAULT '',
++                personality_prompt TEXT NOT NULL DEFAULT '',
++                status TEXT NOT NULL DEFAULT 'active',
++                energy INTEGER NOT NULL DEFAULT 100,
++                skills_config TEXT NOT NULL DEFAULT '{}',
++                proactivity_level TEXT NOT NULL DEFAULT 'moderate',
++                archived_at TEXT,
++                created_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00Z',
++                updated_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00Z'
++            );
++            CREATE TABLE mcp_servers (
++                id TEXT PRIMARY KEY NOT NULL,
++                name TEXT NOT NULL,
++                server_type TEXT NOT NULL,
++                command_or_url TEXT NOT NULL,
++                env_refs TEXT NOT NULL DEFAULT '{}',
++                description TEXT NOT NULL DEFAULT '',
++                enabled INTEGER NOT NULL DEFAULT 1,
++                created_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00Z',
++                updated_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00Z'
++            );
++            CREATE TABLE role_mcp_server_bindings (
++                server_id TEXT NOT NULL,
++                role_id TEXT NOT NULL,
++                created_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00Z',
++                PRIMARY KEY (server_id, role_id)
++            );
++            INSERT INTO roles (id, name) VALUES ('role-1', '产品经理');",
++        )
++        .execute(&pool)
++        .await
++        .unwrap();
++        pool
++    }
++
++    #[tokio::test]
++    async fn sync_mcp_scope_for_role_exposes_only_role_bound_servers() {
++        let pool = setup_test_db().await;
++        db::insert_mcp_server(&pool, &test_server_record("calendar", "日历"))
++            .await
++            .unwrap();
++        db::insert_mcp_server(&pool, &test_server_record("mail", "邮件"))
++            .await
++            .unwrap();
++        db::add_mcp_server_to_role(&pool, "role-1", "calendar")
++            .await
++            .unwrap();
++
++        let dir = tempfile::tempdir().unwrap();
++        let path = dir.path().join("opencode.json");
++        std::fs::write(&path, serde_json::to_string_pretty(&json!({ "mcp": {} })).unwrap()).unwrap();
++        let agent_config = AgentConfigService::new(path.clone());
++
++        sync_mcp_scope_for_role(&pool, &agent_config, Some("role-1"))
++            .await
++            .unwrap();
++
++        let scoped = agent_config.load().unwrap();
++        assert!(scoped["mcp"].get("calendar").is_some());
++        assert!(scoped["mcp"].get("mail").is_none());
++
++        sync_mcp_scope_for_role(&pool, &agent_config, None)
++            .await
++            .unwrap();
++
++        let global = agent_config.load().unwrap();
++        assert!(global["mcp"].get("calendar").is_some());
++        assert!(global["mcp"].get("mail").is_some());
++    }
++
++    #[tokio::test]
++    async fn mcp_scope_key_changes_when_role_bindings_change() {
++        let pool = setup_test_db().await;
++        db::insert_mcp_server(&pool, &test_server_record("calendar", "日历"))
++            .await
++            .unwrap();
++        db::insert_mcp_server(&pool, &test_server_record("mail", "邮件"))
++            .await
++            .unwrap();
++        db::add_mcp_server_to_role(&pool, "role-1", "calendar")
++            .await
++            .unwrap();
++
++        let calendar_scope = mcp_scope_key_for_role(&pool, Some("role-1")).await.unwrap();
++        db::add_mcp_server_to_role(&pool, "role-1", "mail")
++            .await
++            .unwrap();
++        let calendar_mail_scope = mcp_scope_key_for_role(&pool, Some("role-1")).await.unwrap();
++
++        assert_ne!(calendar_scope, calendar_mail_scope);
++        assert_eq!(calendar_scope, "role:role-1|calendar");
++        assert_eq!(calendar_mail_scope, "role:role-1|calendar,mail");
++    }
++
++    #[tokio::test]
++    async fn sync_role_agent_with_mcp_preserves_role_prompt_lines() {
++        let pool = setup_test_db().await;
++        db::insert_mcp_server(&pool, &test_server_record("calendar", "日历"))
++            .await
++            .unwrap();
++        db::add_mcp_server_to_role(&pool, "role-1", "calendar")
++            .await
++            .unwrap();
++
++        let role = crate::db::roles::get_role(&pool, "role-1").await.unwrap();
++        let dir = tempfile::tempdir().unwrap();
++        let path = dir.path().join("opencode.json");
++        std::fs::write(&path, serde_json::to_string_pretty(&json!({ "agent": {} })).unwrap()).unwrap();
++        let agent_config = AgentConfigService::new(path.clone());
++
++        sync_role_agent_with_mcp(&pool, &agent_config, &role, &[])
++            .await
++            .unwrap();
++
++        let config = agent_config.load().unwrap();
++        let prompt = config["agent"]["role-role-1"]["prompt"].as_str().unwrap();
++        assert!(prompt.contains("[外部 MCP 工具]"));
++        assert!(prompt.contains("日历"));
++    }
++
++    #[tokio::test]
++    async fn test_server_accepts_long_running_command_mcp() {
++        let pool = setup_test_db().await;
++        let mut server = test_server_record("long-running-command", "长运行命令");
++        server.server_type = "command".to_string();
++        #[cfg(target_os = "windows")]
++        {
++            server.command_or_url = "powershell -NoProfile -Command \"Start-Sleep -Seconds 5\"".to_string();
++        }
++        #[cfg(not(target_os = "windows"))]
++        {
++            server.command_or_url = "sh -c 'sleep 5'".to_string();
++        }
++        db::insert_mcp_server(&pool, &server).await.unwrap();
++
++        let result = test_server(&pool, "long-running-command").await;
++
++        assert!(result.is_ok());
++    }
++
++    #[tokio::test]
++    async fn test_server_rejects_missing_command_mcp() {
++        let pool = setup_test_db().await;
++        let mut server = test_server_record("missing-command", "缺失命令");
++        server.server_type = "command".to_string();
++        server.command_or_url = "egosync-missing-mcp-command-for-test".to_string();
++        db::insert_mcp_server(&pool, &server).await.unwrap();
++
++        let result = test_server(&pool, "missing-command").await;
++
++        assert!(matches!(result, Err(AppError::ValidationError(message)) if message.contains("无法启动") || message.contains("启动失败")));
++    }
++
++    #[test]
++    fn rejects_secret_like_free_text_fields() {
++        assert!(matches!(normalized_command_or_url("https://example.com/sse?token=sk-plain"), Err(AppError::ValidationError(message)) if message.contains("连接参数")));
++        assert!(matches!(normalized_name("sk-plain"), Err(AppError::ValidationError(message)) if message.contains("名称")));
++        assert!(matches!(ensure_no_secret_like("token=sk-plain", "MCP server 说明"), Err(AppError::ValidationError(message)) if message.contains("说明")));
++    }
++
++    #[tokio::test]
++    async fn update_server_rejects_secret_like_free_text_fields_without_persisting() {
++        let pool = setup_test_db().await;
++        db::insert_mcp_server(&pool, &test_server_record("calendar", "日历"))
++            .await
++            .unwrap();
++        let dir = tempfile::tempdir().unwrap();
++        let agent_config = AgentConfigService::new(dir.path().join("opencode.json"));
++
++        let result = update_server(
++            &pool,
++            &agent_config,
++            "calendar",
++            UpdateMcpServerInput {
++                name: Some("sk-plain".to_string()),
++                server_type: None,
++                command_or_url: None,
++                env_refs: None,
++                description: None,
++                enabled: None,
++            },
++        )
++        .await;
++        assert!(matches!(result, Err(AppError::ValidationError(message)) if message.contains("名称")));
++
++        let result = update_server(
++            &pool,
++            &agent_config,
++            "calendar",
++            UpdateMcpServerInput {
++                name: None,
++                server_type: None,
++                command_or_url: Some("https://example.com/sse?token=sk-plain".to_string()),
++                env_refs: None,
++                description: None,
++                enabled: None,
++            },
++        )
++        .await;
++        assert!(matches!(result, Err(AppError::ValidationError(message)) if message.contains("连接参数")));
++
++        let result = update_server(
++            &pool,
++            &agent_config,
++            "calendar",
++            UpdateMcpServerInput {
++                name: None,
++                server_type: None,
++                command_or_url: None,
++                env_refs: None,
++                description: Some("token=sk-plain".to_string()),
++                enabled: None,
++            },
++        )
++        .await;
++        assert!(matches!(result, Err(AppError::ValidationError(message)) if message.contains("说明")));
++
++        let stored = db::get_mcp_server(&pool, "calendar").await.unwrap();
++        assert_eq!(stored.name, "日历");
++        assert_eq!(stored.command_or_url, "https://calendar.example/mcp");
++        assert_eq!(stored.description, "");
++    }
++
++    #[test]
++    fn rejects_plain_secret_values() {
++        let result = normalize_env_refs(Some(r#"{"TOKEN":"sk-plain"}"#));
++        assert!(matches!(result, Err(AppError::ValidationError(message)) if message.contains("secret 只能保存")));
++    }
++
++    #[test]
++    fn maps_env_refs_without_plain_secret_values() {
++        let server = McpServer {
++            id: "mcp-1".to_string(),
++            name: "日历".to_string(),
++            server_type: "http_sse".to_string(),
++            command_or_url: "https://calendar.example/sse".to_string(),
++            env_refs: r#"{"TOKEN":"env:CALENDAR_TOKEN"}"#.to_string(),
++            description: String::new(),
++            enabled: true,
++            created_at: String::new(),
++            updated_at: String::new(),
++        };
++
++        let config = mcp_server_config_for_opencode(&server);
++        assert_eq!(config["type"], "remote");
++        assert_eq!(config["url"], "https://calendar.example/sse");
++        assert_eq!(config["env"]["TOKEN"], "${CALENDAR_TOKEN}");
++        assert!(!serde_json::to_string(&config).unwrap().contains("sk-"));
++    }
++}
+diff --git a/GUI/src/services/mcpService.ts b/GUI/src/services/mcpService.ts
+new file mode 100644
+index 0000000..cba193b
+--- /dev/null
++++ b/GUI/src/services/mcpService.ts
+@@ -0,0 +1,14 @@
++import { invoke } from '@tauri-apps/api/core';
++import type { CreateMcpServerInput, McpServer, UpdateMcpServerInput } from '../types/mcp';
++
++export const mcpService = {
++  list: () => invoke<McpServer[]>('mcp_server_list'),
++  listForRole: (roleId: string) => invoke<McpServer[]>('mcp_server_list_for_role', { roleId }),
++  listAvailableForRole: (roleId: string) => invoke<McpServer[]>('mcp_server_list_available_for_role', { roleId }),
++  create: (input: CreateMcpServerInput) => invoke<McpServer>('mcp_server_create', { input }),
++  update: (id: string, input: UpdateMcpServerInput) => invoke<McpServer>('mcp_server_update', { id, input }),
++  delete: (id: string) => invoke<void>('mcp_server_delete', { id }),
++  test: (id: string) => invoke<void>('mcp_server_test', { id }),
++  addToRole: (roleId: string, serverId: string) => invoke<void>('mcp_server_add_to_role', { roleId, serverId }),
++  removeFromRole: (roleId: string, serverId: string) => invoke<void>('mcp_server_remove_from_role', { roleId, serverId }),
++};
+diff --git a/GUI/src/types/mcp.ts b/GUI/src/types/mcp.ts
+new file mode 100644
+index 0000000..3ab4864
+--- /dev/null
++++ b/GUI/src/types/mcp.ts
+@@ -0,0 +1,31 @@
++export type McpServerType = 'http_sse' | 'command';
++
++export interface McpServer {
++  id: string;
++  name: string;
++  serverType: McpServerType;
++  commandOrUrl: string;
++  envRefs: string;
++  description: string;
++  enabled: boolean;
++  createdAt: string;
++  updatedAt: string;
++}
++
++export interface CreateMcpServerInput {
++  name: string;
++  serverType: McpServerType;
++  commandOrUrl: string;
++  envRefs?: string;
++  description?: string;
++  enabled: boolean;
++}
++
++export interface UpdateMcpServerInput {
++  name?: string;
++  serverType?: McpServerType;
++  commandOrUrl?: string;
++  envRefs?: string;
++  description?: string;
++  enabled?: boolean;
++}

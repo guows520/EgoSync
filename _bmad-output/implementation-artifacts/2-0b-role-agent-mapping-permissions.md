@@ -44,7 +44,7 @@ so that 每个角色都有独立的 Agent 身份（prompt/model/permission）在
    - **Then** 存在 `services/agent_config.rs`（read/write opencode.json agent 段、同步逻辑）
 
 8. **AC-8 测试通过**
-   - `cd GUI/src-tauri && cargo test`
+   - `cd egosync-app/src-tauri && cargo test`
    - 至少覆盖：opencode.json 读写、agent 段同步逻辑（create/update/archive/delete）、权限映射
    - 现有测试零回归
 
@@ -52,7 +52,7 @@ so that 每个角色都有独立的 Agent 身份（prompt/model/permission）在
 
 ### Phase 1: AgentConfigService 核心模块（AC: #6, #7）
 
-- [x] T1.1 新建 `GUI/src-tauri/src/services/agent_config.rs`
+- [x] T1.1 新建 `egosync-app/src-tauri/src/services/agent_config.rs`
   - `AgentConfigService` struct：持有 `config_path: PathBuf`
   - `pub fn new(config_path: PathBuf) -> Self`
   - `pub fn load(&self) -> Result<serde_json::Value, AppError>`：读取 opencode.json，文件不存在时返回默认骨架
@@ -224,31 +224,31 @@ so that 每个角色都有独立的 Agent 身份（prompt/model/permission）在
 
 | Path | Action | Notes |
 |------|--------|-------|
-| `GUI/src-tauri/src/services/agent_config.rs` | NEW | opencode.json agent 段读写与角色同步 |
+| `egosync-app/src-tauri/src/services/agent_config.rs` | NEW | opencode.json agent 段读写与角色同步 |
 
 ### 修改文件
 
 | Path | Action | Notes |
 |------|--------|-------|
-| `GUI/src-tauri/src/services/mod.rs` | UPDATE | 添加 `pub mod agent_config;` |
-| `GUI/src-tauri/src/commands/role.rs` | UPDATE | 各 command 成功后调用 AgentConfigService 同步 |
-| `GUI/src-tauri/src/lib.rs` | UPDATE | setup 中初始化 AgentConfigService + managed state + 全量同步 |
-| `GUI/src-tauri/Cargo.toml` | UPDATE | 添加 `tempfile` dev-dependency（如不存在） |
+| `egosync-app/src-tauri/src/services/mod.rs` | UPDATE | 添加 `pub mod agent_config;` |
+| `egosync-app/src-tauri/src/commands/role.rs` | UPDATE | 各 command 成功后调用 AgentConfigService 同步 |
+| `egosync-app/src-tauri/src/lib.rs` | UPDATE | setup 中初始化 AgentConfigService + managed state + 全量同步 |
+| `egosync-app/src-tauri/Cargo.toml` | UPDATE | 添加 `tempfile` dev-dependency（如不存在） |
 
 ### 可能修改
 
 | Path | Action | Notes |
 |------|--------|-------|
-| `GUI/src-tauri/src/services/sidecar.rs` | MAYBE UPDATE | start() 增加 `--config` 路径参数 |
+| `egosync-app/src-tauri/src/services/sidecar.rs` | MAYBE UPDATE | start() 增加 `--config` 路径参数 |
 
 ### 不应改动
 
-- `GUI/src-tauri/src/services/agent_engine.rs`（prompt 组装和工具逻辑不变）
-- `GUI/src-tauri/src/services/agent_bridge.rs`（HTTP 客户端不变）
-- `GUI/src-tauri/src/db/roles.rs`（数据层不变）
-- `GUI/src-tauri/src/models/role.rs`（数据模型不变）
-- `GUI/src-tauri/migrations/*.sql`（无新 migration）
-- `GUI/src/*.tsx`（无前端改动，权限 UI 是后续 story 2-10 的工作）
+- `egosync-app/src-tauri/src/services/agent_engine.rs`（prompt 组装和工具逻辑不变）
+- `egosync-app/src-tauri/src/services/agent_bridge.rs`（HTTP 客户端不变）
+- `egosync-app/src-tauri/src/db/roles.rs`（数据层不变）
+- `egosync-app/src-tauri/src/models/role.rs`（数据模型不变）
+- `egosync-app/src-tauri/migrations/*.sql`（无新 migration）
+- `egosync-app/src/*.tsx`（无前端改动，权限 UI 是后续 story 2-10 的工作）
 
 ## References
 
@@ -257,10 +257,10 @@ so that 每个角色都有独立的 Agent 身份（prompt/model/permission）在
 - [Source: `_bmad-output/planning-artifacts/architecture.md` L580 — Rust Backend Organization: `services/agent_config.rs`]
 - [Source: `_bmad-output/implementation-artifacts/2-0-opencode-sidecar-agent-bridge.md` — sidecar 非阻塞设计、AgentBridge/SidecarManager 已实现]
 - [Source: `_bmad-output/implementation-artifacts/2-5-role-emergence-suggestion.md` — agent_engine execute_create_role 直接调 DB]
-- [Source: `GUI/src-tauri/src/commands/role.rs` — 现有 role CRUD commands 结构]
-- [Source: `GUI/src-tauri/src/db/roles.rs` — roles DB 操作层]
-- [Source: `GUI/src-tauri/src/models/role.rs` — Role struct（含 skills_config）]
-- [Source: `GUI/src-tauri/src/lib.rs` — setup 闭包中 sidecar 初始化流程]
+- [Source: `egosync-app/src-tauri/src/commands/role.rs` — 现有 role CRUD commands 结构]
+- [Source: `egosync-app/src-tauri/src/db/roles.rs` — roles DB 操作层]
+- [Source: `egosync-app/src-tauri/src/models/role.rs` — Role struct（含 skills_config）]
+- [Source: `egosync-app/src-tauri/src/lib.rs` — setup 闭包中 sidecar 初始化流程]
 
 ## Dev Agent Record
 
@@ -286,16 +286,16 @@ claude-sonnet-4-20250514
 
 ### File List
 
-- `GUI/src-tauri/src/services/agent_config.rs` (NEW)
-- `GUI/src-tauri/src/services/mod.rs` (MODIFIED)
-- `GUI/src-tauri/src/commands/role.rs` (MODIFIED)
-- `GUI/src-tauri/src/lib.rs` (MODIFIED)
-- `GUI/src-tauri/src/db/roles.rs` (MODIFIED)
-- `GUI/src-tauri/Cargo.toml` (MODIFIED)
+- `egosync-app/src-tauri/src/services/agent_config.rs` (NEW)
+- `egosync-app/src-tauri/src/services/mod.rs` (MODIFIED)
+- `egosync-app/src-tauri/src/commands/role.rs` (MODIFIED)
+- `egosync-app/src-tauri/src/lib.rs` (MODIFIED)
+- `egosync-app/src-tauri/src/db/roles.rs` (MODIFIED)
+- `egosync-app/src-tauri/Cargo.toml` (MODIFIED)
 - `_bmad-output/implementation-artifacts/sprint-status.yaml` (MODIFIED)
 - `_bmad-output/implementation-artifacts/2-0b-role-agent-mapping-permissions.md` (MODIFIED)
 
 ### Review Findings
 
-- [x] [Review][Defer] opencode.json 并发写竞态 [`GUI/src-tauri/src/services/agent_config.rs`] — deferred, V1 单用户场景，无实质回归
-- [x] [Review][Defer] `sync_role_archived` 对损坏 entry 静默 save [`GUI/src-tauri/src/services/agent_config.rs:148-153`] — deferred, 触发前提需手工损坏文件
+- [x] [Review][Defer] opencode.json 并发写竞态 [`egosync-app/src-tauri/src/services/agent_config.rs`] — deferred, V1 单用户场景，无实质回归
+- [x] [Review][Defer] `sync_role_archived` 对损坏 entry 静默 save [`egosync-app/src-tauri/src/services/agent_config.rs:148-153`] — deferred, 触发前提需手工损坏文件

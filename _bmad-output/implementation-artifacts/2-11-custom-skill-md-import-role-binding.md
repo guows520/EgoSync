@@ -81,14 +81,14 @@ so that 我的角色能复用我自己沉淀的能力模块，而不需要每次
 - [x] 前端 SettingsTab 接入导入与绑定 UI（AC: 1, 3, 5, 6）
   - [x] 在现有 Skill 插件配置区下方增加“自定义 Skill”列表和导入按钮
   - [x] 使用现有 inline feedback 模式，不新增 toast/snackbar
-  - [x] 组件不直接调用 `invoke()`；新增方法必须经 `GUI/src/services/*Service.ts`
+  - [x] 组件不直接调用 `invoke()`；新增方法必须经 `egosync-app/src/services/*Service.ts`
   - [x] 保持 Tailwind utility class，不新增 CSS 文件
 
 - [x] 测试与验证（AC: 1-6）
   - [x] Rust 单测：frontmatter 解析、重复检测、旧 JSON 迁移、未知字段保留、registry CRUD、AgentConfigService 同步
   - [x] 前端测试：导入预览、解析失败提示、启用/禁用自定义 Skill、元 Skill toggle 不丢扩展字段
   - [x] 运行 `npm --prefix "GUI" run test:frontend`
-  - [x] 运行 `cargo test --manifest-path "GUI/src-tauri/Cargo.toml" -- --test-threads=1`
+  - [x] 运行 `cargo test --manifest-path "egosync-app/src-tauri/Cargo.toml" -- --test-threads=1`
   - [x] 运行 `npm --prefix "GUI" run build`
   - [x] 可见 UI 改动需启动应用并人工验证导入、启用、重启持久化 golden path
 
@@ -127,16 +127,16 @@ so that 我的角色能复用我自己沉淀的能力模块，而不需要每次
 
 ### Current State
 
-- `roles.skills_config` 已存在，当前是字符串 JSON；`Role` 暴露该字段，见 `GUI/src-tauri/src/models/role.rs`。
+- `roles.skills_config` 已存在，当前是字符串 JSON；`Role` 暴露该字段，见 `egosync-app/src-tauri/src/models/role.rs`。
 - Story 2.10 当前只支持两个元 Skill：`find-skills`、`skill-creator`。`UpdateRoleSkillsInput` 只有两个 bool。
-- `GUI/src-tauri/src/services/role_config.rs` 当前 `normalize_skills_config` 会把配置重写为两个 key，这是本 story 最大回归风险。
+- `egosync-app/src-tauri/src/services/role_config.rs` 当前 `normalize_skills_config` 会把配置重写为两个 key，这是本 story 最大回归风险。
 - `AgentConfigService::build_agent_entry` 会把 `meta_skill_prompt(skills_config)` 拼进角色 prompt，同时 `parse_permissions` 会读取 `skills_config.permissions`；保存路径目前并不保证保留 `permissions`。
 - `SettingsTab` 已有 Skill 插件配置区和 inline error/saved message，可扩展，不要另起一套设置页。
 
 ### Architecture Guardrails
 
 - 前端永远不直接访问 SQLite、opencode server 或文件系统；走 Tauri command + service 封装。
-- Rust `commands/` 只做 IPC 参数解析、校验与 service/db 调用；DB SQL 放在 `GUI/src-tauri/src/db/`。
+- Rust `commands/` 只做 IPC 参数解析、校验与 service/db 调用；DB SQL 放在 `egosync-app/src-tauri/src/db/`。
 - opencode Skill 文件位置按架构文档：项目级 `.opencode/skills/<name>/SKILL.md` 或全局 `~/.config/opencode/skills/`；本故事应使用 EgoSync 管理路径，避免污染用户原始文件。
 - 不存储 secret。Skill 文件本身可能包含用户提示词，日志中只记录 id/hash/简短状态，不记录全文。
 - 不新增外部依赖，除非现有 Rust/TS 能力无法完成 frontmatter 解析；如需依赖必须说明理由并更新测试。
@@ -145,7 +145,7 @@ so that 我的角色能复用我自己沉淀的能力模块，而不需要每次
 
 - Story 2.10 completion notes 表明已新增 `services::role_config`，并把元 Skill 状态注入 `AgentConfigService` 与 fallback `agent_engine`。本 story 必须扩展这些 helper，而不是复制一套平行解析器。
 - Story 2.10 已验证命令：frontend tests、Rust tests 串行、Vite build；继续沿用相同验证标准。
-- 过去在 Windows 环境中 `python3` 不可用，Rust 全量测试需用 `cargo test --manifest-path "GUI/src-tauri/Cargo.toml" -- --test-threads=1` 更稳定。
+- 过去在 Windows 环境中 `python3` 不可用，Rust 全量测试需用 `cargo test --manifest-path "egosync-app/src-tauri/Cargo.toml" -- --test-threads=1` 更稳定。
 
 ### Regression Risks
 
@@ -161,7 +161,7 @@ so that 我的角色能复用我自己沉淀的能力模块，而不需要每次
 - Story 2.10：`_bmad-output/implementation-artifacts/2-10-role-skill-config-proactivity-ui.md`。
 - Architecture Skill 位置与 opencode agent 映射：`_bmad-output/planning-artifacts/architecture.md` → Agent Engine Integration / Skill体系。
 - UX Settings 面板：`_bmad-output/planning-artifacts/ux-design-specification.md` → RoleWorkspacePanel Settings。
-- Current files to extend: `GUI/src-tauri/src/services/role_config.rs`, `GUI/src-tauri/src/services/agent_config.rs`, `GUI/src-tauri/src/db/roles.rs`, `GUI/src-tauri/src/commands/role.rs`, `GUI/src/types/role.ts`, `GUI/src/services/roleService.ts`, `GUI/src/components/role/SettingsTab.tsx`.
+- Current files to extend: `egosync-app/src-tauri/src/services/role_config.rs`, `egosync-app/src-tauri/src/services/agent_config.rs`, `egosync-app/src-tauri/src/db/roles.rs`, `egosync-app/src-tauri/src/commands/role.rs`, `egosync-app/src/types/role.ts`, `egosync-app/src/services/roleService.ts`, `egosync-app/src/components/role/SettingsTab.tsx`.
 
 ## Dev Agent Record
 
@@ -185,31 +185,31 @@ Claude Opus 4.7
 
 ### File List
 
-- `GUI/src-tauri/migrations/008_skills_registry.sql`
-- `GUI/src-tauri/src/commands/mod.rs`
-- `GUI/src-tauri/src/commands/role.rs`
-- `GUI/src-tauri/src/commands/skill.rs`
-- `GUI/src-tauri/src/db/mod.rs`
-- `GUI/src-tauri/src/db/pool.rs`
-- `GUI/src-tauri/src/db/roles.rs`
-- `GUI/src-tauri/src/db/skills.rs`
-- `GUI/src-tauri/src/lib.rs`
-- `GUI/src-tauri/src/models/mod.rs`
-- `GUI/src-tauri/src/models/role.rs`
-- `GUI/src-tauri/src/models/skill.rs`
-- `GUI/src-tauri/src/services/agent_config.rs`
-- `GUI/src-tauri/src/services/agent_engine.rs`
-- `GUI/src-tauri/src/services/mod.rs`
-- `GUI/src-tauri/src/services/role_config.rs`
-- `GUI/src-tauri/src/services/skill_registry.rs`
-- `GUI/src/components/butler/ButlerSettingsContent.tsx`
-- `GUI/src/components/role/SettingsTab.test.tsx`
-- `GUI/src/components/role/SettingsTab.tsx`
-- `GUI/src/services/appService.ts`
-- `GUI/src/services/skillService.ts`
-- `GUI/src/types/file-system-access.d.ts`
-- `GUI/src/types/role.ts`
-- `GUI/src/types/skill.ts`
+- `egosync-app/src-tauri/migrations/008_skills_registry.sql`
+- `egosync-app/src-tauri/src/commands/mod.rs`
+- `egosync-app/src-tauri/src/commands/role.rs`
+- `egosync-app/src-tauri/src/commands/skill.rs`
+- `egosync-app/src-tauri/src/db/mod.rs`
+- `egosync-app/src-tauri/src/db/pool.rs`
+- `egosync-app/src-tauri/src/db/roles.rs`
+- `egosync-app/src-tauri/src/db/skills.rs`
+- `egosync-app/src-tauri/src/lib.rs`
+- `egosync-app/src-tauri/src/models/mod.rs`
+- `egosync-app/src-tauri/src/models/role.rs`
+- `egosync-app/src-tauri/src/models/skill.rs`
+- `egosync-app/src-tauri/src/services/agent_config.rs`
+- `egosync-app/src-tauri/src/services/agent_engine.rs`
+- `egosync-app/src-tauri/src/services/mod.rs`
+- `egosync-app/src-tauri/src/services/role_config.rs`
+- `egosync-app/src-tauri/src/services/skill_registry.rs`
+- `egosync-app/src/components/butler/ButlerSettingsContent.tsx`
+- `egosync-app/src/components/role/SettingsTab.test.tsx`
+- `egosync-app/src/components/role/SettingsTab.tsx`
+- `egosync-app/src/services/appService.ts`
+- `egosync-app/src/services/skillService.ts`
+- `egosync-app/src/types/file-system-access.d.ts`
+- `egosync-app/src/types/role.ts`
+- `egosync-app/src/types/skill.ts`
 - `_bmad-output/implementation-artifacts/2-11-custom-skill-md-import-role-binding.md`
 - `_bmad-output/implementation-artifacts/sprint-status.yaml`
 

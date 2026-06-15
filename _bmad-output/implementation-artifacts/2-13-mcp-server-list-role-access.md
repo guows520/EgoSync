@@ -92,7 +92,7 @@ so that 角色能安全接入日历、邮件、代码仓库等外部工具服务
   - [x] 前端测试：新增/编辑表单、secret 提示、测试失败展示、角色启用切换
   - [x] 回归 `agent_config.rs` 现有 tests，尤其 full_sync、custom tools、provider 保留
   - [x] 运行 `npm --prefix "GUI" run test:frontend`
-  - [x] 运行 `cargo test --manifest-path "GUI/src-tauri/Cargo.toml" -- --test-threads=1`
+  - [x] 运行 `cargo test --manifest-path "egosync-app/src-tauri/Cargo.toml" -- --test-threads=1`
   - [x] 运行 `npm --prefix "GUI" run build`
   - [x] 可见 UI 改动需启动应用，验证新增 MCP server、测试失败、角色启用、重启持久化
 
@@ -102,7 +102,7 @@ so that 角色能安全接入日历、邮件、代码仓库等外部工具服务
 
 - 当前源码没有 MCP schema/service/command/UI。不要误判为“只差 UI”。
 - Story 2.0d 删除了旧 `services/mcp_host.rs`，原因是 opencode project instance 下 MCP 工具可见性不可靠；EgoSync 内部工具已改为 opencode Custom Tools。
-- `GUI/src-tauri/src/services/agent_config.rs::full_sync()` 当前会删除顶层 `mcp` 和 `tools`，这是本 story 必须调整的核心点。
+- `egosync-app/src-tauri/src/services/agent_config.rs::full_sync()` 当前会删除顶层 `mcp` 和 `tools`，这是本 story 必须调整的核心点。
 - 顶层 `tools` 是 legacy；`agent.<role>.tools` 仍用于禁用 butler-only custom tools。不要混淆两者。
 - `app_settings` 表存在（key/value），但 secret 不得明文塞入 value；复杂 MCP 配置更适合独立表或结构化本地配置。
 
@@ -133,9 +133,9 @@ so that 角色能安全接入日历、邮件、代码仓库等外部工具服务
 - PRD FR-4b：`_bmad-output/planning-artifacts/prd-egosync.md` → MCP 外部工具服务。
 - Story 2.0d：`_bmad-output/implementation-artifacts/2-0d-opencode-custom-tools-replace-mcp.md` → MCP 替换为 custom tools 的根因与边界。
 - Architecture Agent Engine：`_bmad-output/planning-artifacts/architecture.md` → opencode sidecar、MCP Servers、opencode.json 动态管理。
-- Existing config code: `GUI/src-tauri/src/services/agent_config.rs` → `full_sync()`、custom tools、provider sync、agent sync。
-- Initial schema: `GUI/src-tauri/migrations/001_initial_schema.sql` → `app_settings`、`llm_configs`。
-- Current UI extension points: `GUI/src/components/role/SettingsTab.tsx`, `GUI/src/services/roleService.ts`, `GUI/src/types/role.ts`.
+- Existing config code: `egosync-app/src-tauri/src/services/agent_config.rs` → `full_sync()`、custom tools、provider sync、agent sync。
+- Initial schema: `egosync-app/src-tauri/migrations/001_initial_schema.sql` → `app_settings`、`llm_configs`。
+- Current UI extension points: `egosync-app/src/components/role/SettingsTab.tsx`, `egosync-app/src/services/roleService.ts`, `egosync-app/src/types/role.ts`.
 
 ## Dev Agent Record
 
@@ -151,7 +151,7 @@ Claude Opus 4.8
 - `cargo test services::mcp_server::tests::test_server_rejects_plain_http_200_without_mcp_handshake`：先红后绿，证明旧连接测试会把普通 HTTP 200 误判为 MCP 成功。
 - `cargo test services::agent_engine::tests::invalid_mcp_session_tool_error_requests_runtime_refresh_retry_once`：先红后绿，覆盖 MCP `Invalid session id` 触发 runtime refresh + retry once。
 - `cargo test services::agent_engine::tests::final_narration_flush_is_suppressed_after_tool_process_event`：先红后绿，覆盖工具调用后最终回答不再重复写入执行过程 narration。
-- `cargo test --manifest-path "GUI/src-tauri/Cargo.toml" --lib`：最新 344 passed；覆盖 MCP scope key、opencode session cache 隔离、真实 MCP 协议测试、session 自动恢复相关单测。
+- `cargo test --manifest-path "egosync-app/src-tauri/Cargo.toml" --lib`：最新 344 passed；覆盖 MCP scope key、opencode session cache 隔离、真实 MCP 协议测试、session 自动恢复相关单测。
 - `npm --prefix "GUI" run build`：TypeScript 与 Vite production build passed。
 - 启动 `npm --prefix "GUI" run tauri dev` 并确认 `5173` 与 `4096` 监听，日志包含 `opencode sidecar started on port 4096`；人工 UI 复验仍建议覆盖真实外部 MCP 数据流。
 
@@ -173,31 +173,31 @@ Claude Opus 4.8
 
 ### File List
 
-- `GUI/src-tauri/migrations/011_mcp_servers.sql`
-- `GUI/src-tauri/migrations/012_mcp_server_standard_types.sql`
-- `GUI/src-tauri/src/models/mcp.rs`
-- `GUI/src-tauri/src/models/mod.rs`
-- `GUI/src-tauri/src/db/mcp_servers.rs`
-- `GUI/src-tauri/src/db/conversations.rs`
-- `GUI/src-tauri/src/db/mod.rs`
-- `GUI/src-tauri/src/services/mcp_server.rs`
-- `GUI/src-tauri/src/services/mod.rs`
-- `GUI/src-tauri/src/services/agent_config.rs`
-- `GUI/src-tauri/src/services/agent_engine.rs`
-- `GUI/src-tauri/src/services/sidecar.rs`
-- `GUI/src-tauri/src/commands/mcp.rs`
-- `GUI/src-tauri/src/commands/chat.rs`
-- `GUI/src-tauri/src/commands/mod.rs`
-- `GUI/src-tauri/src/commands/role.rs`
-- `GUI/src-tauri/src/commands/skill.rs`
-- `GUI/src-tauri/src/lib.rs`
-- `GUI/src/types/mcp.ts`
-- `GUI/src/services/mcpService.ts`
-- `GUI/src/components/settings/GlobalSettingsModal.tsx`
-- `GUI/src/components/settings/GlobalSettingsModal.test.tsx`
-- `GUI/src/components/role/SettingsTab.tsx`
-- `GUI/src/components/role/SettingsTab.test.tsx`
-- `GUI/src/index.css`
+- `egosync-app/src-tauri/migrations/011_mcp_servers.sql`
+- `egosync-app/src-tauri/migrations/012_mcp_server_standard_types.sql`
+- `egosync-app/src-tauri/src/models/mcp.rs`
+- `egosync-app/src-tauri/src/models/mod.rs`
+- `egosync-app/src-tauri/src/db/mcp_servers.rs`
+- `egosync-app/src-tauri/src/db/conversations.rs`
+- `egosync-app/src-tauri/src/db/mod.rs`
+- `egosync-app/src-tauri/src/services/mcp_server.rs`
+- `egosync-app/src-tauri/src/services/mod.rs`
+- `egosync-app/src-tauri/src/services/agent_config.rs`
+- `egosync-app/src-tauri/src/services/agent_engine.rs`
+- `egosync-app/src-tauri/src/services/sidecar.rs`
+- `egosync-app/src-tauri/src/commands/mcp.rs`
+- `egosync-app/src-tauri/src/commands/chat.rs`
+- `egosync-app/src-tauri/src/commands/mod.rs`
+- `egosync-app/src-tauri/src/commands/role.rs`
+- `egosync-app/src-tauri/src/commands/skill.rs`
+- `egosync-app/src-tauri/src/lib.rs`
+- `egosync-app/src/types/mcp.ts`
+- `egosync-app/src/services/mcpService.ts`
+- `egosync-app/src/components/settings/GlobalSettingsModal.tsx`
+- `egosync-app/src/components/settings/GlobalSettingsModal.test.tsx`
+- `egosync-app/src/components/role/SettingsTab.tsx`
+- `egosync-app/src/components/role/SettingsTab.test.tsx`
+- `egosync-app/src/index.css`
 
 ### Change Log
 

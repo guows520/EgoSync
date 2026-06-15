@@ -95,7 +95,7 @@ so that 我能复用 opencode 生态能力，同时仍由 EgoSync 管理每个�
   - [x] 前端测试：未启用提示、扫描结果渲染、跳过摘要、导入后可启用、管家发现/导入/取消导入
   - [x] 回归 2.10/2.11 相关测试
   - [x] 运行 `npm --prefix "GUI" run test:frontend`
-  - [x] 运行 `cargo test --manifest-path "GUI/src-tauri/Cargo.toml" -- --test-threads=1`
+  - [x] 运行 `cargo test --manifest-path "egosync-app/src-tauri/Cargo.toml" -- --test-threads=1`
   - [x] 运行 `npm --prefix "GUI" run build`
 
 ## Dev Notes
@@ -135,7 +135,7 @@ so that 我能复用 opencode 生态能力，同时仍由 EgoSync 管理每个�
 - Story 2.10：`_bmad-output/implementation-artifacts/2-10-role-skill-config-proactivity-ui.md`。
 - Story 2.0d：`_bmad-output/implementation-artifacts/2-0d-opencode-custom-tools-replace-mcp.md` → opencode 路径和 instance 经验。
 - Architecture Skill 体系：`_bmad-output/planning-artifacts/architecture.md` → `.opencode/skills/<name>/SKILL.md` 与 `~/.config/opencode/skills/`。
-- Current files likely to extend: `GUI/src-tauri/src/services/role_config.rs`, `GUI/src-tauri/src/services/agent_config.rs`, `GUI/src/components/role/SettingsTab.tsx`, `GUI/src/services/roleService.ts` or new `skillService.ts`.
+- Current files likely to extend: `egosync-app/src-tauri/src/services/role_config.rs`, `egosync-app/src-tauri/src/services/agent_config.rs`, `egosync-app/src/components/role/SettingsTab.tsx`, `egosync-app/src/services/roleService.ts` or new `skillService.ts`.
 
 ### Review Findings
 
@@ -149,23 +149,23 @@ _Code review 2026-06-09（Blind Hunter + Edge Case Hunter + Acceptance Auditor �
 
 _全部 10 项已修复并验证（2026-06-09）：vitest 15 files/146 tests、cargo test 305+1、`npm run build` 均通过。_
 
-- [x] [Review][Patch] opencode 导入复制 SKILL.md 到 EgoSync 受控目录（`managed_skill_path` + `create_dir_all` + `std::fs::write`），`managed_path` 指向副本（即 opencode 项目级 skills 根，agent 可自动发现），源文件删/改后仍可用，保证 AC4/AC5；测试 `import_opencode_skill_registers_source_type_and_applies_scope` 已改为断言 `managed_path != source_path`、副本存在且删源后仍存在 [GUI/src-tauri/src/services/skill_registry.rs:321-371]
-- [x] [Review][Patch] full_sync 前置查询改用 `?` 而非 `unwrap_or_default()`，DB 瞬时错误直接失败，绝不以空集触发破坏性全量同步 [GUI/src-tauri/src/commands/skill.rs:112-114]
-- [x] [Review][Patch] `ImportOpencodeSkillInput` 新增 `expected_content_hash`，import 时比对发现时的 hash，源文件被替换则拒绝并提示重新发现（TOCTOU）；新增测试 `import_opencode_skill_rejects_when_source_changed_after_discover` [GUI/src-tauri/src/services/skill_registry.rs:336-344]
-- [x] [Review][Patch] `create_skill_with_source` 撞唯一索引时捕获 `DbError` 并重新查重，退化为优雅 duplicate（提取 `finalize_opencode_binding` 收口绑定逻辑）[GUI/src-tauri/src/services/skill_registry.rs:354-376]
-- [x] [Review][Patch] `scan_opencode_root` 对任何解析错误（含非 ValidationError）均 `continue` 跳过当前条目，绝不中断整个扫描；新增 `skip_reason_for`/`parsed_skill_name` 为跳过摘要附带 skill name [GUI/src-tauri/src/services/skill_registry.rs:297-304]
-- [x] [Review][Patch] `entries.flatten()` 改为显式 `match entry`，不可读目录项也 push reason，跳过统计准确 [GUI/src-tauri/src/services/skill_registry.rs:277-283]
-- [x] [Review][Patch] UI 跳过摘要改为 `<ul>` 逐条列出（reason 已带 skill name），超过 5 条折叠计数，可定位具体被跳过 Skill [GUI/src/components/role/SettingsTab.tsx:550-561]
-- [x] [Review][Patch] `handleImportOpencode` 入口预检 `skills.findSkills`，未启用时给出与发现一致的引导提示 [GUI/src/components/role/SettingsTab.tsx:handleImportOpencode]
-- [x] [Review][Patch] discover 不再复用 `settingsSavedMessage` 承载跳过提示（改由独立 `opencodeSkipped` 区块），import 结果提示不会覆盖跳过信息 [GUI/src/components/role/SettingsTab.tsx:handleDiscoverOpencode]
-- [x] [Review][Patch] `ImportOpencodeSkillResult` 新增 `synced` 字段，command 层 full_sync 失败时置 false，前端据此显示「已导入，但同步暂时失败，将在下次同步自动生效」而非谎称「已启用」[GUI/src-tauri/src/commands/skill.rs:117-121, GUI/src/components/role/SettingsTab.tsx]
+- [x] [Review][Patch] opencode 导入复制 SKILL.md 到 EgoSync 受控目录（`managed_skill_path` + `create_dir_all` + `std::fs::write`），`managed_path` 指向副本（即 opencode 项目级 skills 根，agent 可自动发现），源文件删/改后仍可用，保证 AC4/AC5；测试 `import_opencode_skill_registers_source_type_and_applies_scope` 已改为断言 `managed_path != source_path`、副本存在且删源后仍存在 [egosync-app/src-tauri/src/services/skill_registry.rs:321-371]
+- [x] [Review][Patch] full_sync 前置查询改用 `?` 而非 `unwrap_or_default()`，DB 瞬时错误直接失败，绝不以空集触发破坏性全量同步 [egosync-app/src-tauri/src/commands/skill.rs:112-114]
+- [x] [Review][Patch] `ImportOpencodeSkillInput` 新增 `expected_content_hash`，import 时比对发现时的 hash，源文件被替换则拒绝并提示重新发现（TOCTOU）；新增测试 `import_opencode_skill_rejects_when_source_changed_after_discover` [egosync-app/src-tauri/src/services/skill_registry.rs:336-344]
+- [x] [Review][Patch] `create_skill_with_source` 撞唯一索引时捕获 `DbError` 并重新查重，退化为优雅 duplicate（提取 `finalize_opencode_binding` 收口绑定逻辑）[egosync-app/src-tauri/src/services/skill_registry.rs:354-376]
+- [x] [Review][Patch] `scan_opencode_root` 对任何解析错误（含非 ValidationError）均 `continue` 跳过当前条目，绝不中断整个扫描；新增 `skip_reason_for`/`parsed_skill_name` 为跳过摘要附带 skill name [egosync-app/src-tauri/src/services/skill_registry.rs:297-304]
+- [x] [Review][Patch] `entries.flatten()` 改为显式 `match entry`，不可读目录项也 push reason，跳过统计准确 [egosync-app/src-tauri/src/services/skill_registry.rs:277-283]
+- [x] [Review][Patch] UI 跳过摘要改为 `<ul>` 逐条列出（reason 已带 skill name），超过 5 条折叠计数，可定位具体被跳过 Skill [egosync-app/src/components/role/SettingsTab.tsx:550-561]
+- [x] [Review][Patch] `handleImportOpencode` 入口预检 `skills.findSkills`，未启用时给出与发现一致的引导提示 [egosync-app/src/components/role/SettingsTab.tsx:handleImportOpencode]
+- [x] [Review][Patch] discover 不再复用 `settingsSavedMessage` 承载跳过提示（改由独立 `opencodeSkipped` 区块），import 结果提示不会覆盖跳过信息 [egosync-app/src/components/role/SettingsTab.tsx:handleDiscoverOpencode]
+- [x] [Review][Patch] `ImportOpencodeSkillResult` 新增 `synced` 字段，command 层 full_sync 失败时置 false，前端据此显示「已导入，但同步暂时失败，将在下次同步自动生效」而非谎称「已启用」[egosync-app/src-tauri/src/commands/skill.rs:117-121, egosync-app/src/components/role/SettingsTab.tsx]
 
 #### Deferred
 
-- [x] [Review][Defer] duplicate 分支 `replace_bindings` 单角色 scope 会 DELETE 该 Skill 全部绑定再只重插当前角色，静默解绑其它角色 [GUI/src-tauri/src/services/skill_registry.rs:492-501] — deferred, pre-existing（2.11 `import_custom_skill` 使用完全相同模式，非本次引入，应作为统一 binding 语义问题单独处理）
-- [x] [Review][Defer] async 命令内使用阻塞 `std::fs::read_dir/read_to_string`，慢盘/大目录会阻塞 tokio 工作线程 [GUI/src-tauri/src/services/skill_registry.rs:427-449] — deferred, pre-existing（既有 skill_registry 同步 I/O 模式一致，建议统一迁移到 spawn_blocking）
-- [x] [Review][Defer] `read_dir` 因权限失败时静默 `return Ok(())`，与「目录不存在」同等处理，用户无任何「目录不可扫描」反馈 [GUI/src-tauri/src/services/skill_registry.rs:427] — deferred, pre-existing（低概率边界，可与扫描可观测性增强一并处理）
-- [x] [Review][Defer] `content_hash` 全局 UNIQUE 不分 source_type，内容相同的 opencode Skill 会被误判为某 custom Skill 的 duplicate（返回 `entry.source_type='custom'`）[GUI/src-tauri/src/services/skill_registry.rs:preview_from_parsed_with_source, migrations/010:24] — deferred, 用户裁决（Decision #1 选项 1，未选改 `(content_hash, source_type)`）：V1 同内容跨源场景极罕见，保持全局唯一
+- [x] [Review][Defer] duplicate 分支 `replace_bindings` 单角色 scope 会 DELETE 该 Skill 全部绑定再只重插当前角色，静默解绑其它角色 [egosync-app/src-tauri/src/services/skill_registry.rs:492-501] — deferred, pre-existing（2.11 `import_custom_skill` 使用完全相同模式，非本次引入，应作为统一 binding 语义问题单独处理）
+- [x] [Review][Defer] async 命令内使用阻塞 `std::fs::read_dir/read_to_string`，慢盘/大目录会阻塞 tokio 工作线程 [egosync-app/src-tauri/src/services/skill_registry.rs:427-449] — deferred, pre-existing（既有 skill_registry 同步 I/O 模式一致，建议统一迁移到 spawn_blocking）
+- [x] [Review][Defer] `read_dir` 因权限失败时静默 `return Ok(())`，与「目录不存在」同等处理，用户无任何「目录不可扫描」反馈 [egosync-app/src-tauri/src/services/skill_registry.rs:427] — deferred, pre-existing（低概率边界，可与扫描可观测性增强一并处理）
+- [x] [Review][Defer] `content_hash` 全局 UNIQUE 不分 source_type，内容相同的 opencode Skill 会被误判为某 custom Skill 的 duplicate（返回 `entry.source_type='custom'`）[egosync-app/src-tauri/src/services/skill_registry.rs:preview_from_parsed_with_source, migrations/010:24] — deferred, 用户裁决（Decision #1 选项 1，未选改 `(content_hash, source_type)`）：V1 同内容跨源场景极罕见，保持全局唯一
 
 ## Dev Agent Record
 
@@ -176,7 +176,7 @@ Claude Opus 4.8 (Claude Code)
 ### Debug Log References
 
 - 2026-06-08: `python3` 在当前 Windows 环境不可用，已使用 `python` 解析 BMad workflow/agent customization。
-- 2026-06-08: 默认 Cargo registry 指向不可用 USTC 镜像；Rust 验证使用项目本地 `GUI/.cargo-home-local` 与一次性 `rsproxy` sparse registry override，未修改全局 Cargo 配置。
+- 2026-06-08: 默认 Cargo registry 指向不可用 USTC 镜像；Rust 验证使用项目本地 `egosync-app/.cargo-home-local` 与一次性 `rsproxy` sparse registry override，未修改全局 Cargo 配置。
 - 2026-06-08: TDD red tests 先失败于缺少 `create_skill_with_source` / `find_skill_by_name_and_source` / `discover_opencode_skills` 与前端“发现 opencode Skill”入口，随后按最小实现补齐。
 - 2026-06-08: 迁移兼容 red test 暴露 `010` 重建 `skills` 表时会清空 `skill_role_bindings`；已通过临时备份/恢复绑定修复并验证。
 
@@ -189,23 +189,23 @@ Claude Opus 4.8 (Claude Code)
 - SettingsTab 新增 “opencode 生态 Skill” 区块，展示扫描结果、已导入状态、跳过摘要与导入/取消导入按钮；导入后刷新当前角色 registry 列表与角色 `enabledSkillIds`，inline feedback 无全局 toast。
 - ButlerSettingsContent 新增同等 “opencode 生态 Skill” 区块，使用 `__butler__` scope 导入/取消导入管家 Skill；取消导入只移除管家配置，不删除 registry，不影响角色绑定。
 - `AgentConfigService` 继续按 registry id 注入启用 Skill 的 name/description；opencode sourceType 走同一 registry，因此 role/butler update/full sync 禁用后不会声明旧 Skill。
-- 已验证：`npm --prefix "GUI" run test:frontend`（15 files / 150 tests 通过）；`cargo test --manifest-path "GUI/src-tauri/Cargo.toml" -- --test-threads=1`（308 lib tests + 1 integration test 通过）；`npm --prefix "GUI" run build` 通过。
+- 已验证：`npm --prefix "GUI" run test:frontend`（15 files / 150 tests 通过）；`cargo test --manifest-path "egosync-app/src-tauri/Cargo.toml" -- --test-threads=1`（308 lib tests + 1 integration test 通过）；`npm --prefix "GUI" run build` 通过。
 
 ### File List
 
-- `GUI/src-tauri/migrations/010_skills_opencode_source_type.sql`
-- `GUI/src-tauri/src/commands/skill.rs`
-- `GUI/src-tauri/src/lib.rs`
-- `GUI/src-tauri/src/db/pool.rs`
-- `GUI/src-tauri/src/db/skills.rs`
-- `GUI/src-tauri/src/models/skill.rs`
-- `GUI/src-tauri/src/services/skill_registry.rs`
-- `GUI/src/components/butler/ButlerSettingsContent.test.tsx`
-- `GUI/src/components/butler/ButlerSettingsContent.tsx`
-- `GUI/src/components/role/SettingsTab.test.tsx`
-- `GUI/src/components/role/SettingsTab.tsx`
-- `GUI/src/services/skillService.ts`
-- `GUI/src/types/skill.ts`
+- `egosync-app/src-tauri/migrations/010_skills_opencode_source_type.sql`
+- `egosync-app/src-tauri/src/commands/skill.rs`
+- `egosync-app/src-tauri/src/lib.rs`
+- `egosync-app/src-tauri/src/db/pool.rs`
+- `egosync-app/src-tauri/src/db/skills.rs`
+- `egosync-app/src-tauri/src/models/skill.rs`
+- `egosync-app/src-tauri/src/services/skill_registry.rs`
+- `egosync-app/src/components/butler/ButlerSettingsContent.test.tsx`
+- `egosync-app/src/components/butler/ButlerSettingsContent.tsx`
+- `egosync-app/src/components/role/SettingsTab.test.tsx`
+- `egosync-app/src/components/role/SettingsTab.tsx`
+- `egosync-app/src/services/skillService.ts`
+- `egosync-app/src/types/skill.ts`
 - `_bmad-output/implementation-artifacts/2-12-opencode-ecosystem-skill-discovery-import.md`
 - `_bmad-output/implementation-artifacts/sprint-status.yaml`
 

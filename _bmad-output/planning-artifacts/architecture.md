@@ -1,6 +1,6 @@
 ---
 stepsCompleted: [1, 2, 3, 4, 5, 6, 7, 8]
-inputDocuments: ['prd-egosync.md', 'ux-design-specification.md', 'brainstorming-session-2026-05-18-1000.md', 'GUI/src/App.tsx']
+inputDocuments: ['prd-egosync.md', 'ux-design-specification.md', 'brainstorming-session-2026-05-18-1000.md', 'egosync-app/src/App.tsx']
 workflowType: 'architecture'
 lastStep: 8
 status: 'complete'
@@ -55,7 +55,7 @@ _This document builds collaboratively through step-by-step discovery. Sections a
 
 | 约束 | 来源 | 架构影响 |
 |------|------|----------|
-| 前端已固定 | GUI/App.tsx 1458行原型 | React 18 + TS + Vite + Tailwind，只接API |
+| 前端已固定 | egosync-app/App.tsx 1458行原型 | React 18 + TS + Vite + Tailwind，只接API |
 | Tauri框架 | PRD §Platform | Rust后端处理业务逻辑，通过IPC与前端通信 |
 | opencode sidecar | PRD §4.12 FR-31 | opencode binary打包进安装包，Rust管理其生命周期，通过HTTP API通信 |
 | 本地SQLite | FR-25 | 所有持久化走SQLite，需设计schema |
@@ -83,7 +83,7 @@ Full-stack desktop application (Tauri 2.x = Rust backend + React/Vite WebView fr
 
 ### Setup Strategy
 
-**Manual Setup** — 保留现有 GUI/ 前端原型代码，通过 `tauri init` 附加 Rust 后端层。
+**Manual Setup** — 保留现有 egosync-app/ 前端原型代码，通过 `tauri init` 附加 Rust 后端层。
 
 **理由：** 前端已有1458行高保真原型（React 18 + TS + Vite + TailwindCSS），无需从模板重建，只需桥接 Tauri IPC 层。
 
@@ -108,7 +108,7 @@ npx tauri init
 - IPC: Tauri Command system (invoke from JS → Rust handler)
 
 **Styling Solution:**
-- TailwindCSS 3 + tailwindcss-animate (已配置于 GUI/)
+- TailwindCSS 3 + tailwindcss-animate (已配置于 egosync-app/)
 - Lucide React icons
 - 自定义色温系统（角色切换）
 
@@ -141,7 +141,7 @@ npx tauri init
 
 ```
 EgoSync/
-├── GUI/                    # 前端（现有原型）
+├── egosync-app/                    # 前端（现有原型）
 │   ├── src/
 │   │   ├── components/     # 拆分后的 React 组件
 │   │   ├── hooks/          # 自定义 hooks (useTauriCommand 等)
@@ -724,7 +724,7 @@ EgoSync/探索/
 │       ├── ci.yml                    # Lint + Test (三平台)
 │       └── release.yml               # 构建安装包 + 发布
 │
-├── GUI/                              # 前端 + Tauri 桌面壳
+├── egosync-app/                              # 前端 + Tauri 桌面壳
 │   ├── package.json
 │   ├── package-lock.json
 │   ├── vite.config.ts
@@ -1016,7 +1016,7 @@ npm run tauri build
 cd GUI && npx vitest
 
 # Rust 测试
-cd GUI/src-tauri && cargo test
+cd egosync-app/src-tauri && cargo test
 
 # 全量
 npm run test:all   # package.json script 组合以上两者

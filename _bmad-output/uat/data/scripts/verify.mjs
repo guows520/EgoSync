@@ -1,0 +1,20 @@
+// 验证：测试实体数 + 真实数据完整性
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync(process.argv[2], { readOnly: true });
+const q = (sql) => db.prepare(sql).get().c;
+console.log('=== UAT 测试实体 ===');
+console.log('uat 角色:', q("SELECT COUNT(*) c FROM roles WHERE id LIKE 'uat-%'"));
+console.log('uat 记忆:', q("SELECT COUNT(*) c FROM memories WHERE id LIKE 'uat-%'"));
+console.log('uat 遗忘:', q("SELECT COUNT(*) c FROM forgotten_memory_sources WHERE id LIKE 'uat-%'"));
+console.log('uat skill:', q("SELECT COUNT(*) c FROM skills WHERE id LIKE 'uat-%'"));
+console.log('uat skill绑定:', q("SELECT COUNT(*) c FROM skill_role_bindings WHERE skill_id LIKE 'uat-%'"));
+console.log('uat mcp:', q("SELECT COUNT(*) c FROM mcp_servers WHERE id LIKE 'uat-%'"));
+console.log('uat llm:', q("SELECT COUNT(*) c FROM llm_configs WHERE id LIKE 'uat-%'"));
+console.log('=== 真实数据(应保持原值: 角色4 记忆5 skill4 mcp2 llm3) ===');
+console.log('真实角色:', q("SELECT COUNT(*) c FROM roles WHERE id NOT LIKE 'uat-%'"));
+console.log('真实记忆:', q("SELECT COUNT(*) c FROM memories WHERE id NOT LIKE 'uat-%'"));
+console.log('真实skill:', q("SELECT COUNT(*) c FROM skills WHERE id NOT LIKE 'uat-%'"));
+console.log('真实mcp:', q("SELECT COUNT(*) c FROM mcp_servers WHERE id NOT LIKE 'uat-%'"));
+console.log('真实llm:', q("SELECT COUNT(*) c FROM llm_configs WHERE id NOT LIKE 'uat-%'"));
+console.log('默认Provider仍是无问苍穹?:', db.prepare("SELECT name FROM llm_configs WHERE is_default=1").get()?.name);
+db.close();

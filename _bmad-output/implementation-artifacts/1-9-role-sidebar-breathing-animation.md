@@ -23,13 +23,13 @@ So that 能感受到角色是"活的"实体。
 
 ### Phase 1: 提取 RoleSidebarIcon 组件 (AC: #2, #3, #4, #5, #6, #7)
 
-- [x] **T1.1** 创建 `GUI/src/components/layout/RoleSidebarIcon.tsx`
+- [x] **T1.1** 创建 `egosync-app/src/components/layout/RoleSidebarIcon.tsx`
 - [x] **T1.2** 在 `index.css` 的 `.breathe` keyframe 规则中添加 `will-change: opacity;` 启用 GPU 加速
 - [x] **T1.3** 验证 `prefers-reduced-motion` 已覆盖 `.breathe` 动画
 
 ### Phase 2: Sidebar 重构 — 使用 RoleSidebarIcon + 真实数据适配 (AC: #1, #5, #6, #7)
 
-- [x] **T2.1** 修改 `GUI/src/components/layout/Sidebar.tsx` — 替换为 RoleSidebarIcon 组件
+- [x] **T2.1** 修改 `egosync-app/src/components/layout/Sidebar.tsx` — 替换为 RoleSidebarIcon 组件
 - [x] **T2.2** 添加侧边栏 `role="navigation"` + `aria-label="角色导航"` 语义化属性
 - [x] **T2.3** 实现键盘导航：ArrowUp/ArrowDown 切换焦点
 
@@ -41,7 +41,7 @@ So that 能感受到角色是"活的"实体。
 
 ### Phase 4: 测试 (AC: #8)
 
-- [x] **T4.1** 创建 `GUI/src/components/layout/RoleSidebarIcon.test.tsx` — 12 个测试用例
+- [x] **T4.1** 创建 `egosync-app/src/components/layout/RoleSidebarIcon.test.tsx` — 12 个测试用例
 - [x] **T4.2** 运行 `npm run test:frontend` (13 passed) + `cargo test` (39 passed)：全部通过
 
 ## Dev Notes
@@ -158,22 +158,22 @@ interface SidebarProps {
 
 | 文件 | 内容 |
 |---|---|
-| `GUI/src/components/layout/RoleSidebarIcon.tsx` | 独立角色侧边栏图标组件 |
-| `GUI/src/components/layout/RoleSidebarIcon.test.tsx` | 组件测试 |
+| `egosync-app/src/components/layout/RoleSidebarIcon.tsx` | 独立角色侧边栏图标组件 |
+| `egosync-app/src/components/layout/RoleSidebarIcon.test.tsx` | 组件测试 |
 
 **本 Story 修改文件：**
 
 | 文件 | 修改内容 |
 |---|---|
-| `GUI/src/components/layout/Sidebar.tsx` | 角色渲染改用 RoleSidebarIcon 组件 + 添加语义化属性 + 键盘导航 |
-| `GUI/src/index.css` | `.breathe` class 添加 `will-change: opacity` |
+| `egosync-app/src/components/layout/Sidebar.tsx` | 角色渲染改用 RoleSidebarIcon 组件 + 添加语义化属性 + 键盘导航 |
+| `egosync-app/src/index.css` | `.breathe` class 添加 `will-change: opacity` |
 
 **不修改的文件（确认无需改动）：**
-- `GUI/src/App.tsx` — 真实角色加载已就绪，无需改动
-- `GUI/src/constants/mockData.ts` — 保持原格式，RoleSidebarIcon 兼容两种格式
-- `GUI/src/types/role.ts` — 后端 Role 类型不变
-- `GUI/src/components/butler/ButlerView.tsx` — 不改，后续 Story 处理
-- `GUI/src/components/role/RoleView.tsx` — 不改，后续 Story 处理
+- `egosync-app/src/App.tsx` — 真实角色加载已就绪，无需改动
+- `egosync-app/src/constants/mockData.ts` — 保持原格式，RoleSidebarIcon 兼容两种格式
+- `egosync-app/src/types/role.ts` — 后端 Role 类型不变
+- `egosync-app/src/components/butler/ButlerView.tsx` — 不改，后续 Story 处理
+- `egosync-app/src/components/role/RoleView.tsx` — 不改，后续 Story 处理
 - 所有 Rust 后端文件 — 纯前端 Story
 
 **与架构文档对齐：**
@@ -204,11 +204,11 @@ interface SidebarProps {
 - [Source: `_bmad-output/planning-artifacts/ux-design-specification.md` #RoleSidebarIcon] — 呼吸动画规范（opacity 0.65→1, 3s, ease-in-out）
 - [Source: `_bmad-output/planning-artifacts/ux-design-specification.md` #Accessibility] — WCAG 2.1 AA, 键盘导航, aria-label
 - [Source: `_bmad-output/planning-artifacts/ux-design-specification.md` #Energy 色谱] — 高翠绿/中琥珀/低暗灰
-- [Source: `GUI/src/components/layout/Sidebar.tsx`] — 当前侧边栏实现（117行）
-- [Source: `GUI/src/index.css`] — 当前 `.breathe` 动画定义
-- [Source: `GUI/src/constants/mockData.ts`] — DEFAULT_ROLES mock 格式
-- [Source: `GUI/src/types/role.ts`] — 后端 Role TS 类型（emoji icon + hex color）
-- [Source: `GUI/src-tauri/src/db/roles.rs`] — 角色 DB 层（icon TEXT, color TEXT）
+- [Source: `egosync-app/src/components/layout/Sidebar.tsx`] — 当前侧边栏实现（117行）
+- [Source: `egosync-app/src/index.css`] — 当前 `.breathe` 动画定义
+- [Source: `egosync-app/src/constants/mockData.ts`] — DEFAULT_ROLES mock 格式
+- [Source: `egosync-app/src/types/role.ts`] — 后端 Role TS 类型（emoji icon + hex color）
+- [Source: `egosync-app/src-tauri/src/db/roles.rs`] — 角色 DB 层（icon TEXT, color TEXT）
 - [Source: `_bmad-output/implementation-artifacts/1-8-onboarding-five-step-first-role.md`] — 前一 Story 经验
 
 ### 验证命令清单
@@ -218,7 +218,7 @@ cd GUI
 npx tsc --noEmit               # TypeScript 编译检查
 npm run test:frontend           # 前端测试（含新 RoleSidebarIcon 测试）
 
-cd GUI/src-tauri
+cd egosync-app/src-tauri
 cargo test                      # 后端测试无回归
 
 cd GUI
@@ -261,12 +261,12 @@ npm run tauri dev               # 集成验证：侧边栏图标呼吸动画 + �
 ### File List
 
 **新建文件：**
-- `GUI/src/components/layout/RoleSidebarIcon.tsx` — 独立角色侧边栏图标组件（87 行）
-- `GUI/src/components/layout/RoleSidebarIcon.test.tsx` — 12 个测试用例
+- `egosync-app/src/components/layout/RoleSidebarIcon.tsx` — 独立角色侧边栏图标组件（87 行）
+- `egosync-app/src/components/layout/RoleSidebarIcon.test.tsx` — 12 个测试用例
 
 **修改文件：**
-- `GUI/src/components/layout/Sidebar.tsx` — 角色渲染改用 RoleSidebarIcon + 语义化属性 + 键盘导航
-- `GUI/src/index.css` — `.breathe` class 添加 `will-change: opacity`
+- `egosync-app/src/components/layout/Sidebar.tsx` — 角色渲染改用 RoleSidebarIcon + 语义化属性 + 键盘导航
+- `egosync-app/src/index.css` — `.breathe` class 添加 `will-change: opacity`
 
 ## Change Log
 

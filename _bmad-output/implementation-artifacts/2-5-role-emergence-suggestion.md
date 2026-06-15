@@ -47,21 +47,21 @@ so that 角色体系随着我的使用自然生长。
 7. **AC-7 测试通过**
    - `cd GUI && npx tsc --noEmit`
    - `cd GUI && npm run test:frontend`
-   - `cd GUI/src-tauri && cargo test`
+   - `cd egosync-app/src-tauri && cargo test`
    - 至少覆盖：冷却读写、butler prompt 含涌现指令、App.tsx 事件处理
 
 ## Tasks / Subtasks
 
 ### Phase 1: 后端冷却数据层（AC: #3）
 
-- [x] T1.1 `GUI/src-tauri/src/db/app_settings.rs`：新增 `get_emergence_cooldowns() -> HashMap<String, String>` + `set_emergence_cooldown(domain: &str, rejected_at: &str)` 函数
+- [x] T1.1 `egosync-app/src-tauri/src/db/app_settings.rs`：新增 `get_emergence_cooldowns() -> HashMap<String, String>` + `set_emergence_cooldown(domain: &str, rejected_at: &str)` 函数
   - 复用 `app_settings` 表 key-value 模式，key = `emergence_cooldown:{domain}`，value = ISO 8601 时间戳
   - 读取时 `LIKE 'emergence_cooldown:%'` 批量获取
-- [x] T1.2 `GUI/src-tauri/src/db/app_settings.rs`：新增 `clear_expired_cooldowns(days: i64)` 清理过期记录（> days 天的）
+- [x] T1.2 `egosync-app/src-tauri/src/db/app_settings.rs`：新增 `clear_expired_cooldowns(days: i64)` 清理过期记录（> days 天的）
 
 ### Phase 2: 后端工具定义与管家 Prompt（AC: #1, #2, #3, #5）
 
-- [x] T2.1 `GUI/src-tauri/src/services/agent_engine.rs`：在管家模式 `chat_options` 中追加 `create_role` 工具定义（复用 `create_role_tool_definition()`）
+- [x] T2.1 `egosync-app/src-tauri/src/services/agent_engine.rs`：在管家模式 `chat_options` 中追加 `create_role` 工具定义（复用 `create_role_tool_definition()`）
   - butler tools 变为 `[delegate_to_role, create_role, record_emergence_rejection]`
   - `tool_choice` 保持 `None`（LLM 自主决定）
 - [x] T2.2 `agent_engine.rs`：新增 `record_emergence_rejection` 工具定义
@@ -78,18 +78,18 @@ so that 角色体系随着我的使用自然生长。
 
 ### Phase 3: 前端 role:proposed 事件扩展（AC: #2, #6）
 
-- [x] T3.1 `GUI/src/App.tsx`：新增 `role:proposed` 事件监听（仅在非 onboarding 模式生效）
+- [x] T3.1 `egosync-app/src/App.tsx`：新增 `role:proposed` 事件监听（仅在非 onboarding 模式生效）
   - 收到事件后打开 `RoleConfirmModal`（复用 OnboardingView 同款组件）
   - 需新增 state: `butlerProposal`, `isButlerProposalOpen`, `isButlerProposalBusy`
-- [x] T3.2 `GUI/src/App.tsx`：确认回调调用 `roleService.create()` → 刷新角色列表 → 关闭弹窗
+- [x] T3.2 `egosync-app/src/App.tsx`：确认回调调用 `roleService.create()` → 刷新角色列表 → 关闭弹窗
   - 与 OnboardingView 的 confirm 流程一致，区别是不发 `role:created` 给 onboarding 会话
-- [x] T3.3 `GUI/src/App.tsx`：import `RoleConfirmModal` + 相关类型
+- [x] T3.3 `egosync-app/src/App.tsx`：import `RoleConfirmModal` + 相关类型
 - [x] T3.4 确保 `OnboardingView` 现有 `role:proposed` 监听不受影响（onboarding 模式下 App.tsx 的监听跳过）
 
 ### Phase 4: 测试与验证（AC: #7）
 
-- [x] T4.1 `GUI/src-tauri/src/db/app_settings.rs`：新增单测 — 冷却写入、读取、过期清理
-- [x] T4.2 `GUI/src-tauri/src/services/agent_engine.rs`：新增/更新单测 — butler tools 含 create_role 和 record_emergence_rejection、prompt 含涌现行为段落
+- [x] T4.1 `egosync-app/src-tauri/src/db/app_settings.rs`：新增单测 — 冷却写入、读取、过期清理
+- [x] T4.2 `egosync-app/src-tauri/src/services/agent_engine.rs`：新增/更新单测 — butler tools 含 create_role 和 record_emergence_rejection、prompt 含涌现行为段落
 - [x] T4.3 前端：App.tsx role:proposed handler 测试（mock useTauriEvent）
 - [x] T4.4 运行 AC-7 三条命令；桌面端行为需人工 `tauri dev` 验证
 
@@ -175,19 +175,19 @@ so that 角色体系随着我的使用自然生长。
 
 | Path | Action | Notes |
 |---|---|---|
-| `GUI/src-tauri/src/db/app_settings.rs` | UPDATE | 新增 emergence cooldown CRUD 函数 |
-| `GUI/src-tauri/src/services/agent_engine.rs` | UPDATE | butler tools 追加 create_role + record_emergence_rejection；prompt 追加涌现段落；execute_tool_calls 追加分支 |
-| `GUI/src/App.tsx` | UPDATE | 新增 role:proposed 事件监听 + RoleConfirmModal 状态管理 |
+| `egosync-app/src-tauri/src/db/app_settings.rs` | UPDATE | 新增 emergence cooldown CRUD 函数 |
+| `egosync-app/src-tauri/src/services/agent_engine.rs` | UPDATE | butler tools 追加 create_role + record_emergence_rejection；prompt 追加涌现段落；execute_tool_calls 追加分支 |
+| `egosync-app/src/App.tsx` | UPDATE | 新增 role:proposed 事件监听 + RoleConfirmModal 状态管理 |
 
 ### 不应改动
 
-- `GUI/src-tauri/src/commands/chat.rs`（chat send_message 流程不变）
-- `GUI/src-tauri/src/services/agent_engine.rs` 的 `execute_delegate_to_role`（委派路径不变）
-- `GUI/src-tauri/src/services/agent_engine.rs` 的 `build_onboarding_messages`（onboarding 路径不变）
-- `GUI/src/components/onboarding/OnboardingView.tsx`（现有 role:proposed 监听不变）
-- `GUI/src/components/onboarding/RoleConfirmModal.tsx`（组件不变，只新增使用处）
-- `GUI/src/components/modals/AddRoleModal.tsx`（手动创建入口不变）
-- `GUI/src-tauri/migrations/*.sql`（无需新 migration，复用 app_settings 表）
+- `egosync-app/src-tauri/src/commands/chat.rs`（chat send_message 流程不变）
+- `egosync-app/src-tauri/src/services/agent_engine.rs` 的 `execute_delegate_to_role`（委派路径不变）
+- `egosync-app/src-tauri/src/services/agent_engine.rs` 的 `build_onboarding_messages`（onboarding 路径不变）
+- `egosync-app/src/components/onboarding/OnboardingView.tsx`（现有 role:proposed 监听不变）
+- `egosync-app/src/components/onboarding/RoleConfirmModal.tsx`（组件不变，只新增使用处）
+- `egosync-app/src/components/modals/AddRoleModal.tsx`（手动创建入口不变）
+- `egosync-app/src-tauri/migrations/*.sql`（无需新 migration，复用 app_settings 表）
 
 ### 结构冲突记录
 
@@ -200,10 +200,10 @@ so that 角色体系随着我的使用自然生长。
 - [Source: `_bmad-output/planning-artifacts/ux-design-specification.md` — 角色从对话涌现、管家策展层、feedback 通过自然语言传达]
 - [Source: `_bmad-output/project-context.md` — Tauri IPC/event 规范、错误处理、测试命令]
 - [Source: `_bmad-output/implementation-artifacts/2-4-role-personalized-tone.md` — prompt 引号注意事项、现有 agent_engine 架构]
-- [Source: `GUI/src-tauri/src/services/agent_engine.rs` — butler tools=delegate_to_role only、create_role_tool_definition() 已存在、execute_create_role() 已实现]
-- [Source: `GUI/src/App.tsx` — AddRoleModal 独立、role:proposed 未监听、refreshRoles/setRoles 可用]
-- [Source: `GUI/src/components/onboarding/OnboardingView.tsx` — role:proposed 监听 L79-81、RoleConfirmModal 用法]
-- [Source: `GUI/src/components/onboarding/RoleConfirmModal.tsx` — 完整角色提议确认组件]
+- [Source: `egosync-app/src-tauri/src/services/agent_engine.rs` — butler tools=delegate_to_role only、create_role_tool_definition() 已存在、execute_create_role() 已实现]
+- [Source: `egosync-app/src/App.tsx` — AddRoleModal 独立、role:proposed 未监听、refreshRoles/setRoles 可用]
+- [Source: `egosync-app/src/components/onboarding/OnboardingView.tsx` — role:proposed 监听 L79-81、RoleConfirmModal 用法]
+- [Source: `egosync-app/src/components/onboarding/RoleConfirmModal.tsx` — 完整角色提议确认组件]
 
 ## Dev Agent Record
 
@@ -230,8 +230,8 @@ claude-sonnet-4-20250514
 
 ### File List
 
-- `GUI/src-tauri/src/db/app_settings.rs`
-- `GUI/src-tauri/src/services/agent_engine.rs`
-- `GUI/src/App.tsx`
+- `egosync-app/src-tauri/src/db/app_settings.rs`
+- `egosync-app/src-tauri/src/services/agent_engine.rs`
+- `egosync-app/src/App.tsx`
 - `_bmad-output/implementation-artifacts/2-5-role-emergence-suggestion.md`
 - `_bmad-output/implementation-artifacts/sprint-status.yaml`

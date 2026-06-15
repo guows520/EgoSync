@@ -36,7 +36,7 @@ so that 管家和角色都能记住我说过的话，下次对话时更懂我。
 
 4. **AC-4 数据库 schema 正确落地**
    - **Given** 主数据库 `egosync.db`
-   - **Then** `GUI/src-tauri/migrations/004_memories.sql` 创建 `memories` 表
+   - **Then** `egosync-app/src-tauri/migrations/004_memories.sql` 创建 `memories` 表
    - **And** `role_id` 允许 `NULL`，`NULL` 表示管家全局记忆；非空时通过数据库外键关联 `roles.id`，删除角色时级联删除该角色专属记忆
    - **And** `source_conversation_id` 存储 `conversations.db.conversations.id` 的文本引用并建立索引
    - **And** 由于对话日志在独立 `conversations.db`，不得尝试对 `conversations.id` 建 SQLite 跨库外键；必须由 `memory_pipeline` 在写入前通过 `ConversationsPool` 做应用层校验
@@ -59,14 +59,14 @@ so that 管家和角色都能记住我说过的话，下次对话时更懂我。
 7. **AC-7 测试通过**
    - `cd GUI && npx tsc --noEmit`
    - `cd GUI && npm run test:frontend`
-   - `cd GUI/src-tauri && cargo test`
+   - `cd egosync-app/src-tauri && cargo test`
    - 至少覆盖：memories migration/DB 写入、管家 `role_id = NULL` 记忆、角色专属记忆、category 白名单、source_message_ids 校验、无价值 JSON 输出 0 条、提炼失败不传播到 chat flow、5 分钟 debounce 取消旧任务
 
 ## Tasks / Subtasks
 
 ### Phase 1: 数据模型与 migration（AC: #2, #4, #5）
 
-- [x] T1.1 新增 `GUI/src-tauri/migrations/004_memories.sql`
+- [x] T1.1 新增 `egosync-app/src-tauri/migrations/004_memories.sql`
   - 表名：`memories`
   - 字段：`id TEXT PRIMARY KEY NOT NULL`
   - `role_id TEXT`
@@ -83,28 +83,28 @@ so that 管家和角色都能记住我说过的话，下次对话时更懂我。
   - `idx_memories_created_at` on `created_at`
   - `004_memories.sql` 保留初始唯一去重索引：`idx_memories_source_dedupe` on `(source_conversation_id, category, content)`，避免已执行迁移的 checksum 风险
   - `005_memory_role_scoped_dedupe.sql` 删除并重建同名唯一索引，最终运行态为 `COALESCE(role_id, '')`, `source_conversation_id`, `category`, `source_message_ids`，允许同一来源记忆同时存在于管家全局和匹配角色范围
-- [x] T1.2b 新增 `GUI/src-tauri/migrations/005_memory_role_scoped_dedupe.sql`
+- [x] T1.2b 新增 `egosync-app/src-tauri/migrations/005_memory_role_scoped_dedupe.sql`
   - `DROP INDEX IF EXISTS idx_memories_source_dedupe`
   - `CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_source_dedupe ON memories(COALESCE(role_id, ''), source_conversation_id, category, source_message_ids)`
   - 该迁移只变更运行态索引，不回改 `004_memories.sql`，避免真实库已执行 migration 后出现校验不一致
-- [x] T1.3 `GUI/src-tauri/src/db/pool.rs`：确保主库连接启用外键
+- [x] T1.3 `egosync-app/src-tauri/src/db/pool.rs`：确保主库连接启用外键
   - 优先使用 `SqliteConnectOptions::foreign_keys(true)`；若不可用，则连接后执行 `PRAGMA foreign_keys = ON`
   - 不改变 `conversations.db` 独立迁移机制
-- [x] T1.4 新增 `GUI/src-tauri/src/models/memory.rs`
+- [x] T1.4 新增 `egosync-app/src-tauri/src/models/memory.rs`
   - `Memory` 使用 `#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]`
   - `#[serde(rename_all = "camelCase")]`
   - 字段与 AC-2 完全一致；Rust 字段 snake_case，JSON 输出 camelCase
   - 新增内部输入结构 `NewMemory` 或 `ExtractedMemory`，供 pipeline/db 层使用
-- [x] T1.5 更新 `GUI/src-tauri/src/models/mod.rs`：加入 `pub mod memory;`
-- [x] T1.6 新增 `GUI/src-tauri/src/db/memories.rs`
+- [x] T1.5 更新 `egosync-app/src-tauri/src/models/mod.rs`：加入 `pub mod memory;`
+- [x] T1.6 新增 `egosync-app/src-tauri/src/db/memories.rs`
   - `insert_memories(pool, role_id: Option<&str>, source_conversation_id, extracted) -> Result<usize, AppError>`
   - 使用 `INSERT OR IGNORE` 或等价方式配合唯一索引防重复
   - 写入前校验 category 白名单、content 非空、source_message_ids JSON 数组非空且由 pipeline 传入已验证 ids
-- [x] T1.7 更新 `GUI/src-tauri/src/db/mod.rs`：加入 `pub mod memories;`
+- [x] T1.7 更新 `egosync-app/src-tauri/src/db/mod.rs`：加入 `pub mod memories;`
 
 ### Phase 2: memory_pipeline 服务（AC: #1, #2, #3, #5, #6）
 
-- [x] T2.1 新增 `GUI/src-tauri/src/services/memory_pipeline.rs`
+- [x] T2.1 新增 `egosync-app/src-tauri/src/services/memory_pipeline.rs`
   - 入口函数建议：`extract_for_conversation(main_pool: DbPool, conv_pool: ConversationsPool, conversation_id: String) -> Result<usize, AppError>`
   - 函数内部通过 `conversations` 查询 conversation 与 messages，不依赖前端传 role_id
 - [x] T2.2 `db/conversations.rs` 新增只读 helper
@@ -147,14 +147,14 @@ so that 管家和角色都能记住我说过的话，下次对话时更懂我。
   - 对 `preference` / `cognition_update` / `fact` 记忆，调用角色归属判定 prompt，在 active roles 中选择明确匹配的角色并额外写入该角色范围
   - `task_status` 不走事实同步；角色相关任务、安排、日程、待办应由管家委派路径处理，而不是作为事实复制到角色
   - 角色归属失败只记录 warning 并跳过，不影响管家回复和全局记忆写入
-- [x] T2.8 更新 `GUI/src-tauri/src/services/mod.rs`：加入 `pub mod memory_pipeline;`
+- [x] T2.8 更新 `egosync-app/src-tauri/src/services/mod.rs`：加入 `pub mod memory_pipeline;`
 
 ### Phase 3: 对话完成触发与 5 分钟 debounce（AC: #1, #5, #6）
 
-- [x] T3.1 在 `GUI/src-tauri/src/commands/chat.rs` 新增 `MemoryExtractionState`
+- [x] T3.1 在 `egosync-app/src-tauri/src/commands/chat.rs` 新增 `MemoryExtractionState`
   - 类型：`Arc<Mutex<HashMap<String, CancellationToken>>>`
   - 用于每个 conversation 的 idle debounce；新消息完成后取消旧 token，重新计时 5 分钟
-- [x] T3.2 在 `GUI/src-tauri/src/lib.rs` setup 中 `app.manage(commands::chat::MemoryExtractionState::default())`
+- [x] T3.2 在 `egosync-app/src-tauri/src/lib.rs` setup 中 `app.manage(commands::chat::MemoryExtractionState::default())`
 - [x] T3.3 在 `chat_send_message` 的 spawned task 中接入调度
   - 必须在 `agent_engine::run_stream(...).await` 返回后执行
   - 必须先从 `StreamingState` 移除 `conv_id`、从 `CancelTokens` 移除 cancel token，再调度 memory extraction
@@ -175,19 +175,19 @@ so that 管家和角色都能记住我说过的话，下次对话时更懂我。
 
 ### Phase 4: 测试与验证（AC: #7）
 
-- [x] T4.1 `GUI/src-tauri/src/db/memories.rs` 单测
+- [x] T4.1 `egosync-app/src-tauri/src/db/memories.rs` 单测
   - migration 创建表成功
   - 写入 1 条管家全局记忆成功（`role_id = NULL`）
   - 写入 1 条角色专属 preference 记忆成功
   - invalid category 被拒绝或不写入
   - 同一角色范围内重复 `source_conversation_id + category + normalized source_message_ids` 不重复插入；`004` 的 content 精确去重只保留为初始迁移历史
-- [x] T4.2 `GUI/src-tauri/src/services/memory_pipeline.rs` 单测纯函数
+- [x] T4.2 `egosync-app/src-tauri/src/services/memory_pipeline.rs` 单测纯函数
   - `parse_extraction_response` 接受严格 JSON
   - code fence 包裹 JSON 可清洗
   - 自然语言非 JSON 返回空/错误但不 panic
   - `sourceMessageIds` 不属于 conversation 时被过滤
   - `{"memories":[]}` 返回 0 条
-- [x] T4.3 `GUI/src-tauri/src/commands/chat.rs` 单测
+- [x] T4.3 `egosync-app/src-tauri/src/commands/chat.rs` 单测
   - 同 conversation 新 token 会取消旧 memory extraction token
   - 管家 conversation 会调度提炼为全局记忆
   - 角色 conversation 会调度提炼为角色专属记忆
@@ -195,20 +195,20 @@ so that 管家和角色都能记住我说过的话，下次对话时更懂我。
 - [x] T4.4 运行命令
   - `cd GUI && npx tsc --noEmit`
   - `cd GUI && npm run test:frontend`
-  - `cd GUI/src-tauri && cargo test`
+  - `cd egosync-app/src-tauri && cargo test`
 - [x] T4.5 若本 story 改动了 UI 或前端行为，启动 `cd GUI && npm run tauri dev` 做人工验证；本 story 默认后端后台提炼，无 UI 改动时可记录“无新增 UI，未做浏览器交互验证”
 
 ## Dev Notes
 
 ### 当前实现态
 
-- `chat_send_message` 在 `GUI/src-tauri/src/commands/chat.rs` 中先写入 user message 和空 assistant message，再 `tokio::spawn` 执行 `agent_engine::run_stream`；函数本身立即返回 user message。流式状态在后台 task 末尾移除。此处是 2.6 的正确触发点，但必须在移除 `StreamingState` 后再启动记忆提炼，避免 AC-1 的“用户下次对话不阻塞”被破坏。[Source: `GUI/src-tauri/src/commands/chat.rs`:47-209]
-- `agent_engine::try_run_opencode_stream` 已有 opencode 优先路径，普通 completion 在函数末尾落库 assistant 内容并 emit done；delegate 两气泡路径会创建 follow-up assistant message。memory pipeline 不应侵入这些分桶和 emit 逻辑。[Source: `GUI/src-tauri/src/services/agent_engine.rs`:660-1129]
-- `agent_engine::run_stream` 在 opencode 不可用时 fallback 到 `LlmProvider`，并在 fallback 路径中处理 tool calls、follow-up、onboarding 兜底。memory pipeline 应挂在 `run_stream` 外层完成后，而不是分别改 opencode/fallback 两套内部逻辑。[Source: `GUI/src-tauri/src/services/agent_engine.rs`:1131-1201,1420-1627]
-- 当前 `db/conversations.rs` 已有 `list_messages`、`get_recent_messages`、`list_conversations_by_role`，但没有 `get_conversation(id)`；2.6 需要新增只读 helper。[Source: `GUI/src-tauri/src/db/conversations.rs`:255-286]
-- 当前 `models/chat.rs` 的 `Message` 已包含 `routing_metadata`，用于 Story 2.3 的委派审计；memory source ids 应直接引用 `messages.id`，不要复用 `routing_metadata` 字段。[Source: `GUI/src-tauri/src/models/chat.rs`:18-32]
-- 当前主库 migration 目录只有 `001_initial_schema.sql` 与 `003_roles.sql`，对话库 schema 在 `002_conversations.sql` 但由 `init_conversations_db` 通过 `include_str!` 单独运行；2.6 的 `004_memories.sql` 属于主库 `egosync.db`，会由 `sqlx::migrate!("./migrations")` 执行。[Source: `GUI/src-tauri/src/db/pool.rs`:43-50,75-100]
-- 当前已新增 `db/memories.rs`、`models/memory.rs`、`services/memory_pipeline.rs`，并在后续增量中接入 `commands/memory.rs`、`memoryService.ts`、`types/memory.ts` 与 `MemoryTab.tsx`。MemoryTab 已从 mock 静态卡片改为读取真实记忆数据；Story 2.7 仍可继续补充溯源、删除和更完整的查询交互。[Source: `GUI/src-tauri/src/db/mod.rs`; `GUI/src-tauri/src/models/mod.rs`; `GUI/src-tauri/src/services/mod.rs`; `GUI/src-tauri/src/commands/memory.rs`; `GUI/src/components/role/MemoryTab.tsx`]
+- `chat_send_message` 在 `egosync-app/src-tauri/src/commands/chat.rs` 中先写入 user message 和空 assistant message，再 `tokio::spawn` 执行 `agent_engine::run_stream`；函数本身立即返回 user message。流式状态在后台 task 末尾移除。此处是 2.6 的正确触发点，但必须在移除 `StreamingState` 后再启动记忆提炼，避免 AC-1 的“用户下次对话不阻塞”被破坏。[Source: `egosync-app/src-tauri/src/commands/chat.rs`:47-209]
+- `agent_engine::try_run_opencode_stream` 已有 opencode 优先路径，普通 completion 在函数末尾落库 assistant 内容并 emit done；delegate 两气泡路径会创建 follow-up assistant message。memory pipeline 不应侵入这些分桶和 emit 逻辑。[Source: `egosync-app/src-tauri/src/services/agent_engine.rs`:660-1129]
+- `agent_engine::run_stream` 在 opencode 不可用时 fallback 到 `LlmProvider`，并在 fallback 路径中处理 tool calls、follow-up、onboarding 兜底。memory pipeline 应挂在 `run_stream` 外层完成后，而不是分别改 opencode/fallback 两套内部逻辑。[Source: `egosync-app/src-tauri/src/services/agent_engine.rs`:1131-1201,1420-1627]
+- 当前 `db/conversations.rs` 已有 `list_messages`、`get_recent_messages`、`list_conversations_by_role`，但没有 `get_conversation(id)`；2.6 需要新增只读 helper。[Source: `egosync-app/src-tauri/src/db/conversations.rs`:255-286]
+- 当前 `models/chat.rs` 的 `Message` 已包含 `routing_metadata`，用于 Story 2.3 的委派审计；memory source ids 应直接引用 `messages.id`，不要复用 `routing_metadata` 字段。[Source: `egosync-app/src-tauri/src/models/chat.rs`:18-32]
+- 当前主库 migration 目录只有 `001_initial_schema.sql` 与 `003_roles.sql`，对话库 schema 在 `002_conversations.sql` 但由 `init_conversations_db` 通过 `include_str!` 单独运行；2.6 的 `004_memories.sql` 属于主库 `egosync.db`，会由 `sqlx::migrate!("./migrations")` 执行。[Source: `egosync-app/src-tauri/src/db/pool.rs`:43-50,75-100]
+- 当前已新增 `db/memories.rs`、`models/memory.rs`、`services/memory_pipeline.rs`，并在后续增量中接入 `commands/memory.rs`、`memoryService.ts`、`types/memory.ts` 与 `MemoryTab.tsx`。MemoryTab 已从 mock 静态卡片改为读取真实记忆数据；Story 2.7 仍可继续补充溯源、删除和更完整的查询交互。[Source: `egosync-app/src-tauri/src/db/mod.rs`; `egosync-app/src-tauri/src/models/mod.rs`; `egosync-app/src-tauri/src/services/mod.rs`; `egosync-app/src-tauri/src/commands/memory.rs`; `egosync-app/src/components/role/MemoryTab.tsx`]
 
 ### 架构冲突与裁决
 
@@ -272,36 +272,36 @@ so that 管家和角色都能记住我说过的话，下次对话时更懂我。
 
 | Path | Action | Notes |
 |---|---|---|
-| `GUI/src-tauri/migrations/004_memories.sql` | NEW | 主库 memories schema、索引、去重 |
-| `GUI/src-tauri/migrations/005_memory_role_scoped_dedupe.sql` | NEW | 将 memories 去重索引迁移为角色范围 + 来源消息集合去重 |
-| `GUI/src-tauri/src/commands/memory.rs` | NEW | 暴露 `memory_list` / `memory_list_all` 查询命令 |
-| `GUI/src-tauri/src/models/memory.rs` | NEW | Memory / ExtractedMemory 模型 |
-| `GUI/src-tauri/src/db/memories.rs` | NEW | memories 写入与基础查询 helper（仅后端使用） |
-| `GUI/src-tauri/src/services/memory_pipeline.rs` | NEW | 后台提炼主逻辑、prompt、JSON 解析 |
+| `egosync-app/src-tauri/migrations/004_memories.sql` | NEW | 主库 memories schema、索引、去重 |
+| `egosync-app/src-tauri/migrations/005_memory_role_scoped_dedupe.sql` | NEW | 将 memories 去重索引迁移为角色范围 + 来源消息集合去重 |
+| `egosync-app/src-tauri/src/commands/memory.rs` | NEW | 暴露 `memory_list` / `memory_list_all` 查询命令 |
+| `egosync-app/src-tauri/src/models/memory.rs` | NEW | Memory / ExtractedMemory 模型 |
+| `egosync-app/src-tauri/src/db/memories.rs` | NEW | memories 写入与基础查询 helper（仅后端使用） |
+| `egosync-app/src-tauri/src/services/memory_pipeline.rs` | NEW | 后台提炼主逻辑、prompt、JSON 解析 |
 
 #### 修改文件
 
 | Path | Action | Notes |
 |---|---|---|
-| `GUI/src-tauri/src/db/mod.rs` | UPDATE | 导出 `memories` 模块 |
-| `GUI/src-tauri/src/models/mod.rs` | UPDATE | 导出 `memory` 模块 |
-| `GUI/src-tauri/src/services/mod.rs` | UPDATE | 导出 `memory_pipeline` 模块 |
-| `GUI/src-tauri/src/db/pool.rs` | UPDATE | 主库启用 FK；保持 conversations DB 独立迁移 |
-| `GUI/src-tauri/src/db/conversations.rs` | UPDATE | 新增 `get_conversation` helper 与测试 |
-| `GUI/src-tauri/src/commands/chat.rs` | UPDATE | MemoryExtractionState、5 分钟 debounce、manual new conversation immediate extraction |
-| `GUI/src-tauri/src/lib.rs` | UPDATE | manage MemoryExtractionState；注册 memory 查询 command |
-| `GUI/src-tauri/src/services/memory_pipeline.rs` | UPDATE | 管家全局记忆同步到角色记忆；`task_status` 排除角色事实同步 |
-| `GUI/src/components/role/MemoryTab.tsx` | UPDATE | 从 mock 静态卡片改为调用 `memoryService` 展示真实记忆 |
-| `GUI/src/services/memoryService.ts` | NEW | 前端 memory IPC service |
-| `GUI/src/types/memory.ts` | NEW | 前端 Memory 类型 |
+| `egosync-app/src-tauri/src/db/mod.rs` | UPDATE | 导出 `memories` 模块 |
+| `egosync-app/src-tauri/src/models/mod.rs` | UPDATE | 导出 `memory` 模块 |
+| `egosync-app/src-tauri/src/services/mod.rs` | UPDATE | 导出 `memory_pipeline` 模块 |
+| `egosync-app/src-tauri/src/db/pool.rs` | UPDATE | 主库启用 FK；保持 conversations DB 独立迁移 |
+| `egosync-app/src-tauri/src/db/conversations.rs` | UPDATE | 新增 `get_conversation` helper 与测试 |
+| `egosync-app/src-tauri/src/commands/chat.rs` | UPDATE | MemoryExtractionState、5 分钟 debounce、manual new conversation immediate extraction |
+| `egosync-app/src-tauri/src/lib.rs` | UPDATE | manage MemoryExtractionState；注册 memory 查询 command |
+| `egosync-app/src-tauri/src/services/memory_pipeline.rs` | UPDATE | 管家全局记忆同步到角色记忆；`task_status` 排除角色事实同步 |
+| `egosync-app/src/components/role/MemoryTab.tsx` | UPDATE | 从 mock 静态卡片改为调用 `memoryService` 展示真实记忆 |
+| `egosync-app/src/services/memoryService.ts` | NEW | 前端 memory IPC service |
+| `egosync-app/src/types/memory.ts` | NEW | 前端 Memory 类型 |
 
 #### 不应改动
 
-- `GUI/src/components/role/MemoryTab.tsx` 已接入真实数据，不再属于“不应改动”；后续 Story 2.7 可继续补溯源与删除交互。
-- `GUI/src/services/memoryService.ts`、`GUI/src/types/memory.ts` 已作为最小查询 UI 配套新增。
-- `GUI/src-tauri/src/services/agent_bridge.rs`、`event_router.rs`、`delegate_bridge.rs` 仍只承担 stream/委派基础设施，不直接写记忆。
-- `GUI/src-tauri/src/services/agent_config.rs`（记忆不影响 opencode agent 配置）
-- `GUI/src-tauri/src/llm/openai.rs` / `anthropic.rs`（复用 provider trait，不改 provider）
+- `egosync-app/src/components/role/MemoryTab.tsx` 已接入真实数据，不再属于“不应改动”；后续 Story 2.7 可继续补溯源与删除交互。
+- `egosync-app/src/services/memoryService.ts`、`egosync-app/src/types/memory.ts` 已作为最小查询 UI 配套新增。
+- `egosync-app/src-tauri/src/services/agent_bridge.rs`、`event_router.rs`、`delegate_bridge.rs` 仍只承担 stream/委派基础设施，不直接写记忆。
+- `egosync-app/src-tauri/src/services/agent_config.rs`（记忆不影响 opencode agent 配置）
+- `egosync-app/src-tauri/src/llm/openai.rs` / `anthropic.rs`（复用 provider trait，不改 provider）
 
 ### Testing Requirements
 
@@ -319,13 +319,13 @@ so that 管家和角色都能记住我说过的话，下次对话时更懂我。
 - [Source: `_bmad-output/planning-artifacts/ux-design-specification.md` — Memory tab appears in RoleWorkspacePanel but query UI belongs to later story]
 - [Source: `_bmad-output/project-context.md` — Rust/Tauri layering, migration rules, testing commands]
 - [Source: `_bmad-output/implementation-artifacts/2-5-role-emergence-suggestion.md` — previous story implementation lessons]
-- [Source: `GUI/src-tauri/src/commands/chat.rs`:47-209 — chat send flow and background stream task]
-- [Source: `GUI/src-tauri/src/services/agent_engine.rs`:660-1129 — opencode stream completion and message persistence]
-- [Source: `GUI/src-tauri/src/services/agent_engine.rs`:1131-1201,1420-1627 — fallback stream and tool follow-up behavior]
-- [Source: `GUI/src-tauri/src/db/conversations.rs`:255-286 — message listing helpers]
-- [Source: `GUI/src-tauri/src/db/pool.rs`:43-50,75-100 — main vs conversations migration paths]
-- [Source: `GUI/src-tauri/src/lib.rs`:184-213 — current invoke handler registration]
-- [Source: `GUI/src/components/role/MemoryTab.tsx`:1-29 — current mock UI, out of scope]
+- [Source: `egosync-app/src-tauri/src/commands/chat.rs`:47-209 — chat send flow and background stream task]
+- [Source: `egosync-app/src-tauri/src/services/agent_engine.rs`:660-1129 — opencode stream completion and message persistence]
+- [Source: `egosync-app/src-tauri/src/services/agent_engine.rs`:1131-1201,1420-1627 — fallback stream and tool follow-up behavior]
+- [Source: `egosync-app/src-tauri/src/db/conversations.rs`:255-286 — message listing helpers]
+- [Source: `egosync-app/src-tauri/src/db/pool.rs`:43-50,75-100 — main vs conversations migration paths]
+- [Source: `egosync-app/src-tauri/src/lib.rs`:184-213 — current invoke handler registration]
+- [Source: `egosync-app/src/components/role/MemoryTab.tsx`:1-29 — current mock UI, out of scope]
 
 ## Dev Agent Record
 
@@ -335,15 +335,15 @@ Claude Opus 4.7 (claude-opus-4-7[1m])
 
 ### Debug Log References
 
-- 2026-05-30: `cargo test --manifest-path "GUI/src-tauri/Cargo.toml" init_db_runs_memories_migration_with_indexes` passed.
-- 2026-05-30: `cargo test --manifest-path "GUI/src-tauri/Cargo.toml" services::memory_pipeline::tests` passed.
-- 2026-05-30: `cargo test --manifest-path "GUI/src-tauri/Cargo.toml" commands::chat::tests` passed.
-- 2026-05-30: `cargo test --manifest-path "GUI/src-tauri/Cargo.toml"` passed: 178 lib tests + 1 integration test.
-- 2026-05-30: `npx tsc --noEmit -p "GUI/tsconfig.json"` passed.
+- 2026-05-30: `cargo test --manifest-path "egosync-app/src-tauri/Cargo.toml" init_db_runs_memories_migration_with_indexes` passed.
+- 2026-05-30: `cargo test --manifest-path "egosync-app/src-tauri/Cargo.toml" services::memory_pipeline::tests` passed.
+- 2026-05-30: `cargo test --manifest-path "egosync-app/src-tauri/Cargo.toml" commands::chat::tests` passed.
+- 2026-05-30: `cargo test --manifest-path "egosync-app/src-tauri/Cargo.toml"` passed: 178 lib tests + 1 integration test.
+- 2026-05-30: `npx tsc --noEmit -p "egosync-app/tsconfig.json"` passed.
 - 2026-05-30: `npm --prefix "GUI" run test:frontend` passed: 8 files / 47 tests.
 - 2026-05-30: `npm --prefix "GUI" run build` passed.
-- 2026-05-30: `cargo check --manifest-path "GUI/src-tauri/Cargo.toml"` passed.
-- 2026-05-30: `rustfmt --edition 2021 --check "GUI/src-tauri/src/services/memory_pipeline.rs" "GUI/src-tauri/src/commands/chat.rs"` passed.
+- 2026-05-30: `cargo check --manifest-path "egosync-app/src-tauri/Cargo.toml"` passed.
+- 2026-05-30: `rustfmt --edition 2021 --check "egosync-app/src-tauri/src/services/memory_pipeline.rs" "egosync-app/src-tauri/src/commands/chat.rs"` passed.
 
 ### Completion Notes List
 
@@ -357,23 +357,23 @@ Claude Opus 4.7 (claude-opus-4-7[1m])
 
 ### File List
 
-- `GUI/src-tauri/migrations/004_memories.sql`
-- `GUI/src-tauri/migrations/005_memory_role_scoped_dedupe.sql`
-- `GUI/src-tauri/src/commands/memory.rs`
-- `GUI/src-tauri/src/models/memory.rs`
-- `GUI/src-tauri/src/models/mod.rs`
-- `GUI/src-tauri/src/db/memories.rs`
-- `GUI/src-tauri/src/db/mod.rs`
-- `GUI/src-tauri/src/db/pool.rs`
-- `GUI/src-tauri/src/db/conversations.rs`
-- `GUI/src-tauri/src/services/memory_pipeline.rs`
-- `GUI/src-tauri/src/services/mod.rs`
-- `GUI/src-tauri/src/commands/chat.rs`
-- `GUI/src-tauri/src/lib.rs`
-- `GUI/src/components/role/MemoryTab.tsx`
-- `GUI/src/services/memoryService.ts`
-- `GUI/src/types/memory.ts`
-- `GUI/src/components/role/MemoryTab.test.tsx`
+- `egosync-app/src-tauri/migrations/004_memories.sql`
+- `egosync-app/src-tauri/migrations/005_memory_role_scoped_dedupe.sql`
+- `egosync-app/src-tauri/src/commands/memory.rs`
+- `egosync-app/src-tauri/src/models/memory.rs`
+- `egosync-app/src-tauri/src/models/mod.rs`
+- `egosync-app/src-tauri/src/db/memories.rs`
+- `egosync-app/src-tauri/src/db/mod.rs`
+- `egosync-app/src-tauri/src/db/pool.rs`
+- `egosync-app/src-tauri/src/db/conversations.rs`
+- `egosync-app/src-tauri/src/services/memory_pipeline.rs`
+- `egosync-app/src-tauri/src/services/mod.rs`
+- `egosync-app/src-tauri/src/commands/chat.rs`
+- `egosync-app/src-tauri/src/lib.rs`
+- `egosync-app/src/components/role/MemoryTab.tsx`
+- `egosync-app/src/services/memoryService.ts`
+- `egosync-app/src/types/memory.ts`
+- `egosync-app/src/components/role/MemoryTab.test.tsx`
 - `_bmad-output/implementation-artifacts/2-6-conversation-memory-extraction.md`
 - `_bmad-output/implementation-artifacts/sprint-status.yaml`
 
@@ -391,15 +391,15 @@ Claude Opus 4.7 (claude-opus-4-7[1m])
 
 #### Patch
 
-- [x] [Review][Patch] chat_new_conversation 用 `?` 让记忆资格检查阻断新建对话 [GUI/src-tauri/src/commands/chat.rs:~354] — 已改为旧会话 messages 单次 best-effort 查询；查询失败只 warn 并继续创建新 conversation，标题生成与记忆提炼均跳过。[blind+auditor]
-- [x] [Review][Patch] remove_memory_extraction_token_if_active 在锁外检查 is_cancelled 的 TOCTOU [GUI/src-tauri/src/commands/chat.rs:~57] — 已改为持锁后判 `is_cancelled()`，避免旧 task 误删新 token。[blind]
-- [x] [Review][Patch] LLM JSON/code-fence 清洗过窄导致合法记忆被静默丢弃 [GUI/src-tauri/src/services/memory_pipeline.rs:~203] — 已改为提取首个 `{` 到末个 `}`，并补充夹带说明文字/`~~~Json` 回归测试。[edge]
-- [x] [Review][Patch] 提炼超时后 spawn 的 chat_stream 任务未取消 [GUI/src-tauri/src/services/memory_pipeline.rs:~57] — 已持有 `JoinHandle` 并在 timeout 分支 `abort()`；provider 直接错误也会写真实 warn 日志。[blind+edge]
-- [x] [Review][Patch] AC-7 缺 pipeline 角色/全局记忆路由的端到端测试 [GUI/src-tauri/src/services/memory_pipeline.rs] — 已补 fake provider pipeline 测试，断言管家写 `role_id=NULL`、角色会话写目标 role id。[auditor]
+- [x] [Review][Patch] chat_new_conversation 用 `?` 让记忆资格检查阻断新建对话 [egosync-app/src-tauri/src/commands/chat.rs:~354] — 已改为旧会话 messages 单次 best-effort 查询；查询失败只 warn 并继续创建新 conversation，标题生成与记忆提炼均跳过。[blind+auditor]
+- [x] [Review][Patch] remove_memory_extraction_token_if_active 在锁外检查 is_cancelled 的 TOCTOU [egosync-app/src-tauri/src/commands/chat.rs:~57] — 已改为持锁后判 `is_cancelled()`，避免旧 task 误删新 token。[blind]
+- [x] [Review][Patch] LLM JSON/code-fence 清洗过窄导致合法记忆被静默丢弃 [egosync-app/src-tauri/src/services/memory_pipeline.rs:~203] — 已改为提取首个 `{` 到末个 `}`，并补充夹带说明文字/`~~~Json` 回归测试。[edge]
+- [x] [Review][Patch] 提炼超时后 spawn 的 chat_stream 任务未取消 [egosync-app/src-tauri/src/services/memory_pipeline.rs:~57] — 已持有 `JoinHandle` 并在 timeout 分支 `abort()`；provider 直接错误也会写真实 warn 日志。[blind+edge]
+- [x] [Review][Patch] AC-7 缺 pipeline 角色/全局记忆路由的端到端测试 [egosync-app/src-tauri/src/services/memory_pipeline.rs] — 已补 fake provider pipeline 测试，断言管家写 `role_id=NULL`、角色会话写目标 role id。[auditor]
 
 #### Deferred (pre-existing / known V1 boundary)
 
-- [x] [Review][Defer] streaming 标志在消息插入失败时永久卡死会话 [GUI/src-tauri/src/commands/chat.rs:~242] — `streaming.insert` 被提前到 busy 检查后、assistant 消息插入前；DB 失败 `?` 提前返回时清理任务尚未 spawn，会话本进程内永久 busy。**经 git 取证：baseline 34aab28 顺序安全，此错误顺序来自工作树未提交的前序 opencode 重构，非 Story 2.6 引入。** [blind+edge HIGH]
+- [x] [Review][Defer] streaming 标志在消息插入失败时永久卡死会话 [egosync-app/src-tauri/src/commands/chat.rs:~242] — `streaming.insert` 被提前到 busy 检查后、assistant 消息插入前；DB 失败 `?` 提前返回时清理任务尚未 spawn，会话本进程内永久 busy。**经 git 取证：baseline 34aab28 顺序安全，此错误顺序来自工作树未提交的前序 opencode 重构，非 Story 2.6 引入。** [blind+edge HIGH]
 - [x] [Review][Patch] 去重仅覆盖精确文本，LLM 重述产生近似重复记忆 [migrations/004_memories.sql:15] — 已新增 `005_memory_role_scoped_dedupe.sql`，运行态唯一索引改为角色范围 + source_message_ids；DB 写入前也按标准化来源消息集合查询重复，LLM 改写同一来源 content 不会重复写入。[edge+auditor]
-- [x] [Review][Defer] 提炼无取消钩子 + 跨库悬挂记忆 TOCTOU [GUI/src-tauri/src/services/memory_pipeline.rs] — 5 分钟到期进入提炼后无法打断；查存在性(起点)与写入(终点)间删除会话会写入悬挂 source_conversation_id。V1 无消费方，记忆查询/遗忘留待 Story 2.7/2.8。[edge]
-- [x] [Review][Defer] insert_memories DB 层不校验 source_message_ids 归属 [GUI/src-tauri/src/db/memories.rs:39] — 归属白名单仅在 pipeline 层；当前唯一调用链一致，属防御性提示，未来新增绕过 pipeline 的写入路径时再加固。[edge]
+- [x] [Review][Defer] 提炼无取消钩子 + 跨库悬挂记忆 TOCTOU [egosync-app/src-tauri/src/services/memory_pipeline.rs] — 5 分钟到期进入提炼后无法打断；查存在性(起点)与写入(终点)间删除会话会写入悬挂 source_conversation_id。V1 无消费方，记忆查询/遗忘留待 Story 2.7/2.8。[edge]
+- [x] [Review][Defer] insert_memories DB 层不校验 source_message_ids 归属 [egosync-app/src-tauri/src/db/memories.rs:39] — 归属白名单仅在 pipeline 层；当前唯一调用链一致，属防御性提示，未来新增绕过 pipeline 的写入路径时再加固。[edge]

@@ -49,22 +49,22 @@ so that 不同角色之间有明显区分感，对话更自然。
 7. **AC-7 测试通过**
    - `cd GUI && npx tsc --noEmit`
    - `cd GUI && npm run test:frontend`
-   - `cd GUI/src-tauri && cargo test`
+   - `cd egosync-app/src-tauri && cargo test`
    - 至少覆盖：`UpdateRoleInput.personality_prompt` 持久化、`build_role_messages` 三层拼接与身份隔离、SettingsTab 保存 `personalityPrompt`。
 
 ## Tasks / Subtasks
 
 ### Phase 1: 数据契约补全（AC: #3, #6）
 
-- [x] T1.1 `GUI/src-tauri/src/models/role.rs`：`UpdateRoleInput` 新增 `personality_prompt: Option<String>`
-- [x] T1.2 `GUI/src-tauri/src/db/roles.rs`：`update_role` 的 SQL 增加 `personality_prompt = COALESCE(?5, personality_prompt)`，并顺延 bind 序号
-- [x] T1.3 `GUI/src-tauri/src/commands/role.rs`：无需新增 command；沿用 `role_update`
-- [x] T1.4 `GUI/src/types/role.ts`：`UpdateRoleInput` 新增 `personalityPrompt?: string`
-- [x] T1.5 `GUI/src/services/roleService.ts`：无需新增 service；沿用 `roleService.update`
+- [x] T1.1 `egosync-app/src-tauri/src/models/role.rs`：`UpdateRoleInput` 新增 `personality_prompt: Option<String>`
+- [x] T1.2 `egosync-app/src-tauri/src/db/roles.rs`：`update_role` 的 SQL 增加 `personality_prompt = COALESCE(?5, personality_prompt)`，并顺延 bind 序号
+- [x] T1.3 `egosync-app/src-tauri/src/commands/role.rs`：无需新增 command；沿用 `role_update`
+- [x] T1.4 `egosync-app/src/types/role.ts`：`UpdateRoleInput` 新增 `personalityPrompt?: string`
+- [x] T1.5 `egosync-app/src/services/roleService.ts`：无需新增 service；沿用 `roleService.update`
 
 ### Phase 2: Prompt 三层分离（AC: #1, #2, #4, #6）
 
-- [x] T2.1 `GUI/src-tauri/src/services/agent_engine.rs`：保留角色身份与管家身份隔离，不把 `BUTLER_SYSTEM_PROMPT` 拼入角色 prompt
+- [x] T2.1 `egosync-app/src-tauri/src/services/agent_engine.rs`：保留角色身份与管家身份隔离，不把 `BUTLER_SYSTEM_PROMPT` 拼入角色 prompt
 - [x] T2.2 将现有角色 prompt 拆成三段语义：
   - `base_persona`：EgoSync 内在维度身份、非管家、中文简洁自然
   - `role_definition`：角色名称、目标、个性描述；个性描述为空时跳过
@@ -74,7 +74,7 @@ so that 不同角色之间有明显区分感，对话更自然。
 
 ### Phase 3: SettingsTab 编辑入口（AC: #3, #5）
 
-- [x] T3.1 `GUI/src/components/role/SettingsTab.tsx`：新增本地状态 `rolePersonalityPrompt`，随 `role.id`/`role.personalityPrompt` 同步
+- [x] T3.1 `egosync-app/src/components/role/SettingsTab.tsx`：新增本地状态 `rolePersonalityPrompt`，随 `role.id`/`role.personalityPrompt` 同步
 - [x] T3.2 在「角色信息」区域新增「角色个性描述」textarea
   - placeholder 解释用途：影响该角色下次回复风格
   - 显示三条模板参考：产品经理、家庭、学习者
@@ -84,8 +84,8 @@ so that 不同角色之间有明显区分感，对话更自然。
 
 ### Phase 4: 测试与验证（AC: #7）
 
-- [x] T4.1 `GUI/src-tauri/src/db/roles.rs`：新增/更新单测，证明 `personality_prompt` 可通过 `update_role` 修改且读回
-- [x] T4.2 `GUI/src-tauri/src/services/agent_engine.rs`：新增/更新单测，证明 `build_role_messages` 三层拼接、身份隔离、个性描述为空可用
+- [x] T4.1 `egosync-app/src-tauri/src/db/roles.rs`：新增/更新单测，证明 `personality_prompt` 可通过 `update_role` 修改且读回
+- [x] T4.2 `egosync-app/src-tauri/src/services/agent_engine.rs`：新增/更新单测，证明 `build_role_messages` 三层拼接、身份隔离、个性描述为空可用
 - [x] T4.3 前端测试：补 SettingsTab 保存 payload 覆盖 `personalityPrompt`；如现有测试缺失，可在最小范围内新增 co-located 测试
 - [x] T4.4 运行 AC-7 三条命令；若桌面端仍需人工验证，明确标记而不是宣称已完成
 
@@ -144,20 +144,20 @@ so that 不同角色之间有明显区分感，对话更自然。
 
 | Path | Action | Notes |
 |---|---|---|
-| `GUI/src-tauri/src/models/role.rs` | UPDATE | `UpdateRoleInput` 加 `personality_prompt` |
-| `GUI/src-tauri/src/db/roles.rs` | UPDATE | `update_role` 写入 personality_prompt；补测试 |
-| `GUI/src-tauri/src/services/agent_engine.rs` | UPDATE | 整理角色 system prompt 三层；补测试 |
-| `GUI/src/types/role.ts` | UPDATE | `UpdateRoleInput` 加 `personalityPrompt` |
-| `GUI/src/components/role/SettingsTab.tsx` | UPDATE | 新增 textarea、模板参考、保存字段 |
-| `GUI/src/components/role/SettingsTab.test.tsx` | NEW/UPDATE | 若无既有测试则新建，最小覆盖保存 payload |
+| `egosync-app/src-tauri/src/models/role.rs` | UPDATE | `UpdateRoleInput` 加 `personality_prompt` |
+| `egosync-app/src-tauri/src/db/roles.rs` | UPDATE | `update_role` 写入 personality_prompt；补测试 |
+| `egosync-app/src-tauri/src/services/agent_engine.rs` | UPDATE | 整理角色 system prompt 三层；补测试 |
+| `egosync-app/src/types/role.ts` | UPDATE | `UpdateRoleInput` 加 `personalityPrompt` |
+| `egosync-app/src/components/role/SettingsTab.tsx` | UPDATE | 新增 textarea、模板参考、保存字段 |
+| `egosync-app/src/components/role/SettingsTab.test.tsx` | NEW/UPDATE | 若无既有测试则新建，最小覆盖保存 payload |
 
 ### 不应改动
 
-- `GUI/src-tauri/src/commands/chat.rs`
-- `GUI/src-tauri/src/services/agent_engine.rs` 的 `delegate_to_role` 执行链路
-- `GUI/src/components/chat/*` streaming 行为
-- `GUI/src/components/onboarding/*`
-- `GUI/src-tauri/migrations/*.sql`（除非实现时发现当前迁移实际缺失 `personality_prompt` 且运行时无法初始化）
+- `egosync-app/src-tauri/src/commands/chat.rs`
+- `egosync-app/src-tauri/src/services/agent_engine.rs` 的 `delegate_to_role` 执行链路
+- `egosync-app/src/components/chat/*` streaming 行为
+- `egosync-app/src/components/onboarding/*`
+- `egosync-app/src-tauri/migrations/*.sql`（除非实现时发现当前迁移实际缺失 `personality_prompt` 且运行时无法初始化）
 
 ### 结构冲突记录
 
@@ -171,10 +171,10 @@ so that 不同角色之间有明显区分感，对话更自然。
 - [Source: `_bmad-output/planning-artifacts/ux-design-specification.md` — 管家策展 + 角色召唤、角色是用户不同面、角色深入视图与设置入口]
 - [Source: `_bmad-output/project-context.md` — TS/Rust 命名、Tauri IPC、测试命令、禁止前端直接 DB/LLM]
 - [Source: `_bmad-output/implementation-artifacts/2-3-butler-intent-routing.md` — build_role_messages 已就位；角色 stream 不污染管家；端到端需人工验证]
-- [Source: `GUI/src-tauri/src/models/role.rs` — `Role.personality_prompt` 已存在，`UpdateRoleInput` 尚未包含]
-- [Source: `GUI/src-tauri/src/db/roles.rs` — `ROLE_SELECT_COLUMNS` 已含 personality_prompt，`update_role` 尚未写入]
-- [Source: `GUI/src-tauri/src/services/agent_engine.rs` — `build_role_messages` 已追加非空 personality_prompt]
-- [Source: `GUI/src/components/role/SettingsTab.tsx` — 现有设置页保存状态机与角色基础字段]
+- [Source: `egosync-app/src-tauri/src/models/role.rs` — `Role.personality_prompt` 已存在，`UpdateRoleInput` 尚未包含]
+- [Source: `egosync-app/src-tauri/src/db/roles.rs` — `ROLE_SELECT_COLUMNS` 已含 personality_prompt，`update_role` 尚未写入]
+- [Source: `egosync-app/src-tauri/src/services/agent_engine.rs` — `build_role_messages` 已追加非空 personality_prompt]
+- [Source: `egosync-app/src/components/role/SettingsTab.tsx` — 现有设置页保存状态机与角色基础字段]
 
 ## Dev Agent Record
 
@@ -201,15 +201,15 @@ gpt-5.5
 
 ### File List
 
-- `GUI/src-tauri/src/models/role.rs`
-- `GUI/src-tauri/src/db/roles.rs`
-- `GUI/src-tauri/src/services/agent_engine.rs`
-- `GUI/src/types/role.ts`
-- `GUI/src/components/role/SettingsTab.tsx`
-- `GUI/src/components/role/SettingsTab.test.tsx`
-- `GUI/src/components/chat/ChatBubble.tsx`
-- `GUI/tailwind.config.js`
-- `GUI/package.json`
+- `egosync-app/src-tauri/src/models/role.rs`
+- `egosync-app/src-tauri/src/db/roles.rs`
+- `egosync-app/src-tauri/src/services/agent_engine.rs`
+- `egosync-app/src/types/role.ts`
+- `egosync-app/src/components/role/SettingsTab.tsx`
+- `egosync-app/src/components/role/SettingsTab.test.tsx`
+- `egosync-app/src/components/chat/ChatBubble.tsx`
+- `egosync-app/tailwind.config.js`
+- `egosync-app/package.json`
 - `_bmad-output/implementation-artifacts/2-4-role-personalized-tone.md`
 - `_bmad-output/implementation-artifacts/sprint-status.yaml`
 

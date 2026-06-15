@@ -234,22 +234,22 @@ pub fn run() {
 
 | 文件 | 内容 |
 |---|---|
-| `GUI/src-tauri/src/error.rs` | `AppError` 枚举 + Tauri 错误转换 |
-| `GUI/src-tauri/src/services/mod.rs` | services 模块声明 |
-| `GUI/src-tauri/src/services/secret_store.rs` | keyring 抽象层 (save/load/delete) |
-| `GUI/src-tauri/src/commands/mod.rs` | commands 模块声明 |
-| `GUI/src-tauri/src/commands/secret.rs` | Tauri Command 薄层 |
+| `egosync-app/src-tauri/src/error.rs` | `AppError` 枚举 + Tauri 错误转换 |
+| `egosync-app/src-tauri/src/services/mod.rs` | services 模块声明 |
+| `egosync-app/src-tauri/src/services/secret_store.rs` | keyring 抽象层 (save/load/delete) |
+| `egosync-app/src-tauri/src/commands/mod.rs` | commands 模块声明 |
+| `egosync-app/src-tauri/src/commands/secret.rs` | Tauri Command 薄层 |
 
 **本 Story 修改的文件：**
 
 | 文件 | 修改内容 |
 |---|---|
-| `GUI/src-tauri/Cargo.toml` | 添加 `keyring = "3"` + `thiserror = "1"` 依赖 |
-| `GUI/src-tauri/src/lib.rs` | 添加 `mod commands/error/services` + 注册 invoke_handler |
+| `egosync-app/src-tauri/Cargo.toml` | 添加 `keyring = "3"` + `thiserror = "1"` 依赖 |
+| `egosync-app/src-tauri/src/lib.rs` | 添加 `mod commands/error/services` + 注册 invoke_handler |
 
 **不修改的文件（确认无需改动）：**
-- `GUI/src-tauri/src/main.rs` — 仅调用 `egosync_lib::run()`，不变
-- `GUI/src-tauri/tauri.conf.json` — 无需修改
+- `egosync-app/src-tauri/src/main.rs` — 仅调用 `egosync_lib::run()`，不变
+- `egosync-app/src-tauri/tauri.conf.json` — 无需修改
 - 前端所有文件 — 本 Story 不改动前端（前端接通在 Story 1.6）
 
 **与架构文档对齐：**
@@ -271,15 +271,15 @@ pub fn run() {
 - [Source: `_bmad-output/planning-artifacts/architecture.md` #Structure Patterns] — Rust 后端目录结构
 - [Source: `_bmad-output/planning-artifacts/architecture.md` #Process Patterns] — 错误处理规范
 - [Source: `_bmad-output/project-context.md` #关键禁止事项] — 硬编码 API Key 禁止、unwrap 禁止
-- [Source: `GUI/src-tauri/Cargo.toml`] — 当前依赖：tauri 2.x、serde、tokio、tracing（无 keyring）
-- [Source: `GUI/src-tauri/src/lib.rs`] — 当前：最小 run() + tracing init + 空 test
-- [Source: `GUI/src-tauri/tauri.conf.json`] — identifier: "com.egosync.app"（keyring service name 来源）
-- [Source: `GUI/src/components/settings/GlobalSettingsModal.tsx`] — 前端 LLM 配置 UI（mock state，Story 1.6 接通）
+- [Source: `egosync-app/src-tauri/Cargo.toml`] — 当前依赖：tauri 2.x、serde、tokio、tracing（无 keyring）
+- [Source: `egosync-app/src-tauri/src/lib.rs`] — 当前：最小 run() + tracing init + 空 test
+- [Source: `egosync-app/src-tauri/tauri.conf.json`] — identifier: "com.egosync.app"（keyring service name 来源）
+- [Source: `egosync-app/src/components/settings/GlobalSettingsModal.tsx`] — 前端 LLM 配置 UI（mock state，Story 1.6 接通）
 
 ### 验证命令清单
 
 ```bash
-cd GUI/src-tauri
+cd egosync-app/src-tauri
 cargo check                    # 编译检查
 cargo test                     # 单元测试（需桌面环境）
 cargo clippy -- -D warnings    # lint
@@ -319,12 +319,12 @@ Claude Sonnet 4 (Cascade)
 ### File List
 
 **新建：**
-- `GUI/src-tauri/src/error.rs`
-- `GUI/src-tauri/src/services/mod.rs`
-- `GUI/src-tauri/src/services/secret_store.rs`
-- `GUI/src-tauri/src/commands/mod.rs`
-- `GUI/src-tauri/src/commands/secret.rs`
+- `egosync-app/src-tauri/src/error.rs`
+- `egosync-app/src-tauri/src/services/mod.rs`
+- `egosync-app/src-tauri/src/services/secret_store.rs`
+- `egosync-app/src-tauri/src/commands/mod.rs`
+- `egosync-app/src-tauri/src/commands/secret.rs`
 
 **修改：**
-- `GUI/src-tauri/Cargo.toml`
-- `GUI/src-tauri/src/lib.rs`
+- `egosync-app/src-tauri/Cargo.toml`
+- `egosync-app/src-tauri/src/lib.rs`

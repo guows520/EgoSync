@@ -12,7 +12,7 @@ So that 我能在独立窗口中使用它而不是浏览器。
 
 1. **AC-1: `npm run tauri dev` 启动桌面窗口**
    - Given 开发者在三平台之一上 clone 仓库
-   - When 在 `GUI/` 执行 `npm install && npm run tauri dev`
+   - When 在 `egosync-app/` 执行 `npm install && npm run tauri dev`
    - Then 桌面窗口打开并显示原型 UI（与 `npm run dev` 浏览器版本视觉一致）
 
 2. **AC-2: `npm run tauri build` 产出安装包**
@@ -87,10 +87,10 @@ So that 我能在独立窗口中使用它而不是浏览器。
 
 ### 当前项目状态（必须了解）
 
-- `GUI/` 目录已有完整 React 18 + Vite 5 + TailwindCSS 前端原型
-- `GUI/src/App.tsx` 是 1458 行单文件，包含 21 个 React 组件（全部 mock 数据）
-- `GUI/package.json` 现有 scripts：`dev`/`build`/`preview`
-- `GUI/vite.config.ts` 当前仅有 `plugins: [react()]`
+- `egosync-app/` 目录已有完整 React 18 + Vite 5 + TailwindCSS 前端原型
+- `egosync-app/src/App.tsx` 是 1458 行单文件，包含 21 个 React 组件（全部 mock 数据）
+- `egosync-app/package.json` 现有 scripts：`dev`/`build`/`preview`
+- `egosync-app/vite.config.ts` 当前仅有 `plugins: [react()]`
 - **不存在** `src-tauri/` 目录 — 本 Story 从零创建
 - **禁止** 修改 `App.tsx` 或任何现有组件 — 本 Story 只做 Tauri 桥接
 
@@ -146,7 +146,7 @@ So that 我能在独立窗口中使用它而不是浏览器。
 }
 ```
 
-**注意**：`frontendDist` 为 `"../dist"` 因为 Vite 构建输出到 `GUI/dist/`，而 `tauri.conf.json` 在 `GUI/src-tauri/` 中，相对路径为 `../dist`。
+**注意**：`frontendDist` 为 `"../dist"` 因为 Vite 构建输出到 `egosync-app/dist/`，而 `tauri.conf.json` 在 `egosync-app/src-tauri/` 中，相对路径为 `../dist`。
 
 ### vite.config.ts 精确更新
 
@@ -235,7 +235,7 @@ fn main() {
 本 Story 完成后，项目结构应为：
 
 ```
-GUI/
+egosync-app/
 ├── src/              # 现有前端（不修改）
 ├── src-tauri/        # 新增 Rust 后端骨架
 │   ├── Cargo.toml
@@ -302,17 +302,17 @@ Claude Sonnet 4 (Cascade)
 ### File List
 
 **新增文件：**
-- `GUI/src-tauri/Cargo.toml` — Rust 项目配置及依赖
-- `GUI/src-tauri/Cargo.lock` — Rust 依赖锁定文件
-- `GUI/src-tauri/build.rs` — Tauri build script
-- `GUI/src-tauri/tauri.conf.json` — Tauri 应用配置
-- `GUI/src-tauri/src/main.rs` — Rust 入口
-- `GUI/src-tauri/src/lib.rs` — Tauri Builder 初始化 + tracing
-- `GUI/src-tauri/capabilities/default.json` — Tauri 权限配置
-- `GUI/src-tauri/.cargo/config.toml` — Cargo 镜像源配置（rsproxy）
-- `GUI/src-tauri/icons/*` — 默认应用图标（14 files）
+- `egosync-app/src-tauri/Cargo.toml` — Rust 项目配置及依赖
+- `egosync-app/src-tauri/Cargo.lock` — Rust 依赖锁定文件
+- `egosync-app/src-tauri/build.rs` — Tauri build script
+- `egosync-app/src-tauri/tauri.conf.json` — Tauri 应用配置
+- `egosync-app/src-tauri/src/main.rs` — Rust 入口
+- `egosync-app/src-tauri/src/lib.rs` — Tauri Builder 初始化 + tracing
+- `egosync-app/src-tauri/capabilities/default.json` — Tauri 权限配置
+- `egosync-app/src-tauri/.cargo/config.toml` — Cargo 镜像源配置（rsproxy）
+- `egosync-app/src-tauri/icons/*` — 默认应用图标（14 files）
 
 **修改文件：**
-- `GUI/package.json` — 添加 tauri script, @tauri-apps/cli, @tauri-apps/api
-- `GUI/vite.config.ts` — 添加 Tauri 兼容配置
-- `GUI/package-lock.json` — npm 依赖锁定更新
+- `egosync-app/package.json` — 添加 tauri script, @tauri-apps/cli, @tauri-apps/api
+- `egosync-app/vite.config.ts` — 添加 Tauri 兼容配置
+- `egosync-app/package-lock.json` — npm 依赖锁定更新

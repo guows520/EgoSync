@@ -286,9 +286,9 @@ src/
 - [Source: `_bmad-output/project-context.md` #代码质量与风格规则 > 文件与目录组织] — "前端组件按域分目录"、"新增组件必须放在对应域文件夹，禁止在 App.tsx 中新增组件"、"App.tsx 仅做顶层路由/场景管理"
 - [Source: `_bmad-output/project-context.md` #关键禁止事项] — "❌ 在 App.tsx 中新增组件定义"
 - [Source: `_bmad-output/planning-artifacts/ux-design-specification.md` #Design System Foundation] — Tailwind CSS + shadcn/ui + tailwindcss-animate 技术栈
-- [Source: `GUI/tailwind.config.js`] — content 扫描路径、plugins 配置
-- [Source: `GUI/src/index.css`] — `.breathe` 动画定义
-- [Source: `GUI/package.json`] — 依赖版本确认
+- [Source: `egosync-app/tailwind.config.js`] — content 扫描路径、plugins 配置
+- [Source: `egosync-app/src/index.css`] — `.breathe` 动画定义
+- [Source: `egosync-app/package.json`] — 依赖版本确认
 - [Source: `_bmad-output/implementation-artifacts/1-1-tauri-desktop-app-existing-ui.md`] — Story 1.1 确认前端文件未修改
 - [Source: `_bmad-output/implementation-artifacts/1-2-rust-frontend-test-infrastructure.md`] — Story 1.2 确认 Vitest + RTL 测试基础设施
 

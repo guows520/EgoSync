@@ -65,7 +65,7 @@ so that 我只需要面对一个稳定的"助理"，不必在不同身份之间�
 9. **AC-9 测试通过**
    - `cd GUI && npx tsc --noEmit`
    - `cd GUI && npm run test:frontend`
-   - `cd GUI/src-tauri && cargo test`
+   - `cd egosync-app/src-tauri && cargo test`
    - 至少覆盖：`delegate_to_role` ToolDefinition、`execute_delegate_to_role` 写双方对话与 routing_metadata、无效 role_id 走 AC-8 兜底、follow-up `ChatOptions.tools=None`（AC-3）、跨角色摘要拼接函数（AC-7）。
 
 10. **AC-10 事实记忆与任务委派分流**
@@ -242,37 +242,37 @@ so that 我只需要面对一个稳定的"助理"，不必在不同身份之间�
 
 ### 新建文件
 
-- `GUI/src-tauri/src/services/delegate_bridge.rs` — 本地回环 HTTP bridge，供 opencode custom tool 同步调用后端委派逻辑并返回真实角色回复
-- `GUI/src-tauri/src/services/event_router.rs` — opencode 全局事件流按 sessionID 分发，避免跨会话 token 污染
+- `egosync-app/src-tauri/src/services/delegate_bridge.rs` — 本地回环 HTTP bridge，供 opencode custom tool 同步调用后端委派逻辑并返回真实角色回复
+- `egosync-app/src-tauri/src/services/event_router.rs` — opencode 全局事件流按 sessionID 分发，避免跨会话 token 污染
 
 ### 修改文件
 
 | Path | Action | Notes |
 |---|---|---|
-| `GUI/src-tauri/src/db/pool.rs` | UPDATE | `run_conversations_migrations` 追加 `ALTER routing_metadata` 容错 |
-| `GUI/src-tauri/src/db/conversations.rs` | UPDATE | `Message` 列清单加 `routing_metadata`；新增 `update_message_routing_metadata` |
-| `GUI/src-tauri/src/db/roles.rs` | UPDATE（如需） | 若无 `list_active_roles` 则新增（status='active' ORDER BY created_at） |
-| `GUI/src-tauri/src/models/chat.rs` | UPDATE | `Message` 加 `routing_metadata: Option<String>` |
-| `GUI/src-tauri/src/services/agent_engine.rs` | UPDATE | opencode session 复用/事件订阅；sessionID 注册到 delegate bridge；delegate tool 活动态拆分两气泡；`messageId` 路由；`append_delegation_metadata` / `execute_delegate_to_role` 等委派核心逻辑 |
-| `GUI/src-tauri/src/services/agent_config.rs` | UPDATE | 写入 `delegate_to_role.ts` custom tool；工具通过本地 bridge 返回 `role_response` 给管家 |
-| `GUI/src-tauri/src/services/sidecar.rs` | UPDATE | 支持向 opencode 子进程注入 bridge token/port 环境变量 |
-| `GUI/src-tauri/src/services/mod.rs` | UPDATE | 注册 `delegate_bridge` / `event_router` 模块 |
-| `GUI/src-tauri/src/lib.rs` | UPDATE | 启动 delegate bridge、注入 sidecar env、启动 event router |
-| `GUI/src-tauri/src/commands/chat.rs` | UPDATE | `chat_send_message` 把 `user_msg.id` 透传 `run_stream` |
-| `GUI/src/types/chat.ts` | UPDATE | `ChatMessage.routingMetadata` 与 `StreamPayload.messageId` 支持当前流式协议 |
-| `GUI/src/components/chat/ChatStream.tsx` | UPDATE | 多流式气泡分桶、done 后输入框即时解锁、late history/sendMessage 竞态合并 |
-| `GUI/src/components/chat/ChatBubble.tsx` | UPDATE | 去除已有文本流式气泡尾部光标，保留空内容等待点 |
-| `GUI/src/components/chat/*.test.tsx` | UPDATE | 覆盖两气泡委派、即时解锁、历史合并、尾部光标移除等回归 |
-| `GUI/src/components/onboarding/OnboardingView.tsx` | UPDATE | ChatMessage 字面量补 `routingMetadata` 字段 |
+| `egosync-app/src-tauri/src/db/pool.rs` | UPDATE | `run_conversations_migrations` 追加 `ALTER routing_metadata` 容错 |
+| `egosync-app/src-tauri/src/db/conversations.rs` | UPDATE | `Message` 列清单加 `routing_metadata`；新增 `update_message_routing_metadata` |
+| `egosync-app/src-tauri/src/db/roles.rs` | UPDATE（如需） | 若无 `list_active_roles` 则新增（status='active' ORDER BY created_at） |
+| `egosync-app/src-tauri/src/models/chat.rs` | UPDATE | `Message` 加 `routing_metadata: Option<String>` |
+| `egosync-app/src-tauri/src/services/agent_engine.rs` | UPDATE | opencode session 复用/事件订阅；sessionID 注册到 delegate bridge；delegate tool 活动态拆分两气泡；`messageId` 路由；`append_delegation_metadata` / `execute_delegate_to_role` 等委派核心逻辑 |
+| `egosync-app/src-tauri/src/services/agent_config.rs` | UPDATE | 写入 `delegate_to_role.ts` custom tool；工具通过本地 bridge 返回 `role_response` 给管家 |
+| `egosync-app/src-tauri/src/services/sidecar.rs` | UPDATE | 支持向 opencode 子进程注入 bridge token/port 环境变量 |
+| `egosync-app/src-tauri/src/services/mod.rs` | UPDATE | 注册 `delegate_bridge` / `event_router` 模块 |
+| `egosync-app/src-tauri/src/lib.rs` | UPDATE | 启动 delegate bridge、注入 sidecar env、启动 event router |
+| `egosync-app/src-tauri/src/commands/chat.rs` | UPDATE | `chat_send_message` 把 `user_msg.id` 透传 `run_stream` |
+| `egosync-app/src/types/chat.ts` | UPDATE | `ChatMessage.routingMetadata` 与 `StreamPayload.messageId` 支持当前流式协议 |
+| `egosync-app/src/components/chat/ChatStream.tsx` | UPDATE | 多流式气泡分桶、done 后输入框即时解锁、late history/sendMessage 竞态合并 |
+| `egosync-app/src/components/chat/ChatBubble.tsx` | UPDATE | 去除已有文本流式气泡尾部光标，保留空内容等待点 |
+| `egosync-app/src/components/chat/*.test.tsx` | UPDATE | 覆盖两气泡委派、即时解锁、历史合并、尾部光标移除等回归 |
+| `egosync-app/src/components/onboarding/OnboardingView.tsx` | UPDATE | ChatMessage 字面量补 `routingMetadata` 字段 |
 
 ### 不动的文件
 
-- `GUI/src-tauri/migrations/*.sql` — 不新建文件（沿用 raw_sql ALTER 模式）
-- `GUI/src/App.tsx` — 不挂 modal，不监听 routing 事件
-- `GUI/src/components/role/*` — Story 2.2 路径完全保留
-- `GUI/src/components/butler/ButlerView.tsx` — 无需改
-- `GUI/src/components/onboarding/*` — onboarding 业务路径不变；仅类型字段补齐
-- `GUI/src/components/modals/*` — 不新增 RouteConfirmModal（已废弃方案）
+- `egosync-app/src-tauri/migrations/*.sql` — 不新建文件（沿用 raw_sql ALTER 模式）
+- `egosync-app/src/App.tsx` — 不挂 modal，不监听 routing 事件
+- `egosync-app/src/components/role/*` — Story 2.2 路径完全保留
+- `egosync-app/src/components/butler/ButlerView.tsx` — 无需改
+- `egosync-app/src/components/onboarding/*` — onboarding 业务路径不变；仅类型字段补齐
+- `egosync-app/src/components/modals/*` — 不新增 RouteConfirmModal（已废弃方案）
 
 ## References
 
@@ -284,10 +284,10 @@ so that 我只需要面对一个稳定的"助理"，不必在不同身份之间�
 - [Source: `_bmad-output/implementation-artifacts/2-1-role-crud-archive-delete.md` — 错误就地展示 / sprint-status 同步纪律]
 - [Source: `_bmad-output/implementation-artifacts/2-2-role-view-switch-butler.md` — role_id 通路 / build_role_messages / chat_get_role_conversation 已就位]
 - [Source: `_bmad-output/implementation-artifacts/epic-1-retro-2026-05-23.md` — 自动化测试 ≠ 桌面验证；ALTER 容错模式]
-- [Source: `GUI/src-tauri/src/services/agent_engine.rs#execute_create_role` — 工具执行模板，`execute_delegate_to_role` 直接复用其骨架]
-- [Source: `GUI/src-tauri/src/services/agent_engine.rs#run_stream` — follow-up `tools: None` 已是既有行为，AC-3 借此天然成立]
-- [Source: `GUI/src-tauri/src/db/conversations.rs` — `get_or_create_conversation_by_role` / `insert_message` / `update_message_content` 已就绪]
-- [Source: `GUI/src-tauri/src/db/pool.rs#run_conversations_migrations` — 容错 ALTER 模式参考]
+- [Source: `egosync-app/src-tauri/src/services/agent_engine.rs#execute_create_role` — 工具执行模板，`execute_delegate_to_role` 直接复用其骨架]
+- [Source: `egosync-app/src-tauri/src/services/agent_engine.rs#run_stream` — follow-up `tools: None` 已是既有行为，AC-3 借此天然成立]
+- [Source: `egosync-app/src-tauri/src/db/conversations.rs` — `get_or_create_conversation_by_role` / `insert_message` / `update_message_content` 已就绪]
+- [Source: `egosync-app/src-tauri/src/db/pool.rs#run_conversations_migrations` — 容错 ALTER 模式参考]
 
 ## Dev Agent Record
 
@@ -331,7 +331,7 @@ Claude Sonnet 4.5
 
 **验证证据：**
 
-- `cd GUI/src-tauri && cargo test --lib` = **77 passed**（原 Story 2.3 实施，含本 story 12 个新增）
+- `cd egosync-app/src-tauri && cargo test --lib` = **77 passed**（原 Story 2.3 实施，含本 story 12 个新增）
 - `cd GUI && npx tsc --noEmit` 无错误
 - `cd GUI && npm run test:frontend` = **28 passed / 8 files**（原 Story 2.3 实施）
 - 后续同步桥接加固：`cargo test --lib` = **155 passed**
@@ -342,30 +342,30 @@ Claude Sonnet 4.5
 
 **修改文件：**
 
-- `GUI/src-tauri/src/db/pool.rs` — 追加 routing_metadata 容错 ALTER
-- `GUI/src-tauri/src/db/conversations.rs` — Message SELECT 加列、insert_message 默认 None、新增 `update_message_routing_metadata`、测试 setup ALTER + 2 个新单测
-- `GUI/src-tauri/src/models/chat.rs` — Message 加 `routing_metadata: Option<String>`
-- `GUI/src-tauri/src/services/agent_engine.rs` — `build_cross_role_summary` / `delegate_to_role_tool_definition` / `execute_delegate_to_role`；opencode session/event 路由；delegate tool 活动态拆分两气泡；`append_delegation_metadata`；相关单测
-- `GUI/src-tauri/src/services/agent_config.rs` — 写入 `delegate_to_role.ts` custom tool；通过本地 bridge 返回真实角色回复
-- `GUI/src-tauri/src/services/sidecar.rs` — 注入 bridge token/port 环境变量
-- `GUI/src-tauri/src/services/mod.rs` — 注册 `delegate_bridge` / `event_router`
-- `GUI/src-tauri/src/services/delegate_bridge.rs` — 新增本地 bridge，承接 opencode custom tool 并调用 `execute_delegate_to_role`
-- `GUI/src-tauri/src/services/event_router.rs` — 新增 opencode 全局事件流 sessionID 分发器
-- `GUI/src-tauri/src/lib.rs` — 启动 delegate bridge、event router，并在 sidecar 启动前注入 bridge 环境变量
-- `GUI/src-tauri/src/commands/chat.rs` — `chat_send_message` 把 `user_msg.id` 透传 `run_stream`
-- `GUI/src/types/chat.ts` — `ChatMessage` 加 `routingMetadata: string | null`
-- `GUI/src/components/chat/ChatStream.tsx` — 多气泡分桶、done 后即时解锁、late history/sendMessage 竞态保护
-- `GUI/src/components/chat/ChatBubble.tsx` — 已有文本流式气泡不再显示尾部光标；空内容仍显示等待点
-- `GUI/src/components/chat/ChatStream.test.tsx` — 覆盖委派两段式、即时解锁、history 合并、busy/assistant 返回、重复内容等回归
-- `GUI/src/components/chat/ChatBubble.test.tsx` — assistantMsg 字面量补字段；覆盖尾部光标移除与空等待点
-- `GUI/src/components/onboarding/OnboardingView.tsx` — 5 处 ChatMessage 字面量补字段
+- `egosync-app/src-tauri/src/db/pool.rs` — 追加 routing_metadata 容错 ALTER
+- `egosync-app/src-tauri/src/db/conversations.rs` — Message SELECT 加列、insert_message 默认 None、新增 `update_message_routing_metadata`、测试 setup ALTER + 2 个新单测
+- `egosync-app/src-tauri/src/models/chat.rs` — Message 加 `routing_metadata: Option<String>`
+- `egosync-app/src-tauri/src/services/agent_engine.rs` — `build_cross_role_summary` / `delegate_to_role_tool_definition` / `execute_delegate_to_role`；opencode session/event 路由；delegate tool 活动态拆分两气泡；`append_delegation_metadata`；相关单测
+- `egosync-app/src-tauri/src/services/agent_config.rs` — 写入 `delegate_to_role.ts` custom tool；通过本地 bridge 返回真实角色回复
+- `egosync-app/src-tauri/src/services/sidecar.rs` — 注入 bridge token/port 环境变量
+- `egosync-app/src-tauri/src/services/mod.rs` — 注册 `delegate_bridge` / `event_router`
+- `egosync-app/src-tauri/src/services/delegate_bridge.rs` — 新增本地 bridge，承接 opencode custom tool 并调用 `execute_delegate_to_role`
+- `egosync-app/src-tauri/src/services/event_router.rs` — 新增 opencode 全局事件流 sessionID 分发器
+- `egosync-app/src-tauri/src/lib.rs` — 启动 delegate bridge、event router，并在 sidecar 启动前注入 bridge 环境变量
+- `egosync-app/src-tauri/src/commands/chat.rs` — `chat_send_message` 把 `user_msg.id` 透传 `run_stream`
+- `egosync-app/src/types/chat.ts` — `ChatMessage` 加 `routingMetadata: string | null`
+- `egosync-app/src/components/chat/ChatStream.tsx` — 多气泡分桶、done 后即时解锁、late history/sendMessage 竞态保护
+- `egosync-app/src/components/chat/ChatBubble.tsx` — 已有文本流式气泡不再显示尾部光标；空内容仍显示等待点
+- `egosync-app/src/components/chat/ChatStream.test.tsx` — 覆盖委派两段式、即时解锁、history 合并、busy/assistant 返回、重复内容等回归
+- `egosync-app/src/components/chat/ChatBubble.test.tsx` — assistantMsg 字面量补字段；覆盖尾部光标移除与空等待点
+- `egosync-app/src/components/onboarding/OnboardingView.tsx` — 5 处 ChatMessage 字面量补字段
 - `_bmad-output/implementation-artifacts/2-3-butler-intent-routing.md` — Tasks 勾选/Completion Notes/File List/Change Log/状态推进
 - `_bmad-output/implementation-artifacts/sprint-status.yaml` — 状态推进与 last_updated
 
 **新建文件：**
 
-- `GUI/src-tauri/src/services/delegate_bridge.rs`
-- `GUI/src-tauri/src/services/event_router.rs`
+- `egosync-app/src-tauri/src/services/delegate_bridge.rs`
+- `egosync-app/src-tauri/src/services/event_router.rs`
 
 ### Change Log
 

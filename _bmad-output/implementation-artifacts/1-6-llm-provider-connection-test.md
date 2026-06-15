@@ -26,7 +26,7 @@ So that 确认配置正确后才开始使用。
 ### Phase 1: 数据库基础 — SQLx + Migration (AC: #6, #9)
 
 - [x] **T1.1** 在 `Cargo.toml` 添加依赖：`sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }`、`uuid = { version = "1", features = ["v4"] }`、`reqwest = { version = "0.12", features = ["json", "stream"] }`
-- [x] **T1.2** 创建 `GUI/src-tauri/migrations/001_initial_schema.sql`：
+- [x] **T1.2** 创建 `egosync-app/src-tauri/migrations/001_initial_schema.sql`：
   ```sql
   -- 主数据库 egosync.db 初始 schema
 
@@ -135,7 +135,7 @@ So that 确认配置正确后才开始使用。
 
 ### Phase 6: 前端接通 (AC: #7)
 
-- [x] **T6.1** 创建 `GUI/src/types/settings.ts`：
+- [x] **T6.1** 创建 `egosync-app/src/types/settings.ts`：
   ```typescript
   export interface LlmConfig {
     id: string;
@@ -165,7 +165,7 @@ So that 确认配置正确后才开始使用。
     apiKey?: string;  // 有值则更新 keyring
   }
   ```
-- [x] **T6.2** 创建 `GUI/src/services/llmConfigService.ts`：
+- [x] **T6.2** 创建 `egosync-app/src/services/llmConfigService.ts`：
   ```typescript
   import { invoke } from '@tauri-apps/api/core';
   import type { LlmConfig, CreateLlmConfigInput, UpdateLlmConfigInput } from '../types/settings';
@@ -318,37 +318,37 @@ tauri::Builder::default()
 
 | 文件 | 内容 |
 |---|---|
-| `GUI/src-tauri/migrations/001_initial_schema.sql` | llm_configs + app_settings 表 |
-| `GUI/src-tauri/src/db/mod.rs` | db 模块声明 |
-| `GUI/src-tauri/src/db/pool.rs` | SQLite 连接池初始化 + migration |
-| `GUI/src-tauri/src/db/settings.rs` | llm_configs CRUD 操作 |
-| `GUI/src-tauri/src/models/mod.rs` | models 模块声明 |
-| `GUI/src-tauri/src/models/settings.rs` | LlmConfig 数据模型 |
-| `GUI/src-tauri/src/llm/mod.rs` | llm 模块声明 |
-| `GUI/src-tauri/src/llm/traits.rs` | LlmProvider trait 定义 |
-| `GUI/src-tauri/src/llm/openai.rs` | OpenAiProvider 实现 |
-| `GUI/src-tauri/src/llm/anthropic.rs` | AnthropicProvider 实现 |
-| `GUI/src-tauri/src/services/llm_config.rs` | LLM 配置 service 层 |
-| `GUI/src-tauri/src/commands/llm_config.rs` | Tauri command 薄层 |
-| `GUI/src/types/settings.ts` | LlmConfig TS 类型 |
-| `GUI/src/services/llmConfigService.ts` | 前端 service 封装 invoke |
+| `egosync-app/src-tauri/migrations/001_initial_schema.sql` | llm_configs + app_settings 表 |
+| `egosync-app/src-tauri/src/db/mod.rs` | db 模块声明 |
+| `egosync-app/src-tauri/src/db/pool.rs` | SQLite 连接池初始化 + migration |
+| `egosync-app/src-tauri/src/db/settings.rs` | llm_configs CRUD 操作 |
+| `egosync-app/src-tauri/src/models/mod.rs` | models 模块声明 |
+| `egosync-app/src-tauri/src/models/settings.rs` | LlmConfig 数据模型 |
+| `egosync-app/src-tauri/src/llm/mod.rs` | llm 模块声明 |
+| `egosync-app/src-tauri/src/llm/traits.rs` | LlmProvider trait 定义 |
+| `egosync-app/src-tauri/src/llm/openai.rs` | OpenAiProvider 实现 |
+| `egosync-app/src-tauri/src/llm/anthropic.rs` | AnthropicProvider 实现 |
+| `egosync-app/src-tauri/src/services/llm_config.rs` | LLM 配置 service 层 |
+| `egosync-app/src-tauri/src/commands/llm_config.rs` | Tauri command 薄层 |
+| `egosync-app/src/types/settings.ts` | LlmConfig TS 类型 |
+| `egosync-app/src/services/llmConfigService.ts` | 前端 service 封装 invoke |
 
 **本 Story 修改的文件：**
 
 | 文件 | 修改内容 |
 |---|---|
-| `GUI/src-tauri/Cargo.toml` | 添加 sqlx + uuid + reqwest 依赖 |
-| `GUI/src-tauri/src/lib.rs` | 添加 `mod db; mod models; mod llm;` + `.setup()` 初始化 DB + 注册新 commands |
-| `GUI/src-tauri/src/services/mod.rs` | 添加 `pub mod llm_config;` |
-| `GUI/src-tauri/src/commands/mod.rs` | 添加 `pub mod llm_config;` |
-| `GUI/src/components/settings/GlobalSettingsModal.tsx` | 移除 mock state → 使用 service 真实数据 + 测试连接 UI |
-| `GUI/package.json` | 添加 `@tauri-apps/api` 依赖（如尚未安装） |
+| `egosync-app/src-tauri/Cargo.toml` | 添加 sqlx + uuid + reqwest 依赖 |
+| `egosync-app/src-tauri/src/lib.rs` | 添加 `mod db; mod models; mod llm;` + `.setup()` 初始化 DB + 注册新 commands |
+| `egosync-app/src-tauri/src/services/mod.rs` | 添加 `pub mod llm_config;` |
+| `egosync-app/src-tauri/src/commands/mod.rs` | 添加 `pub mod llm_config;` |
+| `egosync-app/src/components/settings/GlobalSettingsModal.tsx` | 移除 mock state → 使用 service 真实数据 + 测试连接 UI |
+| `egosync-app/package.json` | 添加 `@tauri-apps/api` 依赖（如尚未安装） |
 
 **不修改的文件（确认无需改动）：**
-- `GUI/src-tauri/src/error.rs` — `AppError` 已含所有需要的变体
-- `GUI/src-tauri/src/services/secret_store.rs` — 被 llm_config service 调用，本身不改
-- `GUI/src-tauri/src/commands/secret.rs` — 不变
-- `GUI/src-tauri/tauri.conf.json` — 不需要修改（Rust 后端 HTTP 不受 CSP 限制）
+- `egosync-app/src-tauri/src/error.rs` — `AppError` 已含所有需要的变体
+- `egosync-app/src-tauri/src/services/secret_store.rs` — 被 llm_config service 调用，本身不改
+- `egosync-app/src-tauri/src/commands/secret.rs` — 不变
+- `egosync-app/src-tauri/tauri.conf.json` — 不需要修改（Rust 后端 HTTP 不受 CSP 限制）
 
 **与架构文档对齐：**
 
@@ -379,17 +379,17 @@ tauri::Builder::default()
 - [Source: `_bmad-output/planning-artifacts/architecture.md` #Structure Patterns] — Rust 后端目录结构、前端 services/ 目录
 - [Source: `_bmad-output/planning-artifacts/architecture.md` #Authentication & Security] — keyring 3.x、api_key_ref 模式
 - [Source: `_bmad-output/project-context.md` #关键实现规则] — serde camelCase、命名约定、分层规则
-- [Source: `GUI/src-tauri/Cargo.toml`] — 当前依赖清单（无 sqlx/reqwest/uuid）
-- [Source: `GUI/src-tauri/src/lib.rs`] — 当前结构：3 mod + Builder + invoke_handler
-- [Source: `GUI/src-tauri/src/services/secret_store.rs`] — keyring Entry 用法：`Entry::new_with_target()`
-- [Source: `GUI/src-tauri/src/error.rs`] — AppError 手动 Serialize 模式
-- [Source: `GUI/src-tauri/tauri.conf.json`] — identifier: "com.egosync.app"
-- [Source: `GUI/src/components/settings/GlobalSettingsModal.tsx`] — 当前 mock state 代码（待替换）
+- [Source: `egosync-app/src-tauri/Cargo.toml`] — 当前依赖清单（无 sqlx/reqwest/uuid）
+- [Source: `egosync-app/src-tauri/src/lib.rs`] — 当前结构：3 mod + Builder + invoke_handler
+- [Source: `egosync-app/src-tauri/src/services/secret_store.rs`] — keyring Entry 用法：`Entry::new_with_target()`
+- [Source: `egosync-app/src-tauri/src/error.rs`] — AppError 手动 Serialize 模式
+- [Source: `egosync-app/src-tauri/tauri.conf.json`] — identifier: "com.egosync.app"
+- [Source: `egosync-app/src/components/settings/GlobalSettingsModal.tsx`] — 当前 mock state 代码（待替换）
 
 ### 验证命令清单
 
 ```bash
-cd GUI/src-tauri
+cd egosync-app/src-tauri
 cargo check                    # 编译检查
 cargo test                     # 单元测试
 cargo clippy -- -D warnings    # lint
@@ -427,27 +427,27 @@ npm run tauri dev              # 集成验证：打开设置 → LLM tab → CRU
 ## File List
 
 ### 新建文件
-- `GUI/src-tauri/migrations/001_initial_schema.sql`
-- `GUI/src-tauri/src/db/mod.rs`
-- `GUI/src-tauri/src/db/pool.rs`
-- `GUI/src-tauri/src/db/settings.rs`
-- `GUI/src-tauri/src/models/mod.rs`
-- `GUI/src-tauri/src/models/settings.rs`
-- `GUI/src-tauri/src/llm/mod.rs`
-- `GUI/src-tauri/src/llm/traits.rs`
-- `GUI/src-tauri/src/llm/openai.rs`
-- `GUI/src-tauri/src/llm/anthropic.rs`
-- `GUI/src-tauri/src/services/llm_config.rs`
-- `GUI/src-tauri/src/commands/llm_config.rs`
-- `GUI/src/types/settings.ts`
-- `GUI/src/services/llmConfigService.ts`
+- `egosync-app/src-tauri/migrations/001_initial_schema.sql`
+- `egosync-app/src-tauri/src/db/mod.rs`
+- `egosync-app/src-tauri/src/db/pool.rs`
+- `egosync-app/src-tauri/src/db/settings.rs`
+- `egosync-app/src-tauri/src/models/mod.rs`
+- `egosync-app/src-tauri/src/models/settings.rs`
+- `egosync-app/src-tauri/src/llm/mod.rs`
+- `egosync-app/src-tauri/src/llm/traits.rs`
+- `egosync-app/src-tauri/src/llm/openai.rs`
+- `egosync-app/src-tauri/src/llm/anthropic.rs`
+- `egosync-app/src-tauri/src/services/llm_config.rs`
+- `egosync-app/src-tauri/src/commands/llm_config.rs`
+- `egosync-app/src/types/settings.ts`
+- `egosync-app/src/services/llmConfigService.ts`
 
 ### 修改文件
-- `GUI/src-tauri/Cargo.toml` — 添加 sqlx/uuid/reqwest 依赖
-- `GUI/src-tauri/src/lib.rs` — 添加 mod db/models/llm + setup hook + 注册 commands
-- `GUI/src-tauri/src/services/mod.rs` — 添加 pub mod llm_config
-- `GUI/src-tauri/src/commands/mod.rs` — 添加 pub mod llm_config
-- `GUI/src/components/settings/GlobalSettingsModal.tsx` — 真实数据接通 + 测试连接 UI
+- `egosync-app/src-tauri/Cargo.toml` — 添加 sqlx/uuid/reqwest 依赖
+- `egosync-app/src-tauri/src/lib.rs` — 添加 mod db/models/llm + setup hook + 注册 commands
+- `egosync-app/src-tauri/src/services/mod.rs` — 添加 pub mod llm_config
+- `egosync-app/src-tauri/src/commands/mod.rs` — 添加 pub mod llm_config
+- `egosync-app/src/components/settings/GlobalSettingsModal.tsx` — 真实数据接通 + 测试连接 UI
 
 ## Change Log
 

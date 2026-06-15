@@ -76,7 +76,7 @@ so that 我能控制 AI 记住什么，并阻止错误记忆继续影响后续�
 8. **AC-8 验证通过**
    - `cd GUI && npx tsc --noEmit`
    - `cd GUI && npm run test:frontend`
-   - `cd GUI/src-tauri && cargo test`
+   - `cd egosync-app/src-tauri && cargo test`
    - `cd GUI && npm run build`
    - 因本 story 修改 UI，必须启动 `cd GUI && npm run tauri dev` 做人工验证：角色记忆页删除、管家记忆页删除、类别筛选后删除、取消删除、删除失败态、badge 更新、历史对话不受影响。
 
@@ -84,25 +84,25 @@ so that 我能控制 AI 记住什么，并阻止错误记忆继续影响后续�
 
 ### Phase 1: 后端删除 API（AC: #3, #6, #7, #8）
 
-- [x] T1.1 为 `GUI/src-tauri/src/db/memories.rs` 新增删除 helper
+- [x] T1.1 为 `egosync-app/src-tauri/src/db/memories.rs` 新增删除 helper
   - 新增 `delete_memory(pool, memory_id) -> Result<bool, AppError>` 或等价函数
   - SQL 只允许：`DELETE FROM memories WHERE id = ?`
   - 使用 SQLx `SqliteQueryResult::rows_affected()` 判断是否实际删除
   - 不对 `conversations.db` 做任何 DELETE / UPDATE
   - 不改变 `insert_memories`、`dedup_memories`、`count_memories`、`list_*` 现有语义
 
-- [x] T1.2 更新 `GUI/src-tauri/src/services/memory_query.rs`
+- [x] T1.2 更新 `egosync-app/src-tauri/src/services/memory_query.rs`
   - 新增 `delete_memory(pool, memory_id) -> Result<(), AppError>`
   - 调用 db helper；若 `rows_affected == 0`，返回 `AppError::NotFound("记忆不存在: ...")`
   - service 层表达“选择性遗忘 = 删除可见结构化记忆记录 + 记录同源屏蔽”的业务语义
   - 不在此 service 中重跑 `memory_pipeline`
 
-- [x] T1.3 更新 `GUI/src-tauri/src/commands/memory.rs`
+- [x] T1.3 更新 `egosync-app/src-tauri/src/commands/memory.rs`
   - 新增 Tauri command：`memory_delete(pool, memory_id: String) -> Result<(), AppError>`
   - command 层保持薄层，仅转发到 `memory_query::delete_memory`
   - command 命名为 `memory_delete`，与现有 `memory_list` / `memory_count` 风格一致
 
-- [x] T1.4 更新 `GUI/src-tauri/src/lib.rs`
+- [x] T1.4 更新 `egosync-app/src-tauri/src/lib.rs`
   - 在 `tauri::generate_handler!` 中注册 `commands::memory::memory_delete`
   - 不改其它 command 注册顺序语义
 
@@ -114,12 +114,12 @@ so that 我能控制 AI 记住什么，并阻止错误记忆继续影响后续�
 
 ### Phase 2: 前端 service、hook 与 MemoryTab 遗忘交互（AC: #1, #2, #4, #5, #8）
 
-- [x] T2.1 更新 `GUI/src/services/memoryService.ts`
+- [x] T2.1 更新 `egosync-app/src/services/memoryService.ts`
   - 新增 `delete(memoryId: string): Promise<void>`，invoke `memory_delete`，参数为 `{ memoryId }`
   - 保持现有 `list` / `listAll` / `count` / `getSourceMessages` 调用形状不变
   - 不引入新依赖，不绕过 Tauri service 层
 
-- [x] T2.2 更新 `GUI/src/components/role/MemoryTab.tsx` props 与状态
+- [x] T2.2 更新 `egosync-app/src/components/role/MemoryTab.tsx` props 与状态
   - 新增可选 `onMemoryDeleted?: () => void` 或等价回调，供父组件刷新 badge
   - 复用 `useMemories` 已返回的 `refetch`
   - 新增 per-memory 状态：待确认 memory id、正在删除 memory id、删除错误文案
@@ -139,13 +139,13 @@ so that 我能控制 AI 记住什么，并阻止错误记忆继续影响后续�
   - 失败后允许用户再次点击 `确认遗忘` 重试
   - 不使用 toast/snackbar/alert
 
-- [x] T2.5 更新 `GUI/src/components/role/RoleWorkspacePanel.tsx`
+- [x] T2.5 更新 `egosync-app/src/components/role/RoleWorkspacePanel.tsx`
   - 将 `onMemoryDeleted` 传给角色记忆 `MemoryTab`
   - 删除成功后重新调用 `memoryService.count({ roleId: role.id, category: memoryCategory })`
   - 继续让 badge 跟随当前 `memoryCategory`
   - 保持角色页只作用当前 `role.id`
 
-- [x] T2.6 更新 `GUI/src/components/butler/ButlerWorkspacePanel.tsx`
+- [x] T2.6 更新 `egosync-app/src/components/butler/ButlerWorkspacePanel.tsx`
   - 将 `onMemoryDeleted` 传给管家记忆 `MemoryTab`
   - 删除成功后重新调用 `memoryService.count({ roleId: null, includeRoleMemories: true, category: memoryCategory })`
   - 保持 `includeRoleMemories` 总览语义，不误改成只看 `role_id = NULL`
@@ -162,7 +162,7 @@ so that 我能控制 AI 记住什么，并阻止错误记忆继续影响后续�
 
 - [x] T3.1 运行 `cd GUI && npx tsc --noEmit`
 - [x] T3.2 运行 `cd GUI && npm run test:frontend`
-- [x] T3.3 运行 `cd GUI/src-tauri && cargo test`
+- [x] T3.3 运行 `cd egosync-app/src-tauri && cargo test`
 - [x] T3.4 运行 `cd GUI && npm run build`
 - [x] T3.5 启动 `cd GUI && npm run tauri dev` 人工验证 UI
   - 角色记忆页：点击遗忘 → 取消 → 无副作用
@@ -178,12 +178,12 @@ so that 我能控制 AI 记住什么，并阻止错误记忆继续影响后续�
 > 严重度统计：1 HIGH / 3 MED / 2 LOW（已 patch/defer）；另 3 项作为噪声 dismiss。
 > 快乐路径与常规失败路径功能正确；HIGH 项为"记忆已在后端被删 / 并发删除"边界下的真实 UX 缺陷。
 
-- [x] [Review][Patch] NotFound 被当作可重试临时错误且失败后不 refetch，导致"幽灵卡片"永久残留 (HIGH) [GUI/src/components/role/MemoryTab.tsx:143-173]
-- [x] [Review][Patch] role/category 切换的重置 effect 未清除 `deletingMemoryId`，切换后可能残留删除中状态 (MED) [GUI/src/components/role/MemoryTab.tsx:86-90]
-- [x] [Review][Patch] 删除进行中全局禁用所有"遗忘"按钮，应仅禁用当前正在删除的卡片 (MED) [GUI/src/components/role/MemoryTab.tsx:231]
-- [x] [Review][Patch] 缺少"删除中（pending promise 未 resolve）禁用重复点击"的测试，AC#8/T2.2 要求该行为 (MED) [GUI/src/components/role/MemoryTab.test.tsx]
-- [x] [Review][Defer] useMemories 中 refetch 失败会覆盖删除成功结果并显示"加载失败"，遮蔽真实删除状态 (LOW) [GUI/src/hooks/useMemories.ts:35-40] — deferred, pre-existing（本故事 diff 未修改该 hook）
-- [x] [Review][Defer] 确认对话框缺少 `role="alertdialog"` / `aria-live` / 焦点管理，键盘与读屏可达性不足 (LOW) [GUI/src/components/role/MemoryTab.tsx:243-276] — deferred，统一在 Epic 8 story 8-3（WCAG 审计）处理
+- [x] [Review][Patch] NotFound 被当作可重试临时错误且失败后不 refetch，导致"幽灵卡片"永久残留 (HIGH) [egosync-app/src/components/role/MemoryTab.tsx:143-173]
+- [x] [Review][Patch] role/category 切换的重置 effect 未清除 `deletingMemoryId`，切换后可能残留删除中状态 (MED) [egosync-app/src/components/role/MemoryTab.tsx:86-90]
+- [x] [Review][Patch] 删除进行中全局禁用所有"遗忘"按钮，应仅禁用当前正在删除的卡片 (MED) [egosync-app/src/components/role/MemoryTab.tsx:231]
+- [x] [Review][Patch] 缺少"删除中（pending promise 未 resolve）禁用重复点击"的测试，AC#8/T2.2 要求该行为 (MED) [egosync-app/src/components/role/MemoryTab.test.tsx]
+- [x] [Review][Defer] useMemories 中 refetch 失败会覆盖删除成功结果并显示"加载失败"，遮蔽真实删除状态 (LOW) [egosync-app/src/hooks/useMemories.ts:35-40] — deferred, pre-existing（本故事 diff 未修改该 hook）
+- [x] [Review][Defer] 确认对话框缺少 `role="alertdialog"` / `aria-live` / 焦点管理，键盘与读屏可达性不足 (LOW) [egosync-app/src/components/role/MemoryTab.tsx:243-276] — deferred，统一在 Epic 8 story 8-3（WCAG 审计）处理
 
 ## Dev Notes
 
@@ -206,19 +206,19 @@ so that 我能控制 AI 记住什么，并阻止错误记忆继续影响后续�
 
 | Path | Current state | This story changes | Must preserve |
 |---|---|---|---|
-| `GUI/src/components/role/MemoryTab.tsx` | 已支持 category 受控/非受控、真实 list/listAll、来源懒加载、禁用的 `遗忘` 按钮。[Source: `GUI/src/components/role/MemoryTab.tsx`:57-79,91-120,172-178] | 启用 `遗忘`，添加自定义确认、删除中/失败态、删除成功刷新 list 与父级 badge。 | 角色/管家数据边界；来源展开行为；`task_status` 默认隐藏；暖空态；ARIA 展开属性。 |
-| `GUI/src/hooks/useMemories.ts` | 封装 list/listAll、loading/error、`refetch`、取消旧请求防 stale。[Source: `GUI/src/hooks/useMemories.ts`:17-51] | 复用 `refetch`，无需重写 hook；如需新增返回值应保持旧调用兼容。 | role/category 切换防 stale；错误中文友好。 |
-| `GUI/src/services/memoryService.ts` | 现有 `list`、`listAll`、`count`、`getSourceMessages`；无 delete。[Source: `GUI/src/services/memoryService.ts`:10-28] | 新增 `delete(memoryId)` invoke `memory_delete`。 | Tauri v2 `@tauri-apps/api/core` invoke；现有方法签名。 |
-| `GUI/src/types/memory.ts` | 定义 `Memory`、`MemoryCategory`、`MemorySourceMessage`、`MemoryListOptions`。[Source: `GUI/src/types/memory.ts`:1-26] | 通常无需修改；若新增删除回调类型，保持局部。 | `sourceMessageIds` 仍是字符串；UI 不直接解析为来源真相。 |
-| `GUI/src/components/role/RoleWorkspacePanel.tsx` | 用 `memoryService.count({ roleId, category })` 显示当前角色 badge；category 状态在 Panel。[Source: `GUI/src/components/role/RoleWorkspacePanel.tsx`:10-32,55-57] | 接收 MemoryTab 删除成功回调并重新刷新 count。 | badge 跟随 category；角色页只传当前 `role.id`。 |
-| `GUI/src/components/butler/ButlerWorkspacePanel.tsx` | 用 `memoryService.count({ roleId: null, includeRoleMemories: true, category })` 显示管家总览 badge。[Source: `GUI/src/components/butler/ButlerWorkspacePanel.tsx`:10-33,79-87] | 接收 MemoryTab 删除成功回调并重新刷新 count。 | `includeRoleMemories` 总览语义；role owner label。 |
-| `GUI/src-tauri/src/db/memories.rs` | 有 insert/update/get/list/listAll/count/dedup；无 delete。[Source: `GUI/src-tauri/src/db/memories.rs`:213-311] | 新增 `delete_memory` helper。 | list/count 去重和 category/task_status 规则；single-owner dedupe；不改 migrations。 |
-| `GUI/src-tauri/src/services/memory_query.rs` | 查询、count、来源解析 service；来源只返回 user messages 可用子集。[Source: `GUI/src-tauri/src/services/memory_query.rs`:9-80] | 新增 `delete_memory` service。 | `get_source_messages` 的隐私过滤与部分来源缺失可用子集策略。 |
-| `GUI/src-tauri/src/commands/memory.rs` | 已注册 list/listAll/count/getSourceMessages commands；command 薄层。[Source: `GUI/src-tauri/src/commands/memory.rs`:8-59] | 新增 `memory_delete` command。 | 参数接收和 service 转发模式。 |
-| `GUI/src-tauri/src/lib.rs` | 已注册 `memory_list`、`memory_list_all`、`memory_count`、`memory_get_source_messages`。[Source: `GUI/src-tauri/src/lib.rs`:218-221] | 注册 `memory_delete`。 | 其它 command 注册不动。 |
-| `GUI/src/components/role/MemoryTab.test.tsx` | 覆盖真实加载、筛选、来源展开、空态，且断言 `遗忘` 当前 disabled。[Source: `GUI/src/components/role/MemoryTab.test.tsx`:124-143] | 将 disabled 断言替换为确认/取消/成功/失败测试。 | 既有筛选、来源、空态测试继续通过。 |
-| `GUI/src/components/role/RoleWorkspacePanel.test.tsx` | 覆盖 badge 初始 count 与 category 联动。[Source: `GUI/src/components/role/RoleWorkspacePanel.test.tsx`:48-72] | 增加删除成功回调后 count 刷新断言。 | category 联动断言。 |
-| `GUI/src/components/butler/ButlerWorkspacePanel.test.tsx` | 覆盖管家总览 badge 初始 count 与 category 联动。[Source: `GUI/src/components/butler/ButlerWorkspacePanel.test.tsx`:31-73] | 增加删除成功回调后 count 刷新断言。 | `includeRoleMemories: true` 调用断言。 |
+| `egosync-app/src/components/role/MemoryTab.tsx` | 已支持 category 受控/非受控、真实 list/listAll、来源懒加载、禁用的 `遗忘` 按钮。[Source: `egosync-app/src/components/role/MemoryTab.tsx`:57-79,91-120,172-178] | 启用 `遗忘`，添加自定义确认、删除中/失败态、删除成功刷新 list 与父级 badge。 | 角色/管家数据边界；来源展开行为；`task_status` 默认隐藏；暖空态；ARIA 展开属性。 |
+| `egosync-app/src/hooks/useMemories.ts` | 封装 list/listAll、loading/error、`refetch`、取消旧请求防 stale。[Source: `egosync-app/src/hooks/useMemories.ts`:17-51] | 复用 `refetch`，无需重写 hook；如需新增返回值应保持旧调用兼容。 | role/category 切换防 stale；错误中文友好。 |
+| `egosync-app/src/services/memoryService.ts` | 现有 `list`、`listAll`、`count`、`getSourceMessages`；无 delete。[Source: `egosync-app/src/services/memoryService.ts`:10-28] | 新增 `delete(memoryId)` invoke `memory_delete`。 | Tauri v2 `@tauri-apps/api/core` invoke；现有方法签名。 |
+| `egosync-app/src/types/memory.ts` | 定义 `Memory`、`MemoryCategory`、`MemorySourceMessage`、`MemoryListOptions`。[Source: `egosync-app/src/types/memory.ts`:1-26] | 通常无需修改；若新增删除回调类型，保持局部。 | `sourceMessageIds` 仍是字符串；UI 不直接解析为来源真相。 |
+| `egosync-app/src/components/role/RoleWorkspacePanel.tsx` | 用 `memoryService.count({ roleId, category })` 显示当前角色 badge；category 状态在 Panel。[Source: `egosync-app/src/components/role/RoleWorkspacePanel.tsx`:10-32,55-57] | 接收 MemoryTab 删除成功回调并重新刷新 count。 | badge 跟随 category；角色页只传当前 `role.id`。 |
+| `egosync-app/src/components/butler/ButlerWorkspacePanel.tsx` | 用 `memoryService.count({ roleId: null, includeRoleMemories: true, category })` 显示管家总览 badge。[Source: `egosync-app/src/components/butler/ButlerWorkspacePanel.tsx`:10-33,79-87] | 接收 MemoryTab 删除成功回调并重新刷新 count。 | `includeRoleMemories` 总览语义；role owner label。 |
+| `egosync-app/src-tauri/src/db/memories.rs` | 有 insert/update/get/list/listAll/count/dedup；无 delete。[Source: `egosync-app/src-tauri/src/db/memories.rs`:213-311] | 新增 `delete_memory` helper。 | list/count 去重和 category/task_status 规则；single-owner dedupe；不改 migrations。 |
+| `egosync-app/src-tauri/src/services/memory_query.rs` | 查询、count、来源解析 service；来源只返回 user messages 可用子集。[Source: `egosync-app/src-tauri/src/services/memory_query.rs`:9-80] | 新增 `delete_memory` service。 | `get_source_messages` 的隐私过滤与部分来源缺失可用子集策略。 |
+| `egosync-app/src-tauri/src/commands/memory.rs` | 已注册 list/listAll/count/getSourceMessages commands；command 薄层。[Source: `egosync-app/src-tauri/src/commands/memory.rs`:8-59] | 新增 `memory_delete` command。 | 参数接收和 service 转发模式。 |
+| `egosync-app/src-tauri/src/lib.rs` | 已注册 `memory_list`、`memory_list_all`、`memory_count`、`memory_get_source_messages`。[Source: `egosync-app/src-tauri/src/lib.rs`:218-221] | 注册 `memory_delete`。 | 其它 command 注册不动。 |
+| `egosync-app/src/components/role/MemoryTab.test.tsx` | 覆盖真实加载、筛选、来源展开、空态，且断言 `遗忘` 当前 disabled。[Source: `egosync-app/src/components/role/MemoryTab.test.tsx`:124-143] | 将 disabled 断言替换为确认/取消/成功/失败测试。 | 既有筛选、来源、空态测试继续通过。 |
+| `egosync-app/src/components/role/RoleWorkspacePanel.test.tsx` | 覆盖 badge 初始 count 与 category 联动。[Source: `egosync-app/src/components/role/RoleWorkspacePanel.test.tsx`:48-72] | 增加删除成功回调后 count 刷新断言。 | category 联动断言。 |
+| `egosync-app/src/components/butler/ButlerWorkspacePanel.test.tsx` | 覆盖管家总览 badge 初始 count 与 category 联动。[Source: `egosync-app/src/components/butler/ButlerWorkspacePanel.test.tsx`:31-73] | 增加删除成功回调后 count 刷新断言。 | `includeRoleMemories: true` 调用断言。 |
 
 ### Previous Story Intelligence
 
@@ -240,8 +240,8 @@ so that 我能控制 AI 记住什么，并阻止错误记忆继续影响后续�
 
 ### Library / Framework Requirements
 
-- 前端使用 React 18.2、TypeScript 5.2 strict、Vite 5、TailwindCSS 3.3.5、Lucide React 0.292；本 story 不新增 UI/状态管理依赖。[Source: `GUI/package.json`:14-39]
-- Tauri 前端 API 使用 `@tauri-apps/api` 2.11，从 `@tauri-apps/api/core` 引入 `invoke`，沿用 `memoryService` 模式。[Source: `GUI/package.json`:16; `GUI/src/services/memoryService.ts`:1-28]
+- 前端使用 React 18.2、TypeScript 5.2 strict、Vite 5、TailwindCSS 3.3.5、Lucide React 0.292；本 story 不新增 UI/状态管理依赖。[Source: `egosync-app/package.json`:14-39]
+- Tauri 前端 API 使用 `@tauri-apps/api` 2.11，从 `@tauri-apps/api/core` 引入 `invoke`，沿用 `memoryService` 模式。[Source: `egosync-app/package.json`:16; `egosync-app/src/services/memoryService.ts`:1-28]
 - Rust 后端继续使用 Tauri 2 + SQLx 0.8；删除行数判断使用 `SqliteQueryResult::rows_affected()`。[Source: SQLx docs `https://docs.rs/sqlx/latest/sqlx/sqlite/struct.SqliteQueryResult.html`]
 - Tauri v2 command 写法：模块中 `pub async fn` 标注 `#[tauri::command]`，在单个 `tauri::generate_handler![...]` 中注册；前端用 `invoke('memory_delete', { memoryId })` 调用。[Source: Tauri v2 docs `https://v2.tauri.app/develop/calling-rust/`]
 
@@ -277,35 +277,35 @@ so that 我能控制 AI 记住什么，并阻止错误记忆继续影响后续�
 
 | Path | Action | Notes |
 |---|---|---|
-| `GUI/src-tauri/migrations/007_forgotten_memory_sources.sql` | NEW | 记录已遗忘记忆的同源屏蔽，防止旧 source message 再提炼回流。 |
+| `egosync-app/src-tauri/migrations/007_forgotten_memory_sources.sql` | NEW | 记录已遗忘记忆的同源屏蔽，防止旧 source message 再提炼回流。 |
 
 ### 修改文件
 
 | Path | Action | Notes |
 |---|---|---|
-| `GUI/src-tauri/src/db/memories.rs` | UPDATE | 新增 delete helper、同源屏蔽查询与 Rust 单测。 |
-| `GUI/src-tauri/src/db/pool.rs` | UPDATE | 覆盖 `forgotten_memory_sources` migration/index smoke test。 |
-| `GUI/src-tauri/src/services/memory_query.rs` | UPDATE | 新增 delete service，0 rows 映射 NotFound。 |
-| `GUI/src-tauri/src/services/memory_pipeline.rs` | UPDATE | reconciliation update/insert 路径尊重同源屏蔽。 |
-| `GUI/src-tauri/src/commands/memory.rs` | UPDATE | 新增 `memory_delete` command。 |
-| `GUI/src-tauri/src/lib.rs` | UPDATE | 注册 `memory_delete`。 |
-| `GUI/src/services/memoryService.ts` | UPDATE | 新增 `delete(memoryId)`。 |
-| `GUI/src/components/role/MemoryTab.tsx` | UPDATE | 启用遗忘按钮、自定义确认、删除状态、成功/失败处理、refetch。 |
-| `GUI/src/components/role/RoleWorkspacePanel.tsx` | UPDATE | 删除成功后刷新角色记忆 badge。 |
-| `GUI/src/components/butler/ButlerWorkspacePanel.tsx` | UPDATE | 删除成功后刷新管家总览 badge。 |
-| `GUI/src/components/role/MemoryTab.test.tsx` | UPDATE | 删除确认/取消/成功/失败测试。 |
-| `GUI/src/components/role/RoleWorkspacePanel.test.tsx` | UPDATE | 删除后 badge refresh 测试。 |
-| `GUI/src/components/butler/ButlerWorkspacePanel.test.tsx` | UPDATE | 删除后 badge refresh 测试。 |
+| `egosync-app/src-tauri/src/db/memories.rs` | UPDATE | 新增 delete helper、同源屏蔽查询与 Rust 单测。 |
+| `egosync-app/src-tauri/src/db/pool.rs` | UPDATE | 覆盖 `forgotten_memory_sources` migration/index smoke test。 |
+| `egosync-app/src-tauri/src/services/memory_query.rs` | UPDATE | 新增 delete service，0 rows 映射 NotFound。 |
+| `egosync-app/src-tauri/src/services/memory_pipeline.rs` | UPDATE | reconciliation update/insert 路径尊重同源屏蔽。 |
+| `egosync-app/src-tauri/src/commands/memory.rs` | UPDATE | 新增 `memory_delete` command。 |
+| `egosync-app/src-tauri/src/lib.rs` | UPDATE | 注册 `memory_delete`。 |
+| `egosync-app/src/services/memoryService.ts` | UPDATE | 新增 `delete(memoryId)`。 |
+| `egosync-app/src/components/role/MemoryTab.tsx` | UPDATE | 启用遗忘按钮、自定义确认、删除状态、成功/失败处理、refetch。 |
+| `egosync-app/src/components/role/RoleWorkspacePanel.tsx` | UPDATE | 删除成功后刷新角色记忆 badge。 |
+| `egosync-app/src/components/butler/ButlerWorkspacePanel.tsx` | UPDATE | 删除成功后刷新管家总览 badge。 |
+| `egosync-app/src/components/role/MemoryTab.test.tsx` | UPDATE | 删除确认/取消/成功/失败测试。 |
+| `egosync-app/src/components/role/RoleWorkspacePanel.test.tsx` | UPDATE | 删除后 badge refresh 测试。 |
+| `egosync-app/src/components/butler/ButlerWorkspacePanel.test.tsx` | UPDATE | 删除后 badge refresh 测试。 |
 
 ### 不应修改
 
-- `GUI/src-tauri/migrations/004_memories.sql`
-- `GUI/src-tauri/migrations/005_memory_role_scoped_dedupe.sql`
-- `GUI/src-tauri/migrations/006_memory_single_owner_dedupe.sql`
-- `GUI/src-tauri/src/commands/chat.rs`
-- `GUI/src-tauri/src/services/agent_engine.rs`
-- `GUI/src-tauri/src/services/agent_bridge.rs`
-- `GUI/src-tauri/src/services/agent_config.rs`
+- `egosync-app/src-tauri/migrations/004_memories.sql`
+- `egosync-app/src-tauri/migrations/005_memory_role_scoped_dedupe.sql`
+- `egosync-app/src-tauri/migrations/006_memory_single_owner_dedupe.sql`
+- `egosync-app/src-tauri/src/commands/chat.rs`
+- `egosync-app/src-tauri/src/services/agent_engine.rs`
+- `egosync-app/src-tauri/src/services/agent_bridge.rs`
+- `egosync-app/src-tauri/src/services/agent_config.rs`
 - opencode session/message 存储或配置文件
 
 ## References
@@ -319,14 +319,14 @@ so that 我能控制 AI 记住什么，并阻止错误记忆继续影响后续�
 - [Source: `_bmad-output/project-context.md`:104-114,118-136,183-205 — Tauri layering, tests, command checklist, anti-patterns]
 - [Source: `_bmad-output/implementation-artifacts/2-6-conversation-memory-extraction.md`:240-245,400-405 — selective forget deferred and cross-db source boundary]
 - [Source: `_bmad-output/implementation-artifacts/2-7-memory-panel-traceability.md`:171-180,328-337 — review learnings and existing MemoryTab behavior]
-- [Source: `GUI/src/components/role/MemoryTab.tsx`:57-79,91-120,172-178 — current controlled category/source state/disabled forget button]
-- [Source: `GUI/src/hooks/useMemories.ts`:17-51 — current refetch and stale-request guard]
-- [Source: `GUI/src/services/memoryService.ts`:10-28 — current memory service methods]
-- [Source: `GUI/src-tauri/src/db/memories.rs`:213-311 — current get/list/count behavior]
-- [Source: `GUI/src-tauri/src/services/memory_query.rs`:37-80 — current source traceability service]
-- [Source: `GUI/src-tauri/src/commands/memory.rs`:8-59 — current memory commands]
-- [Source: `GUI/src-tauri/src/lib.rs`:218-221 — current memory command registration]
-- [Source: `GUI/package.json`:6-13,14-39 — scripts and frontend deps]
+- [Source: `egosync-app/src/components/role/MemoryTab.tsx`:57-79,91-120,172-178 — current controlled category/source state/disabled forget button]
+- [Source: `egosync-app/src/hooks/useMemories.ts`:17-51 — current refetch and stale-request guard]
+- [Source: `egosync-app/src/services/memoryService.ts`:10-28 — current memory service methods]
+- [Source: `egosync-app/src-tauri/src/db/memories.rs`:213-311 — current get/list/count behavior]
+- [Source: `egosync-app/src-tauri/src/services/memory_query.rs`:37-80 — current source traceability service]
+- [Source: `egosync-app/src-tauri/src/commands/memory.rs`:8-59 — current memory commands]
+- [Source: `egosync-app/src-tauri/src/lib.rs`:218-221 — current memory command registration]
+- [Source: `egosync-app/package.json`:6-13,14-39 — scripts and frontend deps]
 - [Source: Tauri v2 docs `https://v2.tauri.app/develop/calling-rust/` — command registration and invoke]
 - [Source: SQLx docs `https://docs.rs/sqlx/latest/sqlx/sqlite/struct.SqliteQueryResult.html` — `rows_affected()` for DELETE result]
 
@@ -341,7 +341,7 @@ Claude Opus 4.7 (1M context)
 - 2026-06-01: `python3` 不可用，按 skill 回退规则手动读取 `bmad-create-story/customize.toml`，确认无 team/user overrides、无 activation prepend/append。
 - 2026-06-01: 自动从 `sprint-status.yaml` 选中第一个 backlog story：`2-8-selective-memory-forget`。
 - 2026-06-01: dev-story 启动时 `python3` 仍不可用，按 skill 回退规则手动读取 `bmad-dev-story/customize.toml`，确认无 team/user overrides、无 activation prepend/append。
-- 2026-06-01: 首次运行 `cargo test` 被全局/默认 Cargo registry 的 USTC 源阻断；改用仓库内 `GUI/.cargo-test-home` 后进入依赖编译与 Rust 测试。
+- 2026-06-01: 首次运行 `cargo test` 被全局/默认 Cargo registry 的 USTC 源阻断；改用仓库内 `egosync-app/.cargo-test-home` 后进入依赖编译与 Rust 测试。
 
 ### Completion Notes List
 
@@ -354,32 +354,32 @@ Claude Opus 4.7 (1M context)
 - 已通过：`npx tsc --noEmit`（使用 GUI tsconfig）、`npm run test:frontend`（69 tests）、`npm run build`、本故事 Rust 文件 `rustfmt --check`。
 - 已通过完整 Rust 验证：memory 相关 Rust tests 37 passed；完整 Rust suite 单线程 217 unit + 1 integration passed。并记录并发 full suite 中 `sidecar` 旧测试曾单次环境敏感失败，单测重跑通过。
 - 已启动真实 Tauri dev：`egosync.exe`、opencode sidecar、delegate bridge 均启动成功。
-- 新增 `GUI/src-tauri/migrations/007_forgotten_memory_sources.sql`，并在 `insert_memories` / `update_memory_from_extracted` 中跳过已遗忘同源候选，避免旧会话触发提炼时把用户已遗忘事实重新写回。
+- 新增 `egosync-app/src-tauri/migrations/007_forgotten_memory_sources.sql`，并在 `insert_memories` / `update_memory_from_extracted` 中跳过已遗忘同源候选，避免旧会话触发提炼时把用户已遗忘事实重新写回。
 - 真实用户 AppData 中未删除任何真实记忆；因现有 6 条均为用户真实内容，成功删除链路改用临时 identifier `com.egosync.story28test` 与专用测试 DB 验证。
 - 隔离成功删除验证通过：角色 memory 删除后 role count 2→1、total 4→3；全局 fact 删除后 fact count 1→0、total 3→2；preference 分类删除后 preference count 2→1；已删除 memory 的 source 查询返回错误，保留 memory 的 source message 仍可读取。
 - 前端浏览器/单测验证覆盖：自定义确认、取消无副作用、确认删除移除卡片并刷新 badge、管家/角色/category badge 重新计算、失败温和内联反馈、无 toast/snackbar/alert。
 
 ### File List
 
-- `GUI/src-tauri/src/db/memories.rs`
-- `GUI/src-tauri/src/db/pool.rs`
-- `GUI/src-tauri/src/services/memory_query.rs`
-- `GUI/src-tauri/src/services/memory_pipeline.rs`
-- `GUI/src-tauri/src/commands/memory.rs`
-- `GUI/src-tauri/src/lib.rs`
-- `GUI/src/services/memoryService.ts`
-- `GUI/src/components/role/MemoryTab.tsx`
-- `GUI/src/components/role/MemoryTab.test.tsx`
-- `GUI/src/components/role/RoleWorkspacePanel.tsx`
-- `GUI/src/components/role/RoleWorkspacePanel.test.tsx`
-- `GUI/src/components/butler/ButlerWorkspacePanel.tsx`
-- `GUI/src/components/butler/ButlerWorkspacePanel.test.tsx`
-- `GUI/src-tauri/src/services/agent_bridge.rs`
-- `GUI/src-tauri/src/services/agent_engine.rs`
-- `GUI/src-tauri/src/models/agent.rs`
-- `GUI/src/components/chat/ChatStream.tsx`
-- `GUI/src/components/chat/ChatStream.test.tsx`
-- `GUI/src/components/chat/ChatBubble.test.tsx`
+- `egosync-app/src-tauri/src/db/memories.rs`
+- `egosync-app/src-tauri/src/db/pool.rs`
+- `egosync-app/src-tauri/src/services/memory_query.rs`
+- `egosync-app/src-tauri/src/services/memory_pipeline.rs`
+- `egosync-app/src-tauri/src/commands/memory.rs`
+- `egosync-app/src-tauri/src/lib.rs`
+- `egosync-app/src/services/memoryService.ts`
+- `egosync-app/src/components/role/MemoryTab.tsx`
+- `egosync-app/src/components/role/MemoryTab.test.tsx`
+- `egosync-app/src/components/role/RoleWorkspacePanel.tsx`
+- `egosync-app/src/components/role/RoleWorkspacePanel.test.tsx`
+- `egosync-app/src/components/butler/ButlerWorkspacePanel.tsx`
+- `egosync-app/src/components/butler/ButlerWorkspacePanel.test.tsx`
+- `egosync-app/src-tauri/src/services/agent_bridge.rs`
+- `egosync-app/src-tauri/src/services/agent_engine.rs`
+- `egosync-app/src-tauri/src/models/agent.rs`
+- `egosync-app/src/components/chat/ChatStream.tsx`
+- `egosync-app/src/components/chat/ChatStream.test.tsx`
+- `egosync-app/src/components/chat/ChatBubble.test.tsx`
 - `_bmad-output/planning-artifacts/epics.md`
 - `_bmad-output/implementation-artifacts/deferred-work.md`
 - `_bmad-output/implementation-artifacts/2-8-selective-memory-forget.md`

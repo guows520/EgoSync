@@ -73,7 +73,7 @@ so that 我能获得完整的多步工具调用能力（代码编写、文件操
 ### Phase 1: 建立 opencode 对话运行时状态（AC: #1, #3, #4）
 
 - [x] T1.1 新增最小会话映射状态
-  - 建议位置：`GUI/src-tauri/src/commands/chat.rs` 或 `GUI/src-tauri/src/state.rs`（如现有项目已启用 state 文件则优先 state）
+  - 建议位置：`egosync-app/src-tauri/src/commands/chat.rs` 或 `egosync-app/src-tauri/src/state.rs`（如现有项目已启用 state 文件则优先 state）
   - 需要保存：`conversation_id → opencode_session_id`
   - 目的：同一 EgoSync conversation 后续消息复用同一 opencode session；停止按钮能找到 session abort
   - 不新增数据库表，本 story 先用内存态；应用重启后重新创建 opencode session，EgoSync 历史仍由本地 DB 保存
@@ -162,7 +162,7 @@ so that 我能获得完整的多步工具调用能力（代码编写、文件操
   - abort 失败不影响本地取消
 
 - [x] T5.5 运行验证命令
-  - `cd GUI/src-tauri && cargo test`
+  - `cd egosync-app/src-tauri && cargo test`
   - 若改动前端类型或服务：`cd GUI && npx tsc --noEmit`
 
 ## Dev Notes
@@ -179,11 +179,11 @@ so that 我能获得完整的多步工具调用能力（代码编写、文件操
 
 ### opencode sidecar 工作目录与 snapshot 延迟
 
-当前运行时将 opencode sidecar 进程工作目录固定为 AppData 下的 `opencode-workspace`，同时 opencode session 也使用该 workspace 目录。这个约束是必要的：如果 sidecar 继承 `GUI/src-tauri` 作为 cwd，而 session directory 指向 AppData workspace，opencode 的 snapshot 阶段会尝试对不属于当前 git 工作树的路径执行 `git add`，出现类似错误：
+当前运行时将 opencode sidecar 进程工作目录固定为 AppData 下的 `opencode-workspace`，同时 opencode session 也使用该 workspace 目录。这个约束是必要的：如果 sidecar 继承 `egosync-app/src-tauri` 作为 cwd，而 session directory 指向 AppData workspace，opencode 的 snapshot 阶段会尝试对不属于当前 git 工作树的路径执行 `git add`，出现类似错误：
 
 ```text
 service=snapshot exitCode=128
-fatal: pathspec 'GUI/src-tauri/Cargo.lock' did not match any files
+fatal: pathspec 'egosync-app/src-tauri/Cargo.lock' did not match any files
 failed to add snapshot files
 ```
 
@@ -255,19 +255,19 @@ Story 2.0 的实现基于预期端点：
 
 | Path | Action | Notes |
 |------|--------|-------|
-| `GUI/src-tauri/src/services/agent_engine.rs` | UPDATE | 新增 opencode 主路径与降级分支；保留现有 LlmProvider 逻辑 |
-| `GUI/src-tauri/src/commands/chat.rs` | UPDATE | session 映射 state、stop 时 abort opencode session |
-| `GUI/src-tauri/src/models/agent.rs` | MAYBE UPDATE | 如 opencode SSE 有 thinking/permission/custom tool 新事件，扩展 `SseEvent` |
-| `GUI/src-tauri/src/services/agent_bridge.rs` | MAYBE UPDATE | 如实际 opencode API 与当前端点不一致，在此内部适配 |
-| `GUI/src-tauri/src/lib.rs` | UPDATE | 启动 delegate bridge / event router；注入 bridge env；为 sidecar 设置 AppData `opencode-workspace` 工作目录 |
+| `egosync-app/src-tauri/src/services/agent_engine.rs` | UPDATE | 新增 opencode 主路径与降级分支；保留现有 LlmProvider 逻辑 |
+| `egosync-app/src-tauri/src/commands/chat.rs` | UPDATE | session 映射 state、stop 时 abort opencode session |
+| `egosync-app/src-tauri/src/models/agent.rs` | MAYBE UPDATE | 如 opencode SSE 有 thinking/permission/custom tool 新事件，扩展 `SseEvent` |
+| `egosync-app/src-tauri/src/services/agent_bridge.rs` | MAYBE UPDATE | 如实际 opencode API 与当前端点不一致，在此内部适配 |
+| `egosync-app/src-tauri/src/lib.rs` | UPDATE | 启动 delegate bridge / event router；注入 bridge env；为 sidecar 设置 AppData `opencode-workspace` 工作目录 |
 
 #### 不应改动
 
-- `GUI/src/components/chat/ChatStream.tsx`：原则上无需结构性改动；只在 payload 类型变化时最小调整。
-- `GUI/src/services/chatService.ts`：除非 command 参数变化，否则不改。
-- `GUI/src-tauri/src/services/agent_config.rs`：角色配置同步已完成；本 story 只复用。
-- `GUI/src-tauri/src/db/roles.rs`：角色 CRUD 数据层不应承担 opencode 同步。
-- `GUI/src-tauri/migrations/*.sql`：本 story 不需要新表。
+- `egosync-app/src/components/chat/ChatStream.tsx`：原则上无需结构性改动；只在 payload 类型变化时最小调整。
+- `egosync-app/src/services/chatService.ts`：除非 command 参数变化，否则不改。
+- `egosync-app/src-tauri/src/services/agent_config.rs`：角色配置同步已完成；本 story 只复用。
+- `egosync-app/src-tauri/src/db/roles.rs`：角色 CRUD 数据层不应承担 opencode 同步。
+- `egosync-app/src-tauri/migrations/*.sql`：本 story 不需要新表。
 
 ### Testing Requirements
 
@@ -276,7 +276,7 @@ Story 2.0 的实现基于预期端点：
   - fallback 测试要证明“opencode 不可用时用户仍能基础对话”。
   - stop 测试要证明“用户可以夺回控制权”，不只是调用了一个函数。
   - session 映射测试要证明“同一 conversation 保持上下文连续”。
-- 若修改 `GUI/src/types/chat.ts` 或前端监听逻辑，必须跑 `cd GUI && npx tsc --noEmit`。
+- 若修改 `egosync-app/src/types/chat.ts` 或前端监听逻辑，必须跑 `cd GUI && npx tsc --noEmit`。
 
 ### References
 
@@ -286,12 +286,12 @@ Story 2.0 的实现基于预期端点：
 - [Source: `_bmad-output/planning-artifacts/ux-design-specification.md` — 流式输出使用 SSE/WebSocket，不轮询；对话气泡 `aria-live="polite"`]
 - [Source: `_bmad-output/implementation-artifacts/2-0-opencode-sidecar-agent-bridge.md` — SidecarManager / AgentBridge 已实现，非阻塞增强设计]
 - [Source: `_bmad-output/implementation-artifacts/2-0b-role-agent-mapping-permissions.md` — AgentConfigService、`role-{uuid}` key、opencode.json 同步已实现]
-- [Source: `GUI/src-tauri/src/commands/chat.rs` — 当前 chat command、streaming state、cancel token、stop command]
-- [Source: `GUI/src-tauri/src/services/agent_engine.rs` — 当前 LlmProvider 主路径、工具执行、角色提议、委派、降级提取逻辑]
-- [Source: `GUI/src-tauri/src/services/agent_bridge.rs` — 当前 opencode HTTP client 与 SSE parser]
-- [Source: `GUI/src-tauri/src/models/chat.rs` — `StreamPayload` / `RoleProposedPayload`]
-- [Source: `GUI/src/components/chat/ChatStream.tsx` — 前端流式 bucket、stop、history 回拉契约]
-- [Source: `GUI/src-tauri/src/lib.rs` — setup 中 AgentConfigService full_sync、sidecar start、AgentBridge managed state]
+- [Source: `egosync-app/src-tauri/src/commands/chat.rs` — 当前 chat command、streaming state、cancel token、stop command]
+- [Source: `egosync-app/src-tauri/src/services/agent_engine.rs` — 当前 LlmProvider 主路径、工具执行、角色提议、委派、降级提取逻辑]
+- [Source: `egosync-app/src-tauri/src/services/agent_bridge.rs` — 当前 opencode HTTP client 与 SSE parser]
+- [Source: `egosync-app/src-tauri/src/models/chat.rs` — `StreamPayload` / `RoleProposedPayload`]
+- [Source: `egosync-app/src/components/chat/ChatStream.tsx` — 前端流式 bucket、stop、history 回拉契约]
+- [Source: `egosync-app/src-tauri/src/lib.rs` — setup 中 AgentConfigService full_sync、sidecar start、AgentBridge managed state]
 - [Source: recent git log — `fix(chat): clean role proposal handoff flow`, `feat(2.0b): sync roles to opencode agents`, `fix(2.0): correct opencode CLI command and Windows .cmd shim execution`]
 
 ## Story Completion Status
@@ -308,8 +308,8 @@ Story 2.0 的实现基于预期端点：
 
 ### Debug Log References
 
-- `cd GUI/src-tauri && cargo test`: 133 unit tests passed, 1 integration placeholder passed.
-- `cd GUI/src-tauri && cargo test commands::chat::tests`: 2 stop-control tests passed.
+- `cd egosync-app/src-tauri && cargo test`: 133 unit tests passed, 1 integration placeholder passed.
+- `cd egosync-app/src-tauri && cargo test commands::chat::tests`: 2 stop-control tests passed.
 - `cd GUI && npx tsc --noEmit`: passed.
 - Lints checked for edited Rust files: no blocking diagnostics reported.
 
@@ -327,16 +327,16 @@ Story 2.0 的实现基于预期端点：
 
 ### File List
 
-- `GUI/src-tauri/src/commands/chat.rs` (MODIFIED)
-- `GUI/src-tauri/src/lib.rs` (MODIFIED)
-- `GUI/src-tauri/src/models/agent.rs` (MODIFIED)
-- `GUI/src-tauri/src/services/agent_bridge.rs` (MODIFIED)
-- `GUI/src-tauri/src/services/agent_engine.rs` (MODIFIED)
-- `GUI/src-tauri/src/services/sidecar.rs` (MODIFIED — bridge env 注入 + fixed working_dir)
-- `GUI/src-tauri/src/services/delegate_bridge.rs` (ADDED)
-- `GUI/src-tauri/src/services/event_router.rs` (ADDED)
-- `GUI/src-tauri/src/services/mcp_host.rs` (DELETED — replaced by custom tools in 2.0d)
-- `GUI/src-tauri/src/services/mod.rs` (MODIFIED — removed mcp_host module)
+- `egosync-app/src-tauri/src/commands/chat.rs` (MODIFIED)
+- `egosync-app/src-tauri/src/lib.rs` (MODIFIED)
+- `egosync-app/src-tauri/src/models/agent.rs` (MODIFIED)
+- `egosync-app/src-tauri/src/services/agent_bridge.rs` (MODIFIED)
+- `egosync-app/src-tauri/src/services/agent_engine.rs` (MODIFIED)
+- `egosync-app/src-tauri/src/services/sidecar.rs` (MODIFIED — bridge env 注入 + fixed working_dir)
+- `egosync-app/src-tauri/src/services/delegate_bridge.rs` (ADDED)
+- `egosync-app/src-tauri/src/services/event_router.rs` (ADDED)
+- `egosync-app/src-tauri/src/services/mcp_host.rs` (DELETED — replaced by custom tools in 2.0d)
+- `egosync-app/src-tauri/src/services/mod.rs` (MODIFIED — removed mcp_host module)
 - `_bmad-output/implementation-artifacts/2-0c-dialog-engine-switch-to-opencode.md` (MODIFIED)
 - `_bmad-output/implementation-artifacts/2-0d-opencode-custom-tools-replace-mcp.md` (CREATED)
 - `_bmad-output/implementation-artifacts/sprint-status.yaml` (MODIFIED)

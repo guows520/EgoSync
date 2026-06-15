@@ -1,0 +1,771 @@
+# UAT 执行状态 — 独立于 sprint-status.yaml
+# 由 bmad-uat-run 维护，记录每条用例的验收结果
+run_mode: dev
+last_run: "2026-06-15T02:12:01Z"
+scope: all
+version_anchor: 5268797
+
+# 状态机: Pass(通过) / Fail(失败,见技术报告) / Blocked(阻塞,缺环境物料) / Pending(待人工验收)
+stories:
+  1-1-tauri-desktop-app-existing-ui:
+    cases:
+      - id: UAT-APP-001
+        status: Pending
+        exec_mode: semi
+        destructive: read-only
+        note: "转人工(semi)"
+      - id: UAT-APP-002
+        status: Blocked
+        exec_mode: manual
+        destructive: write-isolated
+        note: "缺环境物料,见 data-request"
+      - id: UAT-APP-003
+        status: Blocked
+        exec_mode: semi
+        destructive: read-only
+        note: "缺环境物料,见 data-request"
+      - id: UAT-APP-004
+        status: Pending
+        exec_mode: manual
+        destructive: read-only
+        note: "转人工(manual)"
+      - id: UAT-APP-005
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+  1-2-rust-frontend-test-infrastructure:
+    cases:
+      - id: UAT-QA-001
+        status: Pass
+        exec_mode: auto
+        destructive: read-only
+        note: "Stage A 自动判定"
+      - id: UAT-QA-002
+        status: Pass
+        exec_mode: auto
+        destructive: read-only
+        note: "Stage A 自动判定"
+      - id: UAT-QA-003
+        status: Pass
+        exec_mode: auto
+        destructive: read-only
+        note: "Stage A 自动判定"
+      - id: UAT-QA-004
+        status: Blocked
+        exec_mode: semi
+        destructive: write-isolated
+        note: "缺环境物料,见 data-request"
+      - id: UAT-QA-005
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+  1-3-component-domain-split-visual-zero-regression:
+    cases:
+      - id: UAT-UI-001
+        status: Blocked
+        exec_mode: manual
+        destructive: read-only
+        note: "缺环境物料,见 data-request"
+      - id: UAT-UI-002
+        status: Pending
+        exec_mode: manual
+        destructive: read-only
+        note: "转人工(manual)"
+      - id: UAT-UI-003
+        status: Pending
+        exec_mode: manual
+        destructive: read-only
+        note: "转人工(manual)"
+      - id: UAT-UI-004
+        status: Pass
+        exec_mode: auto
+        destructive: read-only
+        note: "Stage A 初判 Fail→修复后复测 Pass(2026-06-15);见 investigation"
+      - id: UAT-UI-005
+        status: Pass
+        exec_mode: auto
+        destructive: read-only
+        note: "Stage A 初判 Fail→修复后复测 Pass(2026-06-15);App.tsx 99 行"
+  1-4-theme-toggle-design-tokens:
+    cases:
+      - id: UAT-THEME-001
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+      - id: UAT-THEME-002
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+      - id: UAT-THEME-003
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+      - id: UAT-THEME-004
+        status: Pending
+        exec_mode: manual
+        destructive: write-isolated
+        note: "转人工(manual)"
+      - id: UAT-THEME-005
+        status: Blocked
+        exec_mode: semi
+        destructive: read-only
+        note: "缺环境物料,见 data-request"
+      - id: UAT-THEME-006
+        status: Blocked
+        exec_mode: manual
+        destructive: read-only
+        note: "缺环境物料,见 data-request"
+      - id: UAT-THEME-007
+        status: Pending
+        exec_mode: semi
+        destructive: read-only
+        note: "转人工(semi)"
+  1-5-llm-api-key-keyring-storage:
+    cases:
+      - id: UAT-KEY-001
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+      - id: UAT-KEY-002
+        status: Pending
+        exec_mode: manual
+        destructive: write-isolated
+        note: "转人工(manual)"
+      - id: UAT-KEY-003
+        status: Pending
+        exec_mode: semi
+        destructive: read-only
+        note: "转人工(semi)"
+      - id: UAT-KEY-004
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+  1-6-llm-provider-connection-test:
+    cases:
+      - id: UAT-LLM-001
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+      - id: UAT-LLM-002
+        status: Pending
+        exec_mode: auto
+        destructive: write-isolated
+        note: "转人工(auto)"
+      - id: UAT-LLM-003
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+      - id: UAT-LLM-004
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+      - id: UAT-LLM-005
+        status: Pending
+        exec_mode: auto
+        destructive: write-isolated
+        note: "转人工(auto)"
+      - id: UAT-LLM-006
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+      - id: UAT-LLM-007
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+  1-7-butler-first-streaming-conversation:
+    cases:
+      - id: UAT-CHAT-001
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+      - id: UAT-CHAT-002
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+      - id: UAT-CHAT-003
+        status: Pending
+        exec_mode: manual
+        destructive: write-isolated
+        note: "转人工(manual)"
+      - id: UAT-CHAT-004
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+      - id: UAT-CHAT-005
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+      - id: UAT-CHAT-006
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+  1-8-onboarding-five-step-first-role:
+    cases:
+      - id: UAT-ONBOARD-001
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+      - id: UAT-ONBOARD-002
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+      - id: UAT-ONBOARD-003
+        status: Pending
+        exec_mode: auto
+        destructive: write-isolated
+        note: "转人工(auto)"
+      - id: UAT-ONBOARD-004
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+      - id: UAT-ONBOARD-005
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+  1-9-role-sidebar-breathing-animation:
+    cases:
+      - id: UAT-SIDEBAR-001
+        status: Pending
+        exec_mode: semi
+        destructive: read-only
+        note: "转人工(semi)"
+      - id: UAT-SIDEBAR-002
+        status: Pending
+        exec_mode: manual
+        destructive: read-only
+        note: "转人工(manual)"
+      - id: UAT-SIDEBAR-003
+        status: Pending
+        exec_mode: manual
+        destructive: read-only
+        note: "转人工(manual)"
+      - id: UAT-SIDEBAR-004
+        status: Pending
+        exec_mode: semi
+        destructive: read-only
+        note: "转人工(semi)"
+  2-0-opencode-sidecar-agent-bridge:
+    cases:
+      - id: UAT-SIDECAR-001
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+      - id: UAT-SIDECAR-002
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+      - id: UAT-SIDECAR-003
+        status: Pending
+        exec_mode: manual
+        destructive: write-isolated
+        note: "转人工(manual)"
+      - id: UAT-SIDECAR-004
+        status: Pending
+        exec_mode: manual
+        destructive: write-isolated
+        note: "转人工(manual)"
+  2-0b-role-agent-mapping-permissions:
+    cases:
+      - id: UAT-AGENT-001
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+      - id: UAT-AGENT-002
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+      - id: UAT-AGENT-003
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+      - id: UAT-PERM-001
+        status: Pending
+        exec_mode: manual
+        destructive: write-isolated
+        note: "转人工(manual)"
+      - id: UAT-PERM-002
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+  2-0c-dialog-engine-switch-to-opencode:
+    cases:
+      - id: UAT-ENGINE-001
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+      - id: UAT-ENGINE-002
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+      - id: UAT-ENGINE-003
+        status: Pending
+        exec_mode: manual
+        destructive: write-isolated
+        note: "转人工(manual)"
+      - id: UAT-ENGINE-004
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+      - id: UAT-ENGINE-005
+        status: Pending
+        exec_mode: manual
+        destructive: write-isolated
+        note: "转人工(manual)"
+      - id: UAT-ENGINE-006
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+  2-1-role-crud-archive-delete:
+    cases:
+      - id: UAT-ROLE-001
+        status: Pending
+        exec_mode: auto
+        destructive: write-isolated
+        note: "转人工(auto)"
+      - id: UAT-ROLE-002
+        status: Pending
+        exec_mode: auto
+        destructive: write-isolated
+        note: "转人工(auto)"
+      - id: UAT-ROLE-003
+        status: Pending
+        exec_mode: auto
+        destructive: write-isolated
+        note: "转人工(auto)"
+      - id: UAT-ROLE-004
+        status: Pending
+        exec_mode: auto
+        destructive: write-isolated
+        note: "转人工(auto)"
+      - id: UAT-ROLE-005
+        status: Pending
+        exec_mode: auto
+        destructive: write-isolated
+        note: "转人工(auto)"
+      - id: UAT-ROLE-006
+        status: Pending
+        exec_mode: auto
+        destructive: write-isolated
+        note: "转人工(auto)"
+      - id: UAT-ROLE-007
+        status: Pending
+        exec_mode: auto
+        destructive: write-isolated
+        note: "转人工(auto)"
+  2-10-role-skill-config-proactivity-ui:
+    cases:
+      - id: UAT-SKILL-001
+        status: Pending
+        exec_mode: auto
+        destructive: write-isolated
+        note: "转人工(auto)"
+      - id: UAT-SKILL-002
+        status: Pending
+        exec_mode: auto
+        destructive: write-isolated
+        note: "转人工(auto)"
+      - id: UAT-SKILL-003
+        status: Pending
+        exec_mode: auto
+        destructive: write-isolated
+        note: "转人工(auto)"
+      - id: UAT-SKILL-004
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+      - id: UAT-SKILL-005
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+      - id: UAT-SKILL-006
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+  2-11-custom-skill-md-import-role-binding:
+    cases:
+      - id: UAT-IMPORT-001
+        status: Pending
+        exec_mode: auto
+        destructive: write-isolated
+        note: "转人工(auto)"
+      - id: UAT-IMPORT-002
+        status: Pending
+        exec_mode: manual
+        destructive: write-isolated
+        note: "转人工(manual)"
+      - id: UAT-IMPORT-003
+        status: Pending
+        exec_mode: auto
+        destructive: write-isolated
+        note: "转人工(auto)"
+      - id: UAT-IMPORT-004
+        status: Pending
+        exec_mode: auto
+        destructive: write-isolated
+        note: "转人工(auto)"
+      - id: UAT-IMPORT-005
+        status: Pending
+        exec_mode: auto
+        destructive: write-isolated
+        note: "转人工(auto)"
+  2-12-opencode-ecosystem-skill-discovery-import:
+    cases:
+      - id: UAT-DISCOVER-001
+        status: Pending
+        exec_mode: auto
+        destructive: write-isolated
+        note: "转人工(auto)"
+      - id: UAT-DISCOVER-002
+        status: Pending
+        exec_mode: auto
+        destructive: write-isolated
+        note: "转人工(auto)"
+      - id: UAT-DISCOVER-003
+        status: Pending
+        exec_mode: manual
+        destructive: write-isolated
+        note: "转人工(manual)"
+      - id: UAT-DISCOVER-004
+        status: Pending
+        exec_mode: auto
+        destructive: write-isolated
+        note: "转人工(auto)"
+      - id: UAT-DISCOVER-005
+        status: Pending
+        exec_mode: auto
+        destructive: write-isolated
+        note: "转人工(auto)"
+      - id: UAT-DISCOVER-006
+        status: Pending
+        exec_mode: manual
+        destructive: read-only
+        note: "转人工(manual)"
+  2-13-mcp-server-list-role-access:
+    cases:
+      - id: UAT-MCP-001
+        status: Pending
+        exec_mode: auto
+        destructive: write-isolated
+        note: "转人工(auto)"
+      - id: UAT-MCP-002
+        status: Pending
+        exec_mode: auto
+        destructive: write-isolated
+        note: "转人工(auto)"
+      - id: UAT-MCP-003
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+      - id: UAT-MCP-004
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+      - id: UAT-MCP-005
+        status: Pending
+        exec_mode: auto
+        destructive: write-isolated
+        note: "转人工(auto)"
+      - id: UAT-MCP-006
+        status: Pending
+        exec_mode: auto
+        destructive: write-isolated
+        note: "转人工(auto)"
+  2-2-role-view-switch-butler:
+    cases:
+      - id: UAT-NAV-001
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+      - id: UAT-NAV-002
+        status: Pending
+        exec_mode: auto
+        destructive: write-isolated
+        note: "转人工(auto)"
+      - id: UAT-NAV-003
+        status: Pending
+        exec_mode: semi
+        destructive: read-only
+        note: "转人工(semi)"
+      - id: UAT-NAV-004
+        status: Pending
+        exec_mode: auto
+        destructive: write-isolated
+        note: "转人工(auto)"
+      - id: UAT-NAV-005
+        status: Pending
+        exec_mode: manual
+        destructive: write-isolated
+        note: "转人工(manual)"
+  2-3-butler-intent-routing:
+    cases:
+      - id: UAT-DELEG-001
+        status: Pending
+        exec_mode: manual
+        destructive: write-isolated
+        note: "转人工(manual)"
+      - id: UAT-DELEG-002
+        status: Pending
+        exec_mode: manual
+        destructive: write-isolated
+        note: "转人工(manual)"
+      - id: UAT-DELEG-003
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+      - id: UAT-DELEG-004
+        status: Pending
+        exec_mode: manual
+        destructive: write-isolated
+        note: "转人工(manual)"
+      - id: UAT-DELEG-005
+        status: Pending
+        exec_mode: manual
+        destructive: write-isolated
+        note: "转人工(manual)"
+      - id: UAT-DELEG-006
+        status: Pending
+        exec_mode: manual
+        destructive: write-isolated
+        note: "转人工(manual)"
+      - id: UAT-DELEG-007
+        status: Pending
+        exec_mode: manual
+        destructive: write-isolated
+        note: "转人工(manual)"
+      - id: UAT-DELEG-008
+        status: Pending
+        exec_mode: manual
+        destructive: write-isolated
+        note: "转人工(manual)"
+  2-4-role-personalized-tone:
+    cases:
+      - id: UAT-TONE-001
+        status: Pending
+        exec_mode: auto
+        destructive: write-isolated
+        note: "转人工(auto)"
+      - id: UAT-TONE-002
+        status: Pending
+        exec_mode: auto
+        destructive: read-only
+        note: "转人工(auto)"
+      - id: UAT-TONE-003
+        status: Pending
+        exec_mode: manual
+        destructive: write-isolated
+        note: "转人工(manual)"
+      - id: UAT-TONE-004
+        status: Pending
+        exec_mode: manual
+        destructive: write-isolated
+        note: "转人工(manual)"
+      - id: UAT-TONE-005
+        status: Pending
+        exec_mode: manual
+        destructive: write-isolated
+        note: "转人工(manual)"
+      - id: UAT-TONE-006
+        status: Pending
+        exec_mode: manual
+        destructive: write-isolated
+        note: "转人工(manual)"
+  2-5-role-emergence-suggestion:
+    cases:
+      - id: UAT-EMERG-001
+        status: Pending
+        exec_mode: manual
+        destructive: write-isolated
+        note: "转人工(manual)"
+      - id: UAT-EMERG-002
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+      - id: UAT-EMERG-003
+        status: Pending
+        exec_mode: manual
+        destructive: write-isolated
+        note: "转人工(manual)"
+      - id: UAT-EMERG-004
+        status: Pending
+        exec_mode: manual
+        destructive: read-only
+        note: "转人工(manual)"
+      - id: UAT-EMERG-005
+        status: Pending
+        exec_mode: manual
+        destructive: write-isolated
+        note: "转人工(manual)"
+  2-6-conversation-memory-extraction:
+    cases:
+      - id: UAT-MEM-001
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+      - id: UAT-MEM-002
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+      - id: UAT-MEM-003
+        status: Pending
+        exec_mode: manual
+        destructive: write-isolated
+        note: "转人工(manual)"
+      - id: UAT-MEM-004
+        status: Pending
+        exec_mode: manual
+        destructive: write-isolated
+        note: "转人工(manual)"
+      - id: UAT-MEM-005
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+      - id: UAT-MEM-006
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+  2-7-memory-panel-traceability:
+    cases:
+      - id: UAT-MEMPANEL-001
+        status: Pending
+        exec_mode: auto
+        destructive: read-only
+        note: "转人工(auto)"
+      - id: UAT-MEMPANEL-002
+        status: Pending
+        exec_mode: auto
+        destructive: read-only
+        note: "转人工(auto)"
+      - id: UAT-MEMPANEL-003
+        status: Pending
+        exec_mode: semi
+        destructive: read-only
+        note: "转人工(semi)"
+      - id: UAT-MEMPANEL-004
+        status: Pending
+        exec_mode: auto
+        destructive: read-only
+        note: "转人工(auto)"
+      - id: UAT-MEMPANEL-005
+        status: Pending
+        exec_mode: manual
+        destructive: read-only
+        note: "转人工(manual)"
+      - id: UAT-MEMPANEL-006
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+  2-8-selective-memory-forget:
+    cases:
+      - id: UAT-FORGET-001
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+      - id: UAT-FORGET-002
+        status: Pending
+        exec_mode: auto
+        destructive: read-only
+        note: "转人工(auto)"
+      - id: UAT-FORGET-003
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+      - id: UAT-FORGET-004
+        status: Pending
+        exec_mode: manual
+        destructive: write-isolated
+        note: "转人工(manual)"
+      - id: UAT-FORGET-005
+        status: Pending
+        exec_mode: semi
+        destructive: write-isolated
+        note: "转人工(semi)"
+  2-9-reasoning-transparency-uncertainty:
+    cases:
+      - id: UAT-REASON-001
+        status: Pending
+        exec_mode: manual
+        destructive: read-only
+        note: "转人工(manual)"
+      - id: UAT-REASON-002
+        status: Pending
+        exec_mode: manual
+        destructive: read-only
+        note: "转人工(manual)"
+      - id: UAT-REASON-003
+        status: Pending
+        exec_mode: manual
+        destructive: read-only
+        note: "转人工(manual)"
+      - id: UAT-REASON-004
+        status: Pending
+        exec_mode: manual
+        destructive: read-only
+        note: "转人工(manual)"
+      - id: UAT-REASON-005
+        status: Pending
+        exec_mode: manual
+        destructive: write-isolated
+        note: "转人工(manual)"
+      - id: UAT-REASON-006
+        status: Pending
+        exec_mode: manual
+        destructive: write-isolated
+        note: "转人工(manual)"
+
+summary:
+  total: 140
+  pass: 3
+  fail: 2
+  blocked: 6
+  pending_manual: 129
+
+reports:
+  business: reports/business-uat-2026-06-15.md
+  technical: reports/tech-uat-2026-06-15.md
+  manual_queue: reports/manual-acceptance-queue.md

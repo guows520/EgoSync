@@ -16,7 +16,7 @@ _本文件包含 AI Agent 在本项目中实现代码时必须遵循的关键规
 
 ## 技术栈与版本
 
-### 前端 (GUI/)
+### 前端 (egosync-app/)
 - **React** 18.2 + **TypeScript** 5.2 (strict mode, noUnusedLocals, noUnusedParameters)
 - **Vite** 5.0 (HMR dev, 生产构建)
 - **TailwindCSS** 3.3.5 + **tailwindcss-animate** 1.0.7 (darkMode: 'class')
@@ -25,7 +25,7 @@ _本文件包含 AI Agent 在本项目中实现代码时必须遵循的关键规
 - **字体**: Inter + Noto Sans SC (Google Fonts CDN)
 - **目标**: ES2020, jsx: react-jsx, moduleResolution: bundler
 
-### 后端 (GUI/src-tauri/) — 计划中
+### 后端 (egosync-app/src-tauri/) — 计划中
 - **Tauri** 2.x (Rust 后端 + WebView 前端)
 - **Rust** edition 2021 + **tokio** 异步运行时
 - **SQLx** 0.8+ (SQLite, 编译时 SQL 校验)
@@ -123,7 +123,7 @@ _本文件包含 AI Agent 在本项目中实现代码时必须遵循的关键规
 - 单元测试：同文件底部 `#[cfg(test)] mod tests`
 - 集成测试：`src-tauri/tests/test_{domain}.rs`（如 `test_chat.rs`, `test_roles.rs`）
 - 集成测试公共模块：`tests/common/mod.rs`
-- 测试命令：`cd GUI/src-tauri && cargo test`
+- 测试命令：`cd egosync-app/src-tauri && cargo test`
 - SQLx 测试：使用 sqlx test fixtures
 
 **E2E 测试 (V1 必需):**
@@ -177,7 +177,7 @@ _本文件包含 AI Agent 在本项目中实现代码时必须遵循的关键规
 
 **数据库迁移:**
 - 使用 `sqlx migrate` 管理
-- 迁移文件存放：`GUI/src-tauri/migrations/`
+- 迁移文件存放：`egosync-app/src-tauri/migrations/`
 - 命名格式：`{seq}_{description}.sql`
 
 **新增 Tauri Command 检查清单:**

@@ -29,7 +29,7 @@ So that 感受到 AI 正在实时思考并回应我。
 
 ### Phase 1: 对话日志数据库 — 第二个 SQLite DB (AC: #2, #5)
 
-- [ ] **T1.1** 创建 `GUI/src-tauri/migrations/002_conversations.sql`：
+- [ ] **T1.1** 创建 `egosync-app/src-tauri/migrations/002_conversations.sql`：
   ```sql
   -- 对话日志库 conversations.db schema
   -- 注意：此 migration 运行在 conversations.db（非 egosync.db）
@@ -274,7 +274,7 @@ So that 感受到 AI 正在实时思考并回应我。
 
 ### Phase 6: 前端 — Types + Service + Hook (AC: #8, #9)
 
-- [ ] **T6.1** 创建 `GUI/src/types/chat.ts`：
+- [ ] **T6.1** 创建 `egosync-app/src/types/chat.ts`：
   ```typescript
   export interface Conversation {
     id: string;
@@ -304,7 +304,7 @@ So that 感受到 AI 正在实时思考并回应我。
     done: boolean;
   }
   ```
-- [ ] **T6.2** 创建 `GUI/src/services/chatService.ts`：
+- [ ] **T6.2** 创建 `egosync-app/src/services/chatService.ts`：
   ```typescript
   import { invoke } from '@tauri-apps/api/core';
   import type { Conversation, ChatMessage, ChatRequest } from '../types/chat';
@@ -320,7 +320,7 @@ So that 感受到 AI 正在实时思考并回应我。
     deleteConversation: (conversationId: string) => invoke<void>('chat_delete_conversation', { conversationId }),
   };
   ```
-- [ ] **T6.3** 创建 `GUI/src/hooks/useTauriEvent.ts`：
+- [ ] **T6.3** 创建 `egosync-app/src/hooks/useTauriEvent.ts`：
   ```typescript
   import { useEffect } from 'react';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
@@ -343,33 +343,33 @@ So that 感受到 AI 正在实时思考并回应我。
 
 ### Phase 7: 前端 — ChatStream 组件替换 mock (AC: #1, #3, #4, #8)
 
-- [ ] **T7.1** 创建 `GUI/src/components/chat/ChatStream.tsx`：
+- [ ] **T7.1** 创建 `egosync-app/src/components/chat/ChatStream.tsx`：
   - 管理 `messages: ChatMessage[]` 状态
   - 管理 `isStreaming` + `streamContent` 累积状态
   - 通过 `useTauriEvent<StreamPayload>('llm:stream', ...)` 监听流式 token
   - 收到 token → `setStreamContent(prev => prev + token)`
   - 收到 done → 将 streamContent 追加到 messages，清空 streamContent
   - 渲染消息列表（用户/管家区分样式）+ 流式中的"正在输入"气泡
-- [ ] **T7.2** 创建 `GUI/src/components/chat/ChatBubble.tsx`：
+- [ ] **T7.2** 创建 `egosync-app/src/components/chat/ChatBubble.tsx`：
   - 接收 `message: ChatMessage` + `isStreaming?: boolean`
   - 用户消息：右对齐，深色背景
   - 管家消息：左对齐，白色背景，含管家图标
   - 流式光标：`animate-pulse` 的闪烁竖线
-- [ ] **T7.3** 创建 `GUI/src/components/chat/ChatInput.tsx`：
+- [ ] **T7.3** 创建 `egosync-app/src/components/chat/ChatInput.tsx`：
   - 受控 input 组件
   - Enter 发送，Shift+Enter 换行（V1 可选）
   - `disabled` prop 用于流式进行中
   - `isStreaming` + `onStop` props：流式进行中显示停止按钮（同色系，Square 图标），点击调用 `onStop`
   - 发送按钮 + 停止按钮状态切换
-- [ ] **T7.3b** 创建 `GUI/src/components/chat/ChatHeader.tsx`：
+- [ ] **T7.3b** 创建 `egosync-app/src/components/chat/ChatHeader.tsx`：
   - 显示当前对话标题 + 新建对话按钮
   - 历史对话按钮点击展开 `ConversationList`
   - 接收 `onDeleteConversation` prop
-- [ ] **T7.3c** 创建 `GUI/src/components/chat/ConversationList.tsx`：
+- [ ] **T7.3c** 创建 `egosync-app/src/components/chat/ConversationList.tsx`：
   - 显示历史对话列表（标题 + 相对时间格式化：刚刚/X分钟前/X小时前/具体日期）
   - 点击切换对话
   - hover 显示删除按钮（Trash2 图标 + 确认）
-- [ ] **T7.4** 修改 `GUI/src/components/butler/ButlerView.tsx`：
+- [ ] **T7.4** 修改 `egosync-app/src/components/butler/ButlerView.tsx`：
   - 移除 mock `messages` state 和 `handleSend`
   - 用 `<ChatStream roleId={null} />` 替换消息列表区域
   - 保留 header + workspace panel 不变
@@ -588,43 +588,43 @@ unlisten();
 
 | 文件 | 内容 |
 |---|---|
-| `GUI/src-tauri/migrations/002_conversations.sql` | conversations + messages 表 |
-| `GUI/src-tauri/src/db/conversations.rs` | 对话日志 DB CRUD |
-| `GUI/src-tauri/src/models/chat.rs` | Conversation, Message, StreamPayload, ChatRequest |
-| `GUI/src-tauri/src/services/agent_engine.rs` | Agent Engine + System Prompt 分层 |
-| `GUI/src-tauri/src/commands/chat.rs` | chat_send_message, chat_get_history, chat_get_butler_conversation |
-| `GUI/src/types/chat.ts` | TS 类型定义 |
-| `GUI/src/services/chatService.ts` | 前端 service 封装 invoke |
-| `GUI/src/hooks/useTauriEvent.ts` | Tauri Event 通用监听 hook |
-| `GUI/src/components/chat/ChatStream.tsx` | 流式对话主组件 |
-| `GUI/src/components/chat/ChatBubble.tsx` | 消息气泡组件 |
-| `GUI/src/components/chat/ChatInput.tsx` | 输入框组件（含停止按钮） |
-| `GUI/src/components/chat/ChatHeader.tsx` | 对话头部（标题+新建+历史列表） |
-| `GUI/src/components/chat/ConversationList.tsx` | 历史对话列表组件 |
+| `egosync-app/src-tauri/migrations/002_conversations.sql` | conversations + messages 表 |
+| `egosync-app/src-tauri/src/db/conversations.rs` | 对话日志 DB CRUD |
+| `egosync-app/src-tauri/src/models/chat.rs` | Conversation, Message, StreamPayload, ChatRequest |
+| `egosync-app/src-tauri/src/services/agent_engine.rs` | Agent Engine + System Prompt 分层 |
+| `egosync-app/src-tauri/src/commands/chat.rs` | chat_send_message, chat_get_history, chat_get_butler_conversation |
+| `egosync-app/src/types/chat.ts` | TS 类型定义 |
+| `egosync-app/src/services/chatService.ts` | 前端 service 封装 invoke |
+| `egosync-app/src/hooks/useTauriEvent.ts` | Tauri Event 通用监听 hook |
+| `egosync-app/src/components/chat/ChatStream.tsx` | 流式对话主组件 |
+| `egosync-app/src/components/chat/ChatBubble.tsx` | 消息气泡组件 |
+| `egosync-app/src/components/chat/ChatInput.tsx` | 输入框组件（含停止按钮） |
+| `egosync-app/src/components/chat/ChatHeader.tsx` | 对话头部（标题+新建+历史列表） |
+| `egosync-app/src/components/chat/ConversationList.tsx` | 历史对话列表组件 |
 
 **本 Story 修改文件：**
 
 | 文件 | 修改内容 |
 |---|---|
-| `GUI/src-tauri/Cargo.toml` | 添加 `futures = "0.3"`, `chrono = "0.4"`, `tokio-util = "0.7"` 依赖 |
-| `GUI/src-tauri/src/db/pool.rs` | 新增 `ConversationsPool` 类型 + `init_conversations_db()` |
-| `GUI/src-tauri/src/db/mod.rs` | 添加 `pub mod conversations;` |
-| `GUI/src-tauri/src/models/mod.rs` | 添加 `pub mod chat;` |
-| `GUI/src-tauri/src/services/mod.rs` | 添加 `pub mod agent_engine;` |
-| `GUI/src-tauri/src/commands/mod.rs` | 添加 `pub mod chat;` |
-| `GUI/src-tauri/src/lib.rs` | 初始化 conversations.db + 注册 chat commands + manage StreamingState + CancelTokens |
-| `GUI/src-tauri/src/llm/traits.rs` | 添加 `chat_stream` 方法 + StreamEvent + ChatCompletionMessage |
-| `GUI/src-tauri/src/llm/openai.rs` | 实现 `chat_stream`（SSE 解析） |
-| `GUI/src-tauri/src/llm/anthropic.rs` | 实现 `chat_stream`（SSE 解析） |
-| `GUI/src/components/butler/ButlerView.tsx` | 移除 mock messages，集成 ChatStream 组件 |
+| `egosync-app/src-tauri/Cargo.toml` | 添加 `futures = "0.3"`, `chrono = "0.4"`, `tokio-util = "0.7"` 依赖 |
+| `egosync-app/src-tauri/src/db/pool.rs` | 新增 `ConversationsPool` 类型 + `init_conversations_db()` |
+| `egosync-app/src-tauri/src/db/mod.rs` | 添加 `pub mod conversations;` |
+| `egosync-app/src-tauri/src/models/mod.rs` | 添加 `pub mod chat;` |
+| `egosync-app/src-tauri/src/services/mod.rs` | 添加 `pub mod agent_engine;` |
+| `egosync-app/src-tauri/src/commands/mod.rs` | 添加 `pub mod chat;` |
+| `egosync-app/src-tauri/src/lib.rs` | 初始化 conversations.db + 注册 chat commands + manage StreamingState + CancelTokens |
+| `egosync-app/src-tauri/src/llm/traits.rs` | 添加 `chat_stream` 方法 + StreamEvent + ChatCompletionMessage |
+| `egosync-app/src-tauri/src/llm/openai.rs` | 实现 `chat_stream`（SSE 解析） |
+| `egosync-app/src-tauri/src/llm/anthropic.rs` | 实现 `chat_stream`（SSE 解析） |
+| `egosync-app/src/components/butler/ButlerView.tsx` | 移除 mock messages，集成 ChatStream 组件 |
 
 **不修改的文件（确认无需改动）：**
-- `GUI/src-tauri/src/error.rs` — AppError 已含所有需要的变体（LlmError 覆盖流式错误）
-- `GUI/src-tauri/src/services/secret_store.rs` — 被 agent_engine 间接调用加载 API Key，本身不改
-- `GUI/src-tauri/src/services/llm_config.rs` — 提供获取默认 LLM 配置的查询，可能需要一个新的 pub fn（或者 agent_engine 直接调 db 层）
-- `GUI/src-tauri/migrations/001_initial_schema.sql` — 不动，002 是新文件
-- `GUI/src/components/butler/ButlerWorkspacePanel.tsx` — 不动
-- `GUI/src/components/butler/ActionCard.tsx` — 不动
+- `egosync-app/src-tauri/src/error.rs` — AppError 已含所有需要的变体（LlmError 覆盖流式错误）
+- `egosync-app/src-tauri/src/services/secret_store.rs` — 被 agent_engine 间接调用加载 API Key，本身不改
+- `egosync-app/src-tauri/src/services/llm_config.rs` — 提供获取默认 LLM 配置的查询，可能需要一个新的 pub fn（或者 agent_engine 直接调 db 层）
+- `egosync-app/src-tauri/migrations/001_initial_schema.sql` — 不动，002 是新文件
+- `egosync-app/src/components/butler/ButlerWorkspacePanel.tsx` — 不动
+- `egosync-app/src/components/butler/ActionCard.tsx` — 不动
 
 **与架构文档对齐：**
 
@@ -659,18 +659,18 @@ unlisten();
 - [Source: `_bmad-output/planning-artifacts/architecture.md` #LLM Streaming Standard Pattern] — 前端流式标准代码
 - [Source: `_bmad-output/planning-artifacts/architecture.md` #Internal Data Flow] — 对话核心回路数据流
 - [Source: `_bmad-output/project-context.md` #框架特定规则] — Tauri IPC、Event 命名、分层规则
-- [Source: `GUI/src-tauri/src/llm/traits.rs`] — 当前 LlmProvider trait（只有 test_connection）
-- [Source: `GUI/src-tauri/src/llm/openai.rs`] — OpenAiProvider 现有结构
-- [Source: `GUI/src-tauri/src/llm/anthropic.rs`] — AnthropicProvider 现有结构
-- [Source: `GUI/src-tauri/src/lib.rs`] — 当前 app setup 和 invoke_handler 结构
-- [Source: `GUI/src-tauri/src/db/pool.rs`] — 当前 DB 初始化模式（init_db）
-- [Source: `GUI/src/components/butler/ButlerView.tsx`] — 当前 mock messages state（待替换）
+- [Source: `egosync-app/src-tauri/src/llm/traits.rs`] — 当前 LlmProvider trait（只有 test_connection）
+- [Source: `egosync-app/src-tauri/src/llm/openai.rs`] — OpenAiProvider 现有结构
+- [Source: `egosync-app/src-tauri/src/llm/anthropic.rs`] — AnthropicProvider 现有结构
+- [Source: `egosync-app/src-tauri/src/lib.rs`] — 当前 app setup 和 invoke_handler 结构
+- [Source: `egosync-app/src-tauri/src/db/pool.rs`] — 当前 DB 初始化模式（init_db）
+- [Source: `egosync-app/src/components/butler/ButlerView.tsx`] — 当前 mock messages state（待替换）
 - [Source: `_bmad-output/implementation-artifacts/1-6-llm-provider-connection-test.md` #Dev Notes] — 前一 Story 全部经验
 
 ### 验证命令清单
 
 ```bash
-cd GUI/src-tauri
+cd egosync-app/src-tauri
 cargo check                    # 编译检查
 cargo test                     # 单元测试
 cargo clippy -- -D warnings    # lint

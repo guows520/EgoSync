@@ -11,17 +11,17 @@ So that 后续每个 Story 都能在提交时验证不破坏已有功能。
 ## Acceptance Criteria
 
 1. **AC-1: 前端测试可运行**
-   - Given 开发者在 `GUI/` 目录下
+   - Given 开发者在 `egosync-app/` 目录下
    - When 执行 `npm run test:frontend`
    - Then Vitest 运行并报告 ≥ 1 个测试通过，退出码 0
 
 2. **AC-2: Rust 测试可运行**
-   - Given 开发者在 `GUI/src-tauri/` 目录下
+   - Given 开发者在 `egosync-app/src-tauri/` 目录下
    - When 执行 `cargo test`
    - Then Rust 测试运行并报告 ≥ 1 个测试通过，退出码 0
 
 3. **AC-3: 全量测试一键运行**
-   - Given 开发者在 `GUI/` 目录下
+   - Given 开发者在 `egosync-app/` 目录下
    - When 执行 `npm run test:all`
    - Then 按顺序运行前端测试 + Rust 测试，全部通过
 
@@ -71,7 +71,7 @@ So that 后续每个 Story 都能在提交时验证不破坏已有功能。
 
 ### 当前项目状态（Story 1.1 完成后）
 
-- `GUI/src-tauri/` 已存在：Cargo.toml、lib.rs、main.rs、tauri.conf.json、build.rs
+- `egosync-app/src-tauri/` 已存在：Cargo.toml、lib.rs、main.rs、tauri.conf.json、build.rs
 - lib.rs 包含 `pub fn run()` + tracing-subscriber 初始化 + Tauri builder
 - main.rs 仅调用 `egosync_lib::run()`
 - package name = `egosync`, lib name = `egosync_lib`
@@ -86,7 +86,7 @@ So that 后续每个 Story 都能在提交时验证不破坏已有功能。
 npm install -D vitest jsdom @testing-library/react @testing-library/jest-dom
 ```
 
-**vitest.config.ts（项目根 `GUI/` 下）：**
+**vitest.config.ts（项目根 `egosync-app/` 下）：**
 ```typescript
 import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
@@ -180,7 +180,7 @@ pub fn setup() {
 
 ### GitHub Actions CI 精确配置
 
-**文件路径：** `探索/.github/workflows/ci.yml`（项目根目录，非 GUI/ 下）
+**文件路径：** `探索/.github/workflows/ci.yml`（项目根目录，非 egosync-app/ 下）
 
 **关键注意事项：**
 - 三平台：ubuntu-latest, macos-latest, windows-latest
@@ -188,17 +188,17 @@ pub fn setup() {
 - macOS / Windows 无需额外系统依赖（WebView2 内置于 Windows runner）
 - Rust cache 加速编译（actions-rs/toolchain 或 dtolnay/rust-toolchain + Swatinem/rust-cache）
 - Node cache 加速 npm install
-- `cargo test` 在 `GUI/src-tauri` 目录执行
+- `cargo test` 在 `egosync-app/src-tauri` 目录执行
 - CI 不使用 rsproxy 镜像（.cargo/config.toml 仅在本地生效，CI runner 使用 crates.io）
 - `npm run tauri build` 产出验证：workflow 成功即可，不上传 artifact（后续 release.yml 处理）
 
-**CI 不需要覆盖 `.cargo/config.toml`：** 该文件在 `GUI/src-tauri/.cargo/` 下，CI runner 可直接访问 crates.io。如果 rsproxy 不可达但未配置 fallback，CI 可能失败。
+**CI 不需要覆盖 `.cargo/config.toml`：** 该文件在 `egosync-app/src-tauri/.cargo/` 下，CI runner 可直接访问 crates.io。如果 rsproxy 不可达但未配置 fallback，CI 可能失败。
 
-⚠️ **风险：** `GUI/src-tauri/.cargo/config.toml` 硬编码 rsproxy。CI runner 在海外，rsproxy 可能反而降速。有两个选项：
+⚠️ **风险：** `egosync-app/src-tauri/.cargo/config.toml` 硬编码 rsproxy。CI runner 在海外，rsproxy 可能反而降速。有两个选项：
 1. 在 CI 中覆盖/删除该 config（推荐）
 2. 在 config.toml 中添加 fallback（Story 1.1 deferred）
 
-**推荐方案：** CI workflow 中添加步骤移除 `.cargo/config.toml`，或设置 `CARGO_NET_GIT_FETCH_WITH_CLI=true` 环境变量绕过。最简方案：CI step 中 `rm -f GUI/src-tauri/.cargo/config.toml`（仅 CI 运行时移除）。
+**推荐方案：** CI workflow 中添加步骤移除 `.cargo/config.toml`，或设置 `CARGO_NET_GIT_FETCH_WITH_CLI=true` 环境变量绕过。最简方案：CI step 中 `rm -f egosync-app/src-tauri/.cargo/config.toml`（仅 CI 运行时移除）。
 
 ### 前端冒烟测试示例
 
@@ -255,7 +255,7 @@ describe('Test infrastructure', () => {
 ├── .github/
 │   └── workflows/
 │       └── ci.yml                    # 新增：CI 三平台构建+测试
-└── GUI/
+└── egosync-app/
     ├── package.json                  # 修改：+test scripts, +devDeps
     ├── package-lock.json             # 修改：依赖锁定更新
     ├── vitest.config.ts              # 新增：Vitest 配置
@@ -285,7 +285,7 @@ describe('Test infrastructure', () => {
 ### Review Findings
 
 - [x] [Review][Patch] CI release build 过重 — 已修复：`npm run tauri build` → `cargo build`（debug 编译，release build 留给 release.yml）[`.github/workflows/ci.yml:71-73`]
-- [x] [Review][Defer] `tsconfig.json` types 字段限制全局类型可见性 — 后续添加 `@types/node` 等需手动加入 types 数组 [`GUI/tsconfig.json:18`] — deferred, 当前不影响
+- [x] [Review][Defer] `tsconfig.json` types 字段限制全局类型可见性 — 后续添加 `@types/node` 等需手动加入 types 数组 [`egosync-app/tsconfig.json:18`] — deferred, 当前不影响
 - [x] [Review][Defer] CI macOS target 硬编码 `aarch64-apple-darwin` — 若 GitHub Actions runner 架构变更需更新 [`.github/workflows/ci.yml:22`] — deferred, 当前正确
 - [x] [Review][Defer] CI 移除整个 `.cargo/config.toml` — 若未来该文件包含非镜像配置会丢失 [`.github/workflows/ci.yml:50`] — deferred, 当前只含 rsproxy
 
@@ -317,15 +317,15 @@ Claude Sonnet 4 (Cascade)
 ### File List
 
 **新增文件：**
-- `GUI/vitest.config.ts` — Vitest 测试配置（jsdom, globals, setupFiles）
-- `GUI/src/test-setup.ts` — 测试环境设置（@testing-library/jest-dom）
-- `GUI/src/App.test.tsx` — 前端冒烟测试（App 渲染验证）
-- `GUI/src-tauri/tests/common/mod.rs` — Rust 集成测试公共模块
-- `GUI/src-tauri/tests/test_app.rs` — Rust 集成测试骨架
+- `egosync-app/vitest.config.ts` — Vitest 测试配置（jsdom, globals, setupFiles）
+- `egosync-app/src/test-setup.ts` — 测试环境设置（@testing-library/jest-dom）
+- `egosync-app/src/App.test.tsx` — 前端冒烟测试（App 渲染验证）
+- `egosync-app/src-tauri/tests/common/mod.rs` — Rust 集成测试公共模块
+- `egosync-app/src-tauri/tests/test_app.rs` — Rust 集成测试骨架
 - `.github/workflows/ci.yml` — GitHub Actions CI 三平台构建+测试
 
 **修改文件：**
-- `GUI/package.json` — +test:frontend, +test:all scripts, +vitest/jsdom/@testing-library devDeps
-- `GUI/package-lock.json` — 依赖锁定更新
-- `GUI/tsconfig.json` — +types: vitest/globals, @testing-library/jest-dom
-- `GUI/src-tauri/src/lib.rs` — +#[cfg(test)] mod tests 单元测试
+- `egosync-app/package.json` — +test:frontend, +test:all scripts, +vitest/jsdom/@testing-library devDeps
+- `egosync-app/package-lock.json` — 依赖锁定更新
+- `egosync-app/tsconfig.json` — +types: vitest/globals, @testing-library/jest-dom
+- `egosync-app/src-tauri/src/lib.rs` — +#[cfg(test)] mod tests 单元测试

@@ -4,7 +4,7 @@ inputDocuments:
   - prd-egosync.md
   - architecture.md
   - ux-design-specification.md
-  - GUI/src/App.tsx
+  - egosync-app/src/App.tsx
 project_name: EgoSync
 date: 2026-05-25
 user_name: boss
@@ -14,11 +14,11 @@ user_name: boss
 
 ## Overview
 
-本文档基于 PRD（36 个 FR）、Architecture（Tauri 2.x + React 18 + Rust 后端 + opencode sidecar 架构）、UX Design Specification（"宁静书房"布局 + shadcn/ui 设计系统）和**已实现的高保真前端原型 `GUI/src/App.tsx`（1458 行，21 个组件）**，将需求分解为可由开发者执行的 Epic 和 Story 列表。
+本文档基于 PRD（36 个 FR）、Architecture（Tauri 2.x + React 18 + Rust 后端 + opencode sidecar 架构）、UX Design Specification（"宁静书房"布局 + shadcn/ui 设计系统）和**已实现的高保真前端原型 `egosync-app/src/App.tsx`（1458 行，21 个组件）**，将需求分解为可由开发者执行的 Epic 和 Story 列表。
 
 ## ⚠️ 关键实现约束（影响所有 Story 设计）
 
-**前端原型已完整实现：** `GUI/src/App.tsx` 已包含 21 个 React 组件，覆盖管家视角、角色视角、所有弹窗、引导流程、通知面板、LLM 配置 UI 等。样式系统（Tailwind + 角色色温 + 圆角 + 动效）和交互（视图切换、Modal 开关、Tab 切换、Mock 对话流）均已就绪。
+**前端原型已完整实现：** `egosync-app/src/App.tsx` 已包含 21 个 React 组件，覆盖管家视角、角色视角、所有弹窗、引导流程、通知面板、LLM 配置 UI 等。样式系统（Tailwind + 角色色温 + 圆角 + 动效）和交互（视图切换、Modal 开关、Tab 切换、Mock 对话流）均已就绪。
 
 **因此本 Epic 拆分遵循以下约束：**
 
@@ -119,7 +119,7 @@ user_name: boss
 来源：`architecture.md` §Starter Template、§Implementation Sequence、§Validation Gaps
 
 **Starter Template & 项目初始化（影响 Epic 1 Story 1）：**
-- 保留现有 `GUI/` 前端原型，通过 `npx tauri init` 附加 Rust 后端层（**非** greenfield 模板）
+- 保留现有 `egosync-app/` 前端原型，通过 `npx tauri init` 附加 Rust 后端层（**非** greenfield 模板）
 - 配置 `devUrl=http://localhost:5173`, `devCommand="npm run dev"`, `buildCommand="npm run build"`
 - Rust 依赖：tauri 2.x、serde、sqlx (sqlite + runtime-tokio)、tokio、uuid、keyring 3.x、tracing、async-trait
 
@@ -264,7 +264,7 @@ user_name: boss
 **UX-DRs covered:** UX-DR1, UX-DR2, UX-DR4, UX-DR7, UX-DR8（新建）, UX-DR15, UX-DR21, UX-DR23, UX-DR24, UX-DR25
 
 **核心交付：**
-- Tauri 2.x 集成现有 `GUI/` 前端 + Rust 后端骨架（`npx tauri init` 附加，非 greenfield）
+- Tauri 2.x 集成现有 `egosync-app/` 前端 + Rust 后端骨架（`npx tauri init` 附加，非 greenfield）
 - `App.tsx` 拆分为域目录（`components/{layout,butler,role,chat,modals,onboarding,settings}/`）
 - SQLite 双库 schema + migrations（主库 `egosync.db` + 对话日志库 `conversations.db`）
 - LLM Provider trait + OpenAi/Anthropic 策略实现 + keyring 安全存储
@@ -446,7 +446,7 @@ So that 我能在独立窗口中使用它而不是浏览器。
 **Acceptance Criteria:**
 
 **Given** 开发者在三平台之一上 clone 仓库
-**When** 在 `GUI/` 执行 `npm install && npm run tauri dev`
+**When** 在 `egosync-app/` 执行 `npm install && npm run tauri dev`
 **Then** 桌面窗口打开并显示原型 UI（与 `npm run dev` 浏览器版本视觉一致）
 
 **Given** 三平台环境
@@ -470,15 +470,15 @@ So that 后续每个 Story 都能在提交时验证不破坏已有功能。
 
 **Acceptance Criteria:**
 
-**Given** 开发者在 `GUI/` 目录下
+**Given** 开发者在 `egosync-app/` 目录下
 **When** 执行 `npm run test:frontend`
 **Then** Vitest 运行并报告 ≥ 1 个测试通过，退出码 0
 
-**Given** 开发者在 `GUI/src-tauri/` 目录下
+**Given** 开发者在 `egosync-app/src-tauri/` 目录下
 **When** 执行 `cargo test`
 **Then** Rust 测试运行并报告 ≥ 1 个测试通过，退出码 0
 
-**Given** 开发者在 `GUI/` 目录下
+**Given** 开发者在 `egosync-app/` 目录下
 **When** 执行 `npm run test:all`
 **Then** 按顺序运行前端测试 + Rust 测试，全部通过
 

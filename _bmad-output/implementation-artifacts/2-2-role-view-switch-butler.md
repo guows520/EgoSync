@@ -36,9 +36,9 @@ so that 我能与特定角色直接对话，同时不污染管家的全局视角
    - **And** 切换路径只能是 `butler ↔ role`，不允许 `roleA → roleB → 返回 roleA` 历史栈
 
 5. **AC-5 RoleHeader 抽取为独立组件**
-   - **Given** 现有 `GUI/src/components/role/RoleView.tsx` 内联 header（46px 图标 + 名字 + 能量条 + 工具栏按钮）
+   - **Given** 现有 `egosync-app/src/components/role/RoleView.tsx` 内联 header（46px 图标 + 名字 + 能量条 + 工具栏按钮）
    - **When** 重构完成
-   - **Then** header 渲染逻辑移入新文件 `GUI/src/components/role/RoleHeader.tsx`
+   - **Then** header 渲染逻辑移入新文件 `egosync-app/src/components/role/RoleHeader.tsx`
    - **And** `RoleView` 通过 `<RoleHeader role={role} ... />` 复用，行为视觉与重构前一致
    - **And** RoleHeader 与 `Sidebar`/`RoleSidebarIcon` 共用 `lib/roleIcons.ts` 的 `getRoleIconComponent` / `normalizeColorHex`，不重新引入 emoji 渲染分支
 
@@ -56,23 +56,23 @@ so that 我能与特定角色直接对话，同时不污染管家的全局视角
 8. **AC-8 测试通过**
    - `cd GUI && npx tsc --noEmit`
    - `cd GUI && npm run test:frontend`
-   - `cd GUI/src-tauri && cargo test`
+   - `cd egosync-app/src-tauri && cargo test`
    - 至少新增覆盖：role conversation lookup/create、role-aware system prompt 注入、RoleHeader 渲染、ChatStream 按 roleId 切换初始化
 
 ## Tasks / Subtasks
 
 ### Phase 1: 后端 role 对话 command + role-aware prompt (AC: #2, #6, #7)
 
-- [x] T1.1 扩展 `GUI/src-tauri/src/db/conversations.rs`
+- [x] T1.1 扩展 `egosync-app/src-tauri/src/db/conversations.rs`
   - [x] `get_or_create_conversation_by_role(pool, role_id) -> Result<Conversation, AppError>`：先 `SELECT ... WHERE role_id = ? ORDER BY updated_at DESC LIMIT 1`，无则 `create_conversation(pool, Some(role_id))`
   - [x] `list_conversations_by_role(pool, role_id) -> Result<Vec<Conversation>, AppError>`：用于历史对话列表
   - [x] `list_butler_conversations(pool) -> Result<Vec<Conversation>, AppError>`：`WHERE role_id IS NULL ORDER BY updated_at DESC`（替代既有 `list_all_conversations` 在管家视角中的用途，不删除既有 API）
   - [x] 同文件 `#[cfg(test)] mod tests` 增加单测：create→list_by_role 只看到该角色的对话；butler list 只看到 `role_id IS NULL`
-- [x] T1.2 扩展 `GUI/src-tauri/src/commands/chat.rs`
+- [x] T1.2 扩展 `egosync-app/src-tauri/src/commands/chat.rs`
   - [x] `chat_get_role_conversation(role_id, conv_pool)`：调 T1.1 helper
   - [x] `chat_list_conversations(role_id: Option<String>, conv_pool)`：保留入参兼容；`role_id == None` → `list_butler_conversations`，`Some(id)` → `list_conversations_by_role`
   - [x] 不引入新的 streaming/cancel state；复用既有 `StreamingState` / `CancelTokens`
-- [x] T1.3 扩展 `GUI/src-tauri/src/services/agent_engine.rs`
+- [x] T1.3 扩展 `egosync-app/src-tauri/src/services/agent_engine.rs`
   - [x] 新增 `build_role_messages(conv_pool, main_pool, conversation_id, role_id, user_message) -> Result<Vec<ChatCompletionMessage>, AppError>`
     - 加载 `Role` (`db::roles::get_role`)
     - system prompt 模板：以 `BUTLER_SYSTEM_PROMPT` 为基线，追加 `你现在扮演角色「{role.name}」。角色目标：{role.goal}。{role.personality_prompt}` —— `personality_prompt` 为空则跳过该行
@@ -84,28 +84,28 @@ so that 我能与特定角色直接对话，同时不污染管家的全局视角
   - [x] `chat_send_message` 把 `request.role_id` 透传给 `run_stream`
   - [x] 不引入 routing 决策、不引入 `routing_metadata`（属于 Story 2.3）
   - [x] 单测：`build_role_messages` 注入 role.name 与 goal；personality 为空时不出现空行；不存在的 role_id 返回 `AppError::NotFound`
-- [x] T1.4 在 `GUI/src-tauri/src/lib.rs` `invoke_handler` 中注册 `chat_get_role_conversation`
+- [x] T1.4 在 `egosync-app/src-tauri/src/lib.rs` `invoke_handler` 中注册 `chat_get_role_conversation`
 
 ### Phase 2: 前端 service / type 接口补齐 (AC: #2, #6, #7)
 
-- [x] T2.1 扩展 `GUI/src/services/chatService.ts`
+- [x] T2.1 扩展 `egosync-app/src/services/chatService.ts`
   - [x] `getRoleConversation(roleId)` → `invoke<Conversation>('chat_get_role_conversation', { roleId })`
   - [x] `listConversations(roleId?: string)` → `invoke<Conversation[]>('chat_list_conversations', { roleId: roleId ?? null })`（更新签名，保持向后兼容：不传等价 butler 列表）
-- [x] T2.2 `GUI/src/types/chat.ts` 无需新增类型（`Conversation` 已含 `roleId`）
+- [x] T2.2 `egosync-app/src/types/chat.ts` 无需新增类型（`Conversation` 已含 `roleId`）
 
 ### Phase 3: RoleHeader 抽取 + RoleView 接通 ChatStream (AC: #1, #2, #3, #5)
 
-- [x] T3.1 新建 `GUI/src/components/role/RoleHeader.tsx`
+- [x] T3.1 新建 `egosync-app/src/components/role/RoleHeader.tsx`
   - [x] Props：`{ role: Role; openTab: 'tasks'|'memory'|'settings'|null; onToggleTab: (tab) => void }`
   - [x] 视觉与当前 `RoleView` header 完全一致（46×46 图标块 + 名称 + 能量条 + 三个 Tab 按钮）
   - [x] 使用 `getRoleIconComponent(role.icon)` + `normalizeColorHex(role.color)`，不重引入 emoji 字符串渲染
   - [x] `role.color` 直接作为 inline style 背景；按钮 active 态色用 `style={{ color: roleColor }}` 替换原 `role.text` Tailwind class（mock 旧字段）
-- [x] T3.2 重构 `GUI/src/components/role/RoleView.tsx`
+- [x] T3.2 重构 `egosync-app/src/components/role/RoleView.tsx`
   - [x] 把内联 header 替换为 `<RoleHeader />`
   - [x] 把 mock `messages` 状态 + `handleSend` 流程整体删除，主对话区改为渲染 `<ChatStream roleId={role.id} />`（占满 `openTab ? w-[60%] : w-full` 区域，行为与 `ButlerView` 对齐）
   - [x] 保留 `openTab`/`RoleWorkspacePanel`/`RoleHeader` 之间的交互（包括 `setRoleInitialTab` 信号）
   - [x] 保留对 `onUpdateRole`/`onArchiveRole`/`onDeleteRole`/`activeRoleCount` 的透传
-- [x] T3.3 `GUI/src/components/chat/ChatStream.tsx`
+- [x] T3.3 `egosync-app/src/components/chat/ChatStream.tsx`
   - [x] init 分支：`roleId` 为空 → `chatService.getButlerConversation()`；`roleId` 非空 → `chatService.getRoleConversation(roleId)`
   - [x] `loadConversations` 改为 `chatService.listConversations(roleId ?? undefined)`
   - [x] `useEffect` 依赖加上 `roleId`，roleId 变更时重新拉取并清空 streamContent / thinkingContent
@@ -114,12 +114,12 @@ so that 我能与特定角色直接对话，同时不污染管家的全局视角
 
 ### Phase 4: 主区色温过渡与淡入 (AC: #1, #3)
 
-- [x] T4.1 `GUI/src/App.tsx`
+- [x] T4.1 `egosync-app/src/App.tsx`
   - [x] 主区 `<main>` 容器接收 `style={{ '--role-accent': accentHex, '--role-bg-tint': tintHex }}`，根据 `currentView`：
     - `butler` / `onboard` → `--role-accent: #6366F1` / `--role-bg-tint: transparent`
     - 其它（roleId）→ `--role-accent: role.color` / `--role-bg-tint: 同色 + alpha 6%`（不引入新依赖，用 `${roleColor}0F` 拼接）
   - [x] 主区 className 增加 `transition-[--role-accent,--role-bg-tint]` 不可行 — 改为：通过 CSS 变量驱动子元素 background-color/border-color 的 300ms 过渡（`transition-colors duration-300`，CSS 变量变化自动触发 transition）
-- [x] T4.2 `GUI/src/index.css`
+- [x] T4.2 `egosync-app/src/index.css`
   - [x] 不改 `:root` 默认值；仅确认 `--role-accent` / `--role-bg-tint` 在 `transition-colors` 内会平滑过渡（不需新增 keyframe）
 - [x] T4.3 `RoleView`/`ButlerView` 容器顶层加 `animate-in fade-in duration-250`（已存在的 `animate-in fade-in duration-500` 在 ButlerView，验证一致性后统一为 `duration-250` 以匹配 AC-1）
   - 实施偏差：`duration-250` 不在 Tailwind 默认 utility 集；改用 `duration-300` 作为最近的等效值（误差 50ms，肉眼不可感知，UX spec 中 `--duration-color: 300ms` 也是 300ms 节奏）。ButlerView 既有的 `duration-500` 暂未触碰（外科手术原则）。
@@ -142,46 +142,46 @@ so that 我能与特定角色直接对话，同时不污染管家的全局视角
 - [x] T5.5 验证命令
   - [x] `cd GUI && npx tsc --noEmit`（无错误）
   - [x] `cd GUI && npm run test:frontend`（24 passed / 7 files）
-  - [x] `cd GUI/src-tauri && cargo test`（65 passed lib + 1 integration placeholder）
+  - [x] `cd egosync-app/src-tauri && cargo test`（65 passed lib + 1 integration placeholder）
   - [ ] `tauri dev` 端到端验证 — 留给用户在桌面会话中手动确认（参考 Story 2.1 hotfix 经验）
 
 ### Review Findings
 
-- [x] [Review][Patch] 角色视图点击“新对话”会创建管家会话，破坏角色历史隔离 [GUI/src/components/chat/ChatStream.tsx:126] — 已修复：`chat_new_conversation` 接收并持久化 `role_id`，`ChatStream` 在角色视图创建新对话时传入当前 `roleId`，新增前后端测试覆盖归属不污染。
-- [x] [Review][Patch] 角色视图未把色温变量用于真实可见背景或发送按钮 [GUI/src/App.tsx:133] — 已修复：主区背景使用 `var(--role-bg-tint)`，角色视图 `ChatInput` 发送按钮使用 `var(--role-accent)`，管家视图保留原 slate 按钮。
-- [x] [Review][Patch] RoleHeader 未展示 role.goal，与 AC-1 的后端 Role 头部信息不完整 [GUI/src/components/role/RoleHeader.tsx:51] — 已修复：`RoleHeader` 展示 `role.goal`，并更新测试断言。
+- [x] [Review][Patch] 角色视图点击“新对话”会创建管家会话，破坏角色历史隔离 [egosync-app/src/components/chat/ChatStream.tsx:126] — 已修复：`chat_new_conversation` 接收并持久化 `role_id`，`ChatStream` 在角色视图创建新对话时传入当前 `roleId`，新增前后端测试覆盖归属不污染。
+- [x] [Review][Patch] 角色视图未把色温变量用于真实可见背景或发送按钮 [egosync-app/src/App.tsx:133] — 已修复：主区背景使用 `var(--role-bg-tint)`，角色视图 `ChatInput` 发送按钮使用 `var(--role-accent)`，管家视图保留原 slate 按钮。
+- [x] [Review][Patch] RoleHeader 未展示 role.goal，与 AC-1 的后端 Role 头部信息不完整 [egosync-app/src/components/role/RoleHeader.tsx:51] — 已修复：`RoleHeader` 展示 `role.goal`，并更新测试断言。
 
 ## Dev Notes
 
 ### 当前真实状态
 
 - `Sidebar` 已经通过 `onViewChange(currentView)` 实现 `butler ↔ roleId` 切换，无需新增导航状态。
-  [Source: `GUI/src/components/layout/Sidebar.tsx`, `GUI/src/App.tsx`]
+  [Source: `egosync-app/src/components/layout/Sidebar.tsx`, `egosync-app/src/App.tsx`]
 - `ChatStream` **已接受** `roleId?: string | null` 但当前 `useEffect` 直接 `chatService.getButlerConversation()`，**忽略了 roleId**。本 story 必须接通。
-  [Source: `GUI/src/components/chat/ChatStream.tsx#useEffect`]
+  [Source: `egosync-app/src/components/chat/ChatStream.tsx#useEffect`]
 - `RoleView` 当前**没有用 ChatStream**：是一个独立的 mock `messages` 数组 + `setTimeout` 假回复。本 story 替换为真实 ChatStream。
-  [Source: `GUI/src/components/role/RoleView.tsx`]
+  [Source: `egosync-app/src/components/role/RoleView.tsx`]
 - `RoleView` 当前依赖 `role.text`（一个 mock Tailwind class 字段）来给 tab active 态着色，**这个字段不在后端 `Role` 类型上**。重构时必须用 `roleColor` inline style 替换，否则会出现 `'text-indigo-600'` 默认值兜底（功能不影响但已是与真实数据脱节的旧分支）。
-  [Source: `GUI/src/components/role/RoleView.tsx:9`, `GUI/src/types/role.ts`]
+  [Source: `egosync-app/src/components/role/RoleView.tsx:9`, `egosync-app/src/types/role.ts`]
 - 后端 `Conversation.role_id` 字段已存在，`create_conversation(pool, Some(role_id))` 已存在。所以无需新增表结构。
-  [Source: `GUI/src-tauri/src/db/conversations.rs`]
+  [Source: `egosync-app/src-tauri/src/db/conversations.rs`]
 - `run_stream` 目前**不接收 role_id**；分支只在 `onboarding_step.is_some()` vs butler。需要新增 role 分支。
-  [Source: `GUI/src-tauri/src/services/agent_engine.rs#run_stream`]
+  [Source: `egosync-app/src-tauri/src/services/agent_engine.rs#run_stream`]
 - `chat_send_message` 在 `request.conversation_id.is_some()` 时**沿用 request.role_id**，但在 `None` 分支固定走 `get_or_create_butler_conversation`。这意味着角色视图必须**先**调用 `chat_get_role_conversation` 拿到 conversation_id，再发 message。新增 command 必要性已确认。
-  [Source: `GUI/src-tauri/src/commands/chat.rs:62-72`]
+  [Source: `egosync-app/src-tauri/src/commands/chat.rs:62-72`]
 
 ### 必须保留的边界
 
 - 前端不直接访问 SQLite；所有读写必须经 Tauri command。
   [Source: `_bmad-output/project-context.md#关键禁止事项`]
 - 主库 `egosync.db`（roles） 与对话库 `conversations.db` 是两个 pool。`build_role_messages` 需要同时持有两边的 pool（main_pool 读 role，conv_pool 读历史）。
-  [Source: `GUI/src-tauri/src/db/pool.rs`]
+  [Source: `egosync-app/src-tauri/src/db/pool.rs`]
 - 不在前端组件直接 emit Tauri event；事件监听统一通过 `useTauriEvent` hook。
   [Source: `_bmad-output/project-context.md#Tauri IPC`]
 - 不写自定义 CSS class；色温过渡用 Tailwind utility + CSS 变量 + `transition-colors`。
   [Source: `_bmad-output/project-context.md#React 前端`]
 - 不破坏 onboarding 路径：`run_stream` 三分支顺序必须是 `onboarding_step.is_some()` → role → butler。
-  [Source: `GUI/src-tauri/src/services/agent_engine.rs#run_stream`]
+  [Source: `egosync-app/src-tauri/src/services/agent_engine.rs#run_stream`]
 
 ### Story 2.1 与 Epic 1 经验必须应用
 
@@ -224,30 +224,30 @@ so that 我能与特定角色直接对话，同时不污染管家的全局视角
 
 | Path | Notes |
 |---|---|
-| `GUI/src/components/role/RoleHeader.tsx` | 从 RoleView 抽取的头部组件 |
-| `GUI/src/components/role/RoleHeader.test.tsx` | RoleHeader 渲染测试 |
+| `egosync-app/src/components/role/RoleHeader.tsx` | 从 RoleView 抽取的头部组件 |
+| `egosync-app/src/components/role/RoleHeader.test.tsx` | RoleHeader 渲染测试 |
 
 ### 修改文件
 
 | Path | Action | Notes |
 |---|---|---|
-| `GUI/src-tauri/src/db/conversations.rs` | UPDATE | 新增 `get_or_create_conversation_by_role` / `list_conversations_by_role` / `list_butler_conversations` |
-| `GUI/src-tauri/src/commands/chat.rs` | UPDATE | 新增 `chat_get_role_conversation`；`chat_list_conversations` 支持可选 role_id |
-| `GUI/src-tauri/src/services/agent_engine.rs` | UPDATE | 新增 `build_role_messages`；`run_stream` 增加 role_id 分支 |
-| `GUI/src-tauri/src/lib.rs` | UPDATE | 注册新 command |
-| `GUI/src/services/chatService.ts` | UPDATE | 新增 `getRoleConversation`；`listConversations` 支持可选 roleId |
-| `GUI/src/components/role/RoleView.tsx` | UPDATE | 删 mock messages；接通 ChatStream；用 RoleHeader |
-| `GUI/src/components/chat/ChatStream.tsx` | UPDATE | init 按 roleId 分支；listConversations 按 roleId 过滤 |
-| `GUI/src/App.tsx` | UPDATE | 主区注入 `--role-accent` / `--role-bg-tint` CSS 变量 |
-| `GUI/src/components/chat/ChatStream.test.tsx`（如已存在则更新，否则新建） | UPDATE/NEW | 覆盖 roleId 分支 |
+| `egosync-app/src-tauri/src/db/conversations.rs` | UPDATE | 新增 `get_or_create_conversation_by_role` / `list_conversations_by_role` / `list_butler_conversations` |
+| `egosync-app/src-tauri/src/commands/chat.rs` | UPDATE | 新增 `chat_get_role_conversation`；`chat_list_conversations` 支持可选 role_id |
+| `egosync-app/src-tauri/src/services/agent_engine.rs` | UPDATE | 新增 `build_role_messages`；`run_stream` 增加 role_id 分支 |
+| `egosync-app/src-tauri/src/lib.rs` | UPDATE | 注册新 command |
+| `egosync-app/src/services/chatService.ts` | UPDATE | 新增 `getRoleConversation`；`listConversations` 支持可选 roleId |
+| `egosync-app/src/components/role/RoleView.tsx` | UPDATE | 删 mock messages；接通 ChatStream；用 RoleHeader |
+| `egosync-app/src/components/chat/ChatStream.tsx` | UPDATE | init 按 roleId 分支；listConversations 按 roleId 过滤 |
+| `egosync-app/src/App.tsx` | UPDATE | 主区注入 `--role-accent` / `--role-bg-tint` CSS 变量 |
+| `egosync-app/src/components/chat/ChatStream.test.tsx`（如已存在则更新，否则新建） | UPDATE/NEW | 覆盖 roleId 分支 |
 
 ### 不动的文件
 
-- `GUI/src-tauri/migrations/` — 无 schema 变更
-- `GUI/src-tauri/src/models/chat.rs` — `Conversation` / `ChatRequest` 已含 `role_id` / `roleId`
-- `GUI/src/types/chat.ts` — 已含 `roleId`
-- `GUI/src/components/role/SettingsTab.tsx` — 本 story 不动；personality UI 编辑是 Story 2.4
-- `GUI/src/components/onboarding/OnboardingView.tsx` — onboarding 路径不变
+- `egosync-app/src-tauri/migrations/` — 无 schema 变更
+- `egosync-app/src-tauri/src/models/chat.rs` — `Conversation` / `ChatRequest` 已含 `role_id` / `roleId`
+- `egosync-app/src/types/chat.ts` — 已含 `roleId`
+- `egosync-app/src/components/role/SettingsTab.tsx` — 本 story 不动；personality UI 编辑是 Story 2.4
+- `egosync-app/src/components/onboarding/OnboardingView.tsx` — onboarding 路径不变
 
 ## References
 
@@ -259,12 +259,12 @@ so that 我能与特定角色直接对话，同时不污染管家的全局视角
 - [Source: `_bmad-output/implementation-artifacts/1-9-role-sidebar-breathing-animation.md` — 真实角色 icon/color 格式收敛]
 - [Source: `_bmad-output/implementation-artifacts/2-1-role-crud-archive-delete.md` — roleService/SettingsTab 收敛、错误就地展示]
 - [Source: `_bmad-output/implementation-artifacts/epic-1-retro-2026-05-23.md` — sprint-status 同步、mock 收敛纪律]
-- [Source: `GUI/src/components/role/RoleView.tsx` — 当前 mock 实现需要替换]
-- [Source: `GUI/src/components/chat/ChatStream.tsx` — 已有 roleId prop 但未生效]
-- [Source: `GUI/src-tauri/src/commands/chat.rs` — chat_send_message 已透传 role_id]
-- [Source: `GUI/src-tauri/src/db/conversations.rs` — Conversation.role_id 字段已存在]
-- [Source: `GUI/src-tauri/src/services/agent_engine.rs` — run_stream 当前无 role 分支]
-- [Source: `GUI/src/lib/roleIcons.ts` — icon/color 白名单]
+- [Source: `egosync-app/src/components/role/RoleView.tsx` — 当前 mock 实现需要替换]
+- [Source: `egosync-app/src/components/chat/ChatStream.tsx` — 已有 roleId prop 但未生效]
+- [Source: `egosync-app/src-tauri/src/commands/chat.rs` — chat_send_message 已透传 role_id]
+- [Source: `egosync-app/src-tauri/src/db/conversations.rs` — Conversation.role_id 字段已存在]
+- [Source: `egosync-app/src-tauri/src/services/agent_engine.rs` — run_stream 当前无 role 分支]
+- [Source: `egosync-app/src/lib/roleIcons.ts` — icon/color 白名单]
 
 ## Dev Agent Record
 
@@ -295,25 +295,25 @@ Claude Sonnet 4.5
 ### File List
 
 **新建文件：**
-- `GUI/src/components/role/RoleHeader.tsx`
-- `GUI/src/components/role/RoleHeader.test.tsx`
-- `GUI/src/components/chat/ChatStream.test.tsx`
-- `GUI/src/components/chat/ChatInput.test.tsx`
-- `GUI/src/components/chat/ChatBubble.test.tsx`
+- `egosync-app/src/components/role/RoleHeader.tsx`
+- `egosync-app/src/components/role/RoleHeader.test.tsx`
+- `egosync-app/src/components/chat/ChatStream.test.tsx`
+- `egosync-app/src/components/chat/ChatInput.test.tsx`
+- `egosync-app/src/components/chat/ChatBubble.test.tsx`
 
 **修改文件：**
-- `GUI/src-tauri/src/db/conversations.rs`
-- `GUI/src-tauri/src/commands/chat.rs`
-- `GUI/src-tauri/src/services/agent_engine.rs`
-- `GUI/src-tauri/src/lib.rs`
-- `GUI/src/services/chatService.ts`
-- `GUI/src/components/role/RoleView.tsx`
-- `GUI/src/components/chat/ChatStream.tsx`
-- `GUI/src/components/chat/ChatStream.test.tsx`
-- `GUI/src/components/chat/ChatInput.tsx`
-- `GUI/src/components/chat/ChatBubble.tsx`
-- `GUI/src/components/butler/ButlerView.tsx`
-- `GUI/src/App.tsx`
+- `egosync-app/src-tauri/src/db/conversations.rs`
+- `egosync-app/src-tauri/src/commands/chat.rs`
+- `egosync-app/src-tauri/src/services/agent_engine.rs`
+- `egosync-app/src-tauri/src/lib.rs`
+- `egosync-app/src/services/chatService.ts`
+- `egosync-app/src/components/role/RoleView.tsx`
+- `egosync-app/src/components/chat/ChatStream.tsx`
+- `egosync-app/src/components/chat/ChatStream.test.tsx`
+- `egosync-app/src/components/chat/ChatInput.tsx`
+- `egosync-app/src/components/chat/ChatBubble.tsx`
+- `egosync-app/src/components/butler/ButlerView.tsx`
+- `egosync-app/src/App.tsx`
 - `_bmad-output/implementation-artifacts/2-2-role-view-switch-butler.md`
 - `_bmad-output/implementation-artifacts/sprint-status.yaml`
 

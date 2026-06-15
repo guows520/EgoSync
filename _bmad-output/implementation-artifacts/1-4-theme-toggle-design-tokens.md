@@ -242,19 +242,19 @@ So that 在不同光线环境下都能舒适使用。
 
 | 文件 | 修改内容 |
 |---|---|
-| `GUI/src/index.css` | 添加 CSS 变量（浅色+深色）、prefers-reduced-motion media query |
-| `GUI/tailwind.config.js` | 扩展 theme（colors 引用 CSS 变量、borderRadius、transitionDuration、fontFamily.mono） |
-| `GUI/index.html` | 添加 JetBrains Mono 字体到 Google Fonts link |
-| `GUI/src/App.tsx` | 主题 localStorage 持久化 + 系统偏好检测 |
-| `GUI/tsconfig.json` | 添加 `baseUrl` + `paths` 路径别名 |
-| `GUI/vite.config.ts` | 添加 `resolve.alias` 路径别名 |
-| `GUI/src/components/layout/Sidebar.tsx` | 修复深色主题下状态小点边框色 |
-| `GUI/src/App.test.tsx` | mock localStorage + matchMedia |
+| `egosync-app/src/index.css` | 添加 CSS 变量（浅色+深色）、prefers-reduced-motion media query |
+| `egosync-app/tailwind.config.js` | 扩展 theme（colors 引用 CSS 变量、borderRadius、transitionDuration、fontFamily.mono） |
+| `egosync-app/index.html` | 添加 JetBrains Mono 字体到 Google Fonts link |
+| `egosync-app/src/App.tsx` | 主题 localStorage 持久化 + 系统偏好检测 |
+| `egosync-app/tsconfig.json` | 添加 `baseUrl` + `paths` 路径别名 |
+| `egosync-app/vite.config.ts` | 添加 `resolve.alias` 路径别名 |
+| `egosync-app/src/components/layout/Sidebar.tsx` | 修复深色主题下状态小点边框色 |
+| `egosync-app/src/App.test.tsx` | mock localStorage + matchMedia |
 
 **不修改的文件（确认无需改动）：**
-- `GUI/src/lib/utils.ts` — cn() 不变
-- `GUI/src/constants/mockData.ts` — mock 数据不变
-- `GUI/src/main.tsx` — 入口不变
+- `egosync-app/src/lib/utils.ts` — cn() 不变
+- `egosync-app/src/constants/mockData.ts` — mock 数据不变
+- `egosync-app/src/main.tsx` — 入口不变
 - 其他所有 `components/` 下的组件 — 现有 `dark:` 类名继续工作，无需迁移
 
 **与架构文档的对齐：**
@@ -291,11 +291,11 @@ So that 在不同光线环境下都能舒适使用。
 - [Source: `_bmad-output/planning-artifacts/ux-design-specification.md` #Accessibility Strategy] — prefers-reduced-motion、对比度、WCAG
 - [Source: `_bmad-output/project-context.md` #框架特定规则] — Tailwind utility only、darkMode: 'class'
 - [Source: `_bmad-output/implementation-artifacts/1-3-component-domain-split-visual-zero-regression.md` #陷阱3] — "添加 @ 别名属于 Story 1.4 的 design token 工作"
-- [Source: `GUI/tailwind.config.js`] — 当前配置：darkMode 'class'、tailwindcss-animate 插件、仅 accent/sidebar 两个自定义色
-- [Source: `GUI/src/index.css`] — 当前：基础 Tailwind import + 滚动条 + .breathe 动画，无 CSS 变量
-- [Source: `GUI/src/App.tsx`] — 当前：theme useState 无持久化，65 行
-- [Source: `GUI/src/components/layout/Sidebar.tsx`] — 主题切换按钮位置（第 67-69 行）、状态小点边框硬编码（第 49-50 行）
-- [Source: `GUI/index.html`] — Google Fonts link 含 Inter + Noto Sans SC，无 JetBrains Mono
+- [Source: `egosync-app/tailwind.config.js`] — 当前配置：darkMode 'class'、tailwindcss-animate 插件、仅 accent/sidebar 两个自定义色
+- [Source: `egosync-app/src/index.css`] — 当前：基础 Tailwind import + 滚动条 + .breathe 动画，无 CSS 变量
+- [Source: `egosync-app/src/App.tsx`] — 当前：theme useState 无持久化，65 行
+- [Source: `egosync-app/src/components/layout/Sidebar.tsx`] — 主题切换按钮位置（第 67-69 行）、状态小点边框硬编码（第 49-50 行）
+- [Source: `egosync-app/index.html`] — Google Fonts link 含 Inter + Noto Sans SC，无 JetBrains Mono
 
 ### 验证命令清单
 
@@ -330,13 +330,13 @@ Claude Sonnet 4 (Cascade)
 - ✅ AC-10: 浅色主题视觉零回归（CSS 变量默认值与原硬编码一致）
 
 ### File List
-- `GUI/src/index.css` — CSS 变量 token + reduced-motion
-- `GUI/tailwind.config.js` — 扩展 colors/borderRadius/transitionDuration/fontFamily
-- `GUI/index.html` — 添加 JetBrains Mono 字体
-- `GUI/src/App.tsx` — 主题 localStorage 持久化
-- `GUI/tsconfig.json` — @ 路径别名
-- `GUI/vite.config.ts` — @ resolve alias
-- `GUI/vitest.config.ts` — @ resolve alias
-- `GUI/src/components/layout/Sidebar.tsx` — 深色主题样式补全
-- `GUI/src/test-setup.ts` — localStorage + matchMedia mock
-- `GUI/package.json` — 添加 @types/node
+- `egosync-app/src/index.css` — CSS 变量 token + reduced-motion
+- `egosync-app/tailwind.config.js` — 扩展 colors/borderRadius/transitionDuration/fontFamily
+- `egosync-app/index.html` — 添加 JetBrains Mono 字体
+- `egosync-app/src/App.tsx` — 主题 localStorage 持久化
+- `egosync-app/tsconfig.json` — @ 路径别名
+- `egosync-app/vite.config.ts` — @ resolve alias
+- `egosync-app/vitest.config.ts` — @ resolve alias
+- `egosync-app/src/components/layout/Sidebar.tsx` — 深色主题样式补全
+- `egosync-app/src/test-setup.ts` — localStorage + matchMedia mock
+- `egosync-app/package.json` — 添加 @types/node

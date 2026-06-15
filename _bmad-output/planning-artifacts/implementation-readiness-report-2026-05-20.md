@@ -297,7 +297,7 @@ Epic 文档新增了若干**实现性细化项**，PRD 未编号但合理派生�
 - `ux-patterns-preview.html`（模式交互）
 - `ux-prototype.html`（原型）
 
-**额外锚点：** `GUI/src/App.tsx`（1458 行高保真前端原型，21 个组件已实现）— UX 规范、Architecture 和 Epics 全部以此原型为基础，明确"UI 实现零重做"硬约束。
+**额外锚点：** `egosync-app/src/App.tsx`（1458 行高保真前端原型，21 个组件已实现）— UX 规范、Architecture 和 Epics 全部以此原型为基础，明确"UI 实现零重做"硬约束。
 
 ### UX ↔ PRD Alignment
 
@@ -496,7 +496,7 @@ E8 (V1 加固) ← 所有 Epic 完成后
 
 #### A. Starter Template Requirement
 
-**Architecture 决策**: Manual Setup（保留现有 `GUI/` 前端原型，通过 `tauri init` 附加 Rust 后端层，**非 greenfield 模板**）。
+**Architecture 决策**: Manual Setup（保留现有 `egosync-app/` 前端原型，通过 `tauri init` 附加 Rust 后端层，**非 greenfield 模板**）。
 
 **Story 1.1 验证**: ✅ 完整覆盖项目初始化
 - AC 含: `npm install`、`npm run tauri dev`、`npm run tauri build`、Cargo.toml 含 tauri 2.x/serde/tokio/tracing/async-trait 依赖、`cargo check` 通过、三平台产物。

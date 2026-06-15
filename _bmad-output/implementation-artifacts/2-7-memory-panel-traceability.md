@@ -68,7 +68,7 @@ so that 我能理解 AI 为什么记住这些信息，并判断这些记忆是�
 7. **AC-7 测试与验证通过**
    - `cd GUI && npx tsc --noEmit`
    - `cd GUI && npm run test:frontend`
-   - `cd GUI/src-tauri && cargo test`
+   - `cd egosync-app/src-tauri && cargo test`
    - `cd GUI && npm run build`
    - 因本 story 修改 UI，必须启动 `cd GUI && npm run tauri dev` 做人工验证：打开角色记忆页、管家记忆页，验证筛选、badge、展开来源、缺失来源空态。
 
@@ -76,19 +76,19 @@ so that 我能理解 AI 为什么记住这些信息，并判断这些记忆是�
 
 ### Phase 1: 后端查询与溯源 API（AC: #2, #3, #4, #6, #7）
 
-- [x] T1.1 更新 `GUI/src-tauri/src/models/memory.rs`
+- [x] T1.1 更新 `egosync-app/src-tauri/src/models/memory.rs`
   - 新增 `MemorySourceMessage` DTO：`id`, `conversation_id`, `role`, `content`, `created_at`, `is_source`
   - 使用 `#[derive(Debug, Clone, Serialize, Deserialize)]` 与 `#[serde(rename_all = "camelCase")]`
   - 不复用 `models::chat::Message` 直接返回前端，避免暴露 `thinking_content` / `routing_metadata`
 
-- [x] T1.2 更新 `GUI/src-tauri/src/db/memories.rs`
+- [x] T1.2 更新 `egosync-app/src-tauri/src/db/memories.rs`
   - 新增 `get_memory_by_id(pool, memory_id) -> Result<Option<Memory>, AppError>`
   - 扩展 `list_memories(pool, role_id, category, limit, offset)`；`category` 必须复用现有白名单校验
   - 扩展 `list_all_memories(pool, category, limit, offset)`，保持当前 `dedup_memories` 去重语义
   - 新增 `count_memories(...)`，计数必须与去重后的列表一致；可复用 list 后 `len()`，V1 不为此引入复杂 SQL
   - 不改 `insert_memories` 的来源归一化与去重逻辑
 
-- [x] T1.3 新增或更新查询 service（建议 `GUI/src-tauri/src/services/memory_query.rs`）
+- [x] T1.3 新增或更新查询 service（建议 `egosync-app/src-tauri/src/services/memory_query.rs`）
   - `list_role_memories(...)` / `list_all_memories(...)` / `count_memories(...)`
   - `get_source_messages(main_pool, conv_pool, memory_id)`：
     - 主库查 memory；不存在返回 `AppError::NotFound`
@@ -96,16 +96,16 @@ so that 我能理解 AI 为什么记住这些信息，并判断这些记忆是�
     - 调 `db::conversations::list_messages` 读取同 conversation 消息
     - 只返回 id 命中的消息，按 `list_messages` 原始顺序
     - 若 conversation 或消息已删除，返回空数组并写 warn，不 panic
-  - 更新 `GUI/src-tauri/src/services/mod.rs` 导出该 service
+  - 更新 `egosync-app/src-tauri/src/services/mod.rs` 导出该 service
 
-- [x] T1.4 更新 `GUI/src-tauri/src/commands/memory.rs`
+- [x] T1.4 更新 `egosync-app/src-tauri/src/commands/memory.rs`
   - `memory_list(pool, role_id, category, limit, offset)` 调 service/db 查询
   - `memory_list_all(pool, category, limit, offset)` 调 service/db 查询
   - 新增 `memory_count(pool, role_id, include_role_memories, category)`
   - 新增 `memory_get_source_messages(pool, conversations_pool, memory_id)`
   - 保持 command 层仅做参数接收和调用，不把跨库过滤逻辑塞进 command
 
-- [x] T1.5 更新 `GUI/src-tauri/src/lib.rs`
+- [x] T1.5 更新 `egosync-app/src-tauri/src/lib.rs`
   - 在 `tauri::generate_handler!` 注册 `memory_count` 与 `memory_get_source_messages`
   - 不改已有 chat/role/opencode command 注册顺序语义
 
@@ -118,25 +118,25 @@ so that 我能理解 AI 为什么记住这些信息，并判断这些记忆是�
 
 ### Phase 2: 前端 service、hook 与 MemoryTab（AC: #1, #2, #3, #5, #7）
 
-- [x] T2.1 更新 `GUI/src/types/memory.ts`
+- [x] T2.1 更新 `egosync-app/src/types/memory.ts`
   - 提取 `MemoryCategory = 'preference' | 'task_status' | 'cognition_update' | 'fact'`，其中 `cognition_update` 的用户可见标签统一显示为 `认知模式`
   - `Memory.sourceMessageIds` 可暂时保持 `string`，不在 UI 直接解析作为真相来源
   - 新增 `MemorySourceMessage` 与 `MemoryListOptions`
 
-- [x] T2.2 更新 `GUI/src/services/memoryService.ts`
+- [x] T2.2 更新 `egosync-app/src/services/memoryService.ts`
   - `list(roleId, options?)` → invoke `memory_list`
   - `listAll(options?)` → invoke `memory_list_all`
   - 新增 `count({ roleId, includeRoleMemories, category? })` → invoke `memory_count`
   - 新增 `getSourceMessages(memoryId)` → invoke `memory_get_source_messages`
   - 继续使用 `@tauri-apps/api/core` 的 `invoke`，不引入新依赖
 
-- [x] T2.3 新增 `GUI/src/hooks/useMemories.ts`
+- [x] T2.3 新增 `egosync-app/src/hooks/useMemories.ts`
   - 参数：`roleId`, `includeRoleMemories`, `category`
   - 返回：`memories`, `isLoading`, `error`, `refetch`
   - 内部封装现有 `MemoryTab` 的取消标记模式，避免 role 切换后旧请求覆盖新状态
   - 错误状态只返回中文友好文案，不 toast
 
-- [x] T2.4 更新 `GUI/src/components/role/MemoryTab.tsx`
+- [x] T2.4 更新 `egosync-app/src/components/role/MemoryTab.tsx`
   - 用 `useMemories` 替换组件内直接 list/listAll 调用
   - 添加类别筛选器；选中状态可见，键盘可操作
   - 展开来源时懒加载 `memoryService.getSourceMessages(memory.id)`，每条 memory 独立 loading/error/source state
@@ -146,8 +146,8 @@ so that 我能理解 AI 为什么记住这些信息，并判断这些记忆是�
   - `遗忘` 按钮属于 Story 2.8；本 story 不实现 `memory_delete`。如果保留按钮，必须显式 disabled 或不触发任何删除副作用，避免“看起来可用但无行为”
 
 - [x] T2.5 更新 Tab 数量 badge
-  - `GUI/src/components/role/RoleWorkspacePanel.tsx`：`记忆档案` 标签显示当前角色记忆总数
-  - `GUI/src/components/butler/ButlerWorkspacePanel.tsx`：`管家记忆` 标签显示全量总览记忆总数
+  - `egosync-app/src/components/role/RoleWorkspacePanel.tsx`：`记忆档案` 标签显示当前角色记忆总数
+  - `egosync-app/src/components/butler/ButlerWorkspacePanel.tsx`：`管家记忆` 标签显示全量总览记忆总数
   - 计数通过 `memoryService.count` 获取；组件 unmount/role 切换时避免 stale state 写入
 
 - [x] T2.6 前端测试
@@ -160,7 +160,7 @@ so that 我能理解 AI 为什么记住这些信息，并判断这些记忆是�
 
 - [x] T3.1 运行 `cd GUI && npx tsc --noEmit`
 - [x] T3.2 运行 `cd GUI && npm run test:frontend`
-- [x] T3.3 运行 `cd GUI/src-tauri && cargo test`
+- [x] T3.3 运行 `cd egosync-app/src-tauri && cargo test`
 - [x] T3.4 运行 `cd GUI && npm run build`
 - [x] T3.5 启动 `cd GUI && npm run tauri dev` 人工验证 UI
   - 角色记忆页：列表、筛选、badge、展开来源
@@ -172,12 +172,12 @@ so that 我能理解 AI 为什么记住这些信息，并判断这些记忆是�
 
 _代码评审 (2026-06-01) — 三层对抗式评审（盲审 / 边界 / 验收）。AC-1~AC-7 全部 PASS，无 High。以下为待处理项。_
 
-- [x] [Review][Patch] 来源溯源改为显示可用子集（决策 2026-06-01: 不再「全有或全无」）— `get_source_messages` 过滤掉 system 消息与缺失消息后，展示剩余有效来源，不再因部分消息缺失而整体 `return Ok(Vec::new())`；仅当无任何有效来源时返回空数组（前端「来源对话已不可用」）。需调整后端 len 比较逻辑并补「部分缺失」与「含 system 仍展示有效项」的测试。[GUI/src-tauri/src/services/memory_query.rs:67-76]
-- [x] [Review][Patch] 记忆 badge 随 category 筛选联动（决策 2026-06-01: badge 跟随当前选中 category）— 将 category 选中状态提升到 `RoleWorkspacePanel` / `ButlerWorkspacePanel`，受控传入 `MemoryTab`；count useEffect 依赖 category 并传入 `count({ ..., category })`，使 badge 与筛选后列表口径一致；badge 在任意 tab 下仍常驻显示。需更新两个 Panel 测试断言。[GUI/src/components/role/RoleWorkspacePanel.tsx, GUI/src/components/butler/ButlerWorkspacePanel.tsx, GUI/src/components/role/MemoryTab.tsx]
-- [x] [Review][Patch] 来源加载失败后无法重试 — `toggleSource` 的早返回 guard 检查 `sourceStates[memoryId]?.messages`，而 catch 分支把 `messages` 设为 `[]`（JS 真值），导致一次瞬时 IPC 失败后再次展开仍被 guard 拦截、永不重新请求，用户只能持续看到「来源对话已不可用」。[GUI/src/components/role/MemoryTab.tsx:~55,~75]
-- [x] [Review][Defer] sourceStates/sourceRequestIds 在 role/category 切换时未清理 [GUI/src/components/role/MemoryTab.tsx] — deferred, memory id 全局唯一不串号，仅轻微内存累积，无功能危害
-- [x] [Review][Defer] categoryLabels 对未知/历史 category 无兜底标签 [GUI/src/components/role/MemoryTab.tsx] — deferred, insert_memories 有 validate 护栏，仅影响潜在历史脏数据
-- [x] [Review][Defer] 缺少部分来源缺失 / 前端展开竞态 / Tauri State 注入护栏的测试 [GUI/src-tauri/src/services/memory_query.rs, GUI/src/components/role/MemoryTab.test.tsx] — deferred, 测试增强项，非阻塞
+- [x] [Review][Patch] 来源溯源改为显示可用子集（决策 2026-06-01: 不再「全有或全无」）— `get_source_messages` 过滤掉 system 消息与缺失消息后，展示剩余有效来源，不再因部分消息缺失而整体 `return Ok(Vec::new())`；仅当无任何有效来源时返回空数组（前端「来源对话已不可用」）。需调整后端 len 比较逻辑并补「部分缺失」与「含 system 仍展示有效项」的测试。[egosync-app/src-tauri/src/services/memory_query.rs:67-76]
+- [x] [Review][Patch] 记忆 badge 随 category 筛选联动（决策 2026-06-01: badge 跟随当前选中 category）— 将 category 选中状态提升到 `RoleWorkspacePanel` / `ButlerWorkspacePanel`，受控传入 `MemoryTab`；count useEffect 依赖 category 并传入 `count({ ..., category })`，使 badge 与筛选后列表口径一致；badge 在任意 tab 下仍常驻显示。需更新两个 Panel 测试断言。[egosync-app/src/components/role/RoleWorkspacePanel.tsx, egosync-app/src/components/butler/ButlerWorkspacePanel.tsx, egosync-app/src/components/role/MemoryTab.tsx]
+- [x] [Review][Patch] 来源加载失败后无法重试 — `toggleSource` 的早返回 guard 检查 `sourceStates[memoryId]?.messages`，而 catch 分支把 `messages` 设为 `[]`（JS 真值），导致一次瞬时 IPC 失败后再次展开仍被 guard 拦截、永不重新请求，用户只能持续看到「来源对话已不可用」。[egosync-app/src/components/role/MemoryTab.tsx:~55,~75]
+- [x] [Review][Defer] sourceStates/sourceRequestIds 在 role/category 切换时未清理 [egosync-app/src/components/role/MemoryTab.tsx] — deferred, memory id 全局唯一不串号，仅轻微内存累积，无功能危害
+- [x] [Review][Defer] categoryLabels 对未知/历史 category 无兜底标签 [egosync-app/src/components/role/MemoryTab.tsx] — deferred, insert_memories 有 validate 护栏，仅影响潜在历史脏数据
+- [x] [Review][Defer] 缺少部分来源缺失 / 前端展开竞态 / Tauri State 注入护栏的测试 [egosync-app/src-tauri/src/services/memory_query.rs, egosync-app/src/components/role/MemoryTab.test.tsx] — deferred, 测试增强项，非阻塞
 
 ## Dev Notes
 
@@ -198,16 +198,16 @@ _代码评审 (2026-06-01) — 三层对抗式评审（盲审 / 边界 / 验收�
 
 | Path | Current state | This story changes | Must preserve |
 |---|---|---|---|
-| `GUI/src/components/role/MemoryTab.tsx` | 已调用 `memoryService.list` / `listAll` 加载真实记忆；有展开按钮，但展开内容仍是“后续故事中接入”占位。[Source: `GUI/src/components/role/MemoryTab.tsx`:30-56,81-100] | 增加筛选、懒加载来源消息、真实原文渲染、温暖空态。 | loading/error/展开 aria 基础行为；角色页与管家页的数据边界。 |
-| `GUI/src/services/memoryService.ts` | 只有 `list` 和 `listAll`。[Source: `GUI/src/services/memoryService.ts`:4-7] | 增加 options、count、getSourceMessages。 | 继续使用 Tauri v2 `@tauri-apps/api/core` invoke。 |
-| `GUI/src/types/memory.ts` | `Memory.sourceMessageIds` 仍是 JSON 字符串。[Source: `GUI/src/types/memory.ts`:1-9] | 增加 category/type/source DTO。 | 不让 UI 直接信任前端解析出来的 source ids；来源以后端 command 为准。 |
-| `GUI/src-tauri/src/commands/memory.rs` | 只有 `memory_list` / `memory_list_all` 两个 command。[Source: `GUI/src-tauri/src/commands/memory.rs`:8-19] | 增加筛选参数、count/source commands。 | command 层保持薄。 |
-| `GUI/src-tauri/src/db/memories.rs` | 已有 insert、list、list_all、dedup；去重基于 role/source/category/source ids。[Source: `GUI/src-tauri/src/db/memories.rs`:54-109] | 增加 get_by_id、filter/pagination/count。 | 不破坏 insert 去重和历史重复隐藏。 |
-| `GUI/src-tauri/src/models/memory.rs` | `Memory` / `ExtractedMemory` 已存在，serde camelCase。[Source: `GUI/src-tauri/src/models/memory.rs`:1-19] | 增加 `MemorySourceMessage` DTO。 | 不改变现有 Memory 字段名，避免破坏现有 UI。 |
-| `GUI/src-tauri/src/db/conversations.rs` | 已有 `get_conversation` 和 `list_messages`，后者按 `created_at ASC, rowid ASC` 排序。[Source: `GUI/src-tauri/src/db/conversations.rs`:176-187,268-280] | 复用或增加按 ids 过滤 helper。 | 保持 source 原文顺序；不要创建 conversation。 |
-| `GUI/src-tauri/src/lib.rs` | 已注册 `memory_list` / `memory_list_all`。[Source: `GUI/src-tauri/src/lib.rs`:218-219] | 注册新增 command。 | 不改其他 command 注册语义。 |
-| `GUI/src/components/role/RoleWorkspacePanel.tsx` | `记忆档案` Tab 静态标签，内容区传 `role.id` 给 MemoryTab。[Source: `GUI/src/components/role/RoleWorkspacePanel.tsx`:12-17,27-30] | 添加当前角色记忆 count badge。 | 角色页只传当前 role id。 |
-| `GUI/src/components/butler/ButlerWorkspacePanel.tsx` | `管家记忆` Tab 静态标签，内容区 `<MemoryTab roleId={null} includeRoleMemories />`。[Source: `GUI/src/components/butler/ButlerWorkspacePanel.tsx`:18-20,52] | 添加全量记忆 count badge。 | 保留 `includeRoleMemories` 总览行为。 |
+| `egosync-app/src/components/role/MemoryTab.tsx` | 已调用 `memoryService.list` / `listAll` 加载真实记忆；有展开按钮，但展开内容仍是“后续故事中接入”占位。[Source: `egosync-app/src/components/role/MemoryTab.tsx`:30-56,81-100] | 增加筛选、懒加载来源消息、真实原文渲染、温暖空态。 | loading/error/展开 aria 基础行为；角色页与管家页的数据边界。 |
+| `egosync-app/src/services/memoryService.ts` | 只有 `list` 和 `listAll`。[Source: `egosync-app/src/services/memoryService.ts`:4-7] | 增加 options、count、getSourceMessages。 | 继续使用 Tauri v2 `@tauri-apps/api/core` invoke。 |
+| `egosync-app/src/types/memory.ts` | `Memory.sourceMessageIds` 仍是 JSON 字符串。[Source: `egosync-app/src/types/memory.ts`:1-9] | 增加 category/type/source DTO。 | 不让 UI 直接信任前端解析出来的 source ids；来源以后端 command 为准。 |
+| `egosync-app/src-tauri/src/commands/memory.rs` | 只有 `memory_list` / `memory_list_all` 两个 command。[Source: `egosync-app/src-tauri/src/commands/memory.rs`:8-19] | 增加筛选参数、count/source commands。 | command 层保持薄。 |
+| `egosync-app/src-tauri/src/db/memories.rs` | 已有 insert、list、list_all、dedup；去重基于 role/source/category/source ids。[Source: `egosync-app/src-tauri/src/db/memories.rs`:54-109] | 增加 get_by_id、filter/pagination/count。 | 不破坏 insert 去重和历史重复隐藏。 |
+| `egosync-app/src-tauri/src/models/memory.rs` | `Memory` / `ExtractedMemory` 已存在，serde camelCase。[Source: `egosync-app/src-tauri/src/models/memory.rs`:1-19] | 增加 `MemorySourceMessage` DTO。 | 不改变现有 Memory 字段名，避免破坏现有 UI。 |
+| `egosync-app/src-tauri/src/db/conversations.rs` | 已有 `get_conversation` 和 `list_messages`，后者按 `created_at ASC, rowid ASC` 排序。[Source: `egosync-app/src-tauri/src/db/conversations.rs`:176-187,268-280] | 复用或增加按 ids 过滤 helper。 | 保持 source 原文顺序；不要创建 conversation。 |
+| `egosync-app/src-tauri/src/lib.rs` | 已注册 `memory_list` / `memory_list_all`。[Source: `egosync-app/src-tauri/src/lib.rs`:218-219] | 注册新增 command。 | 不改其他 command 注册语义。 |
+| `egosync-app/src/components/role/RoleWorkspacePanel.tsx` | `记忆档案` Tab 静态标签，内容区传 `role.id` 给 MemoryTab。[Source: `egosync-app/src/components/role/RoleWorkspacePanel.tsx`:12-17,27-30] | 添加当前角色记忆 count badge。 | 角色页只传当前 role id。 |
+| `egosync-app/src/components/butler/ButlerWorkspacePanel.tsx` | `管家记忆` Tab 静态标签，内容区 `<MemoryTab roleId={null} includeRoleMemories />`。[Source: `egosync-app/src/components/butler/ButlerWorkspacePanel.tsx`:18-20,52] | 添加全量记忆 count badge。 | 保留 `includeRoleMemories` 总览行为。 |
 
 ### Previous Story Intelligence
 
@@ -227,10 +227,10 @@ _代码评审 (2026-06-01) — 三层对抗式评审（盲审 / 边界 / 验收�
 
 ### Library / Framework Requirements
 
-- 前端使用 React 18.2、TypeScript 5.2 strict、Vite 5、TailwindCSS 3.3.5、Lucide React 0.292；不要新增 UI/状态管理依赖。[Source: `GUI/package.json`:14-24]
-- Tauri 前端 API 版本为 `@tauri-apps/api` 2.11，invoke 从 `@tauri-apps/api/core` 引入，沿用现有 service 模式。[Source: `GUI/package.json`:16,26]
-- Rust 使用 Tauri 2、SQLx 0.8、tokio、serde、chrono、uuid；本 story 不需要新 crate。[Source: `GUI/src-tauri/Cargo.toml`:18-35]
-- 测试框架为 Vitest + React Testing Library 16.3.2；前端测试继续 co-located。[Source: `GUI/package.json`:25-39]
+- 前端使用 React 18.2、TypeScript 5.2 strict、Vite 5、TailwindCSS 3.3.5、Lucide React 0.292；不要新增 UI/状态管理依赖。[Source: `egosync-app/package.json`:14-24]
+- Tauri 前端 API 版本为 `@tauri-apps/api` 2.11，invoke 从 `@tauri-apps/api/core` 引入，沿用现有 service 模式。[Source: `egosync-app/package.json`:16,26]
+- Rust 使用 Tauri 2、SQLx 0.8、tokio、serde、chrono、uuid；本 story 不需要新 crate。[Source: `egosync-app/src-tauri/Cargo.toml`:18-35]
+- 测试框架为 Vitest + React Testing Library 16.3.2；前端测试继续 co-located。[Source: `egosync-app/package.json`:25-39]
 
 ### UX Requirements
 
@@ -260,35 +260,35 @@ _代码评审 (2026-06-01) — 三层对抗式评审（盲审 / 边界 / 验收�
 
 | Path | Action | Notes |
 |---|---|---|
-| `GUI/src/hooks/useMemories.ts` | NEW | 封装 MemoryTab 列表查询、category filter、loading/error/refetch。 |
-| `GUI/src-tauri/src/services/memory_query.rs` | NEW | 推荐新增；跨主库与 conversations DB 的 memory 查询/溯源逻辑。 |
+| `egosync-app/src/hooks/useMemories.ts` | NEW | 封装 MemoryTab 列表查询、category filter、loading/error/refetch。 |
+| `egosync-app/src-tauri/src/services/memory_query.rs` | NEW | 推荐新增；跨主库与 conversations DB 的 memory 查询/溯源逻辑。 |
 
 ### 修改文件
 
 | Path | Action | Notes |
 |---|---|---|
-| `GUI/src/components/role/MemoryTab.tsx` | UPDATE | 筛选、真实来源展开、温暖空态、删除占位处理。 |
-| `GUI/src/components/role/MemoryTab.test.tsx` | UPDATE | 替换来源占位测试，补筛选/来源/空态。 |
-| `GUI/src/components/role/RoleWorkspacePanel.tsx` | UPDATE | 角色记忆 count badge。 |
-| `GUI/src/components/butler/ButlerWorkspacePanel.tsx` | UPDATE | 管家记忆总览 count badge。 |
-| `GUI/src/services/memoryService.ts` | UPDATE | options、count、getSourceMessages。 |
-| `GUI/src/types/memory.ts` | UPDATE | category/source DTO/types。 |
-| `GUI/src-tauri/src/models/memory.rs` | UPDATE | `MemorySourceMessage` DTO。 |
-| `GUI/src-tauri/src/db/memories.rs` | UPDATE | get_by_id/filter/pagination/count。 |
-| `GUI/src-tauri/src/db/conversations.rs` | UPDATE | 可选增加按 message ids 返回来源片段 helper；也可由 service 复用 `list_messages` 过滤。 |
-| `GUI/src-tauri/src/commands/memory.rs` | UPDATE | 增加筛选参数、count/source commands。 |
-| `GUI/src-tauri/src/services/mod.rs` | UPDATE | 若新增 `memory_query.rs`，导出模块。 |
-| `GUI/src-tauri/src/lib.rs` | UPDATE | 注册新增 commands。 |
+| `egosync-app/src/components/role/MemoryTab.tsx` | UPDATE | 筛选、真实来源展开、温暖空态、删除占位处理。 |
+| `egosync-app/src/components/role/MemoryTab.test.tsx` | UPDATE | 替换来源占位测试，补筛选/来源/空态。 |
+| `egosync-app/src/components/role/RoleWorkspacePanel.tsx` | UPDATE | 角色记忆 count badge。 |
+| `egosync-app/src/components/butler/ButlerWorkspacePanel.tsx` | UPDATE | 管家记忆总览 count badge。 |
+| `egosync-app/src/services/memoryService.ts` | UPDATE | options、count、getSourceMessages。 |
+| `egosync-app/src/types/memory.ts` | UPDATE | category/source DTO/types。 |
+| `egosync-app/src-tauri/src/models/memory.rs` | UPDATE | `MemorySourceMessage` DTO。 |
+| `egosync-app/src-tauri/src/db/memories.rs` | UPDATE | get_by_id/filter/pagination/count。 |
+| `egosync-app/src-tauri/src/db/conversations.rs` | UPDATE | 可选增加按 message ids 返回来源片段 helper；也可由 service 复用 `list_messages` 过滤。 |
+| `egosync-app/src-tauri/src/commands/memory.rs` | UPDATE | 增加筛选参数、count/source commands。 |
+| `egosync-app/src-tauri/src/services/mod.rs` | UPDATE | 若新增 `memory_query.rs`，导出模块。 |
+| `egosync-app/src-tauri/src/lib.rs` | UPDATE | 注册新增 commands。 |
 
 ### 不应修改
 
-- `GUI/src-tauri/migrations/004_memories.sql`
-- `GUI/src-tauri/migrations/005_memory_role_scoped_dedupe.sql`
-- `GUI/src-tauri/src/services/memory_pipeline.rs`
-- `GUI/src-tauri/src/commands/chat.rs`
-- `GUI/src-tauri/src/services/agent_engine.rs`
-- `GUI/src-tauri/src/services/agent_bridge.rs`
-- `GUI/src-tauri/src/services/agent_config.rs`
+- `egosync-app/src-tauri/migrations/004_memories.sql`
+- `egosync-app/src-tauri/migrations/005_memory_role_scoped_dedupe.sql`
+- `egosync-app/src-tauri/src/services/memory_pipeline.rs`
+- `egosync-app/src-tauri/src/commands/chat.rs`
+- `egosync-app/src-tauri/src/services/agent_engine.rs`
+- `egosync-app/src-tauri/src/services/agent_bridge.rs`
+- `egosync-app/src-tauri/src/services/agent_config.rs`
 
 ## References
 
@@ -300,15 +300,15 @@ _代码评审 (2026-06-01) — 三层对抗式评审（盲审 / 边界 / 验收�
 - [Source: `_bmad-output/planning-artifacts/ux-design-specification.md`:816-849 — feedback and empty-state UX]
 - [Source: `_bmad-output/project-context.md`:104-114,118-136,183-205 — Tauri layering, tests, command checklist, anti-patterns]
 - [Source: `_bmad-output/implementation-artifacts/2-6-conversation-memory-extraction.md`:213-245,350-356,400-405 — previous story memory implementation and known boundaries]
-- [Source: `GUI/src/components/role/MemoryTab.tsx`:30-56,81-100 — current real list and source placeholder]
-- [Source: `GUI/src/services/memoryService.ts`:4-7 — current memory service methods]
-- [Source: `GUI/src/types/memory.ts`:1-9 — current Memory type]
-- [Source: `GUI/src-tauri/src/commands/memory.rs`:8-19 — current memory commands]
-- [Source: `GUI/src-tauri/src/db/memories.rs`:54-109 — list/dedup behavior]
-- [Source: `GUI/src-tauri/src/db/conversations.rs`:176-187,268-280 — existing conversation/message query helpers]
-- [Source: `GUI/src-tauri/src/lib.rs`:218-219 — current memory command registration]
-- [Source: `GUI/package.json`:14-39 — frontend deps and test scripts]
-- [Source: `GUI/src-tauri/Cargo.toml`:18-35 — Rust deps]
+- [Source: `egosync-app/src/components/role/MemoryTab.tsx`:30-56,81-100 — current real list and source placeholder]
+- [Source: `egosync-app/src/services/memoryService.ts`:4-7 — current memory service methods]
+- [Source: `egosync-app/src/types/memory.ts`:1-9 — current Memory type]
+- [Source: `egosync-app/src-tauri/src/commands/memory.rs`:8-19 — current memory commands]
+- [Source: `egosync-app/src-tauri/src/db/memories.rs`:54-109 — list/dedup behavior]
+- [Source: `egosync-app/src-tauri/src/db/conversations.rs`:176-187,268-280 — existing conversation/message query helpers]
+- [Source: `egosync-app/src-tauri/src/lib.rs`:218-219 — current memory command registration]
+- [Source: `egosync-app/package.json`:14-39 — frontend deps and test scripts]
+- [Source: `egosync-app/src-tauri/Cargo.toml`:18-35 — Rust deps]
 
 ## Dev Agent Record
 
@@ -321,7 +321,7 @@ Claude Opus 4.7 (1M context)
 - 2026-05-31: `python3` 不可用，按 skill 规则手动读取 `customize.toml` 并确认无 team/user override、无 activation prepend/append。
 - 2026-05-31: 首次 Tauri dev 启动失败，根因为 Vite 5173 被既有 node 进程占用；经用户确认后结束旧进程并重启。
 - 2026-05-31: 默认 Cargo target 编译失败，根因为旧 `egosync.exe` 锁定 `target/debug/egosync.exe`；经用户确认后结束旧进程。
-- 2026-05-31: `src-tauri/target-claude-dev-story27` 编译失败，根因为 `sqlx-sqlite` 编译产物被占用；改用 `GUI/.tmp/target-claude-dev-story27` 避免锁定与 watcher 递归重建。
+- 2026-05-31: `src-tauri/target-claude-dev-story27` 编译失败，根因为 `sqlx-sqlite` 编译产物被占用；改用 `egosync-app/.tmp/target-claude-dev-story27` 避免锁定与 watcher 递归重建。
 - 2026-05-31: gstack browse 二进制/安装目录缺失，无法使用 browse 工具；改用浏览器级验证和组件交互测试补充 UI 验证。
 - 2026-05-31: 普通浏览器环境没有 Tauri bridge，真实 `invoke` 调用不可用；Tauri dev 日志显示 WebView2 已启动并访问 Vite，浏览器级验证使用临时 stub 验证 UI 形态，来源展开使用组件交互测试验证。
 
@@ -338,21 +338,21 @@ Claude Opus 4.7 (1M context)
 
 ### File List
 
-- `GUI/src-tauri/src/models/memory.rs`
-- `GUI/src-tauri/src/db/memories.rs`
-- `GUI/src-tauri/src/services/memory_query.rs`
-- `GUI/src-tauri/src/services/mod.rs`
-- `GUI/src-tauri/src/commands/memory.rs`
-- `GUI/src-tauri/src/lib.rs`
-- `GUI/src/types/memory.ts`
-- `GUI/src/services/memoryService.ts`
-- `GUI/src/hooks/useMemories.ts`
-- `GUI/src/components/role/MemoryTab.tsx`
-- `GUI/src/components/role/MemoryTab.test.tsx`
-- `GUI/src/components/role/RoleWorkspacePanel.tsx`
-- `GUI/src/components/role/RoleWorkspacePanel.test.tsx`
-- `GUI/src/components/butler/ButlerWorkspacePanel.tsx`
-- `GUI/src/components/butler/ButlerWorkspacePanel.test.tsx`
+- `egosync-app/src-tauri/src/models/memory.rs`
+- `egosync-app/src-tauri/src/db/memories.rs`
+- `egosync-app/src-tauri/src/services/memory_query.rs`
+- `egosync-app/src-tauri/src/services/mod.rs`
+- `egosync-app/src-tauri/src/commands/memory.rs`
+- `egosync-app/src-tauri/src/lib.rs`
+- `egosync-app/src/types/memory.ts`
+- `egosync-app/src/services/memoryService.ts`
+- `egosync-app/src/hooks/useMemories.ts`
+- `egosync-app/src/components/role/MemoryTab.tsx`
+- `egosync-app/src/components/role/MemoryTab.test.tsx`
+- `egosync-app/src/components/role/RoleWorkspacePanel.tsx`
+- `egosync-app/src/components/role/RoleWorkspacePanel.test.tsx`
+- `egosync-app/src/components/butler/ButlerWorkspacePanel.tsx`
+- `egosync-app/src/components/butler/ButlerWorkspacePanel.test.tsx`
 - `_bmad-output/implementation-artifacts/2-7-memory-panel-traceability.md`
 - `_bmad-output/implementation-artifacts/sprint-status.yaml`
 

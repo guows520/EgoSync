@@ -72,7 +72,7 @@ so that 我能判断建议是否可信。
 8. **AC-8 验证通过**
    - `cd GUI && npx tsc --noEmit`
    - `cd GUI && npm run test:frontend`
-   - `cd GUI/src-tauri && cargo test`
+   - `cd egosync-app/src-tauri && cargo test`
    - `cd GUI && npm run build`
    - 因本 story 修改聊天 UI 与工作台跳转，必须启动 `cd GUI && npm run tauri dev` 做人工验证：管家记忆引用点击、角色记忆引用点击、category filter 下定位、已删除记忆引用降级、streaming 后完成态仍可点击、不确定性声明展示。
 
@@ -80,7 +80,7 @@ so that 我能判断建议是否可信。
 
 ### Phase 1: 后端记忆引用上下文与 prompt 规则（AC: #1, #2, #3, #4, #5, #8）
 
-- [x] T1.1 更新 `GUI/src-tauri/src/services/agent_engine.rs` 的管家记忆摘要格式
+- [x] T1.1 更新 `egosync-app/src-tauri/src/services/agent_engine.rs` 的管家记忆摘要格式
   - 修改 `build_butler_memory_summary`：当前格式是 `- [category] content`；必须改为包含真实 `[记忆#<memory.id>]`。
   - 建议格式：`- [记忆#<id>] [<category>] <content 摘要>`。
   - 继续使用 `memories::list_all_memories(main_pool)`，保持与 MemoryTab 总览一致的“当前可见 memories”来源，不读 `forgotten_memory_sources`。
@@ -117,20 +117,20 @@ so that 我能判断建议是否可信。
 
 ### Phase 2: 前端记忆引用渲染与跳转数据流（AC: #6, #7, #8）
 
-- [x] T2.1 扩展 `GUI/src/components/chat/ChatBubble.tsx`
+- [x] T2.1 扩展 `egosync-app/src/components/chat/ChatBubble.tsx`
   - 新增可选 props，例如 `onMemoryReferenceClick?: (memoryId: string) => void`。
   - assistant 消息正文中的 `[记忆#<id>]` 渲染为可点击元素；用户消息保持纯文本。
   - 继续使用 `ReactMarkdown` 渲染普通 Markdown，不破坏现有 prose 样式。
   - 不引入新 markdown 插件依赖；可通过预处理文本或自定义渲染组件实现。
   - 可点击元素使用 Tailwind utility，具备 `type="button"`、focus ring、清晰 hover 状态。
 
-- [x] T2.2 扩展 `GUI/src/components/chat/ChatStream.tsx`
+- [x] T2.2 扩展 `egosync-app/src/components/chat/ChatStream.tsx`
   - 新增可选 prop：`onMemoryReferenceClick?: (memoryId: string) => void`。
   - 将 callback 传给历史消息和 streaming 完成后的 `ChatBubble`。
   - 保持现有 streaming 状态机：`payload.thinking` 不进入正文；`messageId` bucket 不破坏委派两气泡；final done 解锁输入；segment done 不提前结束。
   - 不新增 stream metadata event；本 story 通过消息正文中的 `[记忆#ID]` 触发跳转即可。
 
-- [x] T2.3 扩展 `GUI/src/components/role/MemoryTab.tsx` 定位能力
+- [x] T2.3 扩展 `egosync-app/src/components/role/MemoryTab.tsx` 定位能力
   - 新增可选 props，例如 `targetMemoryId?: string | null`、`onTargetMemoryHandled?: () => void`。
   - 为每个 memory 卡片增加稳定 DOM anchor，例如 `id={`memory-${memory.id}`}` 或 ref map。
   - 当 `targetMemoryId` 出现在当前可见列表时，滚动到该卡片并短暂高亮。
@@ -138,18 +138,18 @@ so that 我能判断建议是否可信。
   - 如果目标不存在或加载失败，显示温和不可用反馈，例如 `这条记忆现在不可用，可能已经被遗忘了`。
   - 保留现有 source 展开、遗忘确认、删除失败、request id 防竞态逻辑。
 
-- [x] T2.4 扩展 `GUI/src/components/role/RoleWorkspacePanel.tsx`
+- [x] T2.4 扩展 `egosync-app/src/components/role/RoleWorkspacePanel.tsx`
   - 接收 `targetMemoryId` / `onTargetMemoryHandled` 或等价 props。
   - 当收到记忆引用跳转时，设置 `currentTab` 为 `memory` 并清空 `memoryCategory`，确保目标不被 category filter 隐藏。
   - 将目标 ID 传给 `MemoryTab`。
   - 保持 badge count 仍按当前 category 与 role.id 重新计算。
 
-- [x] T2.5 扩展 `GUI/src/components/butler/ButlerWorkspacePanel.tsx`
+- [x] T2.5 扩展 `egosync-app/src/components/butler/ButlerWorkspacePanel.tsx`
   - 接收 `targetMemoryId` / `onTargetMemoryHandled` 或等价 props。
   - 打开 `memory` tab，清空 `memoryCategory`，并传递目标 ID 给全局总览 `MemoryTab`。
   - 保持 `includeRoleMemories` 与 `showOwnerLabel` 语义，不误改成只看 `role_id = NULL`。
 
-- [x] T2.6 扩展 `GUI/src/components/role/RoleView.tsx` 与 `GUI/src/components/butler/ButlerView.tsx`
+- [x] T2.6 扩展 `egosync-app/src/components/role/RoleView.tsx` 与 `egosync-app/src/components/butler/ButlerView.tsx`
   - 在 view 层持有 `targetMemoryId` 状态，因为 `ChatStream` 与 WorkspacePanel 是兄弟组件。
   - 点击 ChatBubble 中 `[记忆#ID]` 时：设置 target ID，并打开 `openTab='memory'`。
   - `MemoryTab` 成功处理后清理 target，避免后续重复滚动。
@@ -178,7 +178,7 @@ so that 我能判断建议是否可信。
 - [x] T3.3 运行验证命令
   - `cd GUI && npx tsc --noEmit`
   - `cd GUI && npm run test:frontend`
-  - `cd GUI/src-tauri && cargo test`
+  - `cd egosync-app/src-tauri && cargo test`
   - `cd GUI && npm run build`
 
 - [x] T3.4 启动 Tauri dev 并做人工验证
@@ -210,51 +210,51 @@ so that 我能判断建议是否可信。
 
 ### Existing Code State: Must Reuse / Update
 
-#### `GUI/src-tauri/src/services/agent_engine.rs`
+#### `egosync-app/src-tauri/src/services/agent_engine.rs`
 
-- `build_butler_memory_summary` 当前用 `memories::list_all_memories(main_pool)`，输出 `- [category] content`，没有 memory ID；这是 AC-4 的主要后端缺口。[Source: GUI/src-tauri/src/services/agent_engine.rs:183-234]
-- `build_butler_system_prompt` 已按“基线 → 角色清单 → 已知记忆 → 各角色近况 → 行为指南 → 角色涌现行为”拼接；透明推理规则应作为短规则块追加到管家/角色 prompt，不破坏现有顺序语义。[Source: GUI/src-tauri/src/services/agent_engine.rs:294-381]
-- `build_role_system_prompt` 当前只接收 `Role`，不会读取 DB；`build_role_messages` 只注入角色定义、历史消息、当前用户消息，角色结构化记忆未注入。[Source: GUI/src-tauri/src/services/agent_engine.rs:431-510]
-- opencode path 在 `try_run_opencode_stream` 中自己拼 `[系统指示]` 前缀，role path 调 `build_role_system_prompt(&role)`，butler path 调 `build_butler_system_prompt(...)`；fallback path 调 `build_role_messages` / `build_butler_messages`。[Source: GUI/src-tauri/src/services/agent_engine.rs:841-857] [Source: GUI/src-tauri/src/services/agent_engine.rs:1413-1424]
-- `llm:stream` payload、thinking token、messageId bucket、委派两气泡状态机都已存在；本 story 不需要新增 stream event 类型。[Source: GUI/src-tauri/src/services/agent_engine.rs:105-122] [Source: GUI/src-tauri/src/services/agent_engine.rs:870-1176]
+- `build_butler_memory_summary` 当前用 `memories::list_all_memories(main_pool)`，输出 `- [category] content`，没有 memory ID；这是 AC-4 的主要后端缺口。[Source: egosync-app/src-tauri/src/services/agent_engine.rs:183-234]
+- `build_butler_system_prompt` 已按“基线 → 角色清单 → 已知记忆 → 各角色近况 → 行为指南 → 角色涌现行为”拼接；透明推理规则应作为短规则块追加到管家/角色 prompt，不破坏现有顺序语义。[Source: egosync-app/src-tauri/src/services/agent_engine.rs:294-381]
+- `build_role_system_prompt` 当前只接收 `Role`，不会读取 DB；`build_role_messages` 只注入角色定义、历史消息、当前用户消息，角色结构化记忆未注入。[Source: egosync-app/src-tauri/src/services/agent_engine.rs:431-510]
+- opencode path 在 `try_run_opencode_stream` 中自己拼 `[系统指示]` 前缀，role path 调 `build_role_system_prompt(&role)`，butler path 调 `build_butler_system_prompt(...)`；fallback path 调 `build_role_messages` / `build_butler_messages`。[Source: egosync-app/src-tauri/src/services/agent_engine.rs:841-857] [Source: egosync-app/src-tauri/src/services/agent_engine.rs:1413-1424]
+- `llm:stream` payload、thinking token、messageId bucket、委派两气泡状态机都已存在；本 story 不需要新增 stream event 类型。[Source: egosync-app/src-tauri/src/services/agent_engine.rs:105-122] [Source: egosync-app/src-tauri/src/services/agent_engine.rs:870-1176]
 
-#### `GUI/src/components/chat/ChatBubble.tsx`
+#### `egosync-app/src/components/chat/ChatBubble.tsx`
 
-- Assistant 内容当前直接 `<ReactMarkdown>{message.content}</ReactMarkdown>`，没有 memory reference 特殊渲染。[Source: GUI/src/components/chat/ChatBubble.tsx:106-115]
-- 已有 thinking UI：streaming 时“思考中...”，完成后“思考过程”折叠；不要破坏空 content + thinking 的显示能力。[Source: GUI/src/components/chat/ChatBubble.tsx:42-84]
-- 角色身份显示通过 `assistantName` / `assistantIcon` / `assistantColor`，管家默认 `Home + 管家`；memory link UI 不应覆盖身份逻辑。[Source: GUI/src/components/chat/ChatBubble.tsx:17-28] [Source: GUI/src/components/chat/ChatBubble.tsx:45-104]
+- Assistant 内容当前直接 `<ReactMarkdown>{message.content}</ReactMarkdown>`，没有 memory reference 特殊渲染。[Source: egosync-app/src/components/chat/ChatBubble.tsx:106-115]
+- 已有 thinking UI：streaming 时“思考中...”，完成后“思考过程”折叠；不要破坏空 content + thinking 的显示能力。[Source: egosync-app/src/components/chat/ChatBubble.tsx:42-84]
+- 角色身份显示通过 `assistantName` / `assistantIcon` / `assistantColor`，管家默认 `Home + 管家`；memory link UI 不应覆盖身份逻辑。[Source: egosync-app/src/components/chat/ChatBubble.tsx:17-28] [Source: egosync-app/src/components/chat/ChatBubble.tsx:45-104]
 
-#### `GUI/src/components/chat/ChatStream.tsx`
+#### `egosync-app/src/components/chat/ChatStream.tsx`
 
-- `ChatStream` 目前 props 只有 `role?: Role | null`；需要增加 memory click callback 并传给 `ChatBubble`。[Source: GUI/src/components/chat/ChatStream.tsx:11-16]
-- `handleStreamEvent` 把 `payload.thinking` 追加到 `thinkingContent`，其它非 done payload 追加到 stream bubble content；不要把 metadata 事件加入本 story，否则会被拼进正文。[Source: GUI/src/components/chat/ChatStream.tsx:257-347]
-- streaming 完成时通过 `completedAssistantMessagesFromBubbles` 生成本地完成消息，并保留首个 bubble 的 `thinkingContent`。[Source: GUI/src/components/chat/ChatStream.tsx:18-53] [Source: GUI/src/components/chat/ChatStream.tsx:276-289]
-- 必须保留 conversationId 过滤、messageId bucket、final done 解锁、delegation segment done 不提前结束、history refresh merge 逻辑。[Source: GUI/src/components/chat/ChatStream.tsx:257-350]
+- `ChatStream` 目前 props 只有 `role?: Role | null`；需要增加 memory click callback 并传给 `ChatBubble`。[Source: egosync-app/src/components/chat/ChatStream.tsx:11-16]
+- `handleStreamEvent` 把 `payload.thinking` 追加到 `thinkingContent`，其它非 done payload 追加到 stream bubble content；不要把 metadata 事件加入本 story，否则会被拼进正文。[Source: egosync-app/src/components/chat/ChatStream.tsx:257-347]
+- streaming 完成时通过 `completedAssistantMessagesFromBubbles` 生成本地完成消息，并保留首个 bubble 的 `thinkingContent`。[Source: egosync-app/src/components/chat/ChatStream.tsx:18-53] [Source: egosync-app/src/components/chat/ChatStream.tsx:276-289]
+- 必须保留 conversationId 过滤、messageId bucket、final done 解锁、delegation segment done 不提前结束、history refresh merge 逻辑。[Source: egosync-app/src/components/chat/ChatStream.tsx:257-350]
 
-#### `GUI/src/components/role/MemoryTab.tsx`
+#### `egosync-app/src/components/role/MemoryTab.tsx`
 
-- Props 当前没有 target/highlight/scroll 能力；新增能力应在这里承接。[Source: GUI/src/components/role/MemoryTab.tsx:8-18]
-- 现有 category filters 只显示全部、事实、偏好、认知模式；`visibleMemories` 过滤 `task_status`。[Source: GUI/src/components/role/MemoryTab.tsx:20-32] [Source: GUI/src/components/role/MemoryTab.tsx:187-190]
-- 卡片当前没有稳定 memory anchor；只有来源展开区有 `id="memory-source-${memory.id}"`。[Source: GUI/src/components/role/MemoryTab.tsx:222-332]
-- 保留现有 source 展开、request id 防竞态、遗忘确认、删除中禁用、失败内联反馈。[Source: GUI/src/components/role/MemoryTab.tsx:74-185]
+- Props 当前没有 target/highlight/scroll 能力；新增能力应在这里承接。[Source: egosync-app/src/components/role/MemoryTab.tsx:8-18]
+- 现有 category filters 只显示全部、事实、偏好、认知模式；`visibleMemories` 过滤 `task_status`。[Source: egosync-app/src/components/role/MemoryTab.tsx:20-32] [Source: egosync-app/src/components/role/MemoryTab.tsx:187-190]
+- 卡片当前没有稳定 memory anchor；只有来源展开区有 `id="memory-source-${memory.id}"`。[Source: egosync-app/src/components/role/MemoryTab.tsx:222-332]
+- 保留现有 source 展开、request id 防竞态、遗忘确认、删除中禁用、失败内联反馈。[Source: egosync-app/src/components/role/MemoryTab.tsx:74-185]
 
-#### `GUI/src/components/role/RoleView.tsx` / `GUI/src/components/butler/ButlerView.tsx`
+#### `egosync-app/src/components/role/RoleView.tsx` / `egosync-app/src/components/butler/ButlerView.tsx`
 
-- `ChatStream` 与 WorkspacePanel 是兄弟组件；memory link 点击需要在 View 层持有 target state 并打开 `openTab='memory'`。[Source: GUI/src/components/role/RoleView.tsx:29-72] [Source: GUI/src/components/butler/ButlerView.tsx:7-51]
-- `RoleWorkspacePanel` 与 `ButlerWorkspacePanel` 已持有 `memoryCategory` 并将 `MemoryTab` 接到受控 category；跳转时应清空 category 让目标可见。[Source: GUI/src/components/role/RoleWorkspacePanel.tsx:10-63] [Source: GUI/src/components/butler/ButlerWorkspacePanel.tsx:10-90]
+- `ChatStream` 与 WorkspacePanel 是兄弟组件；memory link 点击需要在 View 层持有 target state 并打开 `openTab='memory'`。[Source: egosync-app/src/components/role/RoleView.tsx:29-72] [Source: egosync-app/src/components/butler/ButlerView.tsx:7-51]
+- `RoleWorkspacePanel` 与 `ButlerWorkspacePanel` 已持有 `memoryCategory` 并将 `MemoryTab` 接到受控 category；跳转时应清空 category 让目标可见。[Source: egosync-app/src/components/role/RoleWorkspacePanel.tsx:10-63] [Source: egosync-app/src/components/butler/ButlerWorkspacePanel.tsx:10-90]
 
 #### Memory data layer
 
-- `Memory.id` 是 UUID string，并通过 serde camelCase 暴露给前端；`MemorySourceMessage` 只暴露公开 trace 字段，不包含 `thinkingContent` 或 `routingMetadata`。[Source: GUI/src-tauri/src/models/memory.rs:1-30] [Source: GUI/src-tauri/src/models/memory.rs:36-54]
-- `memoryService` 已有 `list`、`listAll`、`count`、`getSourceMessages`、`delete`，前端新增跳转不应绕过该 service 层直接 invoke/DB。[Source: GUI/src/services/memoryService.ts:10-30]
-- `db::memories::delete_memory` 会先写 `forgotten_memory_sources` tombstone，再删除 `memories` 记录；后续注入只应来自 `list_*` 当前 records，不读 tombstone。[Source: GUI/src-tauri/src/db/memories.rs:261-304]
-- `list_memories` / `list_all_memories_with_options` 默认排除 `task_status` 并做 visible dedupe；prompt 注入最好使用同一 visible 口径，避免引用用户在 MemoryTab 看不到的 ID。[Source: GUI/src-tauri/src/db/memories.rs:306-390] [Source: GUI/src-tauri/src/db/memories.rs:393-407]
+- `Memory.id` 是 UUID string，并通过 serde camelCase 暴露给前端；`MemorySourceMessage` 只暴露公开 trace 字段，不包含 `thinkingContent` 或 `routingMetadata`。[Source: egosync-app/src-tauri/src/models/memory.rs:1-30] [Source: egosync-app/src-tauri/src/models/memory.rs:36-54]
+- `memoryService` 已有 `list`、`listAll`、`count`、`getSourceMessages`、`delete`，前端新增跳转不应绕过该 service 层直接 invoke/DB。[Source: egosync-app/src/services/memoryService.ts:10-30]
+- `db::memories::delete_memory` 会先写 `forgotten_memory_sources` tombstone，再删除 `memories` 记录；后续注入只应来自 `list_*` 当前 records，不读 tombstone。[Source: egosync-app/src-tauri/src/db/memories.rs:261-304]
+- `list_memories` / `list_all_memories_with_options` 默认排除 `task_status` 并做 visible dedupe；prompt 注入最好使用同一 visible 口径，避免引用用户在 MemoryTab 看不到的 ID。[Source: egosync-app/src-tauri/src/db/memories.rs:306-390] [Source: egosync-app/src-tauri/src/db/memories.rs:393-407]
 
 ### Previous Story Intelligence
 
 - Story 2.8 完成了选择性遗忘：删除 `memories` 可见记录，记录轻量同源屏蔽，不重跑推理、不改 history/opencode。[Source: _bmad-output/implementation-artifacts/2-8-selective-memory-forget.md:348-350]
 - 2.8 已实现 MemoryTab 自定义确认、删除中禁用、失败内联反馈、成功后清理来源状态并刷新 list/count。[Source: _bmad-output/implementation-artifacts/2-8-selective-memory-forget.md:351-354]
-- 2.8 新增 `GUI/src-tauri/migrations/007_forgotten_memory_sources.sql`，并在 `insert_memories` / `update_memory_from_extracted` 中跳过已遗忘同源候选。[Source: _bmad-output/implementation-artifacts/2-8-selective-memory-forget.md:357-358]
+- 2.8 新增 `egosync-app/src-tauri/migrations/007_forgotten_memory_sources.sql`，并在 `insert_memories` / `update_memory_from_extracted` 中跳过已遗忘同源候选。[Source: _bmad-output/implementation-artifacts/2-8-selective-memory-forget.md:357-358]
 - 2.8 修改/触及了本 story 相关文件：`agent_engine.rs`、`agent_bridge.rs`、`models/agent.rs`、`ChatStream.tsx`、`ChatStream.test.tsx`、`ChatBubble.test.tsx`、`MemoryTab.tsx`、`RoleWorkspacePanel.tsx`、`ButlerWorkspacePanel.tsx`。[Source: _bmad-output/implementation-artifacts/2-8-selective-memory-forget.md:362-386]
 - 2.8 已通过 tsc、frontend tests、build、Rust memory tests、完整 Rust suite、Tauri dev 验证；延续同样验证门禁。[Source: _bmad-output/implementation-artifacts/2-8-selective-memory-forget.md:354-360]
 
@@ -276,9 +276,9 @@ so that 我能判断建议是否可信。
 
 ## Project Structure Notes
 
-- 后端业务逻辑集中在 `GUI/src-tauri/src/services/agent_engine.rs`；commands/db/bridge 分层不变。
-- 前端聊天渲染改 `GUI/src/components/chat/ChatBubble.tsx` 与 `ChatStream.tsx`；兄弟组件联动改 `ButlerView.tsx` / `RoleView.tsx`。
-- Memory 定位能力改现有 `GUI/src/components/role/MemoryTab.tsx`，不要新增 parallel memory panel。
+- 后端业务逻辑集中在 `egosync-app/src-tauri/src/services/agent_engine.rs`；commands/db/bridge 分层不变。
+- 前端聊天渲染改 `egosync-app/src/components/chat/ChatBubble.tsx` 与 `ChatStream.tsx`；兄弟组件联动改 `ButlerView.tsx` / `RoleView.tsx`。
+- Memory 定位能力改现有 `egosync-app/src/components/role/MemoryTab.tsx`，不要新增 parallel memory panel。
 - 工作台接线改现有 `RoleWorkspacePanel.tsx` / `ButlerWorkspacePanel.tsx`，保持 badge/category count 逻辑。
 - 测试 co-located：`ChatBubble.test.tsx`、`ChatStream.test.tsx`、`MemoryTab.test.tsx`、`RoleWorkspacePanel.test.tsx`、`ButlerWorkspacePanel.test.tsx`；Rust 单测放在对应 `.rs` 文件底部。
 
@@ -303,15 +303,15 @@ Claude Opus 4.7 (1M context)
 
 - `npx tsc --noEmit` — passed.
 - `npm run test:frontend` — 13 files / 80 tests passed.
-- `cargo test --manifest-path GUI/src-tauri/Cargo.toml --offline -- --nocapture` — 228 tests passed.
+- `cargo test --manifest-path egosync-app/src-tauri/Cargo.toml --offline -- --nocapture` — 228 tests passed.
 - `npm run build` — passed.
 - `npm run tauri dev` — Vite ready at localhost:5173 and Tauri dev build reached ready marker for manual verification.
 - Review fix targeted validation: `npx tsc --noEmit` — passed; targeted frontend tests — 4 files / 46 tests passed; `test_sse_thinking_is_not_mapped_to_user_visible_payload` — passed.
-- Review fix full validation: `npx tsc --noEmit` — passed; `npm run test:frontend` — 13 files / 84 tests passed; `cargo test --manifest-path GUI/src-tauri/Cargo.toml --offline -- --nocapture` — 227 lib tests + 1 integration test passed; `npm run build` — passed.
+- Review fix full validation: `npx tsc --noEmit` — passed; `npm run test:frontend` — 13 files / 84 tests passed; `cargo test --manifest-path egosync-app/src-tauri/Cargo.toml --offline -- --nocapture` — 227 lib tests + 1 integration test passed; `npm run build` — passed.
 - Review fix dev restart: stopped the stale current-project Vite process on port 5173, restarted `npm run tauri dev`, and reached the ready marker.
 
 - Second review follow-up targeted validation: MemoryTab/Workspace target regression tests — 3 files / 22 tests passed; bus delta hidden-thinking tests — 3 tests passed; `npx tsc --noEmit` — passed.
-- Second review follow-up full validation: `npm run test:frontend` — 13 files / 85 tests passed; `cargo test --manifest-path GUI/src-tauri/Cargo.toml --offline -- --nocapture` — 230 lib tests + 1 integration test passed; `npm run build` — passed.
+- Second review follow-up full validation: `npm run test:frontend` — 13 files / 85 tests passed; `cargo test --manifest-path egosync-app/src-tauri/Cargo.toml --offline -- --nocapture` — 230 lib tests + 1 integration test passed; `npm run build` — passed.
 - Second review follow-up dev restart: stopped the stale current-project Vite listener, restarted `npm run tauri dev`, and reached the ready marker.
 - Source navigation and memory-link follow-up validation: targeted frontend tests for `ChatBubble`, `MemoryTab`, and `ChatStream` passed; full frontend suite passed 13 files / 99 tests; `npm run build` passed.
 - Source navigation and prompt follow-up Rust validation: memory summary / transparency-rule targeted tests passed using project Cargo config and external target directories.
@@ -340,32 +340,32 @@ Claude Opus 4.7 (1M context)
 
 ### File List
 
-- `GUI/src-tauri/src/commands/chat.rs`
-- `GUI/src-tauri/src/lib.rs`
-- `GUI/src-tauri/src/models/memory.rs`
-- `GUI/src-tauri/src/services/agent_engine.rs`
-- `GUI/src-tauri/src/services/memory_query.rs`
-- `GUI/src/App.tsx`
-- `GUI/src/App.test.tsx`
-- `GUI/src/components/butler/ButlerView.tsx`
-- `GUI/src/components/butler/ButlerView.test.tsx`
-- `GUI/src/components/butler/ButlerWorkspacePanel.tsx`
-- `GUI/src/components/butler/ButlerWorkspacePanel.test.tsx`
-- `GUI/src/components/chat/ChatBubble.tsx`
-- `GUI/src/components/chat/ChatBubble.test.tsx`
-- `GUI/src/components/chat/ChatInput.tsx`
-- `GUI/src/components/chat/ChatStream.tsx`
-- `GUI/src/components/chat/ChatStream.test.tsx`
-- `GUI/src/components/role/MemoryTab.tsx`
-- `GUI/src/components/role/MemoryTab.test.tsx`
-- `GUI/src/components/role/RoleView.tsx`
-- `GUI/src/components/role/RoleView.test.tsx`
-- `GUI/src/components/role/RoleWorkspacePanel.tsx`
-- `GUI/src/components/role/RoleWorkspacePanel.test.tsx`
-- `GUI/src/hooks/useMemories.ts`
-- `GUI/src/services/chatService.ts`
-- `GUI/src/types/chat.ts`
-- `GUI/src/types/memory.ts`
+- `egosync-app/src-tauri/src/commands/chat.rs`
+- `egosync-app/src-tauri/src/lib.rs`
+- `egosync-app/src-tauri/src/models/memory.rs`
+- `egosync-app/src-tauri/src/services/agent_engine.rs`
+- `egosync-app/src-tauri/src/services/memory_query.rs`
+- `egosync-app/src/App.tsx`
+- `egosync-app/src/App.test.tsx`
+- `egosync-app/src/components/butler/ButlerView.tsx`
+- `egosync-app/src/components/butler/ButlerView.test.tsx`
+- `egosync-app/src/components/butler/ButlerWorkspacePanel.tsx`
+- `egosync-app/src/components/butler/ButlerWorkspacePanel.test.tsx`
+- `egosync-app/src/components/chat/ChatBubble.tsx`
+- `egosync-app/src/components/chat/ChatBubble.test.tsx`
+- `egosync-app/src/components/chat/ChatInput.tsx`
+- `egosync-app/src/components/chat/ChatStream.tsx`
+- `egosync-app/src/components/chat/ChatStream.test.tsx`
+- `egosync-app/src/components/role/MemoryTab.tsx`
+- `egosync-app/src/components/role/MemoryTab.test.tsx`
+- `egosync-app/src/components/role/RoleView.tsx`
+- `egosync-app/src/components/role/RoleView.test.tsx`
+- `egosync-app/src/components/role/RoleWorkspacePanel.tsx`
+- `egosync-app/src/components/role/RoleWorkspacePanel.test.tsx`
+- `egosync-app/src/hooks/useMemories.ts`
+- `egosync-app/src/services/chatService.ts`
+- `egosync-app/src/types/chat.ts`
+- `egosync-app/src/types/memory.ts`
 - `_bmad-output/implementation-artifacts/2-9-reasoning-transparency-uncertainty.md`
 - `_bmad-output/implementation-artifacts/sprint-status.yaml`
 

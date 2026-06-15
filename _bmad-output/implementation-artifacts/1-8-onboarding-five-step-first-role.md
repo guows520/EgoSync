@@ -25,7 +25,7 @@ So that 不到 5 分钟就能创建第一个角色并理解 EgoSync 的核心概
 
 ### Phase 1: Roles 表迁移 + 数据模型 (AC: #3, #6)
 
-- [ ] **T1.1** 创建 `GUI/src-tauri/migrations/003_roles.sql`：
+- [ ] **T1.1** 创建 `egosync-app/src-tauri/migrations/003_roles.sql`：
   ```sql
   -- 角色表（主库 egosync.db）
   CREATE TABLE IF NOT EXISTS roles (
@@ -159,7 +159,7 @@ So that 不到 5 分钟就能创建第一个角色并理解 EgoSync 的核心概
 
 ### Phase 6: 前端 Types + Service (AC: #8)
 
-- [ ] **T6.1** 创建 `GUI/src/types/role.ts`：
+- [ ] **T6.1** 创建 `egosync-app/src/types/role.ts`：
   ```typescript
   export interface Role {
     id: string;
@@ -184,7 +184,7 @@ So that 不到 5 分钟就能创建第一个角色并理解 EgoSync 的核心概
     goal?: string;
   }
   ```
-- [ ] **T6.2** 创建 `GUI/src/services/roleService.ts`：
+- [ ] **T6.2** 创建 `egosync-app/src/services/roleService.ts`：
   ```typescript
   import { invoke } from '@tauri-apps/api/core';
   import type { Role, CreateRoleInput } from '../types/role';
@@ -194,7 +194,7 @@ So that 不到 5 分钟就能创建第一个角色并理解 EgoSync 的核心概
     list: () => invoke<Role[]>('role_list'),
   };
   ```
-- [ ] **T6.3** 创建 `GUI/src/services/appService.ts`：
+- [ ] **T6.3** 创建 `egosync-app/src/services/appService.ts`：
   ```typescript
   import { invoke } from '@tauri-apps/api/core';
 
@@ -207,7 +207,7 @@ So that 不到 5 分钟就能创建第一个角色并理解 EgoSync 的核心概
 
 ### Phase 7: OnboardingView 重写 — 接通真实 LLM (AC: #1, #2, #3, #8, #9)
 
-- [ ] **T7.1** 重写 `GUI/src/components/onboarding/OnboardingView.tsx`：
+- [ ] **T7.1** 重写 `egosync-app/src/components/onboarding/OnboardingView.tsx`：
   - 状态：`step`(1-5), `conversationId`, `messages`, `isStreaming`, `streamContent`, `thinkingContent`, `showRoleModal`, `proposedRole`
   - 启动时调用 `appService.isLlmConfigured()`：
     - 未配置 → 打开 GlobalSettingsModal，配置完成后继续
@@ -346,7 +346,7 @@ commands::app::app_is_llm_configured,
 
 #### 陷阱 7：前端 `ChatRequest` 类型需要同步更新
 
-`GUI/src/types/chat.ts` 中的 `ChatRequest` 接口需要添加 `onboardingStep?: number`（对应 Rust `u8` + `serde(default)`，前端不传时后端默认 0 = butler 路径）。同时 `chatService.sendMessage` 的参数签名不变（接受 `ChatRequest` 对象）。
+`egosync-app/src/types/chat.ts` 中的 `ChatRequest` 接口需要添加 `onboardingStep?: number`（对应 Rust `u8` + `serde(default)`，前端不传时后端默认 0 = butler 路径）。同时 `chatService.sendMessage` 的参数签名不变（接受 `ChatRequest` 对象）。
 
 #### 陷阱 8：App.tsx 启动时的异步检测
 
@@ -412,42 +412,42 @@ useEffect(() => {
 
 | 文件 | 内容 |
 |---|---|
-| `GUI/src-tauri/migrations/003_roles.sql` | roles 表 |
-| `GUI/src-tauri/src/db/roles.rs` | 角色 DB CRUD |
-| `GUI/src-tauri/src/db/app_settings.rs` | app_settings 读写工具 |
-| `GUI/src-tauri/src/models/role.rs` | Role, CreateRoleInput |
-| `GUI/src-tauri/src/commands/role.rs` | role_create, role_list |
-| `GUI/src-tauri/src/commands/app.rs` | app_is_first_launch, app_complete_onboarding, app_is_llm_configured |
-| `GUI/src/types/role.ts` | TS 类型定义 |
-| `GUI/src/services/roleService.ts` | 前端 service 封装 invoke |
-| `GUI/src/services/appService.ts` | 前端 app service |
-| `GUI/src/lib/roleIcons.ts` | 24 个 Lucide 图标白名单 + 12 色白名单 + 映射工具 |
-| `GUI/src/components/onboarding/RoleConfirmModal.tsx` | 角色确认弹窗（可编辑 name/icon/color/goal） |
+| `egosync-app/src-tauri/migrations/003_roles.sql` | roles 表 |
+| `egosync-app/src-tauri/src/db/roles.rs` | 角色 DB CRUD |
+| `egosync-app/src-tauri/src/db/app_settings.rs` | app_settings 读写工具 |
+| `egosync-app/src-tauri/src/models/role.rs` | Role, CreateRoleInput |
+| `egosync-app/src-tauri/src/commands/role.rs` | role_create, role_list |
+| `egosync-app/src-tauri/src/commands/app.rs` | app_is_first_launch, app_complete_onboarding, app_is_llm_configured |
+| `egosync-app/src/types/role.ts` | TS 类型定义 |
+| `egosync-app/src/services/roleService.ts` | 前端 service 封装 invoke |
+| `egosync-app/src/services/appService.ts` | 前端 app service |
+| `egosync-app/src/lib/roleIcons.ts` | 24 个 Lucide 图标白名单 + 12 色白名单 + 映射工具 |
+| `egosync-app/src/components/onboarding/RoleConfirmModal.tsx` | 角色确认弹窗（可编辑 name/icon/color/goal） |
 
 **本 Story 修改文件：**
 
 | 文件 | 修改内容 |
 |---|---|
-| `GUI/src-tauri/src/db/mod.rs` | 添加 `pub mod roles;` + `pub mod app_settings;` |
-| `GUI/src-tauri/src/models/mod.rs` | 添加 `pub mod role;` |
-| `GUI/src-tauri/src/commands/mod.rs` | 添加 `pub mod role;` + `pub mod app;` |
-| `GUI/src-tauri/src/lib.rs` | 注册 5 个新 commands |
-| `GUI/src-tauri/src/services/agent_engine.rs` | 新增 `build_onboarding_messages` + `ONBOARDING_SYSTEM_PROMPT` + `create_role_tool_definition()` + `get_onboarding_chat_options(step)` + `execute_create_role` + `SUPPORTED_ICONS` 枚举 |
-| `GUI/src-tauri/src/commands/chat.rs` | `chat_send_message` 支持 `onboarding_step` 分支 + `OnboardingConversations` 服务端状态管理 |
-| `GUI/src-tauri/src/models/chat.rs` | `ChatRequest` 新增 `onboarding_step: u8`（`#[serde(default)]`） + 新增 `RoleProposedPayload` struct |
-| `GUI/src-tauri/src/llm/traits.rs` | `ChatOptions` 新增 `tool_choice: Option<String>` 字段 |
-| `GUI/src-tauri/src/llm/openai.rs` | `chat_stream` 序列化 `tool_choice` + 解析 `StreamEvent::ToolCall` |
-| `GUI/src/types/chat.ts` | `ChatRequest` 新增 `onboardingStep?: number` |
-| `GUI/src/components/onboarding/OnboardingView.tsx` | 完全重写逻辑，保留视觉 |
-| `GUI/src/App.tsx` | 启动时检测首次启动 + 引导完成后加载真实角色 |
+| `egosync-app/src-tauri/src/db/mod.rs` | 添加 `pub mod roles;` + `pub mod app_settings;` |
+| `egosync-app/src-tauri/src/models/mod.rs` | 添加 `pub mod role;` |
+| `egosync-app/src-tauri/src/commands/mod.rs` | 添加 `pub mod role;` + `pub mod app;` |
+| `egosync-app/src-tauri/src/lib.rs` | 注册 5 个新 commands |
+| `egosync-app/src-tauri/src/services/agent_engine.rs` | 新增 `build_onboarding_messages` + `ONBOARDING_SYSTEM_PROMPT` + `create_role_tool_definition()` + `get_onboarding_chat_options(step)` + `execute_create_role` + `SUPPORTED_ICONS` 枚举 |
+| `egosync-app/src-tauri/src/commands/chat.rs` | `chat_send_message` 支持 `onboarding_step` 分支 + `OnboardingConversations` 服务端状态管理 |
+| `egosync-app/src-tauri/src/models/chat.rs` | `ChatRequest` 新增 `onboarding_step: u8`（`#[serde(default)]`） + 新增 `RoleProposedPayload` struct |
+| `egosync-app/src-tauri/src/llm/traits.rs` | `ChatOptions` 新增 `tool_choice: Option<String>` 字段 |
+| `egosync-app/src-tauri/src/llm/openai.rs` | `chat_stream` 序列化 `tool_choice` + 解析 `StreamEvent::ToolCall` |
+| `egosync-app/src/types/chat.ts` | `ChatRequest` 新增 `onboardingStep?: number` |
+| `egosync-app/src/components/onboarding/OnboardingView.tsx` | 完全重写逻辑，保留视觉 |
+| `egosync-app/src/App.tsx` | 启动时检测首次启动 + 引导完成后加载真实角色 |
 
 **不修改的文件（确认无需改动）：**
-- `GUI/src-tauri/src/error.rs` — AppError 已含所有需要的变体
-- `GUI/src-tauri/src/db/pool.rs` — migrations 自动发现 003 文件，无需改动
-- `GUI/src-tauri/src/services/secret_store.rs` — 不涉及
-- `GUI/src-tauri/src/llm/` — Provider 层不变，agent_engine 层处理引导差异
-- `GUI/src/services/chatService.ts` — sendMessage 签名不变，ChatRequest 类型更新即可
-- `GUI/src/hooks/useTauriEvent.ts` — 已有，直接复用
+- `egosync-app/src-tauri/src/error.rs` — AppError 已含所有需要的变体
+- `egosync-app/src-tauri/src/db/pool.rs` — migrations 自动发现 003 文件，无需改动
+- `egosync-app/src-tauri/src/services/secret_store.rs` — 不涉及
+- `egosync-app/src-tauri/src/llm/` — Provider 层不变，agent_engine 层处理引导差异
+- `egosync-app/src/services/chatService.ts` — sendMessage 签名不变，ChatRequest 类型更新即可
+- `egosync-app/src/hooks/useTauriEvent.ts` — 已有，直接复用
 
 **与架构文档对齐：**
 
@@ -486,18 +486,18 @@ useEffect(() => {
 - [Source: `_bmad-output/planning-artifacts/ux-design-specification.md` #Journey 1: 冷启动] — 5 步引导对话流设计
 - [Source: `_bmad-output/planning-artifacts/ux-design-specification.md` #Emotional Journey] — 首次打开情感：好奇、被关注
 - [Source: `_bmad-output/project-context.md` #框架特定规则] — Tauri IPC、Command 薄层规则
-- [Source: `GUI/src-tauri/src/lib.rs`] — 当前 app setup 和 invoke_handler 结构
-- [Source: `GUI/src-tauri/src/db/pool.rs`] — 当前 DB 初始化模式（migration 自动发现）
-- [Source: `GUI/src-tauri/src/services/agent_engine.rs`] — 当前 build_butler_messages 模式
-- [Source: `GUI/src-tauri/migrations/001_initial_schema.sql`] — app_settings 表已存在
-- [Source: `GUI/src/components/onboarding/OnboardingView.tsx`] — 当前 mock 实现（待替换）
-- [Source: `GUI/src/App.tsx`] — 当前 currentView 状态管理
+- [Source: `egosync-app/src-tauri/src/lib.rs`] — 当前 app setup 和 invoke_handler 结构
+- [Source: `egosync-app/src-tauri/src/db/pool.rs`] — 当前 DB 初始化模式（migration 自动发现）
+- [Source: `egosync-app/src-tauri/src/services/agent_engine.rs`] — 当前 build_butler_messages 模式
+- [Source: `egosync-app/src-tauri/migrations/001_initial_schema.sql`] — app_settings 表已存在
+- [Source: `egosync-app/src/components/onboarding/OnboardingView.tsx`] — 当前 mock 实现（待替换）
+- [Source: `egosync-app/src/App.tsx`] — 当前 currentView 状态管理
 - [Source: `_bmad-output/implementation-artifacts/1-7-butler-first-streaming-conversation.md`] — 前一 Story 全部经验
 
 ### 验证命令清单
 
 ```bash
-cd GUI/src-tauri
+cd egosync-app/src-tauri
 cargo check                    # 编译检查
 cargo test                     # 单元测试
 cargo clippy -- -D warnings    # lint
@@ -537,31 +537,31 @@ npm run tauri dev              # 集成验证：首次启动 → 引导对话 �
 ### File List
 
 **新建文件：**
-- `GUI/src-tauri/migrations/003_roles.sql`
-- `GUI/src-tauri/src/db/roles.rs`
-- `GUI/src-tauri/src/db/app_settings.rs`
-- `GUI/src-tauri/src/models/role.rs`
-- `GUI/src-tauri/src/commands/role.rs`
-- `GUI/src-tauri/src/commands/app.rs`
-- `GUI/src/types/role.ts`
-- `GUI/src/services/roleService.ts`
-- `GUI/src/services/appService.ts`
-- `GUI/src/lib/roleIcons.ts`
-- `GUI/src/components/onboarding/RoleConfirmModal.tsx`
+- `egosync-app/src-tauri/migrations/003_roles.sql`
+- `egosync-app/src-tauri/src/db/roles.rs`
+- `egosync-app/src-tauri/src/db/app_settings.rs`
+- `egosync-app/src-tauri/src/models/role.rs`
+- `egosync-app/src-tauri/src/commands/role.rs`
+- `egosync-app/src-tauri/src/commands/app.rs`
+- `egosync-app/src/types/role.ts`
+- `egosync-app/src/services/roleService.ts`
+- `egosync-app/src/services/appService.ts`
+- `egosync-app/src/lib/roleIcons.ts`
+- `egosync-app/src/components/onboarding/RoleConfirmModal.tsx`
 
 **修改文件：**
-- `GUI/src-tauri/src/services/agent_engine.rs` — ONBOARDING_SYSTEM_PROMPT, create_role_tool_definition, get_onboarding_chat_options, execute_create_role, SUPPORTED_ICONS
-- `GUI/src-tauri/src/commands/chat.rs` — OnboardingConversations, onboarding_step 分支逻辑
-- `GUI/src-tauri/src/models/chat.rs` — ChatRequest.onboarding_step: u8, RoleProposedPayload
-- `GUI/src-tauri/src/llm/traits.rs` — ChatOptions.tool_choice
-- `GUI/src-tauri/src/llm/openai.rs` — tool_choice 序列化, StreamEvent::ToolCall 解析
-- `GUI/src-tauri/src/lib.rs` — invoke_handler 注册新 commands
-- `GUI/src-tauri/src/db/mod.rs` — pub mod roles + app_settings
-- `GUI/src-tauri/src/models/mod.rs` — pub mod role
-- `GUI/src-tauri/src/commands/mod.rs` — pub mod role + app
-- `GUI/src/types/chat.ts` — ChatRequest.onboardingStep
-- `GUI/src/components/onboarding/OnboardingView.tsx` — 完全重写：role:proposed 监听, RoleConfirmModal 集成, ChatBubble/BounceDots
-- `GUI/src/App.tsx` — isFirstLaunch 检测, onComplete 后加载真实角色
+- `egosync-app/src-tauri/src/services/agent_engine.rs` — ONBOARDING_SYSTEM_PROMPT, create_role_tool_definition, get_onboarding_chat_options, execute_create_role, SUPPORTED_ICONS
+- `egosync-app/src-tauri/src/commands/chat.rs` — OnboardingConversations, onboarding_step 分支逻辑
+- `egosync-app/src-tauri/src/models/chat.rs` — ChatRequest.onboarding_step: u8, RoleProposedPayload
+- `egosync-app/src-tauri/src/llm/traits.rs` — ChatOptions.tool_choice
+- `egosync-app/src-tauri/src/llm/openai.rs` — tool_choice 序列化, StreamEvent::ToolCall 解析
+- `egosync-app/src-tauri/src/lib.rs` — invoke_handler 注册新 commands
+- `egosync-app/src-tauri/src/db/mod.rs` — pub mod roles + app_settings
+- `egosync-app/src-tauri/src/models/mod.rs` — pub mod role
+- `egosync-app/src-tauri/src/commands/mod.rs` — pub mod role + app
+- `egosync-app/src/types/chat.ts` — ChatRequest.onboardingStep
+- `egosync-app/src/components/onboarding/OnboardingView.tsx` — 完全重写：role:proposed 监听, RoleConfirmModal 集成, ChatBubble/BounceDots
+- `egosync-app/src/App.tsx` — isFirstLaunch 检测, onComplete 后加载真实角色
 
 ## Change Log
 

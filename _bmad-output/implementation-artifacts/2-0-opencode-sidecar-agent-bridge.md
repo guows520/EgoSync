@@ -40,7 +40,7 @@ so that 后续所有 Agent 对话和工具调用有执行引擎支撑。
    - **And** 存在 `services/agent_bridge.rs`（HTTP 客户端：create_session/send_message/abort/get_messages/get_config/get_providers）
 
 7. **AC-7 测试通过**
-   - `cd GUI/src-tauri && cargo test`
+   - `cd egosync-app/src-tauri && cargo test`
    - 至少覆盖：sidecar spawn/kill 逻辑、agent_bridge HTTP 客户端序列化、health check 重试逻辑
    - `cd GUI && npx tsc --noEmit`（若有前端改动）
 
@@ -48,7 +48,7 @@ so that 后续所有 Agent 对话和工具调用有执行引擎支撑。
 
 ### Phase 1: opencode Binary 准备与 Tauri 资源配置（AC: #5）
 
-- [x] T1.1 获取 opencode binary 并放置到 `GUI/src-tauri/resources/`
+- [x] T1.1 获取 opencode binary 并放置到 `egosync-app/src-tauri/resources/`
   - 开发阶段：使用 `which opencode` 或 `where opencode` 定位本机已安装的 opencode；若未安装则需先 `go install` 或下载 release
   - 生产打包：`tauri.conf.json` → `bundle.resources` 配置包含 `resources/opencode*`
   - 三平台命名：`opencode`（macOS/Linux）、`opencode.exe`（Windows）
@@ -57,7 +57,7 @@ so that 后续所有 Agent 对话和工具调用有执行引擎支撑。
 
 ### Phase 2: Sidecar 进程管理模块（AC: #1, #3, #4）
 
-- [x] T2.1 新建 `GUI/src-tauri/src/services/sidecar.rs`
+- [x] T2.1 新建 `egosync-app/src-tauri/src/services/sidecar.rs`
   - `SidecarManager` struct：持有 `child: Option<tokio::process::Child>`、`port: u16`、`binary_path: PathBuf`
   - `pub async fn start(&mut self) -> Result<(), AppError>`：spawn opencode server 子进程
     - 优先尝试 Tauri resource 目录中的 binary
@@ -84,7 +84,7 @@ so that 后续所有 Agent 对话和工具调用有执行引擎支撑。
 
 ### Phase 3: AgentBridge HTTP 客户端（AC: #2, #6）
 
-- [x] T3.1 新建 `GUI/src-tauri/src/services/agent_bridge.rs`
+- [x] T3.1 新建 `egosync-app/src-tauri/src/services/agent_bridge.rs`
   - `AgentBridge` struct：`base_url: String`、`http_client: reqwest::Client`
   - 构造函数：`pub fn new(port: u16) -> Self`
   - 所有方法返回 `Result<T, AppError>`，HTTP 错误映射到 `AppError::LlmError`
@@ -107,7 +107,7 @@ so that 后续所有 Agent 对话和工具调用有执行引擎支撑。
   - `pub async fn get_agents(&self) -> Result<Vec<AgentInfo>>`
 
 - [x] T3.5 定义 AgentBridge 数据模型
-  - 新建 `GUI/src-tauri/src/models/agent.rs`
+  - 新建 `egosync-app/src-tauri/src/models/agent.rs`
   - 或追加到 `models/chat.rs`（视结构决定）
   - 类型：`SessionInfo`、`AgentMessage`、`SseEvent`、`OpencodeConfig`、`ProviderInfo`、`AgentInfo`
   - 所有类型 `#[derive(Debug, Clone, Serialize, Deserialize)]` + `#[serde(rename_all = "camelCase")]`
@@ -259,30 +259,30 @@ app.manage(agent_bridge);
 
 | Path | Action | Notes |
 |------|--------|-------|
-| `GUI/src-tauri/src/services/sidecar.rs` | NEW | 进程生命周期管理（spawn/stop/health_check/restart/watchdog） |
-| `GUI/src-tauri/src/services/agent_bridge.rs` | NEW | opencode HTTP API 客户端（session/message/config） |
-| `GUI/src-tauri/src/models/agent.rs` | NEW | AgentBridge 数据模型（SessionInfo/SseEvent/AgentMessage 等） |
-| `GUI/src-tauri/resources/` | NEW DIR | opencode binary 放置目录 |
+| `egosync-app/src-tauri/src/services/sidecar.rs` | NEW | 进程生命周期管理（spawn/stop/health_check/restart/watchdog） |
+| `egosync-app/src-tauri/src/services/agent_bridge.rs` | NEW | opencode HTTP API 客户端（session/message/config） |
+| `egosync-app/src-tauri/src/models/agent.rs` | NEW | AgentBridge 数据模型（SessionInfo/SseEvent/AgentMessage 等） |
+| `egosync-app/src-tauri/resources/` | NEW DIR | opencode binary 放置目录 |
 
 ### 修改文件
 
 | Path | Action | Notes |
 |------|--------|-------|
-| `GUI/src-tauri/src/services/mod.rs` | UPDATE | 添加 `pub mod sidecar;` + `pub mod agent_bridge;` |
-| `GUI/src-tauri/src/models/mod.rs` | UPDATE | 添加 `pub mod agent;` |
-| `GUI/src-tauri/src/lib.rs` | UPDATE | setup 中启动 sidecar + managed state + 退出钩子 |
-| `GUI/src-tauri/src/error.rs` | UPDATE | 新增 `SidecarError` 变体 + serialize 分支 |
-| `GUI/src-tauri/src/commands/app.rs` | UPDATE | 新增 `sidecar_status` command |
-| `GUI/src-tauri/tauri.conf.json` | UPDATE | 添加 `bundle.resources` 配置 |
+| `egosync-app/src-tauri/src/services/mod.rs` | UPDATE | 添加 `pub mod sidecar;` + `pub mod agent_bridge;` |
+| `egosync-app/src-tauri/src/models/mod.rs` | UPDATE | 添加 `pub mod agent;` |
+| `egosync-app/src-tauri/src/lib.rs` | UPDATE | setup 中启动 sidecar + managed state + 退出钩子 |
+| `egosync-app/src-tauri/src/error.rs` | UPDATE | 新增 `SidecarError` 变体 + serialize 分支 |
+| `egosync-app/src-tauri/src/commands/app.rs` | UPDATE | 新增 `sidecar_status` command |
+| `egosync-app/src-tauri/tauri.conf.json` | UPDATE | 添加 `bundle.resources` 配置 |
 
 ### 不应改动
 
-- `GUI/src-tauri/src/services/agent_engine.rs`（现有 LLM 直连不变）
-- `GUI/src-tauri/src/llm/*.rs`（Provider 实现不变）
-- `GUI/src-tauri/src/commands/chat.rs`（对话流程不变）
-- `GUI/src-tauri/src/db/*.rs`（数据库层不变）
-- `GUI/src/*.tsx`（前端不变，除非需注册 sidecar_status command）
-- `GUI/src-tauri/migrations/*.sql`（无新表）
+- `egosync-app/src-tauri/src/services/agent_engine.rs`（现有 LLM 直连不变）
+- `egosync-app/src-tauri/src/llm/*.rs`（Provider 实现不变）
+- `egosync-app/src-tauri/src/commands/chat.rs`（对话流程不变）
+- `egosync-app/src-tauri/src/db/*.rs`（数据库层不变）
+- `egosync-app/src/*.tsx`（前端不变，除非需注册 sidecar_status command）
+- `egosync-app/src-tauri/migrations/*.sql`（无新表）
 
 ### 结构冲突记录
 
@@ -297,10 +297,10 @@ app.manage(agent_bridge);
 - [Source: `_bmad-output/planning-artifacts/architecture.md` — opencode.json 配置格式]
 - [Source: `_bmad-output/planning-artifacts/architecture.md` — 流式响应桥接：opencode SSE → AgentBridge → Tauri Event]
 - [Source: `_bmad-output/planning-artifacts/architecture.md` — 原有 LlmProvider Trait 保留为降级方案]
-- [Source: `GUI/src-tauri/Cargo.toml` — reqwest 0.12 (json+stream), tokio (full) 已可用]
-- [Source: `GUI/src-tauri/src/lib.rs` — 当前 setup 闭包结构、managed state 模式]
-- [Source: `GUI/src-tauri/src/error.rs` — AppError 枚举 + serialize 模式]
-- [Source: `GUI/src-tauri/src/services/mod.rs` — 当前模块声明]
+- [Source: `egosync-app/src-tauri/Cargo.toml` — reqwest 0.12 (json+stream), tokio (full) 已可用]
+- [Source: `egosync-app/src-tauri/src/lib.rs` — 当前 setup 闭包结构、managed state 模式]
+- [Source: `egosync-app/src-tauri/src/error.rs` — AppError 枚举 + serialize 模式]
+- [Source: `egosync-app/src-tauri/src/services/mod.rs` — 当前模块声明]
 - [Source: `_bmad-output/implementation-artifacts/2-5-role-emergence-suggestion.md` — 前序 story 最终状态]
 
 ## Dev Agent Record
@@ -329,17 +329,17 @@ claude-sonnet-4-20250514
 
 ### File List
 
-- `GUI/src-tauri/src/services/sidecar.rs` (NEW)
-- `GUI/src-tauri/src/services/agent_bridge.rs` (NEW)
-- `GUI/src-tauri/src/models/agent.rs` (NEW)
-- `GUI/src-tauri/resources/README.md` (NEW)
-- `GUI/src-tauri/resources/opencode.placeholder` (NEW)
-- `GUI/src-tauri/src/services/mod.rs` (MODIFIED)
-- `GUI/src-tauri/src/models/mod.rs` (MODIFIED)
-- `GUI/src-tauri/src/lib.rs` (MODIFIED)
-- `GUI/src-tauri/src/error.rs` (MODIFIED)
-- `GUI/src-tauri/src/commands/app.rs` (MODIFIED)
-- `GUI/src-tauri/tauri.conf.json` (MODIFIED)
+- `egosync-app/src-tauri/src/services/sidecar.rs` (NEW)
+- `egosync-app/src-tauri/src/services/agent_bridge.rs` (NEW)
+- `egosync-app/src-tauri/src/models/agent.rs` (NEW)
+- `egosync-app/src-tauri/resources/README.md` (NEW)
+- `egosync-app/src-tauri/resources/opencode.placeholder` (NEW)
+- `egosync-app/src-tauri/src/services/mod.rs` (MODIFIED)
+- `egosync-app/src-tauri/src/models/mod.rs` (MODIFIED)
+- `egosync-app/src-tauri/src/lib.rs` (MODIFIED)
+- `egosync-app/src-tauri/src/error.rs` (MODIFIED)
+- `egosync-app/src-tauri/src/commands/app.rs` (MODIFIED)
+- `egosync-app/src-tauri/tauri.conf.json` (MODIFIED)
 - `_bmad-output/implementation-artifacts/sprint-status.yaml` (MODIFIED)
 - `_bmad-output/implementation-artifacts/2-0-opencode-sidecar-agent-bridge.md` (MODIFIED)
 

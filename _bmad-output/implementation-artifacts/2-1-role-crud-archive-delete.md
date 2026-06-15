@@ -51,35 +51,35 @@ so that 我的角色列表保持整洁且可控。
 
 ### Phase 1: 后端角色 CRUD 扩展 (AC: #1, #2, #3, #4, #5, #6)
 
-- [x] T1.1 扩展 `GUI/src-tauri/src/models/role.rs`
+- [x] T1.1 扩展 `egosync-app/src-tauri/src/models/role.rs`
   - [x] 新增 `UpdateRoleInput { name?, icon?, color?, goal? }`
   - [x] 继续使用 `#[serde(rename_all = "camelCase")]`
   - [x] 不改变现有 `Role` 返回结构
-- [x] T1.2 扩展 `GUI/src-tauri/src/db/roles.rs`
+- [x] T1.2 扩展 `egosync-app/src-tauri/src/db/roles.rs`
   - [x] `update_role(pool, id, input)`：只更新允许字段，刷新 `updated_at`
   - [x] `archive_role(pool, id)`：`status='archived'`，写入 `archived_at` 和 `updated_at`
   - [x] `restore_role(pool, id)`：`status='active'`，清空 `archived_at`，刷新 `updated_at`
   - [x] `delete_role(pool, conv_pool, id)`：删除主库角色，并清理对话库中该角色的 conversations/messages
   - [x] `list_archived_roles(pool)`：按 `archived_at DESC` 返回归档角色
   - [x] `count_active_roles(pool)`：用于至少保留一个 active 角色
-- [x] T1.3 扩展 `GUI/src-tauri/src/commands/role.rs`
+- [x] T1.3 扩展 `egosync-app/src-tauri/src/commands/role.rs`
   - [x] `role_update(id, input, pool)`
   - [x] `role_archive(id, pool)`
   - [x] `role_restore(id, pool)`
   - [x] `role_delete(id, pool, conv_pool)`
   - [x] `role_list_archived(pool)`
   - [x] 归档/删除前校验 active 角色数量，剩 1 个时返回 `ValidationError("至少保留一个角色")`
-- [x] T1.4 在 `GUI/src-tauri/src/lib.rs` 注册新增 commands
-- [x] T1.5 如需清理对话库，扩展 `GUI/src-tauri/src/db/conversations.rs`
+- [x] T1.4 在 `egosync-app/src-tauri/src/lib.rs` 注册新增 commands
+- [x] T1.5 如需清理对话库，扩展 `egosync-app/src-tauri/src/db/conversations.rs`
   - [x] 新增 `delete_conversations_by_role(pool, role_id)`
   - [x] 因 `conversations.db` 独立于 `egosync.db`，不要依赖跨库外键级联
 
 ### Phase 2: 前端 service/type 接口补齐 (AC: #1, #2, #3, #4, #5)
 
-- [x] T2.1 扩展 `GUI/src/types/role.ts`
+- [x] T2.1 扩展 `egosync-app/src/types/role.ts`
   - [x] 新增 `UpdateRoleInput`
   - [x] 保持 `Role.status = 'active' | 'archived'`
-- [x] T2.2 扩展 `GUI/src/services/roleService.ts`
+- [x] T2.2 扩展 `egosync-app/src/services/roleService.ts`
   - [x] `update(id, input)` → `invoke<Role>('role_update', { id, input })`
   - [x] `archive(id)` → `invoke<Role>('role_archive', { id })`
   - [x] `restore(id)` → `invoke<Role>('role_restore', { id })`
@@ -88,13 +88,13 @@ so that 我的角色列表保持整洁且可控。
 
 ### Phase 3: RoleView SettingsTab 编辑与危险操作 (AC: #1, #2, #4, #5)
 
-- [x] T3.1 修改 `GUI/src/components/role/SettingsTab.tsx`
+- [x] T3.1 修改 `egosync-app/src/components/role/SettingsTab.tsx`
   - [x] 名称初值来自 `role.name`
   - [x] 图标初值来自 `role.icon`
   - [x] 颜色初值来自 `role.color`
   - [x] 目标初值来自 `role.goal`
   - [x] 保存时调用 `roleService.update()`，成功后通过 `onUpdateRole(updatedRole)` 更新顶层状态
-- [x] T3.2 使用 `GUI/src/lib/roleIcons.ts` 的 `ROLE_ICONS` / `ROLE_COLORS`
+- [x] T3.2 使用 `egosync-app/src/lib/roleIcons.ts` 的 `ROLE_ICONS` / `ROLE_COLORS`
   - [x] 不再新增一套 icon/color 常量
   - [x] icon 存储稳定 id，例如 `briefcase`
   - [x] color 存储 hex，例如 `#4F46E5`
@@ -106,7 +106,7 @@ so that 我的角色列表保持整洁且可控。
 
 ### Phase 4: 全局设置归档列表与恢复 (AC: #3)
 
-- [x] T4.1 修改 `GUI/src/components/settings/GlobalSettingsModal.tsx`
+- [x] T4.1 修改 `egosync-app/src/components/settings/GlobalSettingsModal.tsx`
   - [x] 增加“归档角色”区域，可放在现有设置侧栏内独立 tab 或数据页下方
   - [x] 打开设置时加载 `roleService.listArchived()`
   - [x] 每条显示角色图标、名称、目标、归档时间
@@ -117,7 +117,7 @@ so that 我的角色列表保持整洁且可控。
 
 ### Phase 5: 顶层状态收敛 (AC: #1, #2, #3, #4, #5)
 
-- [x] T5.1 修改 `GUI/src/App.tsx`
+- [x] T5.1 修改 `egosync-app/src/App.tsx`
   - [x] 把当前 mock-only 的 `handleArchiveRole` / `handleRestoreRole` / `handleDeleteRole` 改为真实 service 调用
   - [x] 增加 `refreshRoles()` / `refreshArchivedRoles()`，避免多处重复拉取逻辑
   - [x] 不再用本地 `archivedRoles` 模拟归档结果作为真相
@@ -141,42 +141,42 @@ so that 我的角色列表保持整洁且可控。
 - [x] T6.3 验证命令
   - [x] `cd GUI && npx tsc --noEmit`
   - [x] `cd GUI && npm run test:frontend`
-  - [x] `cd GUI/src-tauri && cargo test`
+  - [x] `cd egosync-app/src-tauri && cargo test`
 
 ### Phase 7: Hotfix — AddRoleModal 写入真实 DB (AC: #1, #2, #5)
 
 > 2026-05-25 验收回归发现：侧边栏「+ 新建角色」入口仍走 mock，导致后续编辑保存 NotFound、计数失真触发"至少保留一个角色"误报。
 
-- [x] T7.1 修改 `GUI/src/components/modals/AddRoleModal.tsx`
+- [x] T7.1 修改 `egosync-app/src/components/modals/AddRoleModal.tsx`
   - [x] 弃用 `constants/mockData.ts` 的 `ICON_OPTIONS` / `COLOR_OPTIONS`，改用 `lib/roleIcons.ts` 的 `ROLE_ICONS` / `ROLE_COLORS` / `DEFAULT_ICON_ID` / `DEFAULT_COLOR_HEX`
   - [x] `handleSubmit` 改为 `async`，调用 `roleService.create({ name, icon, color })`，返回后端真实 `Role` 再回调 `onAdd`
   - [x] 加入 `isCreating` / `error` 局部状态，错误就地展示（不使用 toast）
   - [x] icon 存稳定 id（如 `briefcase`），color 存 hex（如 `#4F46E5`）
-- [x] T7.2 清理 `GUI/src/constants/mockData.ts` 中孤立的 `ICON_OPTIONS` / `COLOR_OPTIONS`，并移除随之未使用的 lucide imports（保留 `DEFAULT_ROLES` 仍在用的 `Briefcase`/`Heart`/`BookOpen`）
+- [x] T7.2 清理 `egosync-app/src/constants/mockData.ts` 中孤立的 `ICON_OPTIONS` / `COLOR_OPTIONS`，并移除随之未使用的 lucide imports（保留 `DEFAULT_ROLES` 仍在用的 `Briefcase`/`Heart`/`BookOpen`）
 - [x] T7.3 验证命令
   - [x] `cd GUI && npx tsc --noEmit`
   - [x] `cd GUI && npm run test:frontend`
-  - [x] `cd GUI/src-tauri && cargo test`
-  - [x] `cd GUI/src-tauri && cargo check`
+  - [x] `cd egosync-app/src-tauri && cargo test`
+  - [x] `cd egosync-app/src-tauri && cargo check`
 
 ## Dev Notes
 
 ### 当前真实状态
 
 - `roles` 表已存在 `status` 与 `archived_at` 字段，不需要为了 `archived_at` 单独新增 migration；本 story 重点是把 update/archive/restore/delete 行为补齐。  
-  [Source: `GUI/src-tauri/migrations/003_roles.sql`]
+  [Source: `egosync-app/src-tauri/migrations/003_roles.sql`]
 - 后端当前只有 `role_create` 与 `role_list`。  
-  [Source: `GUI/src-tauri/src/commands/role.rs`]
+  [Source: `egosync-app/src-tauri/src/commands/role.rs`]
 - 前端 `roleService` 当前只有 `create` 与 `list`。  
-  [Source: `GUI/src/services/roleService.ts`]
+  [Source: `egosync-app/src/services/roleService.ts`]
 - `App.tsx` 当前的 archive/restore/delete 是纯前端数组操作，不写库，不是真实实现。  
-  [Source: `GUI/src/App.tsx`]
+  [Source: `egosync-app/src/App.tsx`]
 - `SettingsTab` 当前只保存名称到本地顶层状态，目标和职责没有从 role 初始化，也不调用后端。  
-  [Source: `GUI/src/components/role/SettingsTab.tsx`]
+  [Source: `egosync-app/src/components/role/SettingsTab.tsx`]
 - `Sidebar` 里已有右键菜单与确认弹窗，但当前只是调用 `App.tsx` 的本地 handler。  
-  [Source: `GUI/src/components/layout/Sidebar.tsx`]
+  [Source: `egosync-app/src/components/layout/Sidebar.tsx`]
 - `GlobalSettingsModal` 目前没有归档角色列表。  
-  [Source: `GUI/src/components/settings/GlobalSettingsModal.tsx`]
+  [Source: `egosync-app/src/components/settings/GlobalSettingsModal.tsx`]
 
 ### 必须保留的边界
 
@@ -185,7 +185,7 @@ so that 我的角色列表保持整洁且可控。
 - Rust command 只做参数校验、调用数据/服务层、返回结果；不要把复杂 SQL 直接堆在组件或 command 以外的错误层。  
   [Source: `_bmad-output/planning-artifacts/architecture.md#Layer Rules`]
 - 主库 `egosync.db` 与对话库 `conversations.db` 是两个 pool。删除角色时，对话清理必须显式调用 `db/conversations.rs`，不能假设跨 DB 外键级联。  
-  [Source: `GUI/src-tauri/src/db/pool.rs`, `GUI/src-tauri/migrations/002_conversations.sql`]
+  [Source: `egosync-app/src-tauri/src/db/pool.rs`, `egosync-app/src-tauri/migrations/002_conversations.sql`]
 
 ### 数据与状态机
 
@@ -213,10 +213,10 @@ archived role
 
 - Epic 1 Story 1.9 已解决 mock 与真实角色格式差异：真实 `Role.icon` 可能是字符串，`Role.color` 是 hex；`RoleSidebarIcon` 已兼容。  
   [Source: `_bmad-output/implementation-artifacts/1-9-role-sidebar-breathing-animation.md`]
-- 当前 `GUI/src/lib/roleIcons.ts` 定义的是稳定 icon id + hex color 白名单；本 story 编辑 UI 应复用它，不要继续使用 `constants/mockData.ts` 的旧 mock 结构。  
-  [Source: `GUI/src/lib/roleIcons.ts`]
+- 当前 `egosync-app/src/lib/roleIcons.ts` 定义的是稳定 icon id + hex color 白名单；本 story 编辑 UI 应复用它，不要继续使用 `constants/mockData.ts` 的旧 mock 结构。  
+  [Source: `egosync-app/src/lib/roleIcons.ts`]
 - 注意：`RoleView.tsx` 当前仍使用 `role.color` 当 Tailwind class、`role.icon` 当 React 组件渲染。真实角色数据下这会继续有风险。若本 story 触碰角色头部，必须兼容 string icon 与 hex color；不要扩大为完整 RoleHeader 重构，RoleHeader 是 Story 2.2 范围。  
-  [Source: `GUI/src/components/role/RoleView.tsx`]
+  [Source: `egosync-app/src/components/role/RoleView.tsx`]
 
 ### Epic 1 经验必须应用
 
@@ -233,7 +233,7 @@ archived role
 - Rust：单元测试放同文件底部或集成测试放 `src-tauri/tests/test_{domain}.rs`。  
   [Source: `_bmad-output/project-context.md#测试规则`]
 - 全量命令：`npm run test:all` 当前组合前端 vitest + Rust cargo test。  
-  [Source: `GUI/package.json`]
+  [Source: `egosync-app/package.json`]
 
 ## Project Structure Notes
 
@@ -241,16 +241,16 @@ archived role
 
 | Path | Action | Notes |
 |---|---|---|
-| `GUI/src-tauri/src/models/role.rs` | UPDATE | 增加 `UpdateRoleInput` |
-| `GUI/src-tauri/src/db/roles.rs` | UPDATE | 增加 update/archive/restore/delete/list_archived/count_active |
-| `GUI/src-tauri/src/db/conversations.rs` | UPDATE | 增加按 role_id 删除 conversations/messages 的 helper |
-| `GUI/src-tauri/src/commands/role.rs` | UPDATE | 增加角色 CRUD commands |
-| `GUI/src-tauri/src/lib.rs` | UPDATE | 注册新增 commands |
-| `GUI/src/types/role.ts` | UPDATE | 增加 `UpdateRoleInput` |
-| `GUI/src/services/roleService.ts` | UPDATE | 增加 update/archive/restore/delete/listArchived |
-| `GUI/src/components/role/SettingsTab.tsx` | UPDATE | 编辑角色信息、危险区域、错误文案 |
-| `GUI/src/components/settings/GlobalSettingsModal.tsx` | UPDATE | 归档角色列表与恢复入口 |
-| `GUI/src/App.tsx` | UPDATE | 顶层真实数据刷新与删除/归档状态同步 |
+| `egosync-app/src-tauri/src/models/role.rs` | UPDATE | 增加 `UpdateRoleInput` |
+| `egosync-app/src-tauri/src/db/roles.rs` | UPDATE | 增加 update/archive/restore/delete/list_archived/count_active |
+| `egosync-app/src-tauri/src/db/conversations.rs` | UPDATE | 增加按 role_id 删除 conversations/messages 的 helper |
+| `egosync-app/src-tauri/src/commands/role.rs` | UPDATE | 增加角色 CRUD commands |
+| `egosync-app/src-tauri/src/lib.rs` | UPDATE | 注册新增 commands |
+| `egosync-app/src/types/role.ts` | UPDATE | 增加 `UpdateRoleInput` |
+| `egosync-app/src/services/roleService.ts` | UPDATE | 增加 update/archive/restore/delete/listArchived |
+| `egosync-app/src/components/role/SettingsTab.tsx` | UPDATE | 编辑角色信息、危险区域、错误文案 |
+| `egosync-app/src/components/settings/GlobalSettingsModal.tsx` | UPDATE | 归档角色列表与恢复入口 |
+| `egosync-app/src/App.tsx` | UPDATE | 顶层真实数据刷新与删除/归档状态同步 |
 
 ### Out of scope
 
@@ -268,13 +268,13 @@ archived role
 - [Source: `_bmad-output/project-context.md` — TypeScript/Rust/Tauri IPC/测试规则]
 - [Source: `_bmad-output/implementation-artifacts/1-9-role-sidebar-breathing-animation.md` — 真实角色格式兼容经验]
 - [Source: `_bmad-output/implementation-artifacts/epic-1-retro-2026-05-23.md` — Epic 2 前置风险与流程要求]
-- [Source: `GUI/src-tauri/migrations/003_roles.sql` — roles schema]
-- [Source: `GUI/src-tauri/src/commands/role.rs` — 当前 commands]
-- [Source: `GUI/src-tauri/src/db/roles.rs` — 当前 DB 层]
-- [Source: `GUI/src-tauri/src/db/conversations.rs` — 对话库清理入口]
-- [Source: `GUI/src/services/roleService.ts` — 当前前端 service]
-- [Source: `GUI/src/components/role/SettingsTab.tsx` — 当前 Settings tab]
-- [Source: `GUI/src/components/settings/GlobalSettingsModal.tsx` — 当前全局设置]
+- [Source: `egosync-app/src-tauri/migrations/003_roles.sql` — roles schema]
+- [Source: `egosync-app/src-tauri/src/commands/role.rs` — 当前 commands]
+- [Source: `egosync-app/src-tauri/src/db/roles.rs` — 当前 DB 层]
+- [Source: `egosync-app/src-tauri/src/db/conversations.rs` — 对话库清理入口]
+- [Source: `egosync-app/src/services/roleService.ts` — 当前前端 service]
+- [Source: `egosync-app/src/components/role/SettingsTab.tsx` — 当前 Settings tab]
+- [Source: `egosync-app/src/components/settings/GlobalSettingsModal.tsx` — 当前全局设置]
 
 ## Dev Agent Record
 
@@ -302,20 +302,20 @@ gpt-5.5
 
 ### File List
 
-- `GUI/src-tauri/src/models/role.rs`
-- `GUI/src-tauri/src/db/roles.rs`
-- `GUI/src-tauri/src/db/conversations.rs`
-- `GUI/src-tauri/src/commands/role.rs`
-- `GUI/src-tauri/src/lib.rs`
-- `GUI/src/types/role.ts`
-- `GUI/src/services/roleService.ts`
-- `GUI/src/components/role/SettingsTab.tsx`
-- `GUI/src/components/role/SettingsTab.test.tsx`
-- `GUI/src/components/settings/GlobalSettingsModal.tsx`
-- `GUI/src/components/settings/GlobalSettingsModal.test.tsx`
-- `GUI/src/App.tsx`
-- `GUI/src/components/modals/AddRoleModal.tsx`
-- `GUI/src/constants/mockData.ts`
+- `egosync-app/src-tauri/src/models/role.rs`
+- `egosync-app/src-tauri/src/db/roles.rs`
+- `egosync-app/src-tauri/src/db/conversations.rs`
+- `egosync-app/src-tauri/src/commands/role.rs`
+- `egosync-app/src-tauri/src/lib.rs`
+- `egosync-app/src/types/role.ts`
+- `egosync-app/src/services/roleService.ts`
+- `egosync-app/src/components/role/SettingsTab.tsx`
+- `egosync-app/src/components/role/SettingsTab.test.tsx`
+- `egosync-app/src/components/settings/GlobalSettingsModal.tsx`
+- `egosync-app/src/components/settings/GlobalSettingsModal.test.tsx`
+- `egosync-app/src/App.tsx`
+- `egosync-app/src/components/modals/AddRoleModal.tsx`
+- `egosync-app/src/constants/mockData.ts`
 - `_bmad-output/implementation-artifacts/2-1-role-crud-archive-delete.md`
 - `_bmad-output/implementation-artifacts/sprint-status.yaml`
 

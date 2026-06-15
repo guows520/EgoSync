@@ -43,31 +43,31 @@ jobs:
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: GUI/src-tauri -> target
+          workspaces: egosync-app/src-tauri -> target
 
       - name: Remove local cargo config (rsproxy mirror)
         shell: bash
-        run: rm -f GUI/src-tauri/.cargo/config.toml
+        run: rm -f egosync-app/src-tauri/.cargo/config.toml
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: GUI/package-lock.json
+          cache-dependency-path: egosync-app/package-lock.json
 
       - name: Install frontend dependencies
-        working-directory: GUI
+        working-directory: egosync-app
         run: npm ci
 
       - name: Run frontend tests
-        working-directory: GUI
+        working-directory: egosync-app
         run: npm run test:frontend
 
       - name: Run Rust tests
-        working-directory: GUI/src-tauri
+        working-directory: egosync-app/src-tauri
         run: cargo test
 
       - name: Build check (Rust)
-        working-directory: GUI/src-tauri
+        working-directory: egosync-app/src-tauri
         run: cargo build

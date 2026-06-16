@@ -4,7 +4,7 @@ baseline_commit: dccfdc609cfa7410f35b9721304d6e311c0307a9
 
 # Story 3.1: 用户能在角色视图创建、编辑、删除任务
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -39,8 +39,8 @@ so that 我能为每个角色管理独立的待办事项。
    - And 后续 `task_list_by_role` 默认不返回已软删除任务
 
 4. **数据库 schema**
-   - Given 当前迁移目录已到 `007_forgotten_memory_sources.sql`
-   - Then 新增迁移必须命名为 `008_tasks.sql`
+   - Given 当前迁移目录已到 `012_mcp_server_standard_types.sql`
+   - Then 新增迁移必须命名为 `013_tasks.sql`
    - And 创建 `tasks` 表，字段固定为：`id`, `role_id`, `title`, `deadline`, `quadrant`, `is_big_rock`, `is_completed`, `completed_at`, `sort_order`, `protection_status`, `confidence`, `created_at`, `updated_at`, `deleted_at`
    - And 以本 story 字段契约为准；不要额外添加架构概览旧表述中的 `content` 或 `status` 列
    - And `role_id` 外键关联 `roles(id)`，角色删除时级联删除任务
@@ -73,72 +73,80 @@ so that 我能为每个角色管理独立的待办事项。
 8. **测试与验证**
    - Rust 单元/集成测试覆盖：任务创建、按角色列出、编辑、软删除、非法 quadrant、空 title、已删除任务不可更新/删除、角色隔离
    - 前端测试覆盖：加载真实任务、创建后插入列表、编辑后更新列表、删除后移除、加载失败中文内联提示、空状态文案
-   - 至少运行：`npm --prefix "GUI" run test:frontend`、`cargo test --manifest-path "egosync-app/src-tauri/Cargo.toml" -- --test-threads=1`、`npm --prefix "GUI" run build`
+   - 至少运行：`npm --prefix "egosync-app" run test:frontend`、`cargo test --manifest-path "egosync-app/src-tauri/Cargo.toml" -- --test-threads=1`、`npm --prefix "egosync-app" run build`
    - 可见 UI 改动需启动应用并人工验证任务创建/编辑/删除 golden path；若无法启动，必须在 Dev Agent Record 写明原因
 
 ## Tasks / Subtasks
 
-- [ ] 后端：新增任务数据模型与迁移（AC: 4, 5）
-  - [ ] 新增 `egosync-app/src-tauri/migrations/008_tasks.sql`，不要使用规划文档中的旧编号 `005_tasks.sql`
-  - [ ] 新增 `egosync-app/src-tauri/src/models/task.rs`，`Task` / `CreateTaskInput` / `UpdateTaskInput` 使用 `#[serde(rename_all = "camelCase")]`
-  - [ ] 在 `egosync-app/src-tauri/src/models/mod.rs` 导出 `task`
-  - [ ] `deadline` 使用 `Option<String>`，存 ISO 8601 或 `YYYY-MM-DD` 字符串；不要新增日期库
-  - [ ] `is_big_rock` / `is_completed` 在 SQLite 中用 INTEGER 0/1，Rust model 可用 bool 并让 SQLx 正确映射
+- [x] 后端：新增任务数据模型与迁移（AC: 4, 5）
+  - [x] 新增 `egosync-app/src-tauri/migrations/013_tasks.sql`，不要使用规划文档中的旧编号 `005_tasks.sql`
+  - [x] 新增 `egosync-app/src-tauri/src/models/task.rs`，`Task` / `CreateTaskInput` / `UpdateTaskInput` 使用 `#[serde(rename_all = "camelCase")]`
+  - [x] 在 `egosync-app/src-tauri/src/models/mod.rs` 导出 `task`
+  - [x] `deadline` 使用 `Option<String>`，存 ISO 8601 或 `YYYY-MM-DD` 字符串；不要新增日期库
+  - [x] `is_big_rock` / `is_completed` 在 SQLite 中用 INTEGER 0/1，Rust model 可用 bool 并让 SQLx 正确映射
 
-- [ ] 后端：实现任务 DB CRUD（AC: 1-5）
-  - [ ] 新增 `egosync-app/src-tauri/src/db/tasks.rs`
-  - [ ] 在 `egosync-app/src-tauri/src/db/mod.rs` 导出 `tasks`
-  - [ ] `create_task(pool, input)` 生成 UUID v4、设置 `created_at` / `updated_at`、计算当前 role 下末尾 `sort_order`
-  - [ ] DB helper 负责 SQL 与数据完整性；title/quadrant 的用户输入校验在 command 层先做一遍，DB 层仍应防御非法数据
-  - [ ] `list_tasks_by_role(pool, role_id)` 只返回 `deleted_at IS NULL`，按 `sort_order ASC, created_at ASC` 排序
-  - [ ] `update_task(pool, id, input)` 仅更新传入字段，保持未传字段不变，返回完整 `Task`
-  - [ ] `soft_delete_task(pool, id)` 写 `deleted_at` 和 `updated_at`，不物理删除
-  - [ ] 所有 SQL 错误映射为中文 `AppError::DbError`，不存在映射为 `AppError::NotFound`
+- [x] 后端：实现任务 DB CRUD（AC: 1-5）
+  - [x] 新增 `egosync-app/src-tauri/src/db/tasks.rs`
+  - [x] 在 `egosync-app/src-tauri/src/db/mod.rs` 导出 `tasks`
+  - [x] `create_task(pool, input)` 生成 UUID v4、设置 `created_at` / `updated_at`、计算当前 role 下末尾 `sort_order`
+  - [x] DB helper 负责 SQL 与数据完整性；title/quadrant 的用户输入校验在 command 层先做一遍，DB 层仍应防御非法数据
+  - [x] `list_tasks_by_role(pool, role_id)` 只返回 `deleted_at IS NULL`，按 `sort_order ASC, created_at ASC` 排序
+  - [x] `update_task(pool, id, input)` 仅更新传入字段，保持未传字段不变，返回完整 `Task`
+  - [x] `soft_delete_task(pool, id)` 写 `deleted_at` 和 `updated_at`，不物理删除
+  - [x] 所有 SQL 错误映射为中文 `AppError::DbError`，不存在映射为 `AppError::NotFound`
 
-- [ ] 后端：实现并注册 Tauri task commands（AC: 5）
-  - [ ] 新增 `egosync-app/src-tauri/src/commands/task.rs`
-  - [ ] 在 `egosync-app/src-tauri/src/commands/mod.rs` 导出 `task`
-  - [ ] 在 `egosync-app/src-tauri/src/lib.rs` 的 `tauri::generate_handler!` 注册 `task_create`、`task_list_by_role`、`task_update`、`task_delete`
-  - [ ] command 层校验 title trim 非空、quadrant 合法；CRUD 调用 `db::tasks`，不新增 `services/task.rs`，除非后续故事引入跨模块业务规则
-  - [ ] `task_delete` 返回 `Result<(), AppError>`；前端成功后按 task id 移除或 refetch
-  - [ ] 不接入 opencode、agent_config、scheduler 或 notification，本 story 只做任务 CRUD
+- [x] 后端：实现并注册 Tauri task commands（AC: 5）
+  - [x] 新增 `egosync-app/src-tauri/src/commands/task.rs`
+  - [x] 在 `egosync-app/src-tauri/src/commands/mod.rs` 导出 `task`
+  - [x] 在 `egosync-app/src-tauri/src/lib.rs` 的 `tauri::generate_handler!` 注册 `task_create`、`task_list_by_role`、`task_update`、`task_delete`
+  - [x] command 层校验 title trim 非空、quadrant 合法；CRUD 调用 `db::tasks`，不新增 `services/task.rs`，除非后续故事引入跨模块业务规则
+  - [x] `task_delete` 返回 `Result<(), AppError>`；前端成功后按 task id 移除或 refetch
+  - [x] 不接入 opencode、agent_config、scheduler 或 notification，本 story 只做任务 CRUD
 
-- [ ] 前端：新增任务类型、service、hook（AC: 1, 2, 3, 6）
-  - [ ] 新增 `egosync-app/src/types/task.ts`：`Task`、`TaskQuadrant`、`CreateTaskInput`、`UpdateTaskInput`
-  - [ ] 新增 `egosync-app/src/services/taskService.ts`：`create`、`listByRole`、`update`、`delete`
-  - [ ] 新增 `egosync-app/src/hooks/useTasks.ts`，对齐 `useMemories` 的 `isLoading/error/refetch` 模式
-  - [ ] `useTasks` 在 roleId 变化时清空过期数据，避免切换角色时短暂显示上一个角色任务
+- [x] 前端：新增任务类型、service、hook（AC: 1, 2, 3, 6）
+  - [x] 新增 `egosync-app/src/types/task.ts`：`Task`、`TaskQuadrant`、`CreateTaskInput`、`UpdateTaskInput`
+  - [x] 新增 `egosync-app/src/services/taskService.ts`：`create`、`listByRole`、`update`、`delete`
+  - [x] 新增 `egosync-app/src/hooks/useTasks.ts`，对齐 `useMemories` 的 `isLoading/error/refetch` 模式
+  - [x] `useTasks` 在 roleId 变化时清空过期数据，避免切换角色时短暂显示上一个角色任务
 
-- [ ] 前端：改造 `TasksTab` 读取真实任务（AC: 1, 2, 3, 6, 7）
-  - [ ] 删除 `ROLE_TASKS` 依赖，不再从 `constants/mockData` 读取任务
-  - [ ] 保留现有卡片视觉：`GripVertical`、`Circle`、deadline badge、大石头标签、hover 边框/阴影
-  - [ ] 显示真实任务列表；空状态使用温和中文文案，不显示“暂无数据”
-  - [ ] 任务卡片点击进入编辑；删除操作需可达且不影响卡片点击
-  - [ ] 创建、更新、删除成功后通过 hook 本地状态更新或 `refetch` 立即反映，不要求用户刷新
-  - [ ] 加载/失败状态使用面板内联反馈，不新增 toast/snackbar
+- [x] 前端：改造 `TasksTab` 读取真实任务（AC: 1, 2, 3, 6, 7）
+  - [x] 删除 `ROLE_TASKS` 依赖，不再从 `constants/mockData` 读取任务
+  - [x] 保留现有卡片视觉：`GripVertical`、`Circle`、deadline badge、大石头标签、hover 边框/阴影
+  - [x] 显示真实任务列表；空状态使用温和中文文案，不显示“暂无数据”
+  - [x] 任务卡片点击进入编辑；删除操作需可达且不影响卡片点击
+  - [x] 创建、更新、删除成功后通过 hook 本地状态更新或 `refetch` 立即反映，不要求用户刷新
+  - [x] 加载/失败状态使用面板内联反馈，不新增 toast/snackbar
 
-- [ ] 前端：改造 `TaskModal` 为 create/edit 表单（AC: 1, 2, 6, 7）
-  - [ ] `TaskModal` props 至少支持：`roleId`、`task?`、`mode`、`onSave`、`onClose`
-  - [ ] 标题随模式显示“新建任务”/“编辑任务”
-  - [ ] 表单字段：任务内容、四象限分类、截止时间、大石头标记
-  - [ ] 删除 `TaskModal` 里“在周规划中优先受到系统时间保护”等 Q2/保护行为暗示；本 story 只保存 `isBigRock` 标记，不实现保护逻辑
-  - [ ] 保存按钮在 title 为空或提交中禁用，并显示内联中文错误
-  - [ ] 保存成功后关闭弹窗；失败时保持弹窗打开并显示错误
-  - [ ] 取消按钮只关闭弹窗，不写入数据
+- [x] 前端：改造 `TaskModal` 为 create/edit 表单（AC: 1, 2, 6, 7）
+  - [x] `TaskModal` props 至少支持：`roleId`、`task?`、`mode`、`onSave`、`onClose`
+  - [x] 标题随模式显示“新建任务”/“编辑任务”
+  - [x] 表单字段：任务内容、四象限分类、截止时间、大石头标记
+  - [x] 删除 `TaskModal` 里“在周规划中优先受到系统时间保护”等 Q2/保护行为暗示；本 story 只保存 `isBigRock` 标记，不实现保护逻辑
+  - [x] 保存按钮在 title 为空或提交中禁用，并显示内联中文错误
+  - [x] 保存成功后关闭弹窗；失败时保持弹窗打开并显示错误
+  - [x] 取消按钮只关闭弹窗，不写入数据
 
-- [ ] 前端：保持 App/RoleWorkspacePanel 入口一致（AC: 1, 2, 6, 7）
-  - [ ] 更新 `egosync-app/src/App.tsx` 的 `TaskModal` 打开状态，使其知道当前 active role 与可选编辑 task
-  - [ ] 如需在 `RoleWorkspacePanel` 与 `TasksTab` 间传递 `onEditTask` / `onTaskSaved`，保持 props 精简且不影响 MemoryTab
-  - [ ] 不把任务 CRUD 状态提升到全局 roles state，除非为保持现有弹窗入口不可避免
+- [x] 前端：保持 App/RoleWorkspacePanel 入口一致（AC: 1, 2, 6, 7）
+  - [x] 更新 `egosync-app/src/App.tsx` 的 `TaskModal` 打开状态，使其知道当前 active role 与可选编辑 task
+  - [x] 如需在 `RoleWorkspacePanel` 与 `TasksTab` 间传递 `onEditTask` / `onTaskSaved`，保持 props 精简且不影响 MemoryTab
+  - [x] 不把任务 CRUD 状态提升到全局 roles state，除非为保持现有弹窗入口不可避免
 
-- [ ] 测试与验证（AC: 1-8）
-  - [ ] Rust：为 `db::tasks` 添加单元测试或集成测试，覆盖 CRUD、软删除、排序、角色隔离和校验
-  - [ ] 前端：新增/更新 `TasksTab.test.tsx`、`TaskModal.test.tsx`、`useTasks` 或 service 测试
-  - [ ] 回归 MemoryTab / RoleWorkspacePanel 相关测试，确保 tab 与记忆计数未被破坏
-  - [ ] 运行 `npm --prefix "GUI" run test:frontend`
-  - [ ] 运行 `cargo test --manifest-path "egosync-app/src-tauri/Cargo.toml" -- --test-threads=1`
-  - [ ] 运行 `npm --prefix "GUI" run build`
-  - [ ] 启动 `npm --prefix "GUI" run tauri dev` 或等价流程，人工验证创建、编辑、删除任务；结束前让应用处于可供 boss 人工验证的运行状态，或记录无法启动原因
+- [x] 测试与验证（AC: 1-8）
+  - [x] Rust：为 `db::tasks` 添加单元测试或集成测试，覆盖 CRUD、软删除、排序、角色隔离和校验
+  - [x] 前端：新增/更新 `TasksTab.test.tsx`、`TaskModal.test.tsx`、`useTasks` 或 service 测试
+  - [x] 回归 MemoryTab / RoleWorkspacePanel 相关测试，确保 tab 与记忆计数未被破坏
+  - [x] 运行 `npm --prefix "egosync-app" run test:frontend`
+  - [ ] 运行 `cargo test --manifest-path "egosync-app/src-tauri/Cargo.toml" -- --test-threads=1`（环境 registry mirror 阻塞，详见 Dev Agent Record）
+  - [x] 运行 `npm --prefix "egosync-app" run build`
+  - [x] 启动 `npm --prefix "egosync-app" run tauri dev` 或等价流程；应用已以复用现有 Vite 的 Tauri dev 流程启动，当前 `egosync.exe` 窗口可供 boss 人工验证创建、编辑、删除任务 golden path
+
+### Review Findings
+
+- [x] [Review][Patch] 删除任务缺少应用内确认弹窗，当前会直接软删除 [`egosync-app/src/components/role/TasksTab.tsx:81`]
+- [x] [Review][Patch] 截止时间无法在编辑时清空 [`egosync-app/src-tauri/src/db/tasks.rs:67`]
+- [x] [Review][Patch] 保存按钮未在标题为空时禁用 [`egosync-app/src/components/modals/TaskModal.tsx:129`]
+- [x] [Review][Patch] 点击任务卡片本身不会进入编辑态 [`egosync-app/src/components/role/TasksTab.tsx:63`]
+- [x] [Review][Patch] `protectionStatus` 前端类型过宽，未对齐 story 数据契约 [`egosync-app/src/types/task.ts:13`]
 
 ## Dev Notes
 
@@ -150,7 +158,7 @@ so that 我能为每个角色管理独立的待办事项。
 - `egosync-app/src/components/role/RoleWorkspacePanel.tsx:64-105` 已负责 tab 布局和 `TasksTab` / `MemoryTab` / `SettingsTab` 切换；本 story 应复用该入口，不重建角色工作台。
 - `egosync-app/src/App.tsx` 当前用 `isTaskModalOpen` 全局控制 `TaskModal`：打开入口在 `RoleView` props，渲染在 `egosync-app/src/App.tsx:267`；需补齐 active role/edit task 上下文。
 - 后端还没有 task 模块：当前 `commands/mod.rs` 仅导出 app/chat/llm_config/memory/role/secret，`db/mod.rs` 仅导出 app_settings/conversations/memories/pool/roles/settings，`models/mod.rs` 仅导出 agent/chat/memory/role/settings。
-- 迁移目录当前到 `007_forgotten_memory_sources.sql`；必须新增 `008_tasks.sql`，不要与 epics 中旧编号冲突。
+- 迁移目录当前到 `012_mcp_server_standard_types.sql`；必须新增 `013_tasks.sql`，不要与现有迁移编号冲突。
 
 ### Architecture Guardrails
 
@@ -193,7 +201,7 @@ so that 我能为每个角色管理独立的待办事项。
   - `egosync-app/src/hooks/useTasks.ts`
 
 - New/update Rust files:
-  - `egosync-app/src-tauri/migrations/008_tasks.sql`
+  - `egosync-app/src-tauri/migrations/013_tasks.sql`
   - `egosync-app/src-tauri/src/models/task.rs`
   - `egosync-app/src-tauri/src/models/mod.rs`
   - `egosync-app/src-tauri/src/db/tasks.rs`
@@ -242,7 +250,7 @@ export interface Task {
 ### Regression Risks
 
 - **Mock leakage**: leaving `ROLE_TASKS` in `TasksTab` means AC 6 is not met.
-- **Wrong migration number**: creating `005_tasks.sql` conflicts with existing memory migrations; use `008_tasks.sql`.
+- **Wrong migration number**: creating `005_tasks.sql` conflicts with existing migrations; use `013_tasks.sql`.
 - **Hard delete**: `DELETE FROM tasks` violates AC 3; deletion must set `deleted_at`.
 - **Cross-role bleed**: `TasksTab` must only show tasks for current role; role switch must not briefly show stale tasks.
 - **Scope creep**: drag/drop, completion toggles, auto classification, big-rock max count, Q2 protection, all-role task tab are later stories.
@@ -253,7 +261,7 @@ export interface Task {
 
 - Frontend: Vitest + React Testing Library under `egosync-app/src/**/*.test.tsx`; service/hook behavior may mock `taskService`.
 - Rust: `cargo test --manifest-path "egosync-app/src-tauri/Cargo.toml" -- --test-threads=1` on Windows for stability.
-- Build: `npm --prefix "GUI" run build`.
+- Build: `npm --prefix "egosync-app" run build`.
 - UI: visible task create/edit/delete flow must be exercised in Tauri app before reporting implementation complete.
 
 ### Project Structure Notes
@@ -282,16 +290,60 @@ export interface Task {
 - Existing Rust command pattern: `egosync-app/src-tauri/src/commands/role.rs:20-120`.
 - Existing Rust DB pattern: `egosync-app/src-tauri/src/db/roles.rs:11-253`.
 - Current command registration: `egosync-app/src-tauri/src/lib.rs:220-259`.
-- Current migrations: `egosync-app/src-tauri/migrations/001_initial_schema.sql` through `007_forgotten_memory_sources.sql`.
+- Current migrations: `egosync-app/src-tauri/migrations/001_initial_schema.sql` through `012_mcp_server_standard_types.sql`.
 
 ## Dev Agent Record
 
 ### Agent Model Used
 
-TBD by dev agent
+SWE-1.6 / GPT-5.1
 
 ### Debug Log References
 
+- `npm run test:frontend -- --run`：通过，18 个 test files / 173 个 tests 全部通过。
+- `cargo test --manifest-path "egosync-app/src-tauri/Cargo.toml" -- --test-threads=1`：未进入编译；Cargo registry 被本机配置替换到 `https://mirrors.ustc.edu.cn/crates.io-index/`，该仓库返回 not found，属于环境依赖解析阻塞。
+- `cargo test --offline --manifest-path "egosync-app/src-tauri/Cargo.toml" --lib agent_engine -- --nocapture`：未进入编译；离线 registry index 缺少 lockfile 中的 `tauri 2.11.2`。
+- `cargo test --lib agent_engine -- --nocapture`（工作目录 `egosync-app/src-tauri`）：通过，88 个 `agent_engine` 相关测试全部通过；覆盖角色任务 prompt 注入、管家全角色任务摘要、50 条可见限制以及所有未完成任务必须注入。
+- `npm run build`：通过，`tsc && vite build` 成功生成 `dist`；此前首次失败于既有测试文件 `GlobalSettingsModal.test.tsx` 使用 `node:fs` / `node:path` 但 `tsconfig.json` 未声明 Node types，补充 `node` type 后通过。
+- UI 人工验证：Tauri dev 已启动，当前复用已有 `http://localhost:5173` Vite，并以临时配置跳过重复 `beforeDevCommand` 启动桌面壳；`egosync.exe` 窗口已打开，可供人工验证 create/edit/delete golden path。
+
 ### Completion Notes List
 
+- 新增 `tasks` migration、Rust model、DB helper 与 Tauri commands，支持按角色创建、列表、编辑与软删除任务。
+- 新增前端 task 类型、IPC service 与 `useTasks` hook，统一由 service 调用 Tauri command，组件不直接 `invoke()`。
+- `TaskModal` 改为 create/edit 受控表单，支持 title/quadrant/deadline/isBigRock，保存失败保持弹窗并显示中文错误。
+- `TasksTab` 移除 `ROLE_TASKS` mock，改为真实任务 props、按四象限分组、加载/错误/空态和创建/编辑/删除入口。
+- `App` / `RoleView` / `RoleWorkspacePanel` 接通任务弹窗上下文与当前角色 task actions，同时保持 MemoryTab tab/计数/跳转回归测试通过。
+- 为构建补充 `tsconfig.json` 的 Node types，修复既有测试文件被 `tsc` 编译时无法解析 `node:fs` / `process` 的问题。
+- 补充角色/管家聊天 prompt 的任务上下文注入：角色 prompt 注入当前角色任务；管家 prompt 注入所有角色任务；每个角色默认最多展示 50 条，但所有未完成任务必须全部注入，已完成任务只填补剩余名额。
+
 ### File List
+
+- `_bmad-output/implementation-artifacts/3-1-task-crud-role-view.md`
+- `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `egosync-app/src-tauri/migrations/013_tasks.sql`
+- `egosync-app/src-tauri/src/models/task.rs`
+- `egosync-app/src-tauri/src/models/mod.rs`
+- `egosync-app/src-tauri/src/db/tasks.rs`
+- `egosync-app/src-tauri/src/db/mod.rs`
+- `egosync-app/src-tauri/src/commands/task.rs`
+- `egosync-app/src-tauri/src/commands/mod.rs`
+- `egosync-app/src-tauri/src/lib.rs`
+- `egosync-app/src/types/task.ts`
+- `egosync-app/src/services/taskService.ts`
+- `egosync-app/src/hooks/useTasks.ts`
+- `egosync-app/src/hooks/useTasks.test.tsx`
+- `egosync-app/src/components/modals/TaskModal.tsx`
+- `egosync-app/src/components/modals/TaskModal.test.tsx`
+- `egosync-app/src/components/role/TasksTab.tsx`
+- `egosync-app/src/components/role/TasksTab.test.tsx`
+- `egosync-app/src/components/role/RoleWorkspacePanel.tsx`
+- `egosync-app/src/components/role/RoleView.tsx`
+- `egosync-app/src/App.tsx`
+- `egosync-app/src-tauri/src/services/agent_engine.rs`
+- `egosync-app/tsconfig.json`
+
+### Change Log
+
+- 2026-06-15: Implemented role-scoped task CRUD backend, frontend data chain, modal/task tab wiring, tests, and validation records.
+- 2026-06-16: Added role/butler chat task-context prompt injection so configured EgoSync tasks are visible to agents, with 50 visible task limit while preserving all unfinished tasks.

@@ -5,11 +5,13 @@ import { RoleWorkspacePanel } from './RoleWorkspacePanel';
 import { ChatStream } from '../chat/ChatStream';
 import type { Role } from '../../types/role';
 import type { SourceNavigationTarget } from '../../types/chat';
+import type { Task, TaskActions } from '../../types/task';
 
 interface RoleViewProps {
   role: Role;
   roles?: Role[];
-  onOpenTask: () => void;
+  onOpenTask: (roleId: string, task?: Task | null) => void;
+  onTasksApiReady?: (roleId: string, actions: TaskActions) => void;
   initialTab: string | null;
   onTabConsumed: () => void;
   onUpdateRole: (role: Role) => void;
@@ -26,6 +28,7 @@ export function RoleView({
   role,
   roles,
   onOpenTask,
+  onTasksApiReady,
   initialTab,
   onTabConsumed,
   onUpdateRole,
@@ -106,7 +109,8 @@ export function RoleView({
               roles={roles}
               currentTab={openTab}
               setTab={setOpenTab}
-              onOpenTask={onOpenTask}
+              onOpenTask={(task: Task | null) => onOpenTask(role.id, task)}
+              onTasksApiReady={(actions: TaskActions) => onTasksApiReady?.(role.id, actions)}
               onUpdateRole={onUpdateRole}
               onArchiveRole={onArchiveRole}
               onDeleteRole={onDeleteRole}

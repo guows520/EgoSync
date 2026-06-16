@@ -7,7 +7,7 @@ use tokio::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
 use crate::db::pool::{ConversationsPool, DbPool};
-use crate::db::{conversations, memories};
+use crate::db::{conversations, memories, tasks};
 use crate::error::AppError;
 use crate::llm::anthropic::AnthropicProvider;
 use crate::llm::openai::OpenAiProvider;
@@ -1068,9 +1068,118 @@ const CROSS_ROLE_SUMMARY_TOTAL_CHARS: usize = 2000;
 const BUTLER_MEMORY_PER_ROLE: usize = 6;
 const BUTLER_MEMORY_PER_LINE_CHARS: usize = 90;
 const BUTLER_MEMORY_TOTAL_CHARS: usize = 3000;
+const TASK_CONTEXT_VISIBLE_LIMIT: usize = 50;
+const TASK_CONTEXT_TITLE_CHARS: usize = 80;
 
 fn truncate_chars(value: &str, limit: usize) -> String {
     value.chars().take(limit).collect()
+}
+
+fn task_status_label(task: &crate::models::task::Task) -> &'static str {
+    if task.is_completed {
+        "已完成"
+    } else {
+        "未完成"
+    }
+}
+
+fn format_task_context_line(task: &crate::models::task::Task) -> String {
+    let mut badges = vec![format!("[{}]", task_status_label(task)), format!("[{}]", task.quadrant)];
+    if task.is_big_rock {
+        badges.push("[大石头]".to_string());
+    }
+    if task.protection_status != "normal" {
+        badges.push(format!("[{}]", task.protection_status));
+    }
+    let deadline = task
+        .deadline
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| format!(" 截止:{}", value))
+        .unwrap_or_default();
+    format!(
+        "- {}{} {}",
+        badges.join(""),
+        deadline,
+        truncate_chars(task.title.trim(), TASK_CONTEXT_TITLE_CHARS)
+    )
+}
+
+fn select_task_context_items(tasks: &[crate::models::task::Task]) -> (Vec<&crate::models::task::Task>, usize) {
+    let mut selected = tasks
+        .iter()
+        .filter(|task| !task.is_completed)
+        .collect::<Vec<_>>();
+    let remaining_slots = TASK_CONTEXT_VISIBLE_LIMIT.saturating_sub(selected.len());
+    let completed = tasks
+        .iter()
+        .filter(|task| task.is_completed)
+        .collect::<Vec<_>>();
+    let omitted_completed_count = completed.len().saturating_sub(remaining_slots);
+    selected.extend(completed.into_iter().take(remaining_slots));
+    (selected, omitted_completed_count)
+}
+
+pub async fn build_role_task_summary(
+    main_pool: &DbPool,
+    role_id: &str,
+) -> Result<String, AppError> {
+    let role = crate::db::roles::get_role(main_pool, role_id).await?;
+    let role_tasks = tasks::list_tasks_by_role(main_pool, role_id).await?;
+    if role_tasks.is_empty() {
+        return Ok(String::new());
+    }
+
+    let (selected, omitted_completed_count) = select_task_context_items(&role_tasks);
+    let mut lines = selected
+        .into_iter()
+        .map(format_task_context_line)
+        .collect::<Vec<_>>();
+    if omitted_completed_count > 0 {
+        lines.push(format!("- 另有 {} 条已完成任务未注入。", omitted_completed_count));
+    }
+
+    Ok(format!(
+        "[当前角色任务]\n{}：\n{}\n规则：这是 EgoSync 内部任务列表；当用户询问任务、待办、安排或下一步时，优先依据本段回答，不要去工作目录寻找任务文件。未完成任务必须全部覆盖；已完成任务只在总量不超过 {} 条时补充。",
+        role.name,
+        lines.join("\n"),
+        TASK_CONTEXT_VISIBLE_LIMIT
+    ))
+}
+
+pub async fn build_butler_task_summary(main_pool: &DbPool) -> Result<String, AppError> {
+    let roles = crate::db::roles::list_all_roles(main_pool).await?;
+    if roles.is_empty() {
+        return Ok(String::new());
+    }
+
+    let mut blocks = Vec::new();
+    for role in roles {
+        let role_tasks = tasks::list_tasks_by_role(main_pool, &role.id).await?;
+        if role_tasks.is_empty() {
+            continue;
+        }
+        let (selected, omitted_completed_count) = select_task_context_items(&role_tasks);
+        let mut lines = selected
+            .into_iter()
+            .map(format_task_context_line)
+            .collect::<Vec<_>>();
+        if omitted_completed_count > 0 {
+            lines.push(format!("- 另有 {} 条已完成任务未注入。", omitted_completed_count));
+        }
+        blocks.push(format!("{}（{}）：\n{}", role.name, role.status, lines.join("\n")));
+    }
+
+    if blocks.is_empty() {
+        return Ok(String::new());
+    }
+
+    Ok(format!(
+        "[各角色任务]\n{}\n规则：这是 EgoSync 内部任务列表；当用户询问任一角色的任务、待办、安排或下一步时，优先依据本段回答，不要去工作目录寻找任务文件。每个角色未完成任务必须全部覆盖；已完成任务只在该角色总量不超过 {} 条时补充。",
+        blocks.join("\n"),
+        TASK_CONTEXT_VISIBLE_LIMIT
+    ))
 }
 
 fn format_memory_reference_label(memory: &crate::models::memory::Memory) -> String {
@@ -1475,6 +1584,10 @@ async fn build_role_system_prompt(
     let memory_summary = build_role_memory_summary(main_pool, &role.id).await?;
     if !memory_summary.is_empty() {
         sections.push(memory_summary);
+    }
+    let task_summary = build_role_task_summary(main_pool, &role.id).await?;
+    if !task_summary.is_empty() {
+        sections.push(task_summary);
     }
     sections.push(TRANSPARENCY_UNCERTAINTY_RULES.to_string());
 
@@ -4792,6 +4905,7 @@ mod tests {
 
     use crate::db::pool::ConversationsPool;
     use crate::models::role::CreateRoleInput;
+    use crate::models::task::CreateTaskInput;
     use sqlx::sqlite::SqlitePoolOptions;
     use sqlx::SqlitePool;
 
@@ -4864,6 +4978,10 @@ mod tests {
             .execute(&pool)
             .await
             .expect("failed to create skill role bindings table");
+        sqlx::raw_sql(include_str!("../../migrations/013_tasks.sql"))
+            .execute(&pool)
+            .await
+            .expect("failed to create tasks table");
 
         pool
     }
@@ -4894,6 +5012,226 @@ mod tests {
             .expect("failed to add routing_metadata");
 
         ConversationsPool(pool)
+    }
+
+    #[tokio::test]
+    async fn test_build_role_messages_includes_current_role_tasks_and_excludes_other_roles_tasks() {
+        let main_pool = setup_test_main_pool().await;
+        let conv_pool = setup_test_conv_pool().await;
+
+        let role = crate::db::roles::create_role(
+            &main_pool,
+            &CreateRoleInput {
+                name: "产品经理".to_string(),
+                icon: None,
+                color: None,
+                goal: Some("推进产品落地".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+        let other_role = crate::db::roles::create_role(
+            &main_pool,
+            &CreateRoleInput {
+                name: "设计师".to_string(),
+                icon: None,
+                color: None,
+                goal: Some("完善视觉体验".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+        let conv = crate::db::conversations::create_conversation(&conv_pool, Some(&role.id))
+            .await
+            .unwrap();
+
+        crate::db::tasks::create_task(
+            &main_pool,
+            &CreateTaskInput {
+                role_id: role.id.clone(),
+                title: "梳理需求范围".to_string(),
+                deadline: None,
+                quadrant: Some("Q2".to_string()),
+                is_big_rock: Some(false),
+            },
+        )
+        .await
+        .unwrap();
+        crate::db::tasks::create_task(
+            &main_pool,
+            &CreateTaskInput {
+                role_id: other_role.id.clone(),
+                title: "准备视觉稿".to_string(),
+                deadline: None,
+                quadrant: Some("Q2".to_string()),
+                is_big_rock: Some(false),
+            },
+        )
+        .await
+        .unwrap();
+
+        let msgs = build_role_messages(&conv_pool, &main_pool, &conv.id, &role.id, "我有哪些任务")
+            .await
+            .unwrap();
+        let system = &msgs.first().unwrap().content;
+
+        assert!(system.contains("[当前角色任务]"));
+        assert!(system.contains("梳理需求范围"));
+        assert!(!system.contains("准备视觉稿"));
+    }
+
+    #[tokio::test]
+    async fn test_butler_task_summary_keeps_unfinished_and_caps_completed_tasks() {
+        let main_pool = setup_test_main_pool().await;
+
+        let role = crate::db::roles::create_role(
+            &main_pool,
+            &CreateRoleInput {
+                name: "产品经理".to_string(),
+                icon: None,
+                color: None,
+                goal: Some("推进产品落地".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+        let other_role = crate::db::roles::create_role(
+            &main_pool,
+            &CreateRoleInput {
+                name: "运营".to_string(),
+                icon: None,
+                color: None,
+                goal: Some("稳定项目节奏".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+
+        crate::db::tasks::create_task(
+            &main_pool,
+            &CreateTaskInput {
+                role_id: role.id.clone(),
+                title: "未完成任务 1".to_string(),
+                deadline: None,
+                quadrant: Some("Q2".to_string()),
+                is_big_rock: Some(false),
+            },
+        )
+        .await
+        .unwrap();
+        crate::db::tasks::create_task(
+            &main_pool,
+            &CreateTaskInput {
+                role_id: role.id.clone(),
+                title: "未完成任务 2".to_string(),
+                deadline: None,
+                quadrant: Some("Q2".to_string()),
+                is_big_rock: Some(false),
+            },
+        )
+        .await
+        .unwrap();
+        for index in 1..=50 {
+            let task = crate::db::tasks::create_task(
+                &main_pool,
+                &CreateTaskInput {
+                    role_id: role.id.clone(),
+                    title: format!("已完成任务 {:02}", index),
+                    deadline: None,
+                    quadrant: Some("Q3".to_string()),
+                    is_big_rock: Some(false),
+                },
+            )
+            .await
+            .unwrap();
+            sqlx::query(
+                "UPDATE tasks SET is_completed = 1, completed_at = '2026-06-16T00:00:00Z' WHERE id = ?1",
+            )
+            .bind(&task.id)
+            .execute(&main_pool)
+            .await
+            .unwrap();
+        }
+        crate::db::tasks::create_task(
+            &main_pool,
+            &CreateTaskInput {
+                role_id: other_role.id.clone(),
+                title: "运营待办 1".to_string(),
+                deadline: None,
+                quadrant: Some("Q1".to_string()),
+                is_big_rock: Some(true),
+            },
+        )
+        .await
+        .unwrap();
+
+        let summary = build_butler_task_summary(&main_pool).await.unwrap();
+
+        assert!(summary.contains("[各角色任务]"));
+        assert!(summary.contains("产品经理"));
+        assert!(summary.contains("运营"));
+        assert!(summary.contains("未完成任务 1"));
+        assert!(summary.contains("未完成任务 2"));
+        assert!(summary.contains("运营待办 1"));
+        assert!(summary.contains("已完成任务 48"));
+        assert!(!summary.contains("已完成任务 49"));
+        assert!(!summary.contains("已完成任务 50"));
+    }
+
+    #[tokio::test]
+    async fn test_role_task_summary_includes_all_unfinished_even_above_visible_limit() {
+        let main_pool = setup_test_main_pool().await;
+        let role = crate::db::roles::create_role(
+            &main_pool,
+            &CreateRoleInput {
+                name: "产品经理".to_string(),
+                icon: None,
+                color: None,
+                goal: Some("推进产品落地".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+
+        for index in 1..=51 {
+            crate::db::tasks::create_task(
+                &main_pool,
+                &CreateTaskInput {
+                    role_id: role.id.clone(),
+                    title: format!("未完成超限任务 {:02}", index),
+                    deadline: None,
+                    quadrant: Some("Q2".to_string()),
+                    is_big_rock: Some(false),
+                },
+            )
+            .await
+            .unwrap();
+        }
+        let completed = crate::db::tasks::create_task(
+            &main_pool,
+            &CreateTaskInput {
+                role_id: role.id.clone(),
+                title: "不应注入的已完成任务".to_string(),
+                deadline: None,
+                quadrant: Some("Q3".to_string()),
+                is_big_rock: Some(false),
+            },
+        )
+        .await
+        .unwrap();
+        sqlx::query("UPDATE tasks SET is_completed = 1 WHERE id = ?1")
+            .bind(&completed.id)
+            .execute(&main_pool)
+            .await
+            .unwrap();
+
+        let summary = build_role_task_summary(&main_pool, &role.id).await.unwrap();
+
+        assert!(summary.contains("未完成超限任务 01"));
+        assert!(summary.contains("未完成超限任务 50"));
+        assert!(summary.contains("未完成超限任务 51"));
+        assert!(!summary.contains("不应注入的已完成任务"));
+        assert!(summary.contains("另有 1 条已完成任务未注入"));
     }
 
     /// AC-6: role-aware system prompt 必须含 role.name 与 goal —

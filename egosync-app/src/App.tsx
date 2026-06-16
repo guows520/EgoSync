@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { cn } from './lib/utils';
 import { Sidebar } from './components/layout/Sidebar';
 import { ButlerView } from './components/butler/ButlerView';
@@ -18,15 +18,21 @@ import { useTauriEvent } from './hooks/useTauriEvent';
 import { normalizeColorHex } from './lib/roleIcons';
 import type { Role } from './types/role';
 import type { SourceNavigationTarget } from './types/chat';
+import type { CreateTaskInput, Task, TaskActions, UpdateTaskInput } from './types/task';
 
 const BUTLER_ACCENT = '#6366F1';
+
+interface TaskModalContext {
+  roleId: string;
+  task: Task | null;
+}
 
 export default function App() {
   const [currentView, setCurrentView] = useState('butler');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isArbOpen, setIsArbOpen] = useState(false);
   const [isReviewOpen, setIsReviewOpen] = useState(false);
-  const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
+  const [taskModalContext, setTaskModalContext] = useState<TaskModalContext | null>(null);
   const [isAddRoleOpen, setIsAddRoleOpen] = useState(false);
   const [roles, setRoles] = useState<Role[]>([]);
   const [archivedRoles, setArchivedRoles] = useState<Role[]>([]);
@@ -40,6 +46,7 @@ export default function App() {
   const [pendingRoleSourceNavigation, setPendingRoleSourceNavigation] = useState<SourceNavigationTarget | null>(null);
   const [pendingButlerSourceNavigation, setPendingButlerSourceNavigation] = useState<SourceNavigationTarget | null>(null);
   const [isNotifOpen, setIsNotifOpen] = useState(false);
+  const taskActionsRef = useRef(new Map<string, TaskActions>());
 
   // Story 2.5: 管家涌现角色提议（非 onboarding 模式）
   const [butlerProposal, setButlerProposal] = useState<RoleProposal | null>(null);
@@ -170,6 +177,26 @@ export default function App() {
     handleSourceNavigation(target);
   };
 
+  const handleOpenTask = useCallback((roleId: string, task: Task | null = null) => {
+    setTaskModalContext({ roleId, task });
+  }, []);
+
+  const handleTasksApiReady = useCallback((roleId: string, actions: TaskActions) => {
+    taskActionsRef.current.set(roleId, actions);
+  }, []);
+
+  const handleSaveTask = useCallback(async (input: CreateTaskInput | UpdateTaskInput) => {
+    if (!taskModalContext) return;
+    const actions = taskActionsRef.current.get(taskModalContext.roleId);
+    if (!actions) throw new Error('当前角色任务列表尚未准备好');
+
+    if (taskModalContext.task) {
+      await actions.updateTask(taskModalContext.task.id, input as UpdateTaskInput);
+    } else {
+      await actions.createTask(input as CreateTaskInput);
+    }
+  }, [taskActionsRef, taskModalContext]);
+
   const handleButlerSourceNavigation = (target: SourceNavigationTarget) => {
     handleSourceNavigation(target);
   };
@@ -240,7 +267,8 @@ export default function App() {
               key={r.id}
               role={r}
               roles={roles}
-              onOpenTask={() => setIsTaskModalOpen(true)}
+              onOpenTask={handleOpenTask}
+              onTasksApiReady={handleTasksApiReady}
               initialTab={roleInitialTab}
               onTabConsumed={() => setRoleInitialTab(null)}
               onUpdateRole={handleUpdateRole}
@@ -266,7 +294,14 @@ export default function App() {
       )}
       {isArbOpen && <ArbitrationModal onClose={() => setIsArbOpen(false)} />}
       {isReviewOpen && <WeeklyReviewModal roles={roles} onClose={() => setIsReviewOpen(false)} />}
-      {isTaskModalOpen && <TaskModal onClose={() => setIsTaskModalOpen(false)} />}
+      {taskModalContext && (
+        <TaskModal
+          roleId={taskModalContext.roleId}
+          task={taskModalContext.task}
+          onClose={() => setTaskModalContext(null)}
+          onSave={handleSaveTask}
+        />
+      )}
       {isAddRoleOpen && <AddRoleModal onClose={() => setIsAddRoleOpen(false)} onAdd={(role: Role) => { setRoles(prev => [...prev, role]); setIsAddRoleOpen(false); }} />}
       {isNotifOpen && <NotificationPanel onClose={() => setIsNotifOpen(false)} />}
       <RoleConfirmModal

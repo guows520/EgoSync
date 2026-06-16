@@ -5,3 +5,4 @@ pub mod mcp;
 pub mod role;
 pub mod settings;
 pub mod skill;
+pub mod task;

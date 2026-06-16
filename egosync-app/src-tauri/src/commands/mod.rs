@@ -6,3 +6,4 @@ pub mod mcp;
 pub mod role;
 pub mod secret;
 pub mod skill;
+pub mod task;

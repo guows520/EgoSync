@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-21
-last_updated: 2026-06-10T18:15:00+08:00
+last_updated: 2026-06-16T22:35:00+08:00
 project: "探索 (EgoSync)"
 project_key: NOKEY
 tracking_system: file-system
@@ -83,7 +83,7 @@ development_status:
   # Epic 3: 任务管理与智能四象限 (Task Management & Eisenhower Matrix)
   # ============================================================
   epic-3: in-progress
-  3-1-task-crud-role-view: ready-for-dev
+  3-1-task-crud-role-view: review
   3-2-task-drag-sort-complete: backlog
   3-3-auto-quadrant-classification: backlog
   3-4-big-rock-marking: backlog

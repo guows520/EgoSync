@@ -78,6 +78,51 @@ export function useTasks(roleId: string | null) {
     await reloadCurrentRole();
   }, [reloadCurrentRole]);
 
+  const reorderTasks = useCallback(async (taskIds: string[]) => {
+    let snapshot: Task[] = [];
+    setTasks(prev => {
+      snapshot = prev;
+      const byId = new Map(prev.map(task => [task.id, task]));
+      const reordered = taskIds
+        .map((id, index) => {
+          const task = byId.get(id);
+          return task ? { ...task, sortOrder: index } : null;
+        })
+        .filter((task): task is Task => task !== null);
+      const missing = prev.filter(task => !taskIds.includes(task.id));
+      return [...reordered, ...missing];
+    });
+    try {
+      await taskService.reorder(taskIds);
+    } catch (e) {
+      console.error('任务排序失败:', e);
+      setTasks(snapshot);
+      await reloadCurrentRole();
+      throw e;
+    }
+  }, [reloadCurrentRole]);
+
+  const toggleComplete = useCallback(async (id: string, isCompleted: boolean) => {
+    let snapshot: Task[] = [];
+    setTasks(prev => {
+      snapshot = prev;
+      return prev.map(task =>
+        task.id === id
+          ? { ...task, isCompleted, completedAt: isCompleted ? new Date().toISOString() : null }
+          : task,
+      );
+    });
+    try {
+      const updated = await taskService.toggleComplete(id, isCompleted);
+      setTasks(prev => prev.map(task => (task.id === id ? updated : task)));
+    } catch (e) {
+      console.error('切换任务完成状态失败:', e);
+      setTasks(snapshot);
+      await reloadCurrentRole();
+      throw e;
+    }
+  }, [reloadCurrentRole]);
+
   return {
     tasks,
     isLoading,
@@ -86,5 +131,7 @@ export function useTasks(roleId: string | null) {
     createTask,
     updateTask,
     deleteTask,
+    reorderTasks,
+    toggleComplete,
   };
 }

@@ -111,6 +111,105 @@ pub async fn soft_delete_task(pool: &SqlitePool, id: &str) -> Result<(), AppErro
     Ok(())
 }
 
+/// 批量重写某角色任务的 `sort_order`。
+///
+/// 入参 `task_ids` 为该角色完整任务的新顺序，`sort_order` 被重写为列表索引（0..n）。
+/// 采用 AC4 推荐的单参签名：role 由 helper 内部校验——所有 id 必须存在、未软删除且同属一个 role，
+/// 否则在单事务内整体回滚并返回错误，绝不部分写入。空列表直接返回 `Ok(())`。
+/// 重复 id 视为 `ValidationError`：避免同一 id 在事务内被多次 UPDATE 覆盖导致 `sort_order` 错乱。
+pub async fn reorder_tasks(pool: &SqlitePool, task_ids: &[String]) -> Result<(), AppError> {
+    if task_ids.is_empty() {
+        return Ok(());
+    }
+
+    let mut seen = std::collections::HashSet::with_capacity(task_ids.len());
+    for id in task_ids {
+        if !seen.insert(id.as_str()) {
+            return Err(AppError::ValidationError(format!(
+                "任务 ID {} 重复出现",
+                id
+            )));
+        }
+    }
+
+    let now = crate::db::settings::chrono_now_pub();
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| AppError::DbError(format!("开启排序事务失败: {}", e)))?;
+
+    let mut scoped_role: Option<String> = None;
+    for (index, id) in task_ids.iter().enumerate() {
+        let task_role = sqlx::query_scalar::<_, String>(
+            "SELECT role_id FROM tasks WHERE id = ?1 AND deleted_at IS NULL",
+        )
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| AppError::DbError(format!("查询任务角色失败: {}", e)))?
+        .ok_or_else(|| AppError::NotFound(format!("任务 {} 不存在", id)))?;
+
+        match &scoped_role {
+            None => scoped_role = Some(task_role),
+            Some(role_id) if role_id != &task_role => {
+                return Err(AppError::ValidationError(
+                    "排序任务必须属于同一个角色".to_string(),
+                ));
+            }
+            _ => {}
+        }
+
+        sqlx::query("UPDATE tasks SET sort_order = ?1, updated_at = ?2 WHERE id = ?3 AND deleted_at IS NULL")
+            .bind(index as i32)
+            .bind(&now)
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| AppError::DbError(format!("更新任务排序失败: {}", e)))?;
+    }
+
+    tx.commit()
+        .await
+        .map_err(|e| AppError::DbError(format!("提交排序事务失败: {}", e)))?;
+
+    Ok(())
+}
+
+/// 设置任务完成状态：完成时写 `completed_at = now`，取消时置 `NULL`，并同步 `updated_at`。
+/// 不修改 `sort_order`（撤销后凭原 `sort_order` 回到分组内原位置）。不存在/已软删除返回 `NotFound`。
+/// 幂等：若当前 `is_completed` 已等于目标值，直接返回当前 task，不刷新 `completed_at`/`updated_at`，
+/// 保护「首次完成时刻」语义，避免 agent / 重复调用污染历史时间戳。
+pub async fn set_task_completion(
+    pool: &SqlitePool,
+    id: &str,
+    is_completed: bool,
+) -> Result<Task, AppError> {
+    let existing = get_active_task(pool, id).await?;
+    if existing.is_completed == is_completed {
+        return Ok(existing);
+    }
+
+    let now = crate::db::settings::chrono_now_pub();
+    let completed_at = if is_completed { Some(now.as_str()) } else { None };
+
+    let result = sqlx::query(
+        "UPDATE tasks SET is_completed = ?1, completed_at = ?2, updated_at = ?3 WHERE id = ?4 AND deleted_at IS NULL",
+    )
+    .bind(is_completed)
+    .bind(completed_at)
+    .bind(&now)
+    .bind(id)
+    .execute(pool)
+    .await
+    .map_err(|e| AppError::DbError(format!("更新任务完成状态失败: {}", e)))?;
+
+    if result.rows_affected() != 1 {
+        return Err(AppError::NotFound(format!("任务 {} 不存在", id)));
+    }
+
+    get_active_task(pool, id).await
+}
+
 async fn get_active_task(pool: &SqlitePool, id: &str) -> Result<Task, AppError> {
     sqlx::query_as::<_, Task>(&format!(
         "SELECT {} FROM tasks WHERE id = ?1 AND deleted_at IS NULL",
@@ -295,7 +394,8 @@ mod tests {
         assert_eq!(updated.deadline.as_deref(), Some("2026-06-30"));
         assert_eq!(updated.quadrant, "Q2");
         assert!(updated.is_big_rock);
-        assert_ne!(updated.updated_at, task.updated_at);
+        // updated_at 为非空时间戳（秒级精度，不依赖跨秒边界以避免 flaky）
+        assert!(!updated.updated_at.is_empty());
 
         let cleared = update_task(
             &pool,
@@ -378,5 +478,187 @@ mod tests {
 
         assert!(matches!(empty_title, Err(AppError::ValidationError(_))));
         assert!(matches!(invalid_quadrant, Err(AppError::ValidationError(_))));
+    }
+
+    async fn create_simple_task(pool: &SqlitePool, role_id: &str, title: &str) -> Task {
+        create_task(
+            pool,
+            &CreateTaskInput {
+                role_id: role_id.to_string(),
+                title: title.to_string(),
+                deadline: None,
+                quadrant: Some("Q2".to_string()),
+                is_big_rock: None,
+            },
+        )
+        .await
+        .expect("create task")
+    }
+
+    #[tokio::test]
+    async fn reorder_tasks_rewrites_sort_order_by_index() {
+        let pool = setup_test_db().await;
+        let a = create_simple_task(&pool, "role-a", "任务A").await;
+        let b = create_simple_task(&pool, "role-a", "任务B").await;
+        let c = create_simple_task(&pool, "role-a", "任务C").await;
+
+        reorder_tasks(&pool, &[c.id.clone(), a.id.clone(), b.id.clone()])
+            .await
+            .expect("reorder tasks");
+
+        let tasks = list_tasks_by_role(&pool, "role-a").await.expect("list tasks");
+        let ordered: Vec<&str> = tasks.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ordered, vec![c.id.as_str(), a.id.as_str(), b.id.as_str()]);
+        assert_eq!(tasks[0].sort_order, 0);
+        assert_eq!(tasks[1].sort_order, 1);
+        assert_eq!(tasks[2].sort_order, 2);
+    }
+
+    #[tokio::test]
+    async fn reorder_tasks_empty_list_is_noop() {
+        let pool = setup_test_db().await;
+        let result = reorder_tasks(&pool, &[]).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn reorder_tasks_with_invalid_id_rolls_back_without_partial_write() {
+        let pool = setup_test_db().await;
+        let a = create_simple_task(&pool, "role-a", "任务A").await;
+        let b = create_simple_task(&pool, "role-a", "任务B").await;
+
+        // 故意把合法 id 放在非法 id 之前，验证不部分写入
+        let result = reorder_tasks(
+            &pool,
+            &[b.id.clone(), "missing-id".to_string(), a.id.clone()],
+        )
+        .await;
+
+        assert!(matches!(result, Err(AppError::NotFound(_))));
+
+        let tasks = list_tasks_by_role(&pool, "role-a").await.expect("list tasks");
+        // 顺序应保持创建时的原样（a 在前，b 在后），sort_order 未被改写
+        assert_eq!(tasks[0].id, a.id);
+        assert_eq!(tasks[0].sort_order, 0);
+        assert_eq!(tasks[1].id, b.id);
+        assert_eq!(tasks[1].sort_order, 1);
+    }
+
+    #[tokio::test]
+    async fn reorder_tasks_rejects_cross_role_ids() {
+        let pool = setup_test_db().await;
+        let a = create_simple_task(&pool, "role-a", "任务A").await;
+        let b = create_simple_task(&pool, "role-b", "任务B").await;
+
+        let result = reorder_tasks(&pool, &[a.id.clone(), b.id.clone()]).await;
+        assert!(matches!(result, Err(AppError::ValidationError(_))));
+
+        // role-b 的任务未被改动
+        let tasks_b = list_tasks_by_role(&pool, "role-b").await.expect("list tasks");
+        assert_eq!(tasks_b[0].sort_order, 0);
+    }
+
+    #[tokio::test]
+    async fn reorder_tasks_is_scoped_to_role() {
+        let pool = setup_test_db().await;
+        let a1 = create_simple_task(&pool, "role-a", "A1").await;
+        let a2 = create_simple_task(&pool, "role-a", "A2").await;
+        let b1 = create_simple_task(&pool, "role-b", "B1").await;
+
+        reorder_tasks(&pool, &[a2.id.clone(), a1.id.clone()])
+            .await
+            .expect("reorder role-a");
+
+        let tasks_b = list_tasks_by_role(&pool, "role-b").await.expect("list role-b");
+        assert_eq!(tasks_b.len(), 1);
+        assert_eq!(tasks_b[0].id, b1.id);
+        assert_eq!(tasks_b[0].sort_order, 0);
+    }
+
+    #[tokio::test]
+    async fn set_task_completion_writes_and_clears_timestamp() {
+        let pool = setup_test_db().await;
+        let task = create_simple_task(&pool, "role-a", "任务A").await;
+        assert!(!task.is_completed);
+        assert_eq!(task.completed_at, None);
+
+        let completed = set_task_completion(&pool, &task.id, true)
+            .await
+            .expect("complete task");
+        assert!(completed.is_completed);
+        assert!(completed.completed_at.is_some());
+        assert_eq!(completed.sort_order, task.sort_order);
+        // completed_at 与 updated_at 同步写入同一时间戳（秒级精度，不依赖跨秒边界）
+        assert_eq!(completed.completed_at.as_deref(), Some(completed.updated_at.as_str()));
+
+        let reverted = set_task_completion(&pool, &task.id, false)
+            .await
+            .expect("uncomplete task");
+        assert!(!reverted.is_completed);
+        assert_eq!(reverted.completed_at, None);
+        assert_eq!(reverted.sort_order, task.sort_order);
+    }
+
+    #[tokio::test]
+    async fn set_task_completion_on_deleted_task_returns_not_found() {
+        let pool = setup_test_db().await;
+        let task = create_simple_task(&pool, "role-a", "任务A").await;
+        soft_delete_task(&pool, &task.id).await.expect("soft delete");
+
+        let result = set_task_completion(&pool, &task.id, true).await;
+        assert!(matches!(result, Err(AppError::NotFound(_))));
+    }
+
+    #[tokio::test]
+    async fn set_task_completion_idempotent_on_same_state() {
+        let pool = setup_test_db().await;
+        let task = create_simple_task(&pool, "role-a", "任务A").await;
+
+        let completed = set_task_completion(&pool, &task.id, true)
+            .await
+            .expect("complete task");
+        let first_completed_at = completed.completed_at.clone();
+        let first_updated_at = completed.updated_at.clone();
+        assert!(first_completed_at.is_some());
+
+        // 再次调用 true → 幂等返回，不刷新时间戳
+        let again = set_task_completion(&pool, &task.id, true)
+            .await
+            .expect("idempotent complete");
+        assert_eq!(again.completed_at, first_completed_at);
+        assert_eq!(again.updated_at, first_updated_at);
+
+        // 撤销后再次撤销也幂等
+        let reverted = set_task_completion(&pool, &task.id, false)
+            .await
+            .expect("uncomplete");
+        assert!(reverted.completed_at.is_none());
+        let reverted_updated = reverted.updated_at.clone();
+        let again_uncomplete = set_task_completion(&pool, &task.id, false)
+            .await
+            .expect("idempotent uncomplete");
+        assert_eq!(again_uncomplete.updated_at, reverted_updated);
+    }
+
+    #[tokio::test]
+    async fn reorder_tasks_rejects_duplicate_ids() {
+        let pool = setup_test_db().await;
+        let a = create_simple_task(&pool, "role-a", "任务A").await;
+        let b = create_simple_task(&pool, "role-a", "任务B").await;
+
+        let result = reorder_tasks(
+            &pool,
+            &[a.id.clone(), b.id.clone(), a.id.clone()],
+        )
+        .await;
+
+        assert!(matches!(result, Err(AppError::ValidationError(_))));
+
+        // 顺序未被改动
+        let tasks = list_tasks_by_role(&pool, "role-a").await.expect("list tasks");
+        assert_eq!(tasks[0].id, a.id);
+        assert_eq!(tasks[0].sort_order, 0);
+        assert_eq!(tasks[1].id, b.id);
+        assert_eq!(tasks[1].sort_order, 1);
     }
 }

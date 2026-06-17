@@ -293,6 +293,8 @@ pub fn run() {
             commands::task::task_list_by_role,
             commands::task::task_update,
             commands::task::task_delete,
+            commands::task::task_reorder,
+            commands::task::task_toggle_complete,
             commands::mcp::mcp_server_list,
             commands::mcp::mcp_server_list_for_role,
             commands::mcp::mcp_server_list_available_for_role,

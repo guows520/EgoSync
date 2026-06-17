@@ -37,4 +37,6 @@ export interface TaskActions {
   createTask: (input: CreateTaskInput) => Promise<void>;
   updateTask: (id: string, input: UpdateTaskInput) => Promise<void>;
   deleteTask: (id: string) => Promise<void>;
+  reorderTasks: (taskIds: string[]) => Promise<void>;
+  toggleComplete: (id: string, isCompleted: boolean) => Promise<void>;
 }

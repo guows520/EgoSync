@@ -10,4 +10,8 @@ export const taskService = {
     invoke<Task>('task_update', { id, input }),
   delete: (id: string) =>
     invoke<void>('task_delete', { id }),
+  reorder: (taskIds: string[]) =>
+    invoke<void>('task_reorder', { taskIds }),
+  toggleComplete: (id: string, isCompleted: boolean) =>
+    invoke<Task>('task_toggle_complete', { taskId: id, isCompleted }),
 };

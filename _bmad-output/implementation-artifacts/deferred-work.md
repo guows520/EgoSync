@@ -40,6 +40,11 @@ All items resolved in the same session:
 - categoryLabels 对未知/历史 category 无兜底标签（MemoryTab.tsx）：insert_memories 有 validate 护栏，仅影响潜在历史脏数据。
 - 缺少部分来源缺失 / 前端展开竞态 / Tauri State 注入护栏的测试（memory_query.rs, MemoryTab.test.tsx）：测试增强项，非阻塞。
 
+## Deferred from: code review of 3-2-task-drag-sort-complete (2026-06-17)
+
+- **`reorder_tasks` N+1 查询 (LOW, performance)**：每个 ID 执行一次 SELECT role_id + 一次 UPDATE sort_order，任务量大时往返次数线性增长。SQLite 本地 IO 影响极小，可后续合并为单条 `UPDATE ... CASE WHEN id=? THEN ?` 批量优化。
+- **缺 `aria-live` 屏幕阅读器反馈 (LOW, a11y)**：拖拽排序、完成切换无 `aria-live` 区域向辅助技术通报结果。归并到 Epic 8 story 8-3（WCAG 可访问性审计）统一处理。
+
 ## Deferred from: code review of 2-13-mcp-server-list-role-access (2026-06-11)
 
 - command 连接测试超时误报 + Windows 孤儿进程（mcp_server.rs::test_command_server）：stdio/local command 仍以 2s 内不退出作为“可长期运行”的启发式判断，慢速失败可能被误报为成功；`cmd /C` 启动的孙进程（npx→node）可能不被 child.kill 完整回收。平台特定，非阻塞。注意：remote `streamable_http`/SSE 测试连接假成功已在 2026-06-13 修复为 MCP protocol/SSE content-type 校验。

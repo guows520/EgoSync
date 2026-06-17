@@ -38,7 +38,26 @@ const tasks: Task[] = [
   },
 ];
 
+const completedTask: Task = {
+  id: 'task-3',
+  roleId: 'role-1',
+  title: '已完成的任务',
+  deadline: null,
+  quadrant: 'Q1',
+  isBigRock: false,
+  isCompleted: true,
+  completedAt: '2026-06-02T00:00:00Z',
+  sortOrder: 2,
+  protectionStatus: 'normal',
+  confidence: null,
+  createdAt: '2026-06-01T00:00:00Z',
+  updatedAt: '2026-06-02T00:00:00Z',
+  deletedAt: null,
+};
+
 const role = { color: '#4F46E5' };
+
+const noop = () => {};
 
 describe('TasksTab', () => {
   beforeEach(() => {
@@ -54,6 +73,8 @@ describe('TasksTab', () => {
         error={null}
         onOpenTask={vi.fn()}
         onDeleteTask={vi.fn()}
+        onReorderTasks={vi.fn()}
+        onToggleComplete={vi.fn()}
       />,
     );
 
@@ -62,6 +83,95 @@ describe('TasksTab', () => {
     expect(screen.getByText('2026-06-30')).toBeInTheDocument();
     expect(screen.getByText('大石头')).toBeInTheDocument();
     expect(screen.queryByText('暂无任务')).not.toBeInTheDocument();
+  });
+
+  it('每个未完成任务卡片渲染拖拽手柄', () => {
+    render(
+      <TasksTab
+        role={role}
+        tasks={tasks}
+        isLoading={false}
+        error={null}
+        onOpenTask={vi.fn()}
+        onDeleteTask={vi.fn()}
+        onReorderTasks={vi.fn()}
+        onToggleComplete={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: '拖动排序 准备季度规划' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '拖动排序 整理会议纪要' })).toBeInTheDocument();
+  });
+
+  it('点击完成圆圈触发 onToggleComplete 并传入取反状态', () => {
+    const onToggleComplete = vi.fn();
+
+    render(
+      <TasksTab
+        role={role}
+        tasks={tasks}
+        isLoading={false}
+        error={null}
+        onOpenTask={vi.fn()}
+        onDeleteTask={vi.fn()}
+        onReorderTasks={vi.fn()}
+        onToggleComplete={onToggleComplete}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '完成 准备季度规划' }));
+    expect(onToggleComplete).toHaveBeenCalledWith('task-1', true);
+  });
+
+  it('点击拖拽手柄不会触发卡片编辑', () => {
+    const onOpenTask = vi.fn();
+
+    render(
+      <TasksTab
+        role={role}
+        tasks={tasks}
+        isLoading={false}
+        error={null}
+        onOpenTask={onOpenTask}
+        onDeleteTask={vi.fn()}
+        onReorderTasks={vi.fn()}
+        onToggleComplete={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '拖动排序 准备季度规划' }));
+    expect(onOpenTask).not.toHaveBeenCalled();
+  });
+
+  it('已完成任务折叠展示、展开后灰显并提供撤销完成入口', () => {
+    const onToggleComplete = vi.fn();
+    render(
+      <TasksTab
+        role={role}
+        tasks={[completedTask, tasks[0]]}
+        isLoading={false}
+        error={null}
+        onOpenTask={vi.fn()}
+        onDeleteTask={vi.fn()}
+        onReorderTasks={vi.fn()}
+        onToggleComplete={onToggleComplete}
+      />,
+    );
+
+    // 未完成任务始终可见
+    expect(screen.getByText('准备季度规划')).toBeInTheDocument();
+    // 已完成任务默认折叠，仅显示摘要
+    const expandBtn = screen.getByRole('button', { name: /已完成 \(1\)/ });
+    expect(expandBtn).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText('已完成的任务')).not.toBeInTheDocument();
+
+    // 展开后显示已完成卡片 + 撤销入口
+    fireEvent.click(expandBtn);
+    expect(expandBtn).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('已完成的任务')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '撤销完成 已完成的任务' }));
+    expect(onToggleComplete).toHaveBeenCalledWith('task-3', false);
   });
 
   it('新增、点击卡片编辑、删除确认通过回调交给上层数据链路', async () => {
@@ -76,6 +186,8 @@ describe('TasksTab', () => {
         error={null}
         onOpenTask={onOpenTask}
         onDeleteTask={onDeleteTask}
+        onReorderTasks={vi.fn()}
+        onToggleComplete={vi.fn()}
       />,
     );
 
@@ -96,14 +208,39 @@ describe('TasksTab', () => {
 
   it('加载、错误、空态使用真实数据状态', () => {
     const { rerender } = render(
-      <TasksTab role={role} tasks={[]} isLoading error={null} onOpenTask={vi.fn()} onDeleteTask={vi.fn()} />,
+      <TasksTab role={role} tasks={[]} isLoading error={null} onOpenTask={vi.fn()} onDeleteTask={vi.fn()} onReorderTasks={noop} onToggleComplete={noop} />,
     );
     expect(screen.getByText('任务加载中...')).toBeInTheDocument();
 
-    rerender(<TasksTab role={role} tasks={[]} isLoading={false} error="任务暂时加载失败，请稍后再试" onOpenTask={vi.fn()} onDeleteTask={vi.fn()} />);
+    rerender(<TasksTab role={role} tasks={[]} isLoading={false} error="任务暂时加载失败，请稍后再试" onOpenTask={vi.fn()} onDeleteTask={vi.fn()} onReorderTasks={noop} onToggleComplete={noop} />);
     expect(screen.getByText('任务暂时加载失败，请稍后再试')).toBeInTheDocument();
 
-    rerender(<TasksTab role={role} tasks={[]} isLoading={false} error={null} onOpenTask={vi.fn()} onDeleteTask={vi.fn()} />);
+    rerender(<TasksTab role={role} tasks={[]} isLoading={false} error={null} onOpenTask={vi.fn()} onDeleteTask={vi.fn()} onReorderTasks={noop} onToggleComplete={noop} />);
     expect(screen.getByText('还没有任务，先添加一个小目标吧')).toBeInTheDocument();
+  });
+
+  it('toggleComplete 失败时显示内联中文错误文案', async () => {
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const onToggleComplete = vi.fn().mockRejectedValue(new Error('boom'));
+
+    render(
+      <TasksTab
+        role={role}
+        tasks={tasks}
+        isLoading={false}
+        error={null}
+        onOpenTask={vi.fn()}
+        onDeleteTask={vi.fn()}
+        onReorderTasks={vi.fn()}
+        onToggleComplete={onToggleComplete}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '完成 准备季度规划' }));
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent('任务状态暂时切换失败，请稍后再试');
+    });
+
+    consoleSpy.mockRestore();
   });
 });

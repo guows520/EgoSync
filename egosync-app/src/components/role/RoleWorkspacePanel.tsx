@@ -47,15 +47,17 @@ export function RoleWorkspacePanel({
   const [memoryCount, setMemoryCount] = useState<number | null>(null);
   const [memoryCategory, setMemoryCategory] = useState<MemoryCategory | undefined>();
   const [memoryCountReloadKey, setMemoryCountReloadKey] = useState(0);
-  const { tasks, isLoading: isLoadingTasks, error: tasksError, createTask, updateTask, deleteTask } = useTasks(role.id);
+  const { tasks, isLoading: isLoadingTasks, error: tasksError, createTask, updateTask, deleteTask, reorderTasks, toggleComplete } = useTasks(role.id);
 
   useEffect(() => {
     onTasksApiReady?.({
       createTask,
       updateTask,
       deleteTask,
+      reorderTasks,
+      toggleComplete,
     });
-  }, [createTask, deleteTask, onTasksApiReady, updateTask]);
+  }, [createTask, deleteTask, onTasksApiReady, updateTask, reorderTasks, toggleComplete]);
 
   const effectiveMemoryCategory = targetMemoryId ? undefined : memoryCategory;
 
@@ -143,6 +145,8 @@ export function RoleWorkspacePanel({
             error={tasksError}
             onOpenTask={(task: Task | null) => onOpenTask?.(task)}
             onDeleteTask={deleteTask}
+            onReorderTasks={reorderTasks}
+            onToggleComplete={toggleComplete}
           />
         )}
         {currentTab === 'memory' && (

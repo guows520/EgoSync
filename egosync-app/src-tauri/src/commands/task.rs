@@ -45,6 +45,23 @@ pub async fn task_delete(id: String, pool: State<'_, DbPool>) -> Result<(), AppE
     tasks::soft_delete_task(&pool, &id).await
 }
 
+#[tauri::command]
+pub async fn task_reorder(
+    task_ids: Vec<String>,
+    pool: State<'_, DbPool>,
+) -> Result<(), AppError> {
+    tasks::reorder_tasks(&pool, &task_ids).await
+}
+
+#[tauri::command]
+pub async fn task_toggle_complete(
+    task_id: String,
+    is_completed: bool,
+    pool: State<'_, DbPool>,
+) -> Result<Task, AppError> {
+    tasks::set_task_completion(&pool, &task_id, is_completed).await
+}
+
 fn validate_title(title: &str) -> Result<(), AppError> {
     if title.trim().is_empty() {
         return Err(AppError::ValidationError("任务标题不能为空".to_string()));

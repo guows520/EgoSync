@@ -10,6 +10,8 @@ vi.mock('../services/taskService', () => ({
     create: vi.fn(),
     update: vi.fn(),
     delete: vi.fn(),
+    reorder: vi.fn(),
+    toggleComplete: vi.fn(),
   },
 }));
 
@@ -66,5 +68,71 @@ describe('useTasks', () => {
     expect(taskService.update).toHaveBeenCalledWith('task-1', { title: '更新季度规划' });
     expect(taskService.delete).toHaveBeenCalledWith('task-1');
     expect(taskService.listByRole).toHaveBeenCalledTimes(4);
+  });
+
+  it('reorderTasks 乐观重排本地顺序并传入正确 id 顺序', async () => {
+    const second: Task = { ...task, id: 'task-2', title: '阅读论文', sortOrder: 1 };
+    vi.mocked(taskService.listByRole).mockResolvedValue([task, second]);
+    vi.mocked(taskService.reorder).mockResolvedValue(undefined);
+
+    const { result } = renderHook(() => useTasks('role-1'));
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    await act(async () => {
+      await result.current.reorderTasks(['task-2', 'task-1']);
+    });
+
+    expect(taskService.reorder).toHaveBeenCalledWith(['task-2', 'task-1']);
+    expect(result.current.tasks.map(t => t.id)).toEqual(['task-2', 'task-1']);
+    expect(result.current.tasks.map(t => t.sortOrder)).toEqual([0, 1]);
+  });
+
+  it('reorderTasks 失败时回滚本地顺序并重新加载', async () => {
+    const second: Task = { ...task, id: 'task-2', title: '阅读论文', sortOrder: 1 };
+    vi.mocked(taskService.listByRole).mockResolvedValue([task, second]);
+    vi.mocked(taskService.reorder).mockRejectedValueOnce(new Error('boom'));
+
+    const { result } = renderHook(() => useTasks('role-1'));
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    await act(async () => {
+      await expect(result.current.reorderTasks(['task-2', 'task-1'])).rejects.toThrow('boom');
+    });
+
+    // 回滚到原顺序，并触发 reloadCurrentRole 重新拉取
+    expect(result.current.tasks.map(t => t.id)).toEqual(['task-1', 'task-2']);
+    expect(taskService.listByRole).toHaveBeenCalledTimes(2);
+  });
+
+  it('toggleComplete 乐观更新完成态并用后端返回值落库', async () => {
+    vi.mocked(taskService.listByRole).mockResolvedValue([task]);
+    const completed: Task = { ...task, isCompleted: true, completedAt: '2026-06-10T00:00:00Z' };
+    vi.mocked(taskService.toggleComplete).mockResolvedValue(completed);
+
+    const { result } = renderHook(() => useTasks('role-1'));
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    await act(async () => {
+      await result.current.toggleComplete('task-1', true);
+    });
+
+    expect(taskService.toggleComplete).toHaveBeenCalledWith('task-1', true);
+    expect(result.current.tasks[0].isCompleted).toBe(true);
+    expect(result.current.tasks[0].completedAt).toBe('2026-06-10T00:00:00Z');
+  });
+
+  it('toggleComplete 失败时回滚完成态并重新加载', async () => {
+    vi.mocked(taskService.listByRole).mockResolvedValue([task]);
+    vi.mocked(taskService.toggleComplete).mockRejectedValueOnce(new Error('boom'));
+
+    const { result } = renderHook(() => useTasks('role-1'));
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    await act(async () => {
+      await expect(result.current.toggleComplete('task-1', true)).rejects.toThrow('boom');
+    });
+
+    expect(result.current.tasks[0].isCompleted).toBe(false);
+    expect(taskService.listByRole).toHaveBeenCalledTimes(2);
   });
 });

@@ -1,5 +1,5 @@
 # generated: 2026-05-21
-# last_updated: 2026-06-08T21:47:21+08:00
+# last_updated: 2026-06-17T22:15:00+08:00
 # project: 探索 (EgoSync)
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-21
-last_updated: 2026-06-17T09:52:00+08:00
+last_updated: 2026-06-17T22:15:00+08:00
 project: "探索 (EgoSync)"
 project_key: NOKEY
 tracking_system: file-system
@@ -84,7 +84,7 @@ development_status:
   # ============================================================
   epic-3: in-progress
   3-1-task-crud-role-view: done
-  3-2-task-drag-sort-complete: backlog
+  3-2-task-drag-sort-complete: done
   3-3-auto-quadrant-classification: backlog
   3-4-big-rock-marking: backlog
   3-5-q2-protection-at-risk: backlog

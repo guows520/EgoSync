@@ -4,17 +4,50 @@ use crate::db::pool::DbPool;
 use crate::db::tasks;
 use crate::error::AppError;
 use crate::models::task::{CreateTaskInput, Task, UpdateTaskInput};
+use crate::services::task_classifier;
+
+/// 任务创建后自动分类完成（或降级）时推送的事件名。
+/// 前端据此用最新任务替换卡片并清除「分类中」标记。
+pub const TASK_CLASSIFIED_EVENT: &str = "task:classified";
 
 #[tauri::command]
 pub async fn task_create(
     input: CreateTaskInput,
+    app_handle: tauri::AppHandle,
     pool: State<'_, DbPool>,
 ) -> Result<Task, AppError> {
+    use tauri::Emitter;
+
     validate_title(&input.title)?;
     if let Some(quadrant) = input.quadrant.as_deref() {
         validate_quadrant(quadrant)?;
     }
-    tasks::create_task(&pool, &input).await
+    let user_chose_quadrant = input.quadrant.is_some();
+    let task = tasks::create_task(&pool, &input).await?;
+
+    // 用户没有显式选择 quadrant 时，后台异步触发自动分类，命令立即返回已创建任务（默认 Q2）。
+    // 这样前端不会被 LLM 调用（最长 12s）阻塞，可立即关闭弹窗并展示「分类中」过渡态。
+    // 分类完成或降级后通过 `task:classified` 事件推送最新任务；
+    // 自动分类失败不回滚任务创建，task_classifier 内部会降级到 Q2 + 中文 reason 并写回。
+    if !user_chose_quadrant {
+        let pool = pool.inner().clone();
+        let app = app_handle.clone();
+        let task_id = task.id.clone();
+        tauri::async_runtime::spawn(async move {
+            let classified = match task_classifier::classify_and_persist(&pool, &task_id).await {
+                Ok(updated) => Some(updated),
+                Err(e) => {
+                    tracing::warn!(task_id = %task_id, error = %e, "任务创建后自动分类失败，保留默认 Q2");
+                    // 即便失败也回读当前任务并广播，使前端清除「分类中」标记。
+                    tasks::get_active_task_pub(&pool, &task_id).await.ok()
+                }
+            };
+            if let Some(updated) = classified {
+                let _ = app.emit(TASK_CLASSIFIED_EVENT, updated);
+            }
+        });
+    }
+    Ok(task)
 }
 
 #[tauri::command]
@@ -37,6 +70,7 @@ pub async fn task_update(
     if let Some(quadrant) = input.quadrant.as_deref() {
         validate_quadrant(quadrant)?;
     }
+    // db 层已根据 input.quadrant.is_some() 设置 manual_override。
     tasks::update_task(&pool, &id, &input).await
 }
 

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Target, X } from 'lucide-react';
+import { Sparkles, Target, X } from 'lucide-react';
 import { Modal } from '../layout/Modal';
 import type { CreateTaskInput, Task, TaskQuadrant, UpdateTaskInput } from '../../types/task';
 
@@ -17,9 +17,16 @@ const quadrantOptions: Array<{ value: TaskQuadrant; label: string }> = [
   { value: 'Q4', label: 'Q4: 不重要不紧急' },
 ];
 
+/** 新建任务时的「智能判断」特殊选项值。 */
+const AUTO_QUADRANT = 'auto';
+
 export function TaskModal({ roleId, task, onClose, onSave }: TaskModalProps) {
+  const isEditing = !!task;
   const [title, setTitle] = useState(task?.title ?? '');
-  const [quadrant, setQuadrant] = useState<TaskQuadrant>(task?.quadrant ?? 'Q1');
+  // 新建任务时默认「智能判断」，编辑时预填当前象限
+  const [quadrant, setQuadrant] = useState<TaskQuadrant | typeof AUTO_QUADRANT>(
+    task?.quadrant ?? AUTO_QUADRANT,
+  );
   const [deadline, setDeadline] = useState(task?.deadline ?? '');
   const [isBigRock, setIsBigRock] = useState(task?.isBigRock ?? false);
   const [isSaving, setIsSaving] = useState(false);
@@ -37,18 +44,23 @@ export function TaskModal({ roleId, task, onClose, onSave }: TaskModalProps) {
     setIsSaving(true);
     setError('');
     try {
-      if (task) {
+      const explicitQuadrant = quadrant === AUTO_QUADRANT ? undefined : quadrant;
+      if (isEditing) {
+        // 仅当用户实际改变了 quadrant 下拉值才发送 quadrant，触发后端 manual_override。
+        // 只改标题/截止日期时省略 quadrant，避免冻结自动分类与临期升 Q1（AC3/AC4）。
+        const quadrantChanged = explicitQuadrant !== undefined && explicitQuadrant !== task!.quadrant;
         await onSave({
           title: trimmedTitle,
           deadline: deadline || null,
-          quadrant,
+          ...(quadrantChanged ? { quadrant: explicitQuadrant } : {}),
           isBigRock,
         });
       } else {
         await onSave({
           roleId,
           title: trimmedTitle,
-          quadrant,
+          // 新建时若用户选了「自动判断」则不传 quadrant，后端触发 LLM 分类
+          ...(explicitQuadrant ? { quadrant: explicitQuadrant } : {}),
           ...(deadline ? { deadline } : {}),
           isBigRock,
         });
@@ -89,13 +101,22 @@ export function TaskModal({ roleId, task, onClose, onSave }: TaskModalProps) {
               <select
                 id="task-quadrant"
                 value={quadrant}
-                onChange={event => setQuadrant(event.target.value as TaskQuadrant)}
+                onChange={event => setQuadrant(event.target.value as TaskQuadrant | typeof AUTO_QUADRANT)}
                 className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-[13px] focus:ring-2 focus:ring-indigo-500/20 outline-none"
               >
+                {!isEditing && (
+                  <option value={AUTO_QUADRANT}>✨ 智能判断</option>
+                )}
                 {quadrantOptions.map(option => (
                   <option key={option.value} value={option.value}>{option.label}</option>
                 ))}
               </select>
+              {isEditing && task?.classificationReason && (
+                <p className="mt-1 text-[11px] text-slate-400 flex items-start gap-1">
+                  <Sparkles size={11} className="mt-0.5 shrink-0" />
+                  {task.classificationReason}
+                </p>
+              )}
             </div>
             <div>
               <label htmlFor="task-deadline" className="block text-[13px] font-medium text-slate-700 mb-1.5">截止时间</label>

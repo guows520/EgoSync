@@ -1,14 +1,36 @@
 import { useCallback, useEffect, useState } from 'react';
 import { taskService } from '../services/taskService';
 import type { CreateTaskInput, Task, UpdateTaskInput } from '../types/task';
+import { useTauriEvent } from './useTauriEvent';
 
 const TASK_LOAD_ERROR = '任务暂时加载失败，请稍后再试';
+
+/** 后端任务自动分类完成（或降级）时推送的事件名，需与 commands/task.rs 的 TASK_CLASSIFIED_EVENT 保持一致。 */
+const TASK_CLASSIFIED_EVENT = 'task:classified';
 
 export function useTasks(roleId: string | null) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  // 新建任务后后端在后台异步分类，这些任务 id 在收到 task:classified 事件前显示「分类中」过渡态。
+  const [classifyingIds, setClassifyingIds] = useState<Set<string>>(() => new Set());
+
+  // 监听后端推送的分类完成事件：用最新任务替换卡片并清除「分类中」标记。
+  useTauriEvent<Task>(
+    TASK_CLASSIFIED_EVENT,
+    classified => {
+      if (!roleId || classified.roleId !== roleId) return;
+      setTasks(prev => prev.map(task => (task.id === classified.id ? classified : task)));
+      setClassifyingIds(prev => {
+        if (!prev.has(classified.id)) return prev;
+        const next = new Set(prev);
+        next.delete(classified.id);
+        return next;
+      });
+    },
+    [roleId],
+  );
 
   const refetch = useCallback(() => {
     setReloadKey(key => key + 1);
@@ -64,7 +86,15 @@ export function useTasks(roleId: string | null) {
   }, [roleId]);
 
   const createTask = useCallback(async (input: CreateTaskInput) => {
-    await taskService.create(input);
+    const created = await taskService.create(input);
+    // 未显式指定 quadrant 时，后端在后台异步分类；先标记「分类中」，收到 task:classified 事件后清除。
+    if (input.quadrant === undefined) {
+      setClassifyingIds(prev => {
+        const next = new Set(prev);
+        next.add(created.id);
+        return next;
+      });
+    }
     await reloadCurrentRole();
   }, [reloadCurrentRole]);
 
@@ -127,6 +157,7 @@ export function useTasks(roleId: string | null) {
     tasks,
     isLoading,
     error,
+    classifyingIds,
     refetch,
     createTask,
     updateTask,

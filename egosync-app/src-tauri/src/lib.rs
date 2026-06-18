@@ -252,6 +252,10 @@ pub fn run() {
             }
             app.manage(watchdog_cancel);
 
+            // Story 3.3: 每小时检查临期任务，自动升入 Q1。
+            // 内部错误只 warn，不阻塞 Tauri setup。
+            services::task_deadline_watch::spawn_hourly_watch(pool.clone());
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

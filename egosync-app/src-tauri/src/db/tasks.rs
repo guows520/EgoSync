@@ -3,20 +3,23 @@ use sqlx::SqlitePool;
 use crate::error::AppError;
 use crate::models::task::{CreateTaskInput, Task, UpdateTaskInput};
 
-const TASK_SELECT_COLUMNS: &str = "id, role_id, title, deadline, quadrant, is_big_rock, is_completed, completed_at, sort_order, protection_status, confidence, created_at, updated_at, deleted_at";
+const TASK_SELECT_COLUMNS: &str = "id, role_id, title, deadline, quadrant, is_big_rock, is_completed, completed_at, sort_order, protection_status, confidence, manual_override, classification_reason, created_at, updated_at, deleted_at";
 const ALLOWED_QUADRANTS: &[&str] = &["Q1", "Q2", "Q3", "Q4"];
 
 pub async fn create_task(pool: &SqlitePool, input: &CreateTaskInput) -> Result<Task, AppError> {
     let title = normalized_title(&input.title)?;
     let quadrant = normalized_quadrant(input.quadrant.as_deref())?;
     let is_big_rock = input.is_big_rock.unwrap_or(false);
+    // 若用户在 TaskModal 中显式选择了 quadrant，则标记 manual_override = true，
+    // 后续自动分类与临期升 Q1 不会覆盖该任务。
+    let manual_override = input.quadrant.is_some();
     let id = uuid::Uuid::new_v4().to_string();
     let now = crate::db::settings::chrono_now_pub();
     let sort_order = next_sort_order(pool, &input.role_id).await?;
 
     sqlx::query(
-        "INSERT INTO tasks (id, role_id, title, deadline, quadrant, is_big_rock, is_completed, sort_order, protection_status, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, 'normal', ?8, ?9)",
+        "INSERT INTO tasks (id, role_id, title, deadline, quadrant, is_big_rock, is_completed, sort_order, protection_status, manual_override, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, 'normal', ?8, ?9, ?10)",
     )
     .bind(&id)
     .bind(&input.role_id)
@@ -25,6 +28,7 @@ pub async fn create_task(pool: &SqlitePool, input: &CreateTaskInput) -> Result<T
     .bind(quadrant)
     .bind(is_big_rock)
     .bind(sort_order)
+    .bind(manual_override)
     .bind(&now)
     .bind(&now)
     .execute(pool)
@@ -60,6 +64,8 @@ pub async fn update_task(
         Some(quadrant) => Some(normalized_quadrant(Some(quadrant))?.to_string()),
         None => None,
     };
+    // 若用户显式修改 quadrant，标记 manual_override = true，后续自动分类不再覆盖。
+    let should_set_manual_override = quadrant.is_some();
     let deadline = input.deadline.as_ref().map(|value| value.as_deref());
     let should_update_deadline = input.deadline.is_some();
     let now = crate::db::settings::chrono_now_pub();
@@ -70,14 +76,16 @@ pub async fn update_task(
              deadline = CASE WHEN ?2 THEN ?3 ELSE deadline END,
              quadrant = COALESCE(?4, quadrant),
              is_big_rock = COALESCE(?5, is_big_rock),
-             updated_at = ?6
-         WHERE id = ?7 AND deleted_at IS NULL",
+             manual_override = CASE WHEN ?6 THEN 1 ELSE manual_override END,
+             updated_at = ?7
+         WHERE id = ?8 AND deleted_at IS NULL",
     )
     .bind(title)
     .bind(should_update_deadline)
     .bind(deadline.flatten())
     .bind(quadrant.as_deref())
     .bind(input.is_big_rock)
+    .bind(should_set_manual_override)
     .bind(&now)
     .bind(id)
     .execute(pool)
@@ -222,6 +230,11 @@ async fn get_active_task(pool: &SqlitePool, id: &str) -> Result<Task, AppError> 
     .ok_or_else(|| AppError::NotFound(format!("任务 {} 不存在", id)))
 }
 
+/// 暴露给 services 层使用的 active task 查询。
+pub async fn get_active_task_pub(pool: &SqlitePool, id: &str) -> Result<Task, AppError> {
+    get_active_task(pool, id).await
+}
+
 async fn next_sort_order(pool: &SqlitePool, role_id: &str) -> Result<i32, AppError> {
     let max_order = sqlx::query_scalar::<_, Option<i32>>(
         "SELECT MAX(sort_order) FROM tasks WHERE role_id = ?1 AND deleted_at IS NULL",
@@ -248,6 +261,95 @@ fn normalized_quadrant(quadrant: Option<&str>) -> Result<&str, AppError> {
         return Err(AppError::ValidationError("四象限分类无效".to_string()));
     }
     Ok(quadrant)
+}
+
+/// 写入自动分类结果：更新 quadrant、confidence、classification_reason、updated_at。
+/// 不修改 sort_order、is_completed、completed_at、manual_override。
+/// 调用方应已确认 `manual_override = false`。
+pub async fn update_task_classification(
+    pool: &SqlitePool,
+    id: &str,
+    quadrant: &str,
+    confidence: f64,
+    classification_reason: &str,
+) -> Result<Task, AppError> {
+    if !ALLOWED_QUADRANTS.contains(&quadrant) {
+        return Err(AppError::ValidationError("四象限分类无效".to_string()));
+    }
+    let now = crate::db::settings::chrono_now_pub();
+    let result = sqlx::query(
+        "UPDATE tasks
+         SET quadrant = ?1,
+             confidence = ?2,
+             classification_reason = ?3,
+             updated_at = ?4
+         WHERE id = ?5 AND deleted_at IS NULL AND manual_override = 0",
+    )
+    .bind(quadrant)
+    .bind(confidence)
+    .bind(classification_reason)
+    .bind(&now)
+    .bind(id)
+    .execute(pool)
+    .await
+    .map_err(|e| AppError::DbError(format!("写入分类结果失败: {}", e)))?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound(format!(
+            "任务 {} 不存在或已被手动覆盖",
+            id
+        )));
+    }
+
+    get_active_task(pool, id).await
+}
+
+/// 读取某角色最近 5 条同角色任务（排除当前任务、软删除任务），按 created_at DESC。
+pub async fn list_recent_tasks_by_role(
+    pool: &SqlitePool,
+    role_id: &str,
+    exclude_task_id: &str,
+    limit: u32,
+) -> Result<Vec<Task>, AppError> {
+    sqlx::query_as::<_, Task>(&format!(
+        "SELECT {} FROM tasks
+         WHERE role_id = ?1 AND id != ?2 AND deleted_at IS NULL
+         ORDER BY created_at DESC
+         LIMIT ?3",
+        TASK_SELECT_COLUMNS
+    ))
+    .bind(role_id)
+    .bind(exclude_task_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| AppError::DbError(format!("查询同角色历史任务失败: {}", e)))
+}
+
+/// 查询临期且未手动覆盖的未完成任务：
+/// deadline IS NOT NULL、deleted_at IS NULL、is_completed = 0、manual_override = 0、quadrant = 'Q2'。
+/// 仅「重要不紧急(Q2)」的任务在临期时升入 Q1；Q3/Q4 本就不重要，临期也不应升为重要紧急。
+/// `deadline_threshold` 为 ISO 8601 字符串（如 "2026-06-19"），返回 deadline <= threshold 的任务。
+pub async fn list_imminent_tasks_for_escalation(
+    pool: &SqlitePool,
+    deadline_threshold: &str,
+) -> Result<Vec<Task>, AppError> {
+    sqlx::query_as::<_, Task>(&format!(
+        "SELECT {} FROM tasks
+         WHERE deadline IS NOT NULL
+           AND deadline != ''
+           AND deadline <= ?1
+           AND deleted_at IS NULL
+           AND is_completed = 0
+           AND manual_override = 0
+           AND quadrant = 'Q2'
+         ORDER BY deadline ASC",
+        TASK_SELECT_COLUMNS
+    ))
+    .bind(deadline_threshold)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| AppError::DbError(format!("查询临期任务失败: {}", e)))
 }
 
 #[cfg(test)]
@@ -305,6 +407,8 @@ mod tests {
                 sort_order INTEGER NOT NULL DEFAULT 0,
                 protection_status TEXT NOT NULL DEFAULT 'normal',
                 confidence REAL,
+                manual_override INTEGER NOT NULL DEFAULT 0,
+                classification_reason TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 deleted_at TEXT,
@@ -359,6 +463,42 @@ mod tests {
         assert!(!tasks[0].is_completed);
         assert_eq!(tasks[0].sort_order, 0);
         assert_eq!(tasks[0].protection_status, "normal");
+    }
+
+    #[tokio::test]
+    async fn imminent_escalation_only_returns_non_overridden_q2() {
+        let pool = setup_test_db().await;
+
+        // 直接 INSERT 以精确控制 quadrant 与 manual_override（create_task 显式 quadrant 会置 override）。
+        let rows = [
+            ("t-q2", "Q2", 0, "2026-06-18"),       // 应被返回：临期 Q2 未覆盖
+            ("t-q2-override", "Q2", 1, "2026-06-18"), // 排除：手动覆盖
+            ("t-q3", "Q3", 0, "2026-06-18"),       // 排除：Q3 不升
+            ("t-q4", "Q4", 0, "2026-06-18"),       // 排除：Q4 不升
+            ("t-q1", "Q1", 0, "2026-06-18"),       // 排除：已是 Q1
+            ("t-q2-future", "Q2", 0, "2026-12-31"),// 排除：未临期
+        ];
+        for (id, quadrant, override_flag, deadline) in rows {
+            sqlx::query(
+                "INSERT INTO tasks (id, role_id, title, deadline, quadrant, manual_override, created_at, updated_at)
+                 VALUES (?1, 'role-a', ?2, ?3, ?4, ?5, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')",
+            )
+            .bind(id)
+            .bind(format!("任务 {}", id))
+            .bind(deadline)
+            .bind(quadrant)
+            .bind(override_flag)
+            .execute(&pool)
+            .await
+            .expect("insert task");
+        }
+
+        let imminent = list_imminent_tasks_for_escalation(&pool, "2026-06-19")
+            .await
+            .expect("list imminent");
+
+        let ids: Vec<&str> = imminent.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, vec!["t-q2"], "仅未手动覆盖的临期 Q2 任务应被升入 Q1");
     }
 
     #[tokio::test]

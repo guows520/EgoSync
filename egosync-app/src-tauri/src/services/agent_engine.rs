@@ -4982,6 +4982,11 @@ mod tests {
             .execute(&pool)
             .await
             .expect("failed to create tasks table");
+        // Story 3.3: 任务自动分类元数据，agent_engine 测试自建 schema 也需同步。
+        sqlx::raw_sql(include_str!("../../migrations/014_task_classification_metadata.sql"))
+            .execute(&pool)
+            .await
+            .expect("failed to apply task classification metadata migration");
 
         pool
     }

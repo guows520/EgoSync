@@ -1,5 +1,10 @@
 # Deferred Work
 
+## Deferred from: code review of 3-3-auto-quadrant-classification (2026-06-18)
+
+- **临期阈值 UTC 与 deadline 本地日期边界偏差 (LOW→deferred, 需全应用时区决策)**：`services/task_deadline_watch.rs:55-65` `compute_imminent_threshold` 基于 `SystemTime` UTC 秒推导日期，而 `deadline` 来自 `<input type="date">` 的本地墙钟日期。全应用刻意 UTC-only（`db::settings::chrono_now` 裸 SystemTime，无 chrono 依赖），单独为本功能引入本地时区会与约定不一致。影响有限且自愈：UTC+8 用户跨日边界附近阈值最多偏早一天，每小时循环随 UTC 推进会在 ≤1 个时区偏移内补上，非永久漏判。建议待全应用时区策略统一时一并处理。
+- **`extract_json_object` 贪婪截取首个 `{` 到末个 `}` (LOW, robustness)**：`services/task_classifier.rs:334-341` 当 LLM 在 JSON 前后输出含散落花括号的散文时，截取区间会变成非法 JSON 而解析失败。当前失败安全降级到 Q2，非正确性破坏；可后续改为按花括号深度扫描提取首个完整 JSON 对象增强健壮性。
+
 ## Deferred from: code review of 2-12-opencode-ecosystem-skill-discovery-import (2026-06-09)
 
 - **duplicate 分支 replace_bindings 跨角色解绑 (HIGH→deferred, pre-existing)**：`import_opencode_skill` 重复导入时调 `replace_bindings(skill_id, false, [当前角色])`，其语义为 DELETE 该 skill 全部绑定后只重插当前角色，会静默解绑该 Skill 已绑定的其它角色。2.11 `import_custom_skill` 使用完全相同模式 → 非本次引入，应作为统一 binding "merge vs replace" 语义问题单独立项处理。

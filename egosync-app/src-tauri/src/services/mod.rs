@@ -12,3 +12,5 @@ pub mod role_config;
 pub mod secret_store;
 pub mod sidecar;
 pub mod skill_registry;
+pub mod task_classifier;
+pub mod task_deadline_watch;

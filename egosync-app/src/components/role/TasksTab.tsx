@@ -1,5 +1,5 @@
 import { useState, type KeyboardEvent, type ReactNode } from 'react';
-import { CheckCircle2, ChevronDown, ChevronRight, Circle, Edit2, GripVertical, Plus, Trash2 } from 'lucide-react';
+import { CheckCircle2, ChevronDown, ChevronRight, Circle, Edit2, GripVertical, Loader2, Plus, Trash2 } from 'lucide-react';
 import {
   DndContext,
   DragOverlay,
@@ -22,13 +22,15 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { Modal } from '../layout/Modal';
 import { cn } from '../../lib/utils';
-import type { Task, TaskQuadrant } from '../../types/task';
+import { isClassificationUncertain, type Task, type TaskQuadrant } from '../../types/task';
 
 interface TasksTabProps {
   role: { color?: string };
   tasks: Task[];
   isLoading: boolean;
   error: string | null;
+  /** 后台正在异步智能分类的任务 id，在卡片上显示「分类中」过渡态。缺省视为无分类中任务。 */
+  classifyingIds?: Set<string>;
   onOpenTask: (task: Task | null) => void;
   onDeleteTask: (id: string) => Promise<void> | void;
   onReorderTasks: (taskIds: string[]) => Promise<void> | void;
@@ -41,10 +43,12 @@ interface TaskCardCallbacks {
   onRequestDelete: (task: Task) => void;
 }
 
+const EMPTY_CLASSIFYING_IDS: Set<string> = new Set();
+
 const CARD_BASE_CLASS =
   'bg-white border border-slate-200 rounded-xl p-4 flex gap-3.5 shadow-sm group hover:border-indigo-300 hover:shadow-md transition-all duration-200 motion-reduce:transition-none cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-500/20';
 
-function TaskCardBody({ task, callbacks, dragHandle }: { task: Task; callbacks: TaskCardCallbacks; dragHandle?: ReactNode }) {
+function TaskCardBody({ task, callbacks, dragHandle, isClassifying }: { task: Task; callbacks: TaskCardCallbacks; dragHandle?: ReactNode; isClassifying?: boolean }) {
   return (
     <>
       {dragHandle}
@@ -70,9 +74,27 @@ function TaskCardBody({ task, callbacks, dragHandle }: { task: Task; callbacks: 
         >
           {task.title}
         </p>
-        <div className="flex items-center gap-2 mt-2.5">
+        <div className="flex items-center gap-2 mt-2.5 flex-wrap">
           {task.deadline && <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-red-50 text-red-600 border border-red-100">{task.deadline}</span>}
           {task.isBigRock && <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-amber-50 text-amber-600 border border-amber-100">大石头</span>}
+          {isClassifying && (
+            <span
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-indigo-50 text-indigo-600 border border-indigo-100"
+              aria-label="正在智能分类"
+            >
+              <Loader2 size={11} className="animate-spin motion-reduce:animate-none" />
+              智能分类中…
+            </span>
+          )}
+          {!isClassifying && isClassificationUncertain(task) && (
+            <span
+              className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-slate-50 text-slate-500 border border-slate-200"
+              title={task.classificationReason ?? '系统对该任务的象限分类置信度较低，可手动调整'}
+              aria-label={`分类不确定：${task.classificationReason ?? '系统置信度较低'}`}
+            >
+              ? 不确定
+            </span>
+          )}
         </div>
       </div>
       <div className="flex items-start gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
@@ -113,7 +135,7 @@ function pointerWithinFallbackToClosestCenter(args: Parameters<typeof pointerWit
   return pointerCollisions.length > 0 ? pointerCollisions : closestCenter(args);
 }
 
-function SortableTaskCard({ task, callbacks }: { task: Task; callbacks: TaskCardCallbacks }) {
+function SortableTaskCard({ task, callbacks, isClassifying }: { task: Task; callbacks: TaskCardCallbacks; isClassifying?: boolean }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id });
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -133,6 +155,7 @@ function SortableTaskCard({ task, callbacks }: { task: Task; callbacks: TaskCard
       <TaskCardBody
         task={task}
         callbacks={callbacks}
+        isClassifying={isClassifying}
         dragHandle={
           <button
             {...attributes}
@@ -171,7 +194,7 @@ const quadrantLabels: Record<TaskQuadrant, string> = {
   Q4: 'Q4 · 不重要不紧急',
 };
 
-export function TasksTab({ role, tasks, isLoading, error, onOpenTask, onDeleteTask, onReorderTasks, onToggleComplete }: TasksTabProps) {
+export function TasksTab({ role, tasks, isLoading, error, classifyingIds = EMPTY_CLASSIFYING_IDS, onOpenTask, onDeleteTask, onReorderTasks, onToggleComplete }: TasksTabProps) {
   const [pendingDeleteTask, setPendingDeleteTask] = useState<Task | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState('');
@@ -325,7 +348,7 @@ export function TasksTab({ role, tasks, isLoading, error, onOpenTask, onDeleteTa
                     strategy={verticalListSortingStrategy}
                   >
                     {incompleteByQuadrant[quadrant].map(task => (
-                      <SortableTaskCard key={task.id} task={task} callbacks={callbacks} />
+                      <SortableTaskCard key={task.id} task={task} callbacks={callbacks} isClassifying={classifyingIds.has(task.id)} />
                     ))}
                   </SortableContext>
                   {completedTasks.length > 0 && (

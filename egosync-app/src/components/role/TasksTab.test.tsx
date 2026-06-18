@@ -16,6 +16,8 @@ const tasks: Task[] = [
     sortOrder: 0,
     protectionStatus: 'normal',
     confidence: null,
+    manualOverride: false,
+    classificationReason: null,
     createdAt: '2026-06-01T00:00:00Z',
     updatedAt: '2026-06-01T00:00:00Z',
     deletedAt: null,
@@ -32,6 +34,8 @@ const tasks: Task[] = [
     sortOrder: 1,
     protectionStatus: 'normal',
     confidence: null,
+    manualOverride: false,
+    classificationReason: null,
     createdAt: '2026-06-01T00:00:00Z',
     updatedAt: '2026-06-01T00:00:00Z',
     deletedAt: null,
@@ -50,6 +54,8 @@ const completedTask: Task = {
   sortOrder: 2,
   protectionStatus: 'normal',
   confidence: null,
+  manualOverride: false,
+  classificationReason: null,
   createdAt: '2026-06-01T00:00:00Z',
   updatedAt: '2026-06-02T00:00:00Z',
   deletedAt: null,
@@ -83,6 +89,26 @@ describe('TasksTab', () => {
     expect(screen.getByText('2026-06-30')).toBeInTheDocument();
     expect(screen.getByText('大石头')).toBeInTheDocument();
     expect(screen.queryByText('暂无任务')).not.toBeInTheDocument();
+  });
+
+  it('classifyingIds 中的任务显示「智能分类中…」徽章，其它任务不显示', () => {
+    render(
+      <TasksTab
+        role={role}
+        tasks={tasks}
+        isLoading={false}
+        error={null}
+        classifyingIds={new Set(['task-2'])}
+        onOpenTask={vi.fn()}
+        onDeleteTask={vi.fn()}
+        onReorderTasks={vi.fn()}
+        onToggleComplete={vi.fn()}
+      />,
+    );
+
+    const badges = screen.getAllByLabelText('正在智能分类');
+    expect(badges).toHaveLength(1);
+    expect(screen.getByText('智能分类中…')).toBeInTheDocument();
   });
 
   it('每个未完成任务卡片渲染拖拽手柄', () => {
@@ -217,6 +243,60 @@ describe('TasksTab', () => {
 
     rerender(<TasksTab role={role} tasks={[]} isLoading={false} error={null} onOpenTask={vi.fn()} onDeleteTask={vi.fn()} onReorderTasks={noop} onToggleComplete={noop} />);
     expect(screen.getByText('还没有任务，先添加一个小目标吧')).toBeInTheDocument();
+  });
+
+  it('低置信度的自动分类任务显示「不确定」徽章并暴露 classificationReason 作为辅助说明', () => {
+    const uncertainTask: Task = {
+      ...tasks[0],
+      id: 'task-uncertain',
+      title: '不确定的任务',
+      manualOverride: false,
+      confidence: 0.4,
+      classificationReason: 'LLM 暂时不可用，先放入 Q2',
+    };
+
+    render(
+      <TasksTab
+        role={role}
+        tasks={[uncertainTask]}
+        isLoading={false}
+        error={null}
+        onOpenTask={vi.fn()}
+        onDeleteTask={vi.fn()}
+        onReorderTasks={vi.fn()}
+        onToggleComplete={vi.fn()}
+      />,
+    );
+
+    const badge = screen.getByLabelText('分类不确定：LLM 暂时不可用，先放入 Q2');
+    expect(badge).toBeInTheDocument();
+    expect(badge).toHaveTextContent('不确定');
+  });
+
+  it('手动覆盖的任务即使 confidence 较低也不显示「不确定」徽章', () => {
+    const manualTask: Task = {
+      ...tasks[0],
+      id: 'task-manual',
+      title: '手动象限任务',
+      manualOverride: true,
+      confidence: 0.1,
+      classificationReason: '用户手动指定',
+    };
+
+    render(
+      <TasksTab
+        role={role}
+        tasks={[manualTask]}
+        isLoading={false}
+        error={null}
+        onOpenTask={vi.fn()}
+        onDeleteTask={vi.fn()}
+        onReorderTasks={vi.fn()}
+        onToggleComplete={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByText(/不确定/)).not.toBeInTheDocument();
   });
 
   it('toggleComplete 失败时显示内联中文错误文案', async () => {

@@ -295,6 +295,7 @@ pub fn run() {
             commands::role::role_delete,
             commands::task::task_create,
             commands::task::task_list_by_role,
+            commands::task::task_list_butler,
             commands::task::task_update,
             commands::task::task_delete,
             commands::task::task_reorder,

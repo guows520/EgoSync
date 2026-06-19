@@ -1,11 +1,15 @@
 import { useEffect, useState } from 'react';
-import { X, Plus, Circle } from 'lucide-react';
+import { X } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { DashboardTab } from './DashboardTab';
 import { MemoryTab } from '../role/MemoryTab';
 import { ButlerSettingsContent } from './ButlerSettingsContent';
+import { TasksTab } from '../role/TasksTab';
 import { memoryService } from '../../services/memoryService';
+import { useTasks } from '../../hooks/useTasks';
 import type { MemoryCategory } from '../../types/memory';
+import type { Task, TaskActions } from '../../types/task';
+import type { TaskScope } from '../../hooks/useTasks';
 
 export function ButlerWorkspacePanel({
   roles,
@@ -18,10 +22,37 @@ export function ButlerWorkspacePanel({
   targetMemoryId,
   onTargetMemoryHandled,
   onSourceMessageClick,
-}: any) {
+  onOpenTask,
+  onTasksApiReady,
+}: {
+  roles: any[];
+  currentTab: 'dashboard' | 'tasks' | 'memory' | 'settings' | null;
+  setTab: (tab: 'dashboard' | 'tasks' | 'memory' | 'settings' | null) => void;
+  archivedRoles: any[];
+  onRestoreRole: (id: string) => Promise<void> | void;
+  onUpdateRole: (role: any) => void;
+  onViewChange: (view: string) => void;
+  targetMemoryId: string | null;
+  onTargetMemoryHandled: () => void;
+  onSourceMessageClick: (target: any) => void;
+  onOpenTask: (scope: TaskScope, task?: Task | null) => void;
+  onTasksApiReady: (key: string, actions: TaskActions) => void;
+}) {
   const [memoryCount, setMemoryCount] = useState<number | null>(null);
   const [memoryCategory, setMemoryCategory] = useState<MemoryCategory | undefined>();
   const [memoryCountReloadKey, setMemoryCountReloadKey] = useState(0);
+
+  const { tasks, isLoading: isLoadingTasks, error: tasksError, classifyingIds, createTask, updateTask, deleteTask, reorderTasks, toggleComplete } = useTasks({ ownerType: 'butler' });
+
+  useEffect(() => {
+    onTasksApiReady?.('butler', {
+      createTask,
+      updateTask,
+      deleteTask,
+      reorderTasks,
+      toggleComplete,
+    });
+  }, [createTask, deleteTask, onTasksApiReady, updateTask, reorderTasks, toggleComplete]);
 
   const effectiveMemoryCategory = targetMemoryId ? undefined : memoryCategory;
 
@@ -85,25 +116,17 @@ export function ButlerWorkspacePanel({
       <div className="flex-1 overflow-y-auto p-6 scroll-smooth">
         {currentTab === 'dashboard' && <DashboardTab roles={roles} onViewChange={onViewChange} />}
         {currentTab === 'tasks' && (
-          <div className="space-y-6">
-            <div>
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-[12px] font-bold tracking-widest text-slate-400 uppercase">通用任务</h3>
-                <button className="hover:bg-slate-200 p-1.5 rounded-md transition-colors text-indigo-600"><Plus size={18}/></button>
-              </div>
-              <div className="space-y-2.5">
-                <div className="bg-white border border-slate-200 rounded-xl p-4 flex gap-3.5 shadow-sm">
-                  <button className="text-slate-300 hover:text-emerald-500 transition-colors shrink-0 mt-0.5"><Circle size={20} strokeWidth={2.5} /></button>
-                  <div className="flex-1">
-                    <p className="text-[14.5px] text-slate-800 font-medium leading-snug">整理本周日程表</p>
-                    <div className="flex items-center gap-2 mt-2.5">
-                      <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-slate-100 text-slate-600 border border-slate-200">通用</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
+          <TasksTab
+            role={{ color: '#6366F1' }}
+            tasks={tasks}
+            isLoading={isLoadingTasks}
+            error={tasksError}
+            classifyingIds={classifyingIds}
+            onOpenTask={(task: Task | null) => onOpenTask({ ownerType: 'butler' }, task)}
+            onDeleteTask={deleteTask}
+            onReorderTasks={reorderTasks}
+            onToggleComplete={toggleComplete}
+          />
         )}
         {currentTab === 'memory' && (
           <MemoryTab

@@ -2,9 +2,10 @@ import { useState } from 'react';
 import { Sparkles, Target, X } from 'lucide-react';
 import { Modal } from '../layout/Modal';
 import type { CreateTaskInput, Task, TaskQuadrant, UpdateTaskInput } from '../../types/task';
+import type { TaskScope } from '../../hooks/useTasks';
 
 interface TaskModalProps {
-  roleId: string;
+  scope: TaskScope;
   task?: Task | null;
   onClose: () => void;
   onSave: (input: CreateTaskInput | UpdateTaskInput) => Promise<void> | void;
@@ -20,7 +21,7 @@ const quadrantOptions: Array<{ value: TaskQuadrant; label: string }> = [
 /** 新建任务时的「智能判断」特殊选项值。 */
 const AUTO_QUADRANT = 'auto';
 
-export function TaskModal({ roleId, task, onClose, onSave }: TaskModalProps) {
+export function TaskModal({ scope, task, onClose, onSave }: TaskModalProps) {
   const isEditing = !!task;
   const [title, setTitle] = useState(task?.title ?? '');
   // 新建任务时默认「智能判断」，编辑时预填当前象限
@@ -57,7 +58,8 @@ export function TaskModal({ roleId, task, onClose, onSave }: TaskModalProps) {
         });
       } else {
         await onSave({
-          roleId,
+          ownerType: scope.ownerType,
+          ...(scope.ownerType === 'role' ? { roleId: scope.roleId } : {}),
           title: trimmedTitle,
           // 新建时若用户选了「自动判断」则不传 quadrant，后端触发 LLM 分类
           ...(explicitQuadrant ? { quadrant: explicitQuadrant } : {}),
@@ -68,7 +70,12 @@ export function TaskModal({ roleId, task, onClose, onSave }: TaskModalProps) {
       onClose();
     } catch (e) {
       console.error('保存任务失败:', e);
-      setError('任务暂时保存失败，请稍后再试');
+      const errorObj = e as { ValidationError?: string };
+      if (errorObj?.ValidationError) {
+        setError(errorObj.ValidationError);
+      } else {
+        setError('任务暂时保存失败，请稍后再试');
+      }
     } finally {
       setIsSaving(false);
     }

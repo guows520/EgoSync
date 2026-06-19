@@ -47,7 +47,7 @@ export function RoleWorkspacePanel({
   const [memoryCount, setMemoryCount] = useState<number | null>(null);
   const [memoryCategory, setMemoryCategory] = useState<MemoryCategory | undefined>();
   const [memoryCountReloadKey, setMemoryCountReloadKey] = useState(0);
-  const { tasks, isLoading: isLoadingTasks, error: tasksError, classifyingIds, createTask, updateTask, deleteTask, reorderTasks, toggleComplete } = useTasks(role.id);
+  const { tasks, isLoading: isLoadingTasks, error: tasksError, classifyingIds, createTask, updateTask, deleteTask, reorderTasks, toggleComplete } = useTasks({ ownerType: 'role', roleId: role.id });
 
   useEffect(() => {
     onTasksApiReady?.({

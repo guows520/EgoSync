@@ -4,6 +4,8 @@ import type { CreateTaskInput, Task, UpdateTaskInput } from '../types/task';
 export const taskService = {
   listByRole: (roleId: string) =>
     invoke<Task[]>('task_list_by_role', { roleId }),
+  listButler: () =>
+    invoke<Task[]>('task_list_butler'),
   create: (input: CreateTaskInput) =>
     invoke<Task>('task_create', { input }),
   update: (id: string, input: UpdateTaskInput) =>

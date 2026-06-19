@@ -87,7 +87,81 @@ pub async fn classify_and_persist(pool: &SqlitePool, task_id: &str) -> Result<Ta
 
 /// 仅做分类（不写库），便于单测与上层组合。
 pub async fn classify_task(pool: &SqlitePool, task: &Task) -> ClassificationOutcome {
-    let role = match db::roles::get_role(pool, &task.role_id).await {
+    // 管家任务没有角色，使用通用上下文分类。
+    if task.owner_type == "butler" {
+        let recent = db::tasks::list_recent_tasks_by_owner(
+            pool,
+            "butler",
+            None,
+            &task.id,
+            HISTORY_SAMPLE_LIMIT,
+        )
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(task_id = %task.id, error = %e, "读取管家历史任务失败，使用空列表继续");
+            Vec::new()
+        });
+
+        let today = current_date();
+        let prompt = build_butler_classification_prompt(task, &recent, &today);
+
+        let provider = match build_default_provider(pool).await {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(task_id = %task.id, error = %e, "未能加载默认 LLM 配置，分类降级到 Q2");
+                return fallback_outcome(
+                    ClassificationSource::FallbackNoConfig,
+                    "未配置默认 LLM，先放入 Q2 等待人工确认",
+                );
+            }
+        };
+
+        let raw = match call_llm_with_timeout(provider.as_ref(), &prompt).await {
+            Ok(text) => text,
+            Err(LlmCallError::Timeout) => {
+                return fallback_outcome(
+                    ClassificationSource::FallbackTimeout,
+                    "LLM 分析超时，先放入 Q2",
+                );
+            }
+            Err(LlmCallError::Provider(e)) => {
+                tracing::warn!(task_id = %task.id, error = %e, "LLM 调用失败，分类降级到 Q2");
+                return fallback_outcome(
+                    ClassificationSource::FallbackLlmError,
+                    "LLM 暂时不可用，先放入 Q2",
+                );
+            }
+        };
+
+        return match parse_classification_response(&raw) {
+            Some(parsed) => ClassificationOutcome {
+                quadrant: parsed.quadrant,
+                confidence: parsed.confidence,
+                reason: parsed.reason,
+                source: ClassificationSource::Llm,
+            },
+            None => {
+                tracing::warn!(task_id = %task.id, raw = %truncate(&raw, 200), "LLM 返回无法解析为分类 JSON，降级到 Q2");
+                fallback_outcome(
+                    ClassificationSource::FallbackParseError,
+                    "LLM 返回格式不符，先放入 Q2 等待人工确认",
+                )
+            }
+        };
+    }
+
+    let role_id = match task.role_id.as_deref() {
+        Some(id) => id,
+        None => {
+            tracing::warn!(task_id = %task.id, "任务缺少 role_id 且非管家任务，分类降级到 Q2");
+            return fallback_outcome(
+                ClassificationSource::FallbackNoConfig,
+                "任务缺少归属信息，先放入 Q2 等待重新判断",
+            );
+        }
+    };
+
+    let role = match db::roles::get_role(pool, role_id).await {
         Ok(role) => role,
         Err(e) => {
             tracing::warn!(task_id = %task.id, error = %e, "读取角色失败，分类降级到 Q2");
@@ -98,7 +172,7 @@ pub async fn classify_task(pool: &SqlitePool, task: &Task) -> ClassificationOutc
         }
     };
 
-    let recent = db::tasks::list_recent_tasks_by_role(pool, &task.role_id, &task.id, HISTORY_SAMPLE_LIMIT)
+    let recent = db::tasks::list_recent_tasks_by_role(pool, role_id, &task.id, HISTORY_SAMPLE_LIMIT)
         .await
         .unwrap_or_else(|e| {
             tracing::warn!(task_id = %task.id, error = %e, "读取同角色历史任务失败，使用空列表继续");
@@ -165,7 +239,8 @@ fn fallback_outcome(source: ClassificationSource, reason: &str) -> Classificatio
 fn log_outcome(task: &Task, outcome: &ClassificationOutcome) {
     tracing::info!(
         task_id = %task.id,
-        role_id = %task.role_id,
+        owner_type = %task.owner_type,
+        role_id = ?task.role_id,
         quadrant = %outcome.quadrant,
         confidence = outcome.confidence,
         source = ?outcome.source,
@@ -254,6 +329,49 @@ fn current_date() -> String {
 /// 输入：今天日期 + 任务标题 + 截止日期 + 角色目标 + 最近 5 条同角色任务标题/quadrant。
 /// `today` 提供时间锚点，支撑 AC1「截止日期距今天数」的紧迫度判断。
 /// 输出要求：严格 JSON 格式 `{ "quadrant", "confidence", "reason" }`，中文 reason。
+pub fn build_butler_classification_prompt(task: &Task, recent: &[Task], today: &str) -> String {
+    let recent_block = if recent.is_empty() {
+        "（暂无）".to_string()
+    } else {
+        recent
+            .iter()
+            .enumerate()
+            .map(|(i, t)| {
+                let deadline = t.deadline.as_deref().unwrap_or("无");
+                format!(
+                    "{}. 「{}」 quadrant={} deadline={}",
+                    i + 1,
+                    t.title,
+                    t.quadrant,
+                    deadline
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    format!(
+        "你是 EgoSync 的任务分类助手，负责按 Eisenhower 四象限分类一项管家通用任务。\n\
+今天日期：{today}\n\
+任务信息：\n\
+- 标题：{title}\n\
+- 截止日期：{deadline}\n\
+管家最近的任务（用于推断模式）：\n{recent}\n\
+四象限定义：\n\
+- Q1 重要且紧急：短期必须完成，影响全局安排。\n\
+- Q2 重要不紧急：长线投资，时间充裕。\n\
+- Q3 紧急不重要：时间敏感但与核心目标关联较弱。\n\
+- Q4 不重要不紧急：可延后或舍弃。\n\
+请综合「截止日期距今天数」「通用重要性」「最近任务模式」给出分类。\n\
+**严格只输出一段 JSON**，不要包裹在代码块里，结构如下：\n\
+{{\"quadrant\": \"Q1|Q2|Q3|Q4\", \"confidence\": 0.0-1.0, \"reason\": \"中文短句，<=40字\"}}",
+        today = today,
+        title = task.title,
+        deadline = task.deadline.as_deref().unwrap_or("未设定"),
+        recent = recent_block,
+    )
+}
+
 pub fn build_classification_prompt(task: &Task, role: &Role, recent: &[Task], today: &str) -> String {
     let recent_block = if recent.is_empty() {
         "（暂无）".to_string()
@@ -371,7 +489,8 @@ mod tests {
     fn sample_task(id: &str, title: &str, deadline: Option<&str>) -> Task {
         Task {
             id: id.to_string(),
-            role_id: "role-a".to_string(),
+            owner_type: "role".to_string(),
+            role_id: Some("role-a".to_string()),
             title: title.to_string(),
             deadline: deadline.map(|s| s.to_string()),
             quadrant: "Q2".to_string(),
@@ -473,5 +592,23 @@ mod tests {
         assert_eq!(outcome.quadrant, "Q2");
         assert!(outcome.confidence < CONFIDENCE_UNCERTAINTY_THRESHOLD);
         assert_eq!(outcome.source, ClassificationSource::FallbackTimeout);
+    }
+
+    #[test]
+    fn build_butler_prompt_contains_required_context() {
+        let task = Task {
+            owner_type: "butler".to_string(),
+            role_id: None,
+            ..sample_task("t-b1", "整理本周日程", Some("2026-06-20"))
+        };
+        let recent = vec![sample_task("t-b2", "上周整理日程", None)];
+
+        let prompt = build_butler_classification_prompt(&task, &recent, "2026-06-18");
+        assert!(prompt.contains("整理本周日程"), "包含任务标题");
+        assert!(prompt.contains("2026-06-20"), "包含截止日期");
+        assert!(prompt.contains("2026-06-18"), "包含今天日期");
+        assert!(prompt.contains("上周整理日程"), "包含管家历史任务");
+        assert!(prompt.contains("Q1") && prompt.contains("Q4"), "包含四象限定义");
+        assert!(prompt.contains("管家"), "标明管家上下文");
     }
 }

@@ -30,6 +30,25 @@ vi.mock('./ButlerSettingsContent', () => ({
   ButlerSettingsContent: () => <div>管家设置内容</div>,
 }));
 
+vi.mock('../role/TasksTab', () => ({
+  TasksTab: () => <div>任务内容</div>,
+}));
+
+vi.mock('../../hooks/useTasks', () => ({
+  useTasks: () => ({
+    tasks: [],
+    isLoading: false,
+    error: null,
+    classifyingIds: new Set(),
+    refetch: vi.fn(),
+    createTask: vi.fn(),
+    updateTask: vi.fn(),
+    deleteTask: vi.fn(),
+    reorderTasks: vi.fn(),
+    toggleComplete: vi.fn(),
+  }),
+}));
+
 describe('ButlerWorkspacePanel memory badge', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -46,6 +65,12 @@ describe('ButlerWorkspacePanel memory badge', () => {
         archivedRoles={[]}
         onRestoreRole={vi.fn()}
         onViewChange={vi.fn()}
+        onUpdateRole={vi.fn()}
+        targetMemoryId={null}
+        onTargetMemoryHandled={vi.fn()}
+        onSourceMessageClick={vi.fn()}
+        onOpenTask={vi.fn()}
+        onTasksApiReady={vi.fn()}
       />
     );
 
@@ -66,6 +91,12 @@ describe('ButlerWorkspacePanel memory badge', () => {
         archivedRoles={[]}
         onRestoreRole={vi.fn()}
         onViewChange={vi.fn()}
+        onUpdateRole={vi.fn()}
+        targetMemoryId={null}
+        onTargetMemoryHandled={vi.fn()}
+        onSourceMessageClick={vi.fn()}
+        onOpenTask={vi.fn()}
+        onTasksApiReady={vi.fn()}
       />
     );
 
@@ -92,6 +123,10 @@ describe('ButlerWorkspacePanel memory badge', () => {
         archivedRoles={[]}
         onRestoreRole={vi.fn()}
         onViewChange={vi.fn()}
+        onUpdateRole={vi.fn()}
+        onSourceMessageClick={vi.fn()}
+        onOpenTask={vi.fn()}
+        onTasksApiReady={vi.fn()}
         targetMemoryId="memory-2"
         onTargetMemoryHandled={onTargetMemoryHandled}
       />
@@ -122,6 +157,12 @@ describe('ButlerWorkspacePanel memory badge', () => {
         archivedRoles={[]}
         onRestoreRole={vi.fn()}
         onViewChange={vi.fn()}
+        onUpdateRole={vi.fn()}
+        targetMemoryId={null}
+        onTargetMemoryHandled={vi.fn()}
+        onSourceMessageClick={vi.fn()}
+        onOpenTask={vi.fn()}
+        onTasksApiReady={vi.fn()}
       />,
     );
 
@@ -139,6 +180,10 @@ describe('ButlerWorkspacePanel memory badge', () => {
         archivedRoles={[]}
         onRestoreRole={vi.fn()}
         onViewChange={vi.fn()}
+        onUpdateRole={vi.fn()}
+        onSourceMessageClick={vi.fn()}
+        onOpenTask={vi.fn()}
+        onTasksApiReady={vi.fn()}
         targetMemoryId="memory-2"
         onTargetMemoryHandled={vi.fn()}
       />,

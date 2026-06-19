@@ -1,5 +1,9 @@
 # Deferred Work
 
+## Deferred from: code review of 3-4-big-rock-marking (2026-06-19)
+
+- **big_rock 计数检查与写入非原子（TOCTOU 竞态，LOW→deferred，V1 单用户可接受）**：`db/tasks.rs:13-44`（create_task）与 `:67-113`（update_task）中 `count_big_rocks_by_role` 与 INSERT/UPDATE 未包裹同一事务，并发写入（用户 + opencode agent）理论上可双双读到 count<3 而突破 3 个上限。V1 单用户桌面应用实际风险极低；若未来引入多写入方，应仿照 `reorder_tasks` 用事务包裹 count+write。
+
 ## Deferred from: code review of 3-3-auto-quadrant-classification (2026-06-18)
 
 - **临期阈值 UTC 与 deadline 本地日期边界偏差 (LOW→deferred, 需全应用时区决策)**：`services/task_deadline_watch.rs:55-65` `compute_imminent_threshold` 基于 `SystemTime` UTC 秒推导日期，而 `deadline` 来自 `<input type="date">` 的本地墙钟日期。全应用刻意 UTC-only（`db::settings::chrono_now` 裸 SystemTime，无 chrono 依赖），单独为本功能引入本地时区会与约定不一致。影响有限且自愈：UTC+8 用户跨日边界附近阈值最多偏早一天，每小时循环随 UTC 推进会在 ≤1 个时区偏移内补上，非永久漏判。建议待全应用时区策略统一时一并处理。

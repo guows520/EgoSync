@@ -8,7 +8,19 @@ const TASK_LOAD_ERROR = '任务暂时加载失败，请稍后再试';
 /** 后端任务自动分类完成（或降级）时推送的事件名，需与 commands/task.rs 的 TASK_CLASSIFIED_EVENT 保持一致。 */
 const TASK_CLASSIFIED_EVENT = 'task:classified';
 
-export function useTasks(roleId: string | null) {
+export type TaskScope =
+  | { ownerType: 'role'; roleId: string }
+  | { ownerType: 'butler' };
+
+export function useTasks(scope: TaskScope | null) {
+  // scope 为对象，调用方每次 render 新建引用。若直接作为 effect/callback 依赖会因
+  // 引用每次变化导致无限重载，故归约成稳定的原始字符串 key 作为依赖（等价于值比较）。
+  const scopeKey = scope
+    ? scope.ownerType === 'role'
+      ? `role:${scope.roleId}`
+      : 'butler'
+    : null;
+
   const [tasks, setTasks] = useState<Task[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -20,7 +32,9 @@ export function useTasks(roleId: string | null) {
   useTauriEvent<Task>(
     TASK_CLASSIFIED_EVENT,
     classified => {
-      if (!roleId || classified.roleId !== roleId) return;
+      if (!scope) return;
+      if (scope.ownerType === 'role' && classified.roleId !== scope.roleId) return;
+      if (scope.ownerType === 'butler' && classified.ownerType !== 'butler') return;
       setTasks(prev => prev.map(task => (task.id === classified.id ? classified : task)));
       setClassifyingIds(prev => {
         if (!prev.has(classified.id)) return prev;
@@ -29,7 +43,8 @@ export function useTasks(roleId: string | null) {
         return next;
       });
     },
-    [roleId],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [scopeKey],
   );
 
   const refetch = useCallback(() => {
@@ -37,7 +52,7 @@ export function useTasks(roleId: string | null) {
   }, []);
 
   useEffect(() => {
-    if (!roleId) {
+    if (!scope) {
       setTasks([]);
       setIsLoading(false);
       setError(null);
@@ -48,8 +63,11 @@ export function useTasks(roleId: string | null) {
     setIsLoading(true);
     setError(null);
 
-    taskService
-      .listByRole(roleId)
+    const loadPromise = scope.ownerType === 'role'
+      ? taskService.listByRole(scope.roleId)
+      : taskService.listButler();
+
+    loadPromise
       .then(items => {
         if (!cancelled) setTasks(items);
       })
@@ -67,14 +85,19 @@ export function useTasks(roleId: string | null) {
     return () => {
       cancelled = true;
     };
-  }, [roleId, reloadKey]);
+    // 依赖 scopeKey（稳定原始值）而非 scope（每次新建的对象引用），避免无限重载。
+    // scopeKey 唯一决定 scope 内容，故闭包内读取的 scope 不存在 stale 风险。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scopeKey, reloadKey]);
 
-  const reloadCurrentRole = useCallback(async () => {
-    if (!roleId) return;
+  const reloadCurrent = useCallback(async () => {
+    if (!scope) return;
     setIsLoading(true);
     setError(null);
     try {
-      const items = await taskService.listByRole(roleId);
+      const items = scope.ownerType === 'role'
+        ? await taskService.listByRole(scope.roleId)
+        : await taskService.listButler();
       setTasks(items);
     } catch (e) {
       console.error('加载任务失败:', e);
@@ -83,7 +106,8 @@ export function useTasks(roleId: string | null) {
     } finally {
       setIsLoading(false);
     }
-  }, [roleId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scopeKey]);
 
   const createTask = useCallback(async (input: CreateTaskInput) => {
     const created = await taskService.create(input);
@@ -95,18 +119,18 @@ export function useTasks(roleId: string | null) {
         return next;
       });
     }
-    await reloadCurrentRole();
-  }, [reloadCurrentRole]);
+    await reloadCurrent();
+  }, [reloadCurrent]);
 
   const updateTask = useCallback(async (id: string, input: UpdateTaskInput) => {
     await taskService.update(id, input);
-    await reloadCurrentRole();
-  }, [reloadCurrentRole]);
+    await reloadCurrent();
+  }, [reloadCurrent]);
 
   const deleteTask = useCallback(async (id: string) => {
     await taskService.delete(id);
-    await reloadCurrentRole();
-  }, [reloadCurrentRole]);
+    await reloadCurrent();
+  }, [reloadCurrent]);
 
   const reorderTasks = useCallback(async (taskIds: string[]) => {
     let snapshot: Task[] = [];
@@ -127,10 +151,10 @@ export function useTasks(roleId: string | null) {
     } catch (e) {
       console.error('任务排序失败:', e);
       setTasks(snapshot);
-      await reloadCurrentRole();
+      await reloadCurrent();
       throw e;
     }
-  }, [reloadCurrentRole]);
+  }, [reloadCurrent]);
 
   const toggleComplete = useCallback(async (id: string, isCompleted: boolean) => {
     let snapshot: Task[] = [];
@@ -138,7 +162,13 @@ export function useTasks(roleId: string | null) {
       snapshot = prev;
       return prev.map(task =>
         task.id === id
-          ? { ...task, isCompleted, completedAt: isCompleted ? new Date().toISOString() : null }
+          ? {
+              ...task,
+              isCompleted,
+              completedAt: isCompleted ? new Date().toISOString() : null,
+              // 方案 D：完成时后端会自动撤销大石头标记，前端乐观同步让「大石头」标签即时消失。
+              isBigRock: isCompleted ? false : task.isBigRock,
+            }
           : task,
       );
     });
@@ -148,10 +178,10 @@ export function useTasks(roleId: string | null) {
     } catch (e) {
       console.error('切换任务完成状态失败:', e);
       setTasks(snapshot);
-      await reloadCurrentRole();
+      await reloadCurrent();
       throw e;
     }
-  }, [reloadCurrentRole]);
+  }, [reloadCurrent]);
 
   return {
     tasks,

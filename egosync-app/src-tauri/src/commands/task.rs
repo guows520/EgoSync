@@ -59,6 +59,11 @@ pub async fn task_list_by_role(
 }
 
 #[tauri::command]
+pub async fn task_list_butler(pool: State<'_, DbPool>) -> Result<Vec<Task>, AppError> {
+    tasks::list_butler_tasks(&pool).await
+}
+
+#[tauri::command]
 pub async fn task_update(
     id: String,
     input: UpdateTaskInput,

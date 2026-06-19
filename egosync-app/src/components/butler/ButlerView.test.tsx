@@ -44,6 +44,12 @@ describe('ButlerView memory reference navigation', () => {
         archivedRoles={[]}
         onRestoreRole={vi.fn()}
         onViewChange={vi.fn()}
+        onUpdateRole={vi.fn()}
+        onRoleSourceNavigation={vi.fn()}
+        sourceNavigationTarget={null}
+        onSourceNavigationHandled={vi.fn()}
+        onOpenTask={vi.fn()}
+        onTasksApiReady={vi.fn()}
       />,
     );
 
@@ -66,6 +72,12 @@ describe('ButlerView memory reference navigation', () => {
         archivedRoles={[]}
         onRestoreRole={vi.fn()}
         onViewChange={vi.fn()}
+        onUpdateRole={vi.fn()}
+        onRoleSourceNavigation={vi.fn()}
+        sourceNavigationTarget={null}
+        onSourceNavigationHandled={vi.fn()}
+        onOpenTask={vi.fn()}
+        onTasksApiReady={vi.fn()}
       />,
     );
 
@@ -90,7 +102,12 @@ describe('ButlerView memory reference navigation', () => {
         archivedRoles={[]}
         onRestoreRole={vi.fn()}
         onViewChange={vi.fn()}
+        onUpdateRole={vi.fn()}
         onRoleSourceNavigation={onRoleSourceNavigation}
+        sourceNavigationTarget={null}
+        onSourceNavigationHandled={vi.fn()}
+        onOpenTask={vi.fn()}
+        onTasksApiReady={vi.fn()}
       />,
     );
 

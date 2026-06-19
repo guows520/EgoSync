@@ -4,8 +4,21 @@ import { cn } from '../../lib/utils';
 import { ButlerWorkspacePanel } from './ButlerWorkspacePanel';
 import { ChatStream } from '../chat/ChatStream';
 import type { SourceNavigationTarget } from '../../types/chat';
+import type { Task, TaskActions } from '../../types/task';
+import type { TaskScope } from '../../hooks/useTasks';
 
-export function ButlerView({ roles, onViewChange, archivedRoles, onRestoreRole, onUpdateRole, onRoleSourceNavigation, sourceNavigationTarget: externalSourceNavigationTarget, onSourceNavigationHandled }: any) {
+export function ButlerView({ roles, onViewChange, archivedRoles, onRestoreRole, onUpdateRole, onRoleSourceNavigation, sourceNavigationTarget: externalSourceNavigationTarget, onSourceNavigationHandled, onOpenTask, onTasksApiReady }: {
+  roles: any[];
+  onViewChange: (view: string) => void;
+  archivedRoles: any[];
+  onRestoreRole: (id: string) => Promise<void> | void;
+  onUpdateRole: (role: any) => void;
+  onRoleSourceNavigation: (target: SourceNavigationTarget) => void;
+  sourceNavigationTarget: SourceNavigationTarget | null;
+  onSourceNavigationHandled: () => void;
+  onOpenTask: (scope: TaskScope, task?: Task | null) => void;
+  onTasksApiReady: (key: string, actions: TaskActions) => void;
+}) {
   const [openTab, setOpenTab] = useState<'dashboard' | 'tasks' | 'memory' | 'settings' | null>(null);
   const [targetMemoryId, setTargetMemoryId] = useState<string | null>(null);
   const [sourceNavigationTarget, setSourceNavigationTarget] = useState<SourceNavigationTarget | null>(null);
@@ -86,6 +99,8 @@ export function ButlerView({ roles, onViewChange, archivedRoles, onRestoreRole, 
               targetMemoryId={targetMemoryId}
               onTargetMemoryHandled={() => setTargetMemoryId(null)}
               onSourceMessageClick={handleSourceMessageClick}
+              onOpenTask={onOpenTask}
+              onTasksApiReady={onTasksApiReady}
             />
           </div>
         )}

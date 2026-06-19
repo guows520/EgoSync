@@ -1171,6 +1171,20 @@ pub async fn build_butler_task_summary(main_pool: &DbPool) -> Result<String, App
         blocks.push(format!("{}（{}）：\n{}", role.name, role.status, lines.join("\n")));
     }
 
+    // 管家自己的通用任务
+    let butler_tasks = tasks::list_butler_tasks(main_pool).await?;
+    if !butler_tasks.is_empty() {
+        let (selected, omitted_completed_count) = select_task_context_items(&butler_tasks);
+        let mut lines = selected
+            .into_iter()
+            .map(format_task_context_line)
+            .collect::<Vec<_>>();
+        if omitted_completed_count > 0 {
+            lines.push(format!("- 另有 {} 条已完成任务未注入。", omitted_completed_count));
+        }
+        blocks.push(format!("管家通用任务：\n{}", lines.join("\n")));
+    }
+
     if blocks.is_empty() {
         return Ok(String::new());
     }
@@ -1388,6 +1402,12 @@ pub async fn build_butler_system_prompt(
                 }
             ));
         }
+    }
+
+    let butler_task_summary = build_butler_task_summary(main_pool).await?;
+    if !butler_task_summary.is_empty() {
+        system_prompt.push_str("\n\n");
+        system_prompt.push_str(&butler_task_summary);
     }
 
     let memory_summary = build_butler_memory_summary(main_pool).await?;
@@ -2779,6 +2799,13 @@ pub async fn run_stream(
     });
 
     let mut accumulated = OPENCODE_FALLBACK_NOTICE.to_string();
+    emit_stream_token(
+        &app_handle,
+        &conversation_id,
+        None,
+        OPENCODE_FALLBACK_NOTICE,
+        false,
+    );
     let mut accumulated_thinking = String::new();
     let mut pending = String::new();
     let mut saw_thinking = false;
@@ -4987,6 +5014,10 @@ mod tests {
             .execute(&pool)
             .await
             .expect("failed to apply task classification metadata migration");
+        sqlx::raw_sql(include_str!("../../migrations/015_task_owner_scope.sql"))
+            .execute(&pool)
+            .await
+            .expect("failed to apply task owner scope migration");
 
         pool
     }
@@ -5053,7 +5084,8 @@ mod tests {
         crate::db::tasks::create_task(
             &main_pool,
             &CreateTaskInput {
-                role_id: role.id.clone(),
+                owner_type: None,
+                role_id: Some(role.id.clone()),
                 title: "梳理需求范围".to_string(),
                 deadline: None,
                 quadrant: Some("Q2".to_string()),
@@ -5065,7 +5097,8 @@ mod tests {
         crate::db::tasks::create_task(
             &main_pool,
             &CreateTaskInput {
-                role_id: other_role.id.clone(),
+                owner_type: None,
+                role_id: Some(other_role.id.clone()),
                 title: "准备视觉稿".to_string(),
                 deadline: None,
                 quadrant: Some("Q2".to_string()),
@@ -5115,7 +5148,8 @@ mod tests {
         crate::db::tasks::create_task(
             &main_pool,
             &CreateTaskInput {
-                role_id: role.id.clone(),
+                owner_type: None,
+                role_id: Some(role.id.clone()),
                 title: "未完成任务 1".to_string(),
                 deadline: None,
                 quadrant: Some("Q2".to_string()),
@@ -5127,7 +5161,8 @@ mod tests {
         crate::db::tasks::create_task(
             &main_pool,
             &CreateTaskInput {
-                role_id: role.id.clone(),
+                owner_type: None,
+                role_id: Some(role.id.clone()),
                 title: "未完成任务 2".to_string(),
                 deadline: None,
                 quadrant: Some("Q2".to_string()),
@@ -5140,7 +5175,8 @@ mod tests {
             let task = crate::db::tasks::create_task(
                 &main_pool,
                 &CreateTaskInput {
-                    role_id: role.id.clone(),
+                    owner_type: None,
+                    role_id: Some(role.id.clone()),
                     title: format!("已完成任务 {:02}", index),
                     deadline: None,
                     quadrant: Some("Q3".to_string()),
@@ -5160,7 +5196,8 @@ mod tests {
         crate::db::tasks::create_task(
             &main_pool,
             &CreateTaskInput {
-                role_id: other_role.id.clone(),
+                owner_type: None,
+                role_id: Some(other_role.id.clone()),
                 title: "运营待办 1".to_string(),
                 deadline: None,
                 quadrant: Some("Q1".to_string()),
@@ -5202,7 +5239,8 @@ mod tests {
             crate::db::tasks::create_task(
                 &main_pool,
                 &CreateTaskInput {
-                    role_id: role.id.clone(),
+                    owner_type: None,
+                    role_id: Some(role.id.clone()),
                     title: format!("未完成超限任务 {:02}", index),
                     deadline: None,
                     quadrant: Some("Q2".to_string()),
@@ -5215,7 +5253,8 @@ mod tests {
         let completed = crate::db::tasks::create_task(
             &main_pool,
             &CreateTaskInput {
-                role_id: role.id.clone(),
+                owner_type: None,
+                role_id: Some(role.id.clone()),
                 title: "不应注入的已完成任务".to_string(),
                 deadline: None,
                 quadrant: Some("Q3".to_string()),

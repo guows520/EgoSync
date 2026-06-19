@@ -6,12 +6,13 @@ import { ChatStream } from '../chat/ChatStream';
 import type { Role } from '../../types/role';
 import type { SourceNavigationTarget } from '../../types/chat';
 import type { Task, TaskActions } from '../../types/task';
+import type { TaskScope } from '../../hooks/useTasks';
 
 interface RoleViewProps {
   role: Role;
   roles?: Role[];
-  onOpenTask: (roleId: string, task?: Task | null) => void;
-  onTasksApiReady?: (roleId: string, actions: TaskActions) => void;
+  onOpenTask: (scope: TaskScope, task?: Task | null) => void;
+  onTasksApiReady?: (key: string, actions: TaskActions) => void;
   initialTab: string | null;
   onTabConsumed: () => void;
   onUpdateRole: (role: Role) => void;
@@ -109,8 +110,8 @@ export function RoleView({
               roles={roles}
               currentTab={openTab}
               setTab={setOpenTab}
-              onOpenTask={(task: Task | null) => onOpenTask(role.id, task)}
-              onTasksApiReady={(actions: TaskActions) => onTasksApiReady?.(role.id, actions)}
+              onOpenTask={(task: Task | null) => onOpenTask({ ownerType: 'role', roleId: role.id }, task)}
+              onTasksApiReady={(actions: TaskActions) => onTasksApiReady?.(`role:${role.id}`, actions)}
               onUpdateRole={onUpdateRole}
               onArchiveRole={onArchiveRole}
               onDeleteRole={onDeleteRole}

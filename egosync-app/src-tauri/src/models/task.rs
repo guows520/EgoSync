@@ -1,8 +1,25 @@
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum TaskOwnerType {
+    Role,
+    Butler,
+}
+
+impl TaskOwnerType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TaskOwnerType::Role => "role",
+            TaskOwnerType::Butler => "butler",
+        }
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
 pub struct Task {
     pub id: String,
-    pub role_id: String,
+    pub owner_type: String,
+    pub role_id: Option<String>,
     pub title: String,
     pub deadline: Option<String>,
     pub quadrant: String,
@@ -22,7 +39,8 @@ pub struct Task {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateTaskInput {
-    pub role_id: String,
+    pub owner_type: Option<TaskOwnerType>,
+    pub role_id: Option<String>,
     pub title: String,
     pub deadline: Option<String>,
     /// 用户在 TaskModal 中显式选择的 quadrant。`None` 表示让系统自动判断。

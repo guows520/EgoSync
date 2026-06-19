@@ -6,6 +6,7 @@ import type { Task } from '../../types/task';
 const tasks: Task[] = [
   {
     id: 'task-1',
+    ownerType: 'role',
     roleId: 'role-1',
     title: '准备季度规划',
     deadline: '2026-06-30',
@@ -24,6 +25,7 @@ const tasks: Task[] = [
   },
   {
     id: 'task-2',
+    ownerType: 'role',
     roleId: 'role-1',
     title: '整理会议纪要',
     deadline: null,
@@ -44,6 +46,7 @@ const tasks: Task[] = [
 
 const completedTask: Task = {
   id: 'task-3',
+  ownerType: 'role',
   roleId: 'role-1',
   title: '已完成的任务',
   deadline: null,
@@ -169,6 +172,32 @@ describe('TasksTab', () => {
     expect(onOpenTask).not.toHaveBeenCalled();
   });
 
+  it('点击任务卡片空白区域不会触发编辑，仅编辑按钮触发', () => {
+    const onOpenTask = vi.fn();
+
+    const { container } = render(
+      <TasksTab
+        role={role}
+        tasks={tasks}
+        isLoading={false}
+        error={null}
+        onOpenTask={onOpenTask}
+        onDeleteTask={vi.fn()}
+        onReorderTasks={vi.fn()}
+        onToggleComplete={vi.fn()}
+      />,
+    );
+
+    // 点击卡片容器（非按钮区域）不应触发编辑
+    const card = container.querySelector('[class*="rounded-xl"]');
+    if (card) fireEvent.click(card);
+    expect(onOpenTask).not.toHaveBeenCalled();
+
+    // 仅编辑按钮触发
+    fireEvent.click(screen.getByRole('button', { name: '编辑 准备季度规划' }));
+    expect(onOpenTask).toHaveBeenCalledWith(tasks[0]);
+  });
+
   it('已完成任务折叠展示、展开后灰显并提供撤销完成入口', () => {
     const onToggleComplete = vi.fn();
     render(
@@ -218,7 +247,7 @@ describe('TasksTab', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: '新增任务' }));
-    fireEvent.click(screen.getByRole('button', { name: '打开编辑 准备季度规划' }));
+    fireEvent.click(screen.getByRole('button', { name: '编辑 准备季度规划' }));
     fireEvent.click(screen.getByRole('button', { name: '删除 准备季度规划' }));
 
     expect(onOpenTask).toHaveBeenNthCalledWith(1, null);
@@ -245,7 +274,7 @@ describe('TasksTab', () => {
     expect(screen.getByText('还没有任务，先添加一个小目标吧')).toBeInTheDocument();
   });
 
-  it('低置信度的自动分类任务显示「不确定」徽章并暴露 classificationReason 作为辅助说明', () => {
+  it('低置信度的自动分类任务不再显示「不确定」徽章', () => {
     const uncertainTask: Task = {
       ...tasks[0],
       id: 'task-uncertain',
@@ -268,35 +297,7 @@ describe('TasksTab', () => {
       />,
     );
 
-    const badge = screen.getByLabelText('分类不确定：LLM 暂时不可用，先放入 Q2');
-    expect(badge).toBeInTheDocument();
-    expect(badge).toHaveTextContent('不确定');
-  });
-
-  it('手动覆盖的任务即使 confidence 较低也不显示「不确定」徽章', () => {
-    const manualTask: Task = {
-      ...tasks[0],
-      id: 'task-manual',
-      title: '手动象限任务',
-      manualOverride: true,
-      confidence: 0.1,
-      classificationReason: '用户手动指定',
-    };
-
-    render(
-      <TasksTab
-        role={role}
-        tasks={[manualTask]}
-        isLoading={false}
-        error={null}
-        onOpenTask={vi.fn()}
-        onDeleteTask={vi.fn()}
-        onReorderTasks={vi.fn()}
-        onToggleComplete={vi.fn()}
-      />,
-    );
-
-    expect(screen.queryByText(/不确定/)).not.toBeInTheDocument();
+    expect(screen.queryByText('? 不确定')).not.toBeInTheDocument();
   });
 
   it('toggleComplete 失败时显示内联中文错误文案', async () => {
@@ -322,5 +323,65 @@ describe('TasksTab', () => {
     });
 
     consoleSpy.mockRestore();
+  });
+
+  it('大石头任务在同象限内排在非大石头任务之前', () => {
+    const q2Tasks: Task[] = [
+      {
+        id: 'br-non-rock',
+        ownerType: 'role',
+        roleId: 'role-1',
+        title: '非大石头任务',
+        deadline: null,
+        quadrant: 'Q2',
+        isBigRock: false,
+        isCompleted: false,
+        completedAt: null,
+        sortOrder: 0,
+        protectionStatus: 'normal',
+        confidence: null,
+        manualOverride: false,
+        classificationReason: null,
+        createdAt: '2026-06-01T00:00:00Z',
+        updatedAt: '2026-06-01T00:00:00Z',
+        deletedAt: null,
+      },
+      {
+        id: 'br-rock',
+        ownerType: 'role',
+        roleId: 'role-1',
+        title: '大石头任务',
+        deadline: null,
+        quadrant: 'Q2',
+        isBigRock: true,
+        isCompleted: false,
+        completedAt: null,
+        sortOrder: 1,
+        protectionStatus: 'normal',
+        confidence: null,
+        manualOverride: false,
+        classificationReason: null,
+        createdAt: '2026-06-01T00:00:00Z',
+        updatedAt: '2026-06-01T00:00:00Z',
+        deletedAt: null,
+      },
+    ];
+
+    render(
+      <TasksTab
+        role={role}
+        tasks={q2Tasks}
+        isLoading={false}
+        error={null}
+        onOpenTask={vi.fn()}
+        onDeleteTask={vi.fn()}
+        onReorderTasks={vi.fn()}
+        onToggleComplete={vi.fn()}
+      />,
+    );
+
+    const editButtons = screen.getAllByRole('button', { name: /编辑/ });
+    expect(editButtons[0]).toHaveAccessibleName('编辑 大石头任务');
+    expect(editButtons[1]).toHaveAccessibleName('编辑 非大石头任务');
   });
 });

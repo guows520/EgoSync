@@ -19,11 +19,12 @@ import { normalizeColorHex } from './lib/roleIcons';
 import type { Role } from './types/role';
 import type { SourceNavigationTarget } from './types/chat';
 import type { CreateTaskInput, Task, TaskActions, UpdateTaskInput } from './types/task';
+import type { TaskScope } from './hooks/useTasks';
 
 const BUTLER_ACCENT = '#6366F1';
 
 interface TaskModalContext {
-  roleId: string;
+  scope: TaskScope;
   task: Task | null;
 }
 
@@ -177,18 +178,21 @@ export default function App() {
     handleSourceNavigation(target);
   };
 
-  const handleOpenTask = useCallback((roleId: string, task: Task | null = null) => {
-    setTaskModalContext({ roleId, task });
+  const handleOpenTask = useCallback((scope: TaskScope, task: Task | null = null) => {
+    setTaskModalContext({ scope, task });
   }, []);
 
-  const handleTasksApiReady = useCallback((roleId: string, actions: TaskActions) => {
-    taskActionsRef.current.set(roleId, actions);
+  const handleTasksApiReady = useCallback((key: string, actions: TaskActions) => {
+    taskActionsRef.current.set(key, actions);
   }, []);
 
   const handleSaveTask = useCallback(async (input: CreateTaskInput | UpdateTaskInput) => {
     if (!taskModalContext) return;
-    const actions = taskActionsRef.current.get(taskModalContext.roleId);
-    if (!actions) throw new Error('当前角色任务列表尚未准备好');
+    const key = taskModalContext.scope.ownerType === 'role'
+      ? `role:${taskModalContext.scope.roleId}`
+      : 'butler';
+    const actions = taskActionsRef.current.get(key);
+    if (!actions) throw new Error('当前任务列表尚未准备好');
 
     if (taskModalContext.task) {
       await actions.updateTask(taskModalContext.task.id, input as UpdateTaskInput);
@@ -260,6 +264,8 @@ export default function App() {
               onRoleSourceNavigation={handleRoleSourceNavigation}
               sourceNavigationTarget={pendingButlerSourceNavigation}
               onSourceNavigationHandled={() => setPendingButlerSourceNavigation(null)}
+              onOpenTask={handleOpenTask}
+              onTasksApiReady={handleTasksApiReady}
             />
           )}
           {roles.map(r => r.id === currentView && (
@@ -296,7 +302,7 @@ export default function App() {
       {isReviewOpen && <WeeklyReviewModal roles={roles} onClose={() => setIsReviewOpen(false)} />}
       {taskModalContext && (
         <TaskModal
-          roleId={taskModalContext.roleId}
+          scope={taskModalContext.scope}
           task={taskModalContext.task}
           onClose={() => setTaskModalContext(null)}
           onSave={handleSaveTask}

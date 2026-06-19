@@ -7,6 +7,7 @@ import type { Task } from '../types/task';
 vi.mock('../services/taskService', () => ({
   taskService: {
     listByRole: vi.fn(),
+    listButler: vi.fn(),
     create: vi.fn(),
     update: vi.fn(),
     delete: vi.fn(),
@@ -17,6 +18,7 @@ vi.mock('../services/taskService', () => ({
 
 const task: Task = {
   id: 'task-1',
+  ownerType: 'role',
   roleId: 'role-1',
   title: '准备季度规划',
   deadline: '2026-06-30',
@@ -42,7 +44,7 @@ describe('useTasks', () => {
   it('按角色加载真实任务并暴露刷新状态', async () => {
     vi.mocked(taskService.listByRole).mockResolvedValue([task]);
 
-    const { result } = renderHook(() => useTasks('role-1'));
+    const { result } = renderHook(() => useTasks({ ownerType: 'role', roleId: 'role-1' }));
 
     expect(result.current.isLoading).toBe(true);
     await waitFor(() => expect(taskService.listByRole).toHaveBeenCalledWith('role-1'));
@@ -57,7 +59,7 @@ describe('useTasks', () => {
     vi.mocked(taskService.update).mockResolvedValue({ ...task, title: '更新季度规划' });
     vi.mocked(taskService.delete).mockResolvedValue(undefined);
 
-    const { result } = renderHook(() => useTasks('role-1'));
+    const { result } = renderHook(() => useTasks({ ownerType: 'role', roleId: 'role-1' }));
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
     await act(async () => {
@@ -77,7 +79,7 @@ describe('useTasks', () => {
     vi.mocked(taskService.listByRole).mockResolvedValue([task, second]);
     vi.mocked(taskService.reorder).mockResolvedValue(undefined);
 
-    const { result } = renderHook(() => useTasks('role-1'));
+    const { result } = renderHook(() => useTasks({ ownerType: 'role', roleId: 'role-1' }));
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
     await act(async () => {
@@ -94,7 +96,7 @@ describe('useTasks', () => {
     vi.mocked(taskService.listByRole).mockResolvedValue([task, second]);
     vi.mocked(taskService.reorder).mockRejectedValueOnce(new Error('boom'));
 
-    const { result } = renderHook(() => useTasks('role-1'));
+    const { result } = renderHook(() => useTasks({ ownerType: 'role', roleId: 'role-1' }));
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
     await act(async () => {
@@ -111,7 +113,7 @@ describe('useTasks', () => {
     const completed: Task = { ...task, isCompleted: true, completedAt: '2026-06-10T00:00:00Z' };
     vi.mocked(taskService.toggleComplete).mockResolvedValue(completed);
 
-    const { result } = renderHook(() => useTasks('role-1'));
+    const { result } = renderHook(() => useTasks({ ownerType: 'role', roleId: 'role-1' }));
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
     await act(async () => {
@@ -127,7 +129,7 @@ describe('useTasks', () => {
     vi.mocked(taskService.listByRole).mockResolvedValue([task]);
     vi.mocked(taskService.toggleComplete).mockRejectedValueOnce(new Error('boom'));
 
-    const { result } = renderHook(() => useTasks('role-1'));
+    const { result } = renderHook(() => useTasks({ ownerType: 'role', roleId: 'role-1' }));
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
     await act(async () => {
@@ -136,5 +138,34 @@ describe('useTasks', () => {
 
     expect(result.current.tasks[0].isCompleted).toBe(false);
     expect(taskService.listByRole).toHaveBeenCalledTimes(2);
+  });
+
+  it('scope 内容不变但每次传入新对象引用时不应重复加载（回归：任务一直加载中）', async () => {
+    vi.mocked(taskService.listByRole).mockResolvedValue([task]);
+
+    // 模拟调用方每次 render 内联新建 scope 对象（引用每次不同，内容相同）。
+    const { result, rerender } = renderHook(() =>
+      useTasks({ ownerType: 'role', roleId: 'role-1' }),
+    );
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    rerender();
+    rerender();
+    rerender();
+
+    // 依赖归约为稳定 scopeKey 后，重复 render 不应重新发起加载。
+    expect(taskService.listByRole).toHaveBeenCalledTimes(1);
+    expect(result.current.isLoading).toBe(false);
+  });
+
+  it('butler scope 调用 listButler 加载管家任务', async () => {
+    const butlerTask: Task = { ...task, id: 'b-1', ownerType: 'butler', roleId: null };
+    vi.mocked(taskService.listButler).mockResolvedValue([butlerTask]);
+
+    const { result } = renderHook(() => useTasks({ ownerType: 'butler' }));
+
+    await waitFor(() => expect(taskService.listButler).toHaveBeenCalledTimes(1));
+    expect(taskService.listByRole).not.toHaveBeenCalled();
+    expect(result.current.tasks).toEqual([butlerTask]);
   });
 });

@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { CheckCircle2, ChevronDown, ChevronRight, Circle, Edit2, GripVertical, Loader2, Plus, Trash2 } from 'lucide-react';
 import {
   DndContext,
@@ -22,7 +22,7 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { Modal } from '../layout/Modal';
 import { cn } from '../../lib/utils';
-import { isClassificationUncertain, type Task, type TaskQuadrant } from '../../types/task';
+import { type Task, type TaskQuadrant } from '../../types/task';
 
 interface TasksTabProps {
   role: { color?: string };
@@ -46,7 +46,7 @@ interface TaskCardCallbacks {
 const EMPTY_CLASSIFYING_IDS: Set<string> = new Set();
 
 const CARD_BASE_CLASS =
-  'bg-white border border-slate-200 rounded-xl p-4 flex gap-3.5 shadow-sm group hover:border-indigo-300 hover:shadow-md transition-all duration-200 motion-reduce:transition-none cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-500/20';
+  'bg-white border border-slate-200 rounded-xl p-4 flex gap-3.5 shadow-sm group hover:border-indigo-300 hover:shadow-md transition-all duration-200 motion-reduce:transition-none';
 
 function TaskCardBody({ task, callbacks, dragHandle, isClassifying }: { task: Task; callbacks: TaskCardCallbacks; dragHandle?: ReactNode; isClassifying?: boolean }) {
   return (
@@ -86,15 +86,6 @@ function TaskCardBody({ task, callbacks, dragHandle, isClassifying }: { task: Ta
               智能分类中…
             </span>
           )}
-          {!isClassifying && isClassificationUncertain(task) && (
-            <span
-              className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-slate-50 text-slate-500 border border-slate-200"
-              title={task.classificationReason ?? '系统对该任务的象限分类置信度较低，可手动调整'}
-              aria-label={`分类不确定：${task.classificationReason ?? '系统置信度较低'}`}
-            >
-              ? 不确定
-            </span>
-          )}
         </div>
       </div>
       <div className="flex items-start gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
@@ -123,13 +114,6 @@ function TaskCardBody({ task, callbacks, dragHandle, isClassifying }: { task: Ta
   );
 }
 
-function handleCardKeyDown(event: KeyboardEvent<HTMLDivElement>, task: Task, onOpenTask: (task: Task) => void) {
-  if (event.key === 'Enter' || event.key === ' ') {
-    event.preventDefault();
-    onOpenTask(task);
-  }
-}
-
 function pointerWithinFallbackToClosestCenter(args: Parameters<typeof pointerWithin>[0]) {
   const pointerCollisions = pointerWithin(args);
   return pointerCollisions.length > 0 ? pointerCollisions : closestCenter(args);
@@ -145,11 +129,6 @@ function SortableTaskCard({ task, callbacks, isClassifying }: { task: Task; call
     <div
       ref={setNodeRef}
       style={style}
-      role="button"
-      tabIndex={0}
-      aria-label={`打开编辑 ${task.title}`}
-      onClick={() => callbacks.onOpenTask(task)}
-      onKeyDown={event => handleCardKeyDown(event, task, callbacks.onOpenTask)}
       className={cn(CARD_BASE_CLASS, isDragging && 'opacity-50')}
     >
       <TaskCardBody
@@ -175,11 +154,6 @@ function SortableTaskCard({ task, callbacks, isClassifying }: { task: Task; call
 function CompletedTaskCard({ task, callbacks }: { task: Task; callbacks: TaskCardCallbacks }) {
   return (
     <div
-      role="button"
-      tabIndex={0}
-      aria-label={`打开编辑 ${task.title}`}
-      onClick={() => callbacks.onOpenTask(task)}
-      onKeyDown={event => handleCardKeyDown(event, task, callbacks.onOpenTask)}
       className={cn(CARD_BASE_CLASS, 'opacity-60 scale-[0.99]')}
     >
       <TaskCardBody task={task} callbacks={callbacks} />
@@ -247,7 +221,7 @@ export function TasksTab({ role, tasks, isLoading, error, classifyingIds = EMPTY
     { Q1: [], Q2: [], Q3: [], Q4: [] },
   );
 
-  const orderBySort = (a: Task, b: Task) => a.sortOrder - b.sortOrder;
+  const orderBySort = (a: Task, b: Task) => (Number(b.isBigRock) - Number(a.isBigRock)) || (a.sortOrder - b.sortOrder);
   const allQuadrants = Object.keys(quadrantLabels) as TaskQuadrant[];
   const incompleteByQuadrant = {} as Record<TaskQuadrant, Task[]>;
   const completedByQuadrant = {} as Record<TaskQuadrant, Task[]>;

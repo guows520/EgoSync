@@ -5,9 +5,12 @@ export type TaskProtectionStatus = 'normal' | 'at_risk';
  *  与后端 `services::task_classifier::CONFIDENCE_UNCERTAINTY_THRESHOLD` 保持同步。 */
 export const CLASSIFICATION_UNCERTAINTY_THRESHOLD = 0.8;
 
+export type TaskOwnerType = 'role' | 'butler';
+
 export interface Task {
   id: string;
-  roleId: string;
+  ownerType: TaskOwnerType;
+  roleId: string | null;
   title: string;
   deadline: string | null;
   quadrant: TaskQuadrant;
@@ -29,7 +32,8 @@ export interface Task {
 }
 
 export interface CreateTaskInput {
-  roleId: string;
+  ownerType?: TaskOwnerType;
+  roleId?: string | null;
   title: string;
   deadline?: string;
   /** Story 3.3：未提供时由后端自动分类，提供时立即标记为手动覆盖。 */

@@ -1,28 +1,38 @@
 use sqlx::SqlitePool;
 
 use crate::error::AppError;
-use crate::models::task::{CreateTaskInput, Task, UpdateTaskInput};
+use crate::models::task::{CreateTaskInput, Task, TaskOwnerType, UpdateTaskInput};
 
-const TASK_SELECT_COLUMNS: &str = "id, role_id, title, deadline, quadrant, is_big_rock, is_completed, completed_at, sort_order, protection_status, confidence, manual_override, classification_reason, created_at, updated_at, deleted_at";
+const TASK_SELECT_COLUMNS: &str = "id, owner_type, role_id, title, deadline, quadrant, is_big_rock, is_completed, completed_at, sort_order, protection_status, confidence, manual_override, classification_reason, created_at, updated_at, deleted_at";
 const ALLOWED_QUADRANTS: &[&str] = &["Q1", "Q2", "Q3", "Q4"];
+const MAX_BIG_ROCKS_PER_OWNER: i32 = 3;
+const BIG_ROCK_LIMIT_MESSAGE: &str = "每个任务清单每周最多 3 个大石头，请先取消一个再标记";
 
 pub async fn create_task(pool: &SqlitePool, input: &CreateTaskInput) -> Result<Task, AppError> {
+    let (owner_type, role_id) = normalized_owner(input.owner_type.as_ref(), input.role_id.as_deref())?;
     let title = normalized_title(&input.title)?;
     let quadrant = normalized_quadrant(input.quadrant.as_deref())?;
     let is_big_rock = input.is_big_rock.unwrap_or(false);
+    if is_big_rock {
+        let count = count_big_rocks_by_owner(pool, owner_type, role_id).await?;
+        if count >= MAX_BIG_ROCKS_PER_OWNER {
+            return Err(AppError::ValidationError(BIG_ROCK_LIMIT_MESSAGE.to_string()));
+        }
+    }
     // 若用户在 TaskModal 中显式选择了 quadrant，则标记 manual_override = true，
     // 后续自动分类与临期升 Q1 不会覆盖该任务。
     let manual_override = input.quadrant.is_some();
     let id = uuid::Uuid::new_v4().to_string();
     let now = crate::db::settings::chrono_now_pub();
-    let sort_order = next_sort_order(pool, &input.role_id).await?;
+    let sort_order = next_sort_order(pool, owner_type, role_id).await?;
 
     sqlx::query(
-        "INSERT INTO tasks (id, role_id, title, deadline, quadrant, is_big_rock, is_completed, sort_order, protection_status, manual_override, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, 'normal', ?8, ?9, ?10)",
+        "INSERT INTO tasks (id, owner_type, role_id, title, deadline, quadrant, is_big_rock, is_completed, sort_order, protection_status, manual_override, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, 'normal', ?9, ?10, ?11)",
     )
     .bind(&id)
-    .bind(&input.role_id)
+    .bind(owner_type)
+    .bind(role_id)
     .bind(title)
     .bind(input.deadline.as_deref())
     .bind(quadrant)
@@ -39,10 +49,27 @@ pub async fn create_task(pool: &SqlitePool, input: &CreateTaskInput) -> Result<T
 }
 
 pub async fn list_tasks_by_role(pool: &SqlitePool, role_id: &str) -> Result<Vec<Task>, AppError> {
+    list_tasks_by_owner(pool, "role", Some(role_id)).await
+}
+
+pub async fn list_butler_tasks(pool: &SqlitePool) -> Result<Vec<Task>, AppError> {
+    list_tasks_by_owner(pool, "butler", None).await
+}
+
+async fn list_tasks_by_owner(
+    pool: &SqlitePool,
+    owner_type: &str,
+    role_id: Option<&str>,
+) -> Result<Vec<Task>, AppError> {
     sqlx::query_as::<_, Task>(&format!(
-        "SELECT {} FROM tasks WHERE role_id = ?1 AND deleted_at IS NULL ORDER BY sort_order ASC, created_at ASC",
+        "SELECT {} FROM tasks
+         WHERE owner_type = ?1
+           AND ((?2 IS NULL AND role_id IS NULL) OR role_id = ?2)
+           AND deleted_at IS NULL
+         ORDER BY sort_order ASC, created_at ASC",
         TASK_SELECT_COLUMNS
     ))
+    .bind(owner_type)
     .bind(role_id)
     .fetch_all(pool)
     .await
@@ -54,7 +81,14 @@ pub async fn update_task(
     id: &str,
     input: &UpdateTaskInput,
 ) -> Result<Task, AppError> {
-    get_active_task(pool, id).await?;
+    let existing = get_active_task(pool, id).await?;
+
+    if input.is_big_rock == Some(true) && !existing.is_big_rock {
+        let count = count_big_rocks_by_owner(pool, &existing.owner_type, existing.role_id.as_deref()).await?;
+        if count >= MAX_BIG_ROCKS_PER_OWNER {
+            return Err(AppError::ValidationError(BIG_ROCK_LIMIT_MESSAGE.to_string()));
+        }
+    }
 
     let title = match input.title.as_deref() {
         Some(title) => Some(normalized_title(title)?),
@@ -119,11 +153,10 @@ pub async fn soft_delete_task(pool: &SqlitePool, id: &str) -> Result<(), AppErro
     Ok(())
 }
 
-/// 批量重写某角色任务的 `sort_order`。
+/// 批量重写某任务清单的 `sort_order`。
 ///
-/// 入参 `task_ids` 为该角色完整任务的新顺序，`sort_order` 被重写为列表索引（0..n）。
-/// 采用 AC4 推荐的单参签名：role 由 helper 内部校验——所有 id 必须存在、未软删除且同属一个 role，
-/// 否则在单事务内整体回滚并返回错误，绝不部分写入。空列表直接返回 `Ok(())`。
+/// 入参 `task_ids` 为该 owner 完整任务的新顺序，`sort_order` 被重写为列表索引（0..n）。
+/// 所有 id 必须存在、未软删除且同属一个 owner，否则在单事务内整体回滚并返回错误。
 /// 重复 id 视为 `ValidationError`：避免同一 id 在事务内被多次 UPDATE 覆盖导致 `sort_order` 错乱。
 pub async fn reorder_tasks(pool: &SqlitePool, task_ids: &[String]) -> Result<(), AppError> {
     if task_ids.is_empty() {
@@ -146,22 +179,22 @@ pub async fn reorder_tasks(pool: &SqlitePool, task_ids: &[String]) -> Result<(),
         .await
         .map_err(|e| AppError::DbError(format!("开启排序事务失败: {}", e)))?;
 
-    let mut scoped_role: Option<String> = None;
+    let mut scoped_owner: Option<(String, Option<String>)> = None;
     for (index, id) in task_ids.iter().enumerate() {
-        let task_role = sqlx::query_scalar::<_, String>(
-            "SELECT role_id FROM tasks WHERE id = ?1 AND deleted_at IS NULL",
+        let task_owner = sqlx::query_as::<_, (String, Option<String>)>(
+            "SELECT owner_type, role_id FROM tasks WHERE id = ?1 AND deleted_at IS NULL",
         )
         .bind(id)
         .fetch_optional(&mut *tx)
         .await
-        .map_err(|e| AppError::DbError(format!("查询任务角色失败: {}", e)))?
+        .map_err(|e| AppError::DbError(format!("查询任务 owner 失败: {}", e)))?
         .ok_or_else(|| AppError::NotFound(format!("任务 {} 不存在", id)))?;
 
-        match &scoped_role {
-            None => scoped_role = Some(task_role),
-            Some(role_id) if role_id != &task_role => {
+        match &scoped_owner {
+            None => scoped_owner = Some(task_owner),
+            Some(owner) if owner != &task_owner => {
                 return Err(AppError::ValidationError(
-                    "排序任务必须属于同一个角色".to_string(),
+                    "排序任务必须属于同一个任务清单".to_string(),
                 ));
             }
             _ => {}
@@ -187,6 +220,9 @@ pub async fn reorder_tasks(pool: &SqlitePool, task_ids: &[String]) -> Result<(),
 /// 不修改 `sort_order`（撤销后凭原 `sort_order` 回到分组内原位置）。不存在/已软删除返回 `NotFound`。
 /// 幂等：若当前 `is_completed` 已等于目标值，直接返回当前 task，不刷新 `completed_at`/`updated_at`，
 /// 保护「首次完成时刻」语义，避免 agent / 重复调用污染历史时间戳。
+///
+/// 方案 D：完成任务时自动撤销大石头标记（`is_big_rock = 0`），使已完成任务不再占用大石头名额。
+/// 这样撤销完成后任务只是普通未完成任务，不会因恢复大石头身份而导致名额超限，彻底消除边界矛盾。
 pub async fn set_task_completion(
     pool: &SqlitePool,
     id: &str,
@@ -201,7 +237,12 @@ pub async fn set_task_completion(
     let completed_at = if is_completed { Some(now.as_str()) } else { None };
 
     let result = sqlx::query(
-        "UPDATE tasks SET is_completed = ?1, completed_at = ?2, updated_at = ?3 WHERE id = ?4 AND deleted_at IS NULL",
+        "UPDATE tasks
+         SET is_completed = ?1,
+             completed_at = ?2,
+             is_big_rock = CASE WHEN ?1 THEN 0 ELSE is_big_rock END,
+             updated_at = ?3
+         WHERE id = ?4 AND deleted_at IS NULL",
     )
     .bind(is_completed)
     .bind(completed_at)
@@ -235,16 +276,61 @@ pub async fn get_active_task_pub(pool: &SqlitePool, id: &str) -> Result<Task, Ap
     get_active_task(pool, id).await
 }
 
-async fn next_sort_order(pool: &SqlitePool, role_id: &str) -> Result<i32, AppError> {
-    let max_order = sqlx::query_scalar::<_, Option<i32>>(
-        "SELECT MAX(sort_order) FROM tasks WHERE role_id = ?1 AND deleted_at IS NULL",
+pub async fn count_big_rocks_by_owner(
+    pool: &SqlitePool,
+    owner_type: &str,
+    role_id: Option<&str>,
+) -> Result<i32, AppError> {
+    let count = sqlx::query_scalar::<_, i32>(
+        "SELECT COUNT(*) FROM tasks
+         WHERE owner_type = ?1
+           AND ((?2 IS NULL AND role_id IS NULL) OR role_id = ?2)
+           AND is_big_rock = 1
+           AND deleted_at IS NULL",
     )
+    .bind(owner_type)
+    .bind(role_id)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| AppError::DbError(format!("查询大石头数量失败: {}", e)))?;
+
+    Ok(count)
+}
+
+async fn next_sort_order(
+    pool: &SqlitePool,
+    owner_type: &str,
+    role_id: Option<&str>,
+) -> Result<i32, AppError> {
+    let max_order = sqlx::query_scalar::<_, Option<i32>>(
+        "SELECT MAX(sort_order) FROM tasks
+         WHERE owner_type = ?1
+           AND ((?2 IS NULL AND role_id IS NULL) OR role_id = ?2)
+           AND deleted_at IS NULL",
+    )
+    .bind(owner_type)
     .bind(role_id)
     .fetch_one(pool)
     .await
     .map_err(|e| AppError::DbError(format!("计算任务排序失败: {}", e)))?;
 
     Ok(max_order.map_or(0, |order| order + 1))
+}
+
+fn normalized_owner<'a>(
+    owner_type: Option<&TaskOwnerType>,
+    role_id: Option<&'a str>,
+) -> Result<(&'static str, Option<&'a str>), AppError> {
+    match owner_type.unwrap_or(&TaskOwnerType::Role) {
+        TaskOwnerType::Role => {
+            let role_id = role_id
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .ok_or_else(|| AppError::ValidationError("角色任务必须指定角色".to_string()))?;
+            Ok(("role", Some(role_id)))
+        }
+        TaskOwnerType::Butler => Ok(("butler", None)),
+    }
 }
 
 fn normalized_title(title: &str) -> Result<&str, AppError> {
@@ -304,26 +390,40 @@ pub async fn update_task_classification(
     get_active_task(pool, id).await
 }
 
-/// 读取某角色最近 5 条同角色任务（排除当前任务、软删除任务），按 created_at DESC。
+/// 读取某 owner 最近 5 条同 owner 任务（排除当前任务、软删除任务），按 created_at DESC。
+pub async fn list_recent_tasks_by_owner(
+    pool: &SqlitePool,
+    owner_type: &str,
+    role_id: Option<&str>,
+    exclude_task_id: &str,
+    limit: u32,
+) -> Result<Vec<Task>, AppError> {
+    sqlx::query_as::<_, Task>(&format!(
+        "SELECT {} FROM tasks
+         WHERE owner_type = ?1
+           AND ((?2 IS NULL AND role_id IS NULL) OR role_id = ?2)
+           AND id != ?3
+           AND deleted_at IS NULL
+         ORDER BY created_at DESC
+         LIMIT ?4",
+        TASK_SELECT_COLUMNS
+    ))
+    .bind(owner_type)
+    .bind(role_id)
+    .bind(exclude_task_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| AppError::DbError(format!("查询同任务清单历史任务失败: {}", e)))
+}
+
 pub async fn list_recent_tasks_by_role(
     pool: &SqlitePool,
     role_id: &str,
     exclude_task_id: &str,
     limit: u32,
 ) -> Result<Vec<Task>, AppError> {
-    sqlx::query_as::<_, Task>(&format!(
-        "SELECT {} FROM tasks
-         WHERE role_id = ?1 AND id != ?2 AND deleted_at IS NULL
-         ORDER BY created_at DESC
-         LIMIT ?3",
-        TASK_SELECT_COLUMNS
-    ))
-    .bind(role_id)
-    .bind(exclude_task_id)
-    .bind(limit)
-    .fetch_all(pool)
-    .await
-    .map_err(|e| AppError::DbError(format!("查询同角色历史任务失败: {}", e)))
+    list_recent_tasks_by_owner(pool, "role", Some(role_id), exclude_task_id, limit).await
 }
 
 /// 查询临期且未手动覆盖的未完成任务：
@@ -355,6 +455,7 @@ pub async fn list_imminent_tasks_for_escalation(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::task::TaskOwnerType;
     use sqlx::sqlite::SqlitePoolOptions;
 
     async fn setup_test_db() -> SqlitePool {
@@ -397,7 +498,8 @@ mod tests {
         sqlx::query(
             "CREATE TABLE tasks (
                 id TEXT PRIMARY KEY NOT NULL,
-                role_id TEXT NOT NULL,
+                owner_type TEXT NOT NULL DEFAULT 'role' CHECK (owner_type IN ('role', 'butler')),
+                role_id TEXT,
                 title TEXT NOT NULL,
                 deadline TEXT,
                 quadrant TEXT NOT NULL DEFAULT 'Q2' CHECK (quadrant IN ('Q1', 'Q2', 'Q3', 'Q4')),
@@ -412,6 +514,7 @@ mod tests {
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 deleted_at TEXT,
+                CHECK ((owner_type = 'role' AND role_id IS NOT NULL) OR (owner_type = 'butler' AND role_id IS NULL)),
                 FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE
             )",
         )
@@ -429,7 +532,8 @@ mod tests {
         let first = create_task(
             &pool,
             &CreateTaskInput {
-                role_id: "role-a".to_string(),
+                owner_type: None,
+                role_id: Some("role-a".to_string()),
                 title: "准备季度规划".to_string(),
                 deadline: Some("2026-06-30".to_string()),
                 quadrant: Some("Q1".to_string()),
@@ -441,7 +545,8 @@ mod tests {
         create_task(
             &pool,
             &CreateTaskInput {
-                role_id: "role-b".to_string(),
+                owner_type: None,
+                role_id: Some("role-b".to_string()),
                 title: "阅读论文".to_string(),
                 deadline: None,
                 quadrant: Some("Q2".to_string()),
@@ -455,7 +560,7 @@ mod tests {
 
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].id, first.id);
-        assert_eq!(tasks[0].role_id, "role-a");
+        assert_eq!(tasks[0].role_id.as_deref(), Some("role-a"));
         assert_eq!(tasks[0].title, "准备季度规划");
         assert_eq!(tasks[0].deadline.as_deref(), Some("2026-06-30"));
         assert_eq!(tasks[0].quadrant, "Q1");
@@ -480,8 +585,8 @@ mod tests {
         ];
         for (id, quadrant, override_flag, deadline) in rows {
             sqlx::query(
-                "INSERT INTO tasks (id, role_id, title, deadline, quadrant, manual_override, created_at, updated_at)
-                 VALUES (?1, 'role-a', ?2, ?3, ?4, ?5, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')",
+                "INSERT INTO tasks (id, owner_type, role_id, title, deadline, quadrant, manual_override, created_at, updated_at)
+                 VALUES (?1, 'role', 'role-a', ?2, ?3, ?4, ?5, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')",
             )
             .bind(id)
             .bind(format!("任务 {}", id))
@@ -507,7 +612,8 @@ mod tests {
         let task = create_task(
             &pool,
             &CreateTaskInput {
-                role_id: "role-a".to_string(),
+                owner_type: None,
+                role_id: Some("role-a".to_string()),
                 title: "准备季度规划".to_string(),
                 deadline: Some("2026-06-30".to_string()),
                 quadrant: Some("Q1".to_string()),
@@ -559,7 +665,8 @@ mod tests {
         let task = create_task(
             &pool,
             &CreateTaskInput {
-                role_id: "role-a".to_string(),
+                owner_type: None,
+                role_id: Some("role-a".to_string()),
                 title: "准备季度规划".to_string(),
                 deadline: None,
                 quadrant: None,
@@ -596,7 +703,8 @@ mod tests {
         let empty_title = create_task(
             &pool,
             &CreateTaskInput {
-                role_id: "role-a".to_string(),
+                owner_type: None,
+                role_id: Some("role-a".to_string()),
                 title: "  ".to_string(),
                 deadline: None,
                 quadrant: None,
@@ -607,7 +715,8 @@ mod tests {
         let invalid_quadrant = create_task(
             &pool,
             &CreateTaskInput {
-                role_id: "role-a".to_string(),
+                owner_type: None,
+                role_id: Some("role-a".to_string()),
                 title: "准备季度规划".to_string(),
                 deadline: None,
                 quadrant: Some("Q5".to_string()),
@@ -624,7 +733,8 @@ mod tests {
         create_task(
             pool,
             &CreateTaskInput {
-                role_id: role_id.to_string(),
+                owner_type: None,
+                role_id: Some(role_id.to_string()),
                 title: title.to_string(),
                 deadline: None,
                 quadrant: Some("Q2".to_string()),
@@ -800,5 +910,259 @@ mod tests {
         assert_eq!(tasks[0].sort_order, 0);
         assert_eq!(tasks[1].id, b.id);
         assert_eq!(tasks[1].sort_order, 1);
+    }
+
+    async fn create_big_rock(pool: &SqlitePool, role_id: &str, title: &str) -> Task {
+        create_task(
+            pool,
+            &CreateTaskInput {
+                owner_type: None,
+                role_id: Some(role_id.to_string()),
+                title: title.to_string(),
+                deadline: None,
+                quadrant: Some("Q2".to_string()),
+                is_big_rock: Some(true),
+            },
+        )
+        .await
+        .expect("create big rock task")
+    }
+
+    #[tokio::test]
+    async fn create_fourth_big_rock_returns_validation_error() {
+        let pool = setup_test_db().await;
+        create_big_rock(&pool, "role-a", "大石头1").await;
+        create_big_rock(&pool, "role-a", "大石头2").await;
+        create_big_rock(&pool, "role-a", "大石头3").await;
+
+        let result = create_task(
+            &pool,
+            &CreateTaskInput {
+                owner_type: None,
+                role_id: Some("role-a".to_string()),
+                title: "大石头4".to_string(),
+                deadline: None,
+                quadrant: Some("Q2".to_string()),
+                is_big_rock: Some(true),
+            },
+        )
+        .await;
+
+        assert!(matches!(result, Err(AppError::ValidationError(_))));
+    }
+
+    #[tokio::test]
+    async fn completing_big_rock_clears_flag_and_frees_slot() {
+        let pool = setup_test_db().await;
+        let r1 = create_big_rock(&pool, "role-a", "大石头1").await;
+        create_big_rock(&pool, "role-a", "大石头2").await;
+        create_big_rock(&pool, "role-a", "大石头3").await;
+
+        // 方案 D：完成其中一个大石头后，大石头标记被自动撤销
+        let completed = set_task_completion(&pool, &r1.id, true)
+            .await
+            .expect("complete big rock");
+        assert!(completed.is_completed);
+        assert!(!completed.is_big_rock, "完成后大石头标记应被撤销");
+
+        // 名额释放：进行中大石头从 3 降为 2
+        let count = count_big_rocks_by_owner(&pool, "role", Some("role-a"))
+            .await
+            .expect("count big rocks");
+        assert_eq!(count, 2);
+
+        // 可再标记一个新的大石头，且不触发上限错误
+        create_big_rock(&pool, "role-a", "大石头4").await;
+        let count_after = count_big_rocks_by_owner(&pool, "role", Some("role-a"))
+            .await
+            .expect("count big rocks after");
+        assert_eq!(count_after, 3);
+    }
+
+    #[tokio::test]
+    async fn uncompleting_big_rock_stays_non_big_rock() {
+        let pool = setup_test_db().await;
+        let r1 = create_big_rock(&pool, "role-a", "大石头1").await;
+
+        set_task_completion(&pool, &r1.id, true)
+            .await
+            .expect("complete big rock");
+        // 撤销完成后任务恢复为普通未完成任务，不再是大石头，也不占名额
+        let reverted = set_task_completion(&pool, &r1.id, false)
+            .await
+            .expect("uncomplete big rock");
+        assert!(!reverted.is_completed);
+        assert!(!reverted.is_big_rock, "撤销完成后不应恢复大石头身份");
+
+        let count = count_big_rocks_by_owner(&pool, "role", Some("role-a"))
+            .await
+            .expect("count big rocks");
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn update_non_big_rock_to_big_rock_at_limit_returns_validation_error() {
+        let pool = setup_test_db().await;
+        create_big_rock(&pool, "role-a", "大石头1").await;
+        create_big_rock(&pool, "role-a", "大石头2").await;
+        create_big_rock(&pool, "role-a", "大石头3").await;
+
+        let normal_task = create_simple_task(&pool, "role-a", "普通任务").await;
+
+        let result = update_task(
+            &pool,
+            &normal_task.id,
+            &UpdateTaskInput {
+                title: None,
+                deadline: None,
+                quadrant: None,
+                is_big_rock: Some(true),
+            },
+        )
+        .await;
+
+        assert!(matches!(result, Err(AppError::ValidationError(_))));
+    }
+
+    #[tokio::test]
+    async fn update_existing_big_rock_without_change_does_not_trigger_validation() {
+        let pool = setup_test_db().await;
+        let rock = create_big_rock(&pool, "role-a", "大石头1").await;
+        create_big_rock(&pool, "role-a", "大石头2").await;
+        create_big_rock(&pool, "role-a", "大石头3").await;
+
+        let updated = update_task(
+            &pool,
+            &rock.id,
+            &UpdateTaskInput {
+                title: Some("大石头1-改名".to_string()),
+                deadline: None,
+                quadrant: None,
+                is_big_rock: Some(true),
+            },
+        )
+        .await
+        .expect("update should succeed");
+
+        assert_eq!(updated.title, "大石头1-改名");
+        assert!(updated.is_big_rock);
+    }
+
+    #[tokio::test]
+    async fn unmark_big_rock_does_not_trigger_validation_even_at_limit() {
+        let pool = setup_test_db().await;
+        let rock1 = create_big_rock(&pool, "role-a", "大石头1").await;
+        create_big_rock(&pool, "role-a", "大石头2").await;
+        create_big_rock(&pool, "role-a", "大石头3").await;
+
+        let updated = update_task(
+            &pool,
+            &rock1.id,
+            &UpdateTaskInput {
+                title: None,
+                deadline: None,
+                quadrant: None,
+                is_big_rock: Some(false),
+            },
+        )
+        .await
+        .expect("unmark should succeed");
+
+        assert!(!updated.is_big_rock);
+    }
+
+    #[tokio::test]
+    async fn big_rock_limit_is_independent_per_role() {
+        let pool = setup_test_db().await;
+        create_big_rock(&pool, "role-a", "大石头A1").await;
+        create_big_rock(&pool, "role-a", "大石头A2").await;
+        create_big_rock(&pool, "role-a", "大石头A3").await;
+
+        let result = create_big_rock(&pool, "role-b", "大石头B1").await;
+        assert!(result.is_big_rock);
+    }
+
+    async fn create_butler_task(pool: &SqlitePool, title: &str) -> Task {
+        create_task(
+            pool,
+            &CreateTaskInput {
+                owner_type: Some(TaskOwnerType::Butler),
+                role_id: None,
+                title: title.to_string(),
+                deadline: None,
+                quadrant: Some("Q2".to_string()),
+                is_big_rock: None,
+            },
+        )
+        .await
+        .expect("create butler task")
+    }
+
+    #[tokio::test]
+    async fn butler_tasks_are_listed_separately_from_role_tasks() {
+        let pool = setup_test_db().await;
+        create_simple_task(&pool, "role-a", "角色任务A").await;
+        create_butler_task(&pool, "管家任务1").await;
+        create_butler_task(&pool, "管家任务2").await;
+
+        let butler_tasks = list_butler_tasks(&pool).await.expect("list butler tasks");
+        assert_eq!(butler_tasks.len(), 2);
+        assert!(butler_tasks.iter().all(|t| t.owner_type == "butler"));
+        assert!(butler_tasks.iter().all(|t| t.role_id.is_none()));
+
+        let role_tasks = list_tasks_by_role(&pool, "role-a").await.expect("list role tasks");
+        assert_eq!(role_tasks.len(), 1);
+        assert_eq!(role_tasks[0].owner_type, "role");
+    }
+
+    #[tokio::test]
+    async fn butler_big_rock_limit_is_independent_from_roles() {
+        let pool = setup_test_db().await;
+        create_big_rock(&pool, "role-a", "角色大石头1").await;
+        create_big_rock(&pool, "role-a", "角色大石头2").await;
+        create_big_rock(&pool, "role-a", "角色大石头3").await;
+
+        // 管家可以独立拥有 3 个大石头
+        for i in 1..=3 {
+            let b = create_task(
+                &pool,
+                &CreateTaskInput {
+                    owner_type: Some(TaskOwnerType::Butler),
+                    role_id: None,
+                    title: format!("管家大石头{}", i),
+                    deadline: None,
+                    quadrant: Some("Q2".to_string()),
+                    is_big_rock: Some(true),
+                },
+            )
+            .await
+            .expect(&format!("create butler big rock {}", i));
+            assert!(b.is_big_rock);
+        }
+
+        // 第 4 个管家大石头应被拒绝
+        let result = create_task(
+            &pool,
+            &CreateTaskInput {
+                owner_type: Some(TaskOwnerType::Butler),
+                role_id: None,
+                title: "管家大石头4".to_string(),
+                deadline: None,
+                quadrant: Some("Q2".to_string()),
+                is_big_rock: Some(true),
+            },
+        )
+        .await;
+        assert!(matches!(result, Err(AppError::ValidationError(_))));
+    }
+
+    #[tokio::test]
+    async fn reorder_rejects_mixed_owner_tasks() {
+        let pool = setup_test_db().await;
+        let role_task = create_simple_task(&pool, "role-a", "角色任务").await;
+        let butler_task = create_butler_task(&pool, "管家任务").await;
+
+        let result = reorder_tasks(&pool, &[role_task.id.clone(), butler_task.id.clone()]).await;
+        assert!(matches!(result, Err(AppError::ValidationError(_))));
     }
 }

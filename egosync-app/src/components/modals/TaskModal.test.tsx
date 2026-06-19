@@ -1,8 +1,32 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TaskModal } from './TaskModal';
+import type { Task } from '../../types/task';
 
-const roleId = 'role-1';
+const scope = { ownerType: 'role' as const, roleId: 'role-1' };
+
+function sampleTask(overrides: Partial<Task> = {}): Task {
+  return {
+    id: 'task-1',
+    ownerType: 'role',
+    roleId: 'role-1',
+    title: '旧任务',
+    deadline: null,
+    quadrant: 'Q2',
+    isBigRock: false,
+    isCompleted: false,
+    completedAt: null,
+    sortOrder: 0,
+    protectionStatus: 'normal',
+    confidence: null,
+    manualOverride: false,
+    classificationReason: null,
+    createdAt: '2026-06-01T00:00:00Z',
+    updatedAt: '2026-06-01T00:00:00Z',
+    deletedAt: null,
+    ...overrides,
+  };
+}
 
 describe('TaskModal', () => {
   beforeEach(() => {
@@ -13,7 +37,7 @@ describe('TaskModal', () => {
     const onClose = vi.fn();
     const onSave = vi.fn().mockResolvedValue(undefined);
 
-    render(<TaskModal roleId={roleId} onClose={onClose} onSave={onSave} />);
+    render(<TaskModal scope={scope} onClose={onClose} onSave={onSave} />);
 
     fireEvent.change(screen.getByLabelText('任务内容'), { target: { value: '准备 Q3 OKR 规划' } });
     fireEvent.change(screen.getByLabelText('四象限分类'), { target: { value: 'Q1' } });
@@ -23,7 +47,8 @@ describe('TaskModal', () => {
 
     await waitFor(() => {
       expect(onSave).toHaveBeenCalledWith({
-        roleId,
+        ownerType: 'role',
+        roleId: 'role-1',
         title: '准备 Q3 OKR 规划',
         quadrant: 'Q1',
         deadline: '2026-06-30',
@@ -39,27 +64,10 @@ describe('TaskModal', () => {
 
     render(
       <TaskModal
-        roleId={roleId}
+        scope={scope}
         onClose={onClose}
         onSave={onSave}
-        task={{
-          id: 'task-1',
-          roleId,
-          title: '旧任务',
-          deadline: null,
-          quadrant: 'Q2',
-          isBigRock: false,
-          isCompleted: false,
-          completedAt: null,
-          sortOrder: 0,
-          protectionStatus: 'normal',
-          confidence: null,
-          manualOverride: false,
-          classificationReason: null,
-          createdAt: '2026-06-01T00:00:00Z',
-          updatedAt: '2026-06-01T00:00:00Z',
-          deletedAt: null,
-        }}
+        task={sampleTask()}
       />,
     );
 
@@ -82,27 +90,10 @@ describe('TaskModal', () => {
 
     render(
       <TaskModal
-        roleId={roleId}
+        scope={scope}
         onClose={vi.fn()}
         onSave={onSave}
-        task={{
-          id: 'task-1',
-          roleId,
-          title: '旧任务',
-          deadline: null,
-          quadrant: 'Q2',
-          isBigRock: false,
-          isCompleted: false,
-          completedAt: null,
-          sortOrder: 0,
-          protectionStatus: 'normal',
-          confidence: null,
-          manualOverride: false,
-          classificationReason: null,
-          createdAt: '2026-06-01T00:00:00Z',
-          updatedAt: '2026-06-01T00:00:00Z',
-          deletedAt: null,
-        }}
+        task={sampleTask()}
       />,
     );
 
@@ -122,7 +113,7 @@ describe('TaskModal', () => {
   it('标题为空时禁用保存', () => {
     const onSave = vi.fn();
 
-    render(<TaskModal roleId={roleId} onClose={vi.fn()} onSave={onSave} />);
+    render(<TaskModal scope={scope} onClose={vi.fn()} onSave={onSave} />);
 
     const saveButton = screen.getByRole('button', { name: '保存任务' });
     expect(saveButton).toBeDisabled();
@@ -134,14 +125,15 @@ describe('TaskModal', () => {
   it('新建任务默认选择「让系统自动判断」，提交 payload 不包含 quadrant', async () => {
     const onSave = vi.fn().mockResolvedValue(undefined);
 
-    render(<TaskModal roleId={roleId} onClose={vi.fn()} onSave={onSave} />);
+    render(<TaskModal scope={scope} onClose={vi.fn()} onSave={onSave} />);
 
     fireEvent.change(screen.getByLabelText('任务内容'), { target: { value: '让系统判断的任务' } });
     fireEvent.click(screen.getByRole('button', { name: '保存任务' }));
 
     await waitFor(() => {
       expect(onSave).toHaveBeenCalledWith({
-        roleId,
+        ownerType: 'role',
+        roleId: 'role-1',
         title: '让系统判断的任务',
         isBigRock: false,
       });
@@ -153,27 +145,10 @@ describe('TaskModal', () => {
 
     render(
       <TaskModal
-        roleId={roleId}
+        scope={scope}
         onClose={vi.fn()}
         onSave={onSave}
-        task={{
-          id: 'task-1',
-          roleId,
-          title: '带截止时间的任务',
-          deadline: '2026-06-30',
-          quadrant: 'Q1',
-          isBigRock: true,
-          isCompleted: false,
-          completedAt: null,
-          sortOrder: 0,
-          protectionStatus: 'normal',
-          confidence: null,
-          manualOverride: false,
-          classificationReason: null,
-          createdAt: '2026-06-01T00:00:00Z',
-          updatedAt: '2026-06-01T00:00:00Z',
-          deletedAt: null,
-        }}
+        task={sampleTask({ title: '带截止时间的任务', deadline: '2026-06-30', quadrant: 'Q1', isBigRock: true })}
       />,
     );
 
@@ -188,5 +163,26 @@ describe('TaskModal', () => {
         isBigRock: true,
       });
     });
+  });
+
+  it('后端返回 big_rock 限制错误时显示对应中文消息且弹窗保持打开', async () => {
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const onClose = vi.fn();
+    const onSave = vi.fn().mockRejectedValue({
+      ValidationError: '每个角色每周最多 3 个大石头，请先取消一个再标记',
+    });
+
+    render(<TaskModal scope={scope} onClose={onClose} onSave={onSave} />);
+
+    fireEvent.change(screen.getByLabelText('任务内容'), { target: { value: '第四个大石头' } });
+    fireEvent.click(screen.getByLabelText('标记为本周大石头'));
+    fireEvent.click(screen.getByRole('button', { name: '保存任务' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('每个角色每周最多 3 个大石头，请先取消一个再标记')).toBeInTheDocument();
+    });
+    expect(onClose).not.toHaveBeenCalled();
+
+    consoleSpy.mockRestore();
   });
 });

@@ -22,17 +22,17 @@ so that 不用逐个切换角色就能掌握全局，并能就地快速处理任
 
 Story 3.7 将其**改造为「任务概览」**：标签改名「通用任务」→「任务概览」；内容改为**所有活跃角色 + 管家自己的任务**，按**四象限分区**展示（Q1→Q4 小标题；**不**按角色分组、组内跨 owner 混排；已完成默认折叠），每条任务**就近标注归属**（角色色点 + 名称；管家则标「管家」），并提供**角色多选 / 象限 / 仅大石头**筛选；管家可在概览里**新建任务（选归属、默认管家）并就地编辑任意任务**（保存自动同步到原角色、**不跳转**）：
 
-| AC | 需求 | 当前状态 |
+| AC | 需求 | 实际状态 |
 |----|------|----------|
-| AC1 四象限分区（不按角色分组） | 保留 Q1→Q4 小标题；组内跨 owner 混排，不按角色分组 | ❌ 当前仅单一 owner（管家自己） |
-| AC2 每条标注归属 | 卡片就近显示「色点 + 角色名」；管家任务标「管家」 | ❌ 当前卡片无归属标识 |
-| AC3 组内排序 + 完成折叠 | 各象限内：未完成在上（大石头→sortOrder）；已完成默认折叠 | ❌ 当前按 owner 内 sortOrder |
-| AC4 角色多选筛选 | 可选 1 个或多个角色（含「管家」）过滤 | ❌ 无 |
-| AC5 象限 + 大石头筛选 | 象限（全部/Q1/Q2/Q3/Q4）+ 仅大石头 | ❌ 无 |
-| AC6 新建 + 就地编辑 | 顶部「+新建」（选归属、默认管家）；点任意卡就地编辑，保存即同步、**不跳转** | ❌ 当前仅管家自己的任务可增改 |
-| AC7 空态 | 「所有角色都很轻松，可以考虑添加新目标」 | ❌ 当前是角色版空态文案 |
-| AC8 Rust `task::list_all` | 返回**全 owner**任务（角色含 roleName/roleColor，管家为 null），支持 quadrant?/isBigRock? | ❌ 仅 `task_list_by_role`/`task_list_butler` |
-| AC9 `useAllTasks(filters)` hook | 封装跨 owner 查询 | ❌ 仅 `useTasks(scope)` |
+| AC1 四象限分区（不按角色分组） | 保留 Q1→Q4 小标题；组内跨 owner 混排，不按角色分组 | ✅ 已实现：`TaskOverviewTab` 按 Q1→Q4 分区，组内跨 owner 展示 |
+| AC2 每条标注归属 | 卡片就近显示「色点 + 角色名」；管家任务标「管家」 | ✅ 已实现：角色任务显示 `roleName`/`roleColor`，管家固定「管家」 |
+| AC3 组内排序 + 完成折叠 | 各象限内：未完成在上（大石头→sortOrder）；已完成默认折叠 | ✅ 已实现：未完成优先、已完成默认折叠；概览内额外按 owner 名称稳定排序 |
+| AC4 角色多选筛选 | 可选 1 个或多个角色（含「管家」）过滤 | ✅ 已实现：归属 chips 前端过滤，支持全选/全不选/多选 |
+| AC5 象限 + 大石头筛选 | 象限（全部/Q1/Q2/Q3/Q4）+ 仅大石头 | ✅ 已实现：象限/大石头状态上提到 `ButlerWorkspacePanel`，经 `useAllTasks` 服务端过滤 |
+| AC6 新建 + 就地编辑 | 顶部「+新建」（选归属、默认管家）；点任意卡就地编辑，保存即同步、**不跳转** | ✅ 已实现：App 级 `TaskModal` 复用，Butler 注册 `useAllTasks` actions，保存后刷新概览 |
+| AC7 空态 | 「所有角色都很轻松，可以考虑添加新目标」 | ✅ 已实现：全空与筛选空分别显示不同文案 |
+| AC8 Rust `task::list_all` | 返回**全 owner**任务（角色含 roleName/roleColor，管家为 null），支持 quadrant?/isBigRock? | ✅ 已实现：`task_list_all` + `db::tasks::list_all_tasks` |
+| AC9 `useAllTasks(filters)` hook | 封装跨 owner 查询 | ✅ 已实现：含稳定 `filterKey`、分类事件处理、CRUD actions 与错误兜底 |
 
 > **关键设计决策（已采纳，见文末「待确认问题」可回退）**：
 > - **D1（按 boss 指示更新）**：「通用任务」改名「任务概览」，内容为**所有活跃角色 + 管家自己**的任务，**按四象限分区**（Q1→Q4 小标题）、组内**跨 owner 混排**（不按角色分组），每条**就近标注归属**。管家任务**并入**概览。
@@ -83,7 +83,7 @@ Story 3.7 将其**改造为「任务概览」**：标签改名「通用任务」
 
 7. **新建 + 就地编辑 + 完成 + 删除（AC6）**
    - **Given** 概览中一张任务卡（角色任务或管家任务）
-   - **When** 用户点击卡片主体（或编辑按钮）
+   - **When** 用户点击编辑按钮
    - **Then** 弹出 `TaskModal`（编辑模式，预填该任务），**不切换视图、不跳转**
    - **And** 保存调用 `taskService.update(task.id, input)`（后端按 id 更新，`role_id`/`owner_type` 不变 → 自动同步到原角色/管家）；**成功后**才 `useAllTasks.refetch()` 刷新概览
    - **And（大石头上限校验，重点）** 若将某任务改为大石头、而**该任务所属角色（或管家）已满 3 个大石头**，`task_update` 返回 `ValidationError`「每个任务清单每周最多 3 个大石头，请先取消一个再标记」；概览的 `onSave` **不得 try/catch 吞错**，让其**冒泡回 `TaskModal`** 由弹窗在管家界面直接提示，弹窗保持打开、**不** refetch、不写库。上限按**被编辑任务的 owner** 计（改产品角色的任务就校验产品角色的大石头数，与「当前在管家视角」无关）——`update_task` 已实现此校验（`db/tasks.rs:86-91` 用 `existing.owner_type`/`existing.role_id`），**本 story 无需改后端**（如需提示里带上具体角色名，是可选小增强）
@@ -98,8 +98,9 @@ Story 3.7 将其**改造为「任务概览」**：标签改名「通用任务」
    - **And** 加载中显示占位、失败显示错误文案（复用既有模式）
 
 9. **零回归（既有功能）**
-   - **Then** 角色侧 `TasksTab`/`RoleView`/`RoleWorkspacePanel` **完全不改**（本 story 无需触碰角色侧任务组件），全部交互不变
-   - **And** 管家「仪表盘 / 管家记忆 / 管家设置」三个 Tab 行为不变；App 级 `TaskModal` 的角色创建/编辑路径不变
+   - **Then** 角色侧 `TasksTab`/`RoleView`/`RoleWorkspacePanel` 原有任务能力保持不回归（拖拽、完成、分类中、at_risk、四象限折叠、大石头排序仍可用）
+   - **And** 后续 UX 修复已触碰 `TasksTab`/`RoleView`：角色任务顶部改为上下布局；角色右侧面板动画改为单一宽度/透明度过渡，并补充测试
+   - **And** 管家「仪表盘 / 管家记忆 / 管家设置」三个 Tab 行为不变；App 级 `TaskModal` 的角色创建/编辑路径保持兼容
    - **And** 现有全部前端测试 + Rust 测试保持通过（涉及 mock 调整的测试同步更新，但断言语义不削弱）
 
 ## Tasks / Subtasks
@@ -125,12 +126,12 @@ Story 3.7 将其**改造为「任务概览」**：标签改名「通用任务」
 
 - [x] 前端：任务概览组件（AC: 5, 6, 7, 8）
   - [x] 新建 `src/components/butler/TaskOverviewTab.tsx`：接收 `roles`、`tasks`、加载/错误状态、分类中集合和任务操作回调，负责概览 UI 展示与本地筛选
-  - [x] 顶部：归属筛选（全部/管家/角色）+「只看大石头」开关 +「新增任务」按钮
+  - [x] 顶部：象限筛选、归属筛选（全部/管家/角色，横向细滚动条）+「只看大石头」开关 +「新增任务」按钮
   - [x] 派生 owner 标识：角色任务→`roleName`/`roleColor`；管家任务→`管家`/`#6366F1`；按所选归属前端过滤
   - [x] 按 **Q1→Q4 分区**渲染；各象限内未完成在上、**已完成默认折叠**；卡含归属标签 + deadline/大石头/at_risk badge；**不**用 dnd/`SortableTaskCard`
   - [x] 每卡交互：完成圈、编辑按钮、删除按钮（二次确认）
   - [x] 编辑任意任务时从概览打开 App 级 `TaskModal`，使用 Butler 全量任务 actions 更新，避免依赖角色工作区是否已挂载
-  - [x] 空态 / loading / error 文案；过滤后为空显示「当前筛选下没有任务」
+  - [x] 空态 / loading / error 文案；过滤后为空显示「当前筛选无匹配任务」
 
 - [x] 前端：`TaskModal` 加归属选择（仅新建，AC: 6）
   - [x] `src/components/modals/TaskModal.tsx`：新增可选 `roles?: Role[]`；当处于 Butler scope 且是新建模式时渲染「归属」`<select>`：默认「管家」+ 各活跃角色；选中决定 create 分支 `CreateTaskInput` 的 `ownerType`/`roleId`
@@ -141,7 +142,7 @@ Story 3.7 将其**改造为「任务概览」**：标签改名「通用任务」
   - [x] `src/App.tsx`：向 App 级 `TaskModal` 传入 `roles`，支持 Butler 新建任务时选择归属
   - [x] 保留角色视图的 `taskModalContext`/`handleSaveTask`/`role:` 路径不变
 
-> 注：本 story **不**改动 `src/components/role/`（`TasksTab`/`RoleView`/`RoleWorkspacePanel` 零改动）与跨视图导航——boss 已确认「不跳转、就地编辑」。
+> 注：Story 3.7 主实现不需要角色侧任务逻辑；后续 UX 修复已额外触碰 `src/components/role/TasksTab.tsx` 与 `src/components/role/RoleView.tsx`，仅调整角色任务顶部布局与右侧面板动画，原有任务交互保持并由测试覆盖。
 
 - [x] 前端：测试（AC: 5, 6, 7, 8, 9）
   - [x] 新建 `src/components/butler/TaskOverviewTab.test.tsx`：覆盖四象限展示、归属标签、已完成折叠、归属筛选、只看大石头、打开新建/编辑、完成切换、删除确认
@@ -177,25 +178,30 @@ Story 3.7 将其**改造为「任务概览」**：标签改名「通用任务」
 3. `commands/task.rs`：+`task_list_all`
 4. `lib.rs`：注册 `task_list_all`
 
-**前端（新增 2 + 修改 4，角色侧零改动）：**
+**前端（新增 4 + 修改 10，含后续 UX polish）：**
 5. `types/task.ts`：+`CrossRoleTask` +`AllTasksFilter`
 6. `services/taskService.ts`：+`listAll`
-7. `hooks/useAllTasks.ts`：**新建**（+监听 `task:classified` refetch）
-8. `components/butler/TaskOverviewTab.tsx`：**新建**（四象限分区 + 组内跨 owner + 已完成默认折叠 + 归属标签 + 角色多选/象限/大石头筛选 + 「+新建」(选归属,默认管家) + 自带 `TaskModal` 编辑 + 完成/删除）
-9. `components/modals/TaskModal.tsx`：新增**可选** `allowOwnerSelect`/`roles`（仅新建渲染归属下拉、默认管家）；向后兼容
-10. `components/butler/ButlerWorkspacePanel.tsx`：标签改名「任务概览」+ tasks Tab 改渲染 `TaskOverviewTab` + 移除 butler 任务接线（`useTasks`/`onTasksApiReady`/`onOpenTask`）
-11. `components/butler/ButlerView.tsx`：移除 butler 任务 props 透传（`onOpenTask`/`onTasksApiReady`）
-12. `App.tsx`：`<ButlerView>` 不再传 butler 任务 props（角色视图的 `TaskModal`/`handleSaveTask` 路径保留不动）
+7. `hooks/useAllTasks.ts`：**新建**（稳定 `filterKey`、监听 `task:classified`、提供全量任务 CRUD actions）
+8. `hooks/useAllTasks.test.tsx`：**新建**（filters 重查、错误兜底、失败冒泡等）
+9. `components/butler/TaskOverviewTab.tsx`：**新建**（四象限分区 + 组内跨 owner + 已完成默认折叠 + 归属标签 + 角色多选/象限/大石头筛选 + 横向细滚动条 + 完成/删除）
+10. `components/butler/TaskOverviewTab.test.tsx`：**新建**（概览展示/筛选/交互覆盖）
+11. `components/modals/TaskModal.tsx`：新增可选 `roles`；当 `scope.ownerType === 'butler'` 且新建模式时渲染归属下拉（默认管家）；向后兼容
+12. `components/butler/ButlerWorkspacePanel.tsx`：标签改名「任务概览」+ tasks Tab 改渲染 `TaskOverviewTab` + 使用 `useAllTasks` 注册 `butler` actions 给 App 级 `TaskModal`
+13. `components/butler/ButlerView.tsx`：保留 `onOpenTask`/`onTasksApiReady` 透传给 `ButlerWorkspacePanel`
+14. `App.tsx`：继续向 `<ButlerView>` 传任务弹窗编排；App 级 `<TaskModal>` 传入 `roles`，支持 Butler 新建任务选择归属
+15. `components/role/TasksTab.tsx`：后续 UX 修复，角色任务顶部改为标题/新增任务 + 筛选卡片上下结构
+16. `components/role/RoleView.tsx`：后续 UX 修复，角色右侧面板改为单一宽度/透明度过渡，去掉叠加 slide-in
+17. `index.css`：新增局部 `.thin-horizontal-scrollbar`，只作用于任务概览归属筛选横向滚动条
 
-> **角色侧零改动**：`components/role/TasksTab.tsx`、`RoleView.tsx`、`RoleWorkspacePanel.tsx` 本 story **不修改**（无跨视图导航/高亮）。
+> **角色侧说明**：Story 3.7 主功能不依赖角色侧改动；当前代码包含后续 UX polish，未改变角色任务数据流和交互语义。
 
 **测试：** 新建 `TaskOverviewTab.test.tsx`（+可选 `useAllTasks.test.tsx`）；改 `ButlerWorkspacePanel.test.tsx`、`TaskModal.test.tsx`；`db/tasks.rs` 测试模块。
 
 ### What Must Be Preserved（防回归）
 
-- **角色侧任务组件零改动**：`TasksTab.tsx`/`RoleView.tsx`/`RoleWorkspacePanel.tsx` 本 story **不触碰**，全部交互（拖拽/完成/分类中/at_risk/四象限折叠/大石头排序）保持。
-- **TaskModal 角色路径**：`App.handleSaveTask` 的 `role:` 分支、`onTasksApiReady('role:<id>')`、角色 `onOpenTask`、`taskModalContext` 不变（仅移除 butler 任务接线）。
-- **`TaskModal` 改动向后兼容**：仅新增可选 `allowOwnerSelect`/`roles`，**不传时行为与现状完全一致**（角色视图创建/编辑、App 级 `TaskModal` 不受影响）。
+- **角色侧任务能力不回归**：`TasksTab.tsx`/`RoleView.tsx` 后续仅做 UX polish（顶部布局、右侧面板动画），角色任务拖拽/完成/分类中/at_risk/四象限折叠/大石头排序保持。`RoleWorkspacePanel.tsx` 任务数据流不变。
+- **TaskModal 角色路径**：`App.handleSaveTask` 的 `role:` 分支、`onTasksApiReady('role:<id>')`、角色 `onOpenTask`、`taskModalContext` 不变；Butler 侧注册 `butler` 全量任务 actions 给同一 App 级弹窗编排使用。
+- **`TaskModal` 改动向后兼容**：仅新增可选 `roles`；不传时行为与现状完全一致。只有 `scope.ownerType === 'butler'` 且新建模式且 `roles.length > 0` 时渲染归属下拉。
 - **管家其余三 Tab**：仪表盘 / 管家记忆 / 管家设置 不变；`ButlerWorkspacePanel` 的 memory badge 逻辑（既有测试覆盖）不动。
 - **`task_list_butler` 命令 / `owner_type='butler'` 数据**：后端保留；butler 任务改由 `task_list_all` 并入概览展示（`task_list_butler` 暂无前端消费方，保留不动）。
 - **既有测试**：`ButlerWorkspacePanel.test.tsx` 当前以 `currentTab='memory'` 测记忆 badge，不渲染 tasks Tab；改动 tasks 渲染不影响其断言，但其顶层 mock 了 `useTasks` 与 `TasksTab`——本 story 改为 mock `TaskOverviewTab`、按需移除 `useTasks` mock，**保持记忆用例语义不变**。
@@ -205,15 +211,15 @@ Story 3.7 将其**改造为「任务概览」**：标签改名「通用任务」
 - **sqlx 可选过滤的 NULL 绑定**：`(?2 IS NULL OR t.quadrant = ?2)` 配合 `.bind(quadrant)`（`Option<&str>`）安全；布尔过滤建议绑 `Option<bool>`，SQL 写 `(?3 IS NULL OR t.is_big_rock = ?3)`。**勿**把 `Option<bool>` 当作 0/1 直接拼接。参考 `list_tasks_by_owner` 的 `(?2 IS NULL ...)` 写法。
 - **quadrant 字典序 = 业务序**：`'Q1'<'Q2'<'Q3'<'Q4'`，故 `ORDER BY quadrant ASC` 即 Q1→Q4，无需 CASE 映射。
 - **`useAllTasks` 依赖归约**：必须用稳定 `filterKey` 字符串做 effect 依赖（仿 `useTasks.scopeKey`），否则 `filters` 对象每渲染新引用 → 无限请求。
-- **编辑走 `taskService` 而非角色 actions**：管家视图下角色面板未挂载，`taskActionsRef`（App 的 `onTasksApiReady` 注册表）取不到 `role:<其它角色>` actions。故概览的编辑/完成/删除**直接调 `taskService.update/toggleComplete/delete`（按任务 id，owner 无关）+ `useAllTasks.refetch()`**，**不要**走 App 的 `handleSaveTask`/`taskActionsRef`。
-- **概览自带 `TaskModal`**：概览渲染自己的 `<TaskModal>` 实例（local `editingTask`），与 App 级 `taskModalContext` 互不干扰；`TaskModal` 编辑分支仅用 `task`，`scope` 只在「新建」分支用到，编辑场景给个由 owner 派生的占位 scope 即可（`role`→`{ownerType:'role',roleId}`；`butler`→`{ownerType:'butler'}`）。
+- **编辑走 App 级 `TaskModal` + Butler 全量任务 actions**：管家视图下角色面板未挂载，`taskActionsRef` 取不到 `role:<其它角色>` actions。实现中 `ButlerWorkspacePanel` 使用 `useAllTasks` 注册 `butler` actions；概览点编辑通过 `onOpenTask({ ownerType:'butler' }, task)` 打开 App 级 `TaskModal`，保存时 `handleSaveTask` 调 `actions.updateTask(task.id, input)`，最终按任务 id 落库并刷新全量概览。
+- **概览不自带 `TaskModal`**：当前实现复用 App 级 `<TaskModal>`，与角色侧弹窗共用同一保存编排；`CrossRoleTask extends Task`，可直接作为 `task` 传入。
 - **概览卡不要塞进 dnd**：概览**不**使用 `SortableContext`/`useSortable`/`GripVertical`（跨 owner 拖拽排序无意义）；新建轻量卡（可在 `TaskOverviewTab.tsx` 内联），含完成圈/编辑/删除但无拖拽手柄。
-- **TS strict / noUnusedLocals**：新增 props/常量若未使用会编译失败；移除 butler `useTasks`/`onOpenTask`/`onTasksApiReady` 后注意删除随之闲置的 import 与 props。
+- **TS strict / noUnusedLocals**：新增 props/常量若未使用会编译失败；Butler 任务概览保留 `onOpenTask`/`onTasksApiReady` 透传时，需确保 `ButlerView`、`ButlerWorkspacePanel`、`App` 三层类型同步。
 - **`CrossRoleTask` 可直接喂 `TaskModal`**：`CrossRoleTask extends Task`，结构上可赋给 `TaskModal` 的 `task: Task`（多出的 roleName/roleColor 不影响）。编辑保存只发 `UpdateTaskInput`，`task_update` 按 id 更新且不动 `role_id`/`owner_type`，天然「同步到原角色/管家」。`task_update` 仅在 quadrant 变化时置 `manual_override`（`TaskModal` 已处理）。
 - **大石头上限按「被编辑任务的角色」校验，错误必须冒泡**：`update_task`（`db/tasks.rs:86-91`）在 `is_big_rock` 由 false→true 时对 `existing.owner_type`/`existing.role_id` 调 `count_big_rocks_by_owner`，≥3 返回 `ValidationError`。管家在概览改某角色任务为大石头时，校验的是**那个角色**的额度（非管家），后端已正确处理。前端务必：概览 `onSave` 写成 `async input => { await taskService.update(id, input); await refetch(); }`（**不要** `.catch` 吞错），让 rejection 冒泡到 `TaskModal`（其 `handleSubmit` 已 try/catch 并显示 `errorObj.ValidationError`）；update 失败时 `refetch` 不执行、弹窗不关。
-- **新建归属选择，默认管家**：概览「+新建」复用 `TaskModal` 新建分支 + 新增的归属 `<select>`（默认「管家」=`ownerType:'butler'`；选角色=`ownerType:'role'`+`roleId`）。新建经 `taskService.create`，同样受**大石头上限**（`create_task` 对所选 owner 计数）+ 错误冒泡约束。
+- **新建归属选择，默认管家**：概览「+新建」通过 App 级 `TaskModal` 新建分支 + `roles` prop 渲染归属 `<select>`（默认「管家」=`ownerType:'butler'`；选角色=`ownerType:'role'`+`roleId`）。新建经 `taskService.create`，同样受**大石头上限**（`create_task` 对所选 owner 计数）+ 错误冒泡约束。
 - **新建后异步分类需刷新**：未显式选象限的新建任务，`task_create` 立即返回默认 Q2 并后台分类，完成后发 `task:classified`；`useAllTasks` 须监听并 `refetch`（仿 `useTasks`），否则概览中该任务象限/排序滞后。
-- **仅 Tailwind utility**：象限 chips / 色点 / 选中态 / 按钮全部 Tailwind，禁自定义 CSS；动效加 `motion-reduce:` 变体（项目无障碍约定）。
+- **Tailwind utility 优先**：象限 chips / 色点 / 选中态 / 按钮全部 Tailwind，动效加 `motion-reduce:` 变体（项目无障碍约定）。例外：归属筛选横向滚动条使用局部 `.thin-horizontal-scrollbar` CSS，仅作用于该横向筛选条。
 
 ### Previous Story Intelligence
 
@@ -240,10 +246,11 @@ Story 3.7 将其**改造为「任务概览」**：标签改名「通用任务」
   - 排序：象限 Q1→Q4、未完成在前、大石头优先、owner role 先于 butler；
   - 补插一个 `status='archived'` 角色 + 任务，断言被排除（roles 表含 status 列）。
 - **前端测试**：
-  - `TaskOverviewTab.test.tsx`：mock `useAllTasks`（返回含 2 角色 + 1 管家 + 已完成任务的 `CrossRoleTask[]`）+ mock `taskService`，断言：**按 Q1→Q4 分区**渲染 + 已完成默认折叠（点展开才显） + 归属标签（角色色点/名、管家标「管家」）、象限 chip 点击后 `useAllTasks` 收到新 filters（或断言 `taskService.listAll` 参数）、仅大石头 toggle、**角色多选前端过滤**、空态文案、点卡开编辑弹窗且保存调 `taskService.update(id, input)`、完成切换调 `taskService.toggleComplete`、删除（确认后）调 `taskService.delete`、**「+新建」默认归属管家、选某角色后保存调 `taskService.create` 带 `ownerType`/`roleId`**。
-  - **大石头上限用例**：mock `taskService.update` reject 为 `{ ValidationError: '每个任务清单每周最多 3 个大石头，请先取消一个再标记' }`；编辑某角色任务勾选大石头保存 → 断言弹窗内出现该提示、`refetch` **未**被调用、弹窗未关闭。
-  - `TaskModal.test.tsx`（新增）：传 `allowOwnerSelect roles=[...]` + 新建模式 → 渲染归属下拉（默认管家），选角色后 `onSave` 收到 `ownerType:'role'`+`roleId`；不传 `allowOwnerSelect` 时不渲染下拉（回归）。
-  - `ButlerWorkspacePanel.test.tsx`：把 `vi.mock('../role/TasksTab')` 调整为 `vi.mock('./TaskOverviewTab')`，移除不再需要的 `useTasks` mock 与 `onOpenTask`/`onTasksApiReady` props；保留并通过 4 个记忆 badge 用例。
+  - `TaskOverviewTab.test.tsx`：通过 props 注入 `roles` 和 `CrossRoleTask[]`，断言按象限展示、归属标签、已完成默认折叠、归属筛选、象限/大石头回调、打开新建/编辑、完成切换、删除确认、归属筛选使用细横向滚动条类。
+  - `TaskModal.test.tsx`：传 `roles=[...]` + Butler 新建模式 → 渲染归属下拉（默认管家），选角色后 `onSave` 收到 `ownerType:'role'`+`roleId`；角色 scope 不渲染归属下拉（回归）。
+  - `useAllTasks.test.tsx`：filters 变化重查、错误兜底、更新失败不刷新并向上抛出错误，覆盖大石头超限冒泡所需路径。
+  - `ButlerWorkspacePanel.test.tsx`：mock `TaskOverviewTab` 与 `useAllTasks`；保留并通过记忆 badge 用例。
+  - `TasksTab.test.tsx` / `RoleView.test.tsx`：覆盖后续 UX polish（角色任务顶部上下结构、角色右侧面板不再叠加 slide-in）。
 - **必跑命令**：
   - `npm --prefix "egosync-app" run test:frontend`
   - `npm --prefix "egosync-app" run build`
@@ -251,7 +258,7 @@ Story 3.7 将其**改造为「任务概览」**：标签改名「通用任务」
 
 ### Project Structure Notes
 
-- **新增文件（3）**：`hooks/useAllTasks.ts`、`components/butler/TaskOverviewTab.tsx`、`components/butler/TaskOverviewTab.test.tsx`（+可选 `hooks/useAllTasks.test.tsx`）。
+- **新增文件（4）**：`hooks/useAllTasks.ts`、`hooks/useAllTasks.test.tsx`、`components/butler/TaskOverviewTab.tsx`、`components/butler/TaskOverviewTab.test.tsx`。
 - **无新增依赖、无新增迁移、无 DB schema 改动**（roles/tasks 表已含所需列）。
 - 符合项目规则：组件按域分目录（butler/）、hook `useXxx.ts`、service 封装 invoke、仅 Tailwind、图标 lucide-react、不在 `App.tsx` 内定义组件（仅加状态/handler/props）、Rust 三层（command→db）、serde camelCase、`Result<T,AppError>` + 无 `.unwrap()`。
 
@@ -292,7 +299,9 @@ Cascade
 - 新增 Rust `CrossRoleTask`、`list_all_tasks` DB 查询、`task_list_all` Tauri 命令并注册。
 - 新增前端 `CrossRoleTask` / `AllTasksFilter`、`taskService.listAll`、`useAllTasks`。
 - Butler 任务 Tab 改为 `TaskOverviewTab`，展示管家 + 所有 active 角色任务，支持归属筛选、大石头筛选、四象限分区、已完成折叠、编辑、删除、完成切换。
+- 归属筛选横向滚动条改为局部细滚动条，并微调厚度与筛选项间距。
 - `TaskModal` 支持 Butler 新建任务时选择归属，编辑路径保持兼容。
+- 角色任务页顶部布局与角色右侧面板动画完成 UX polish，原有交互保持。
 - 更新并新增 Rust / 前端测试，验证全量测试和构建通过。
 
 ### File List
@@ -312,12 +321,18 @@ Cascade
 - `egosync-app/src/components/modals/TaskModal.tsx`
 - `egosync-app/src/components/modals/TaskModal.test.tsx`
 - `egosync-app/src/App.tsx`
+- `egosync-app/src/components/role/TasksTab.tsx`
+- `egosync-app/src/components/role/TasksTab.test.tsx`
+- `egosync-app/src/components/role/RoleView.tsx`
+- `egosync-app/src/components/role/RoleView.test.tsx`
+- `egosync-app/src/index.css`
 - `_bmad-output/implementation-artifacts/3-7-butler-all-roles-task-tab.md`
 - `_bmad-output/implementation-artifacts/sprint-status.yaml`
 
 ### Change Log
 
 - 2026-06-20: 完成 Story 3.7 管家全角色任务概览实现与验证。
+- 2026-06-20: 完成后续 UX polish：角色任务顶部上下布局、角色右侧面板单一过渡动画、任务概览归属筛选细横向滚动条，并刷新本文档使其与实际代码一致。
 
 ## 待确认问题（boss 已给主方向，剩余请开发前确认）
 
@@ -341,8 +356,8 @@ Cascade
 
 - [x] [Review][Patch] 「通用任务」Tab 改名「任务概览」（boss 确认为漏改）— 已修复 `ButlerWorkspacePanel.tsx:109`。
 - [x] [Review][Patch] 筛选器按原 AC4/AC5/AC6/D4 回补（boss 选择回补）— 已实现：角色归属多选 chips（`TaskOverviewTab.tsx`）、象限 chips 单选（全部/Q1-Q4）、象限+大石头改服务端过滤（状态上提至 `ButlerWorkspacePanel.tsx:45-51`、经 `useAllTasks(filter)`），角色多选仍前端过滤；同步更新 `TaskOverviewTab.test.tsx`。
-- [x] [Review][Patch] 空态文案与 AC7 对齐 — 已实现两态：全空显示「所有角色都很轻松，可以考虑添加新目标」，筛选空显示「当前筛选无匹配任务」（`TaskOverviewTab.tsx:357-360`）。
+- [x] [Review][Patch] 空态文案与 AC7 对齐 — 已实现两态：全空显示「所有角色都很轻松，可以考虑添加新目标」，筛选空显示「当前筛选无匹配任务」（`TaskOverviewTab.tsx`）。
 - [x] [Review][Patch] 补大石头上限拒绝路径测试 — `TaskModal.test.tsx` 已覆盖弹窗保持打开 + 新建归属 payload；新增 `useAllTasks.test.tsx`「更新失败时不刷新列表并向上抛出错误」用例，验证超限拒绝时 `refetch` 未触发且错误冒泡。
-- [x] [Review][Defer] `groupedTasks` 对非法 quadrant 无防御 [TaskOverviewTab.tsx:179-185] — deferred，后端 `validate_quadrant` 已约束取值，实际不可达，仅防御性提示。
-- [x] [Review][Dismiss] Dev Notes（行 167-168、208）描述「移除 butler 接线、编辑直连 taskService」与实现（保留 `onTasksApiReady`/`onOpenTask`、经 App TaskModal + `useAllTasks` 按 id 落库）不符 — 文档漂移，非代码缺陷；实现按 id 更新功能等价。
-- [x] [Review][Dismiss] `orderByOverview` 在大石头与 sortOrder 之间插入 owner 名称排序（`TaskOverviewTab.tsx:187-190`），与 AC3「大石头→sortOrder」略有出入 — 视觉影响轻微，按 owner 聚合可读性更好。
+- [x] [Review][Defer] `groupedTasks` 对非法 quadrant 无防御 — deferred，后端 `validate_quadrant` 已约束取值，实际不可达，仅防御性提示。
+- [x] [Review][Docs Refresh] `3-7-butler-all-roles-task-tab.md` 已按实际代码刷新：保留 `onOpenTask`/`onTasksApiReady` 透传，Butler 通过 `useAllTasks` 注册全量任务 actions；App 级 `TaskModal` 负责新建/编辑；后续角色侧 UX polish 与局部滚动条样式已纳入 File List / Change Log。
+- [x] [Review][Dismiss] `orderByOverview` 在大石头与 sortOrder 之间插入 owner 名称排序，与 AC3「大石头→sortOrder」略有出入 — 视觉影响轻微，按 owner 聚合可读性更好。

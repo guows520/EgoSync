@@ -3,7 +3,7 @@ use tauri::State;
 use crate::db::pool::DbPool;
 use crate::db::tasks;
 use crate::error::AppError;
-use crate::models::task::{CreateTaskInput, Task, UpdateTaskInput};
+use crate::models::task::{CreateTaskInput, CrossRoleTask, Task, UpdateTaskInput};
 use crate::services::task_classifier;
 
 /// 任务创建后自动分类完成（或降级）时推送的事件名。
@@ -61,6 +61,18 @@ pub async fn task_list_by_role(
 #[tauri::command]
 pub async fn task_list_butler(pool: State<'_, DbPool>) -> Result<Vec<Task>, AppError> {
     tasks::list_butler_tasks(&pool).await
+}
+
+#[tauri::command]
+pub async fn task_list_all(
+    quadrant: Option<String>,
+    is_big_rock: Option<bool>,
+    pool: State<'_, DbPool>,
+) -> Result<Vec<CrossRoleTask>, AppError> {
+    if let Some(ref q) = quadrant {
+        validate_quadrant(q)?;
+    }
+    tasks::list_all_tasks(&pool, quadrant.as_deref(), is_big_rock).await
 }
 
 #[tauri::command]

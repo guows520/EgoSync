@@ -1,7 +1,7 @@
 use sqlx::SqlitePool;
 
 use crate::error::AppError;
-use crate::models::task::{CreateTaskInput, Task, TaskOwnerType, UpdateTaskInput};
+use crate::models::task::{CreateTaskInput, CrossRoleTask, Task, TaskOwnerType, UpdateTaskInput};
 
 const TASK_SELECT_COLUMNS: &str = "id, owner_type, role_id, title, deadline, quadrant, is_big_rock, is_completed, completed_at, sort_order, protection_status, confidence, manual_override, classification_reason, created_at, updated_at, deleted_at";
 const ALLOWED_QUADRANTS: &[&str] = &["Q1", "Q2", "Q3", "Q4"];
@@ -54,6 +54,33 @@ pub async fn list_tasks_by_role(pool: &SqlitePool, role_id: &str) -> Result<Vec<
 
 pub async fn list_butler_tasks(pool: &SqlitePool) -> Result<Vec<Task>, AppError> {
     list_tasks_by_owner(pool, "butler", None).await
+}
+
+pub async fn list_all_tasks(
+    pool: &SqlitePool,
+    quadrant: Option<&str>,
+    is_big_rock: Option<bool>,
+) -> Result<Vec<CrossRoleTask>, AppError> {
+    sqlx::query_as::<_, CrossRoleTask>(
+        "SELECT t.id, t.owner_type, t.role_id, t.title, t.deadline, t.quadrant,
+                t.is_big_rock, t.is_completed, t.completed_at, t.sort_order,
+                t.protection_status, t.confidence, t.manual_override,
+                t.classification_reason, t.created_at, t.updated_at, t.deleted_at,
+                r.name AS role_name, r.color AS role_color
+         FROM tasks t
+         LEFT JOIN roles r ON t.role_id = r.id
+         WHERE t.deleted_at IS NULL
+           AND (t.owner_type = 'butler' OR r.status = 'active')
+           AND (?1 IS NULL OR t.quadrant = ?1)
+           AND (?2 IS NULL OR t.is_big_rock = ?2)
+         ORDER BY t.quadrant ASC, t.is_completed ASC, t.is_big_rock DESC,
+                  t.owner_type ASC, t.sort_order ASC",
+    )
+    .bind(quadrant)
+    .bind(is_big_rock)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| AppError::DbError(format!("查询全量任务失败: {}", e)))
 }
 
 async fn list_tasks_by_owner(
@@ -1411,5 +1438,162 @@ mod tests {
         assert_eq!(protection_status_of(&pool, "q2-stale-at-risk").await, "at_risk", "仍过期保持 at_risk");
         assert_eq!(protection_status_of(&pool, "q1-at-risk").await, "normal", "非 Q2 被清回 normal");
         assert_eq!(protection_status_of(&pool, "q2-recent").await, "normal", "近期 Q2 不标记");
+    }
+
+    // ---- Story 3.7: list_all_tasks 跨 owner 查询 ----
+
+    /// 直接 INSERT 一条 butler 任务，精确控制 quadrant/is_completed/is_big_rock/sort_order。
+    async fn insert_butler_task_raw(
+        pool: &SqlitePool,
+        id: &str,
+        quadrant: &str,
+        is_completed: bool,
+        is_big_rock: bool,
+        sort_order: i32,
+    ) {
+        sqlx::query(
+            "INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, is_big_rock, sort_order, created_at, updated_at)
+             VALUES (?1, 'butler', NULL, ?2, ?3, ?4, ?5, ?6, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')",
+        )
+        .bind(id)
+        .bind(format!("管家任务 {}", id))
+        .bind(quadrant)
+        .bind(is_completed as i32)
+        .bind(is_big_rock as i32)
+        .bind(sort_order)
+        .execute(pool)
+        .await
+        .expect("insert butler task");
+    }
+
+    /// 直接 INSERT 一条角色任务，精确控制各字段。
+    async fn insert_role_task_raw(
+        pool: &SqlitePool,
+        id: &str,
+        role_id: &str,
+        quadrant: &str,
+        is_completed: bool,
+        is_big_rock: bool,
+        sort_order: i32,
+    ) {
+        sqlx::query(
+            "INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, is_big_rock, sort_order, created_at, updated_at)
+             VALUES (?1, 'role', ?2, ?3, ?4, ?5, ?6, ?7, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')",
+        )
+        .bind(id)
+        .bind(role_id)
+        .bind(format!("角色任务 {}", id))
+        .bind(quadrant)
+        .bind(is_completed as i32)
+        .bind(is_big_rock as i32)
+        .bind(sort_order)
+        .execute(pool)
+        .await
+        .expect("insert role task");
+    }
+
+    #[tokio::test]
+    async fn list_all_tasks_includes_butler_and_role_tasks() {
+        let pool = setup_test_db().await;
+        insert_role_task_raw(&pool, "r-q1", "role-a", "Q1", false, false, 0).await;
+        insert_butler_task_raw(&pool, "b-q2", "Q2", false, false, 0).await;
+
+        let all = list_all_tasks(&pool, None, None).await.expect("list all");
+
+        assert_eq!(all.len(), 2);
+        let role_task = all.iter().find(|t| t.id == "r-q1").expect("role task");
+        assert_eq!(role_task.owner_type, "role");
+        assert_eq!(role_task.role_name.as_deref(), Some("产品"));
+        assert_eq!(role_task.role_color.as_deref(), Some("#4F46E5"));
+
+        let butler_task = all.iter().find(|t| t.id == "b-q2").expect("butler task");
+        assert_eq!(butler_task.owner_type, "butler");
+        assert_eq!(butler_task.role_name, None);
+        assert_eq!(butler_task.role_color, None);
+    }
+
+    #[tokio::test]
+    async fn list_all_tasks_includes_completed_tasks() {
+        let pool = setup_test_db().await;
+        insert_role_task_raw(&pool, "r-done", "role-a", "Q1", true, false, 0).await;
+        insert_role_task_raw(&pool, "r-todo", "role-a", "Q1", false, false, 1).await;
+
+        let all = list_all_tasks(&pool, None, None).await.expect("list all");
+
+        assert_eq!(all.len(), 2, "已完成任务应包含在结果中");
+        let todo_task = all.iter().find(|t| t.id == "r-todo").expect("todo task");
+        let done_task = all.iter().find(|t| t.id == "r-done").expect("done task");
+        assert!(!todo_task.is_completed);
+        assert!(done_task.is_completed);
+    }
+
+    #[tokio::test]
+    async fn list_all_tasks_filters_by_quadrant() {
+        let pool = setup_test_db().await;
+        insert_role_task_raw(&pool, "r-q1", "role-a", "Q1", false, false, 0).await;
+        insert_role_task_raw(&pool, "r-q2", "role-a", "Q2", false, false, 0).await;
+        insert_butler_task_raw(&pool, "b-q1", "Q1", false, false, 0).await;
+
+        let q1_only = list_all_tasks(&pool, Some("Q1"), None).await.expect("list Q1");
+        assert_eq!(q1_only.len(), 2);
+        assert!(q1_only.iter().all(|t| t.quadrant == "Q1"));
+    }
+
+    #[tokio::test]
+    async fn list_all_tasks_filters_by_is_big_rock() {
+        let pool = setup_test_db().await;
+        insert_role_task_raw(&pool, "r-rock", "role-a", "Q2", false, true, 0).await;
+        insert_role_task_raw(&pool, "r-normal", "role-a", "Q2", false, false, 1).await;
+
+        let rocks = list_all_tasks(&pool, None, Some(true)).await.expect("list big rocks");
+        assert_eq!(rocks.len(), 1);
+        assert_eq!(rocks[0].id, "r-rock");
+        assert!(rocks[0].is_big_rock);
+    }
+
+    #[tokio::test]
+    async fn list_all_tasks_excludes_archived_role_tasks() {
+        let pool = setup_test_db().await;
+        // 插入一个归档角色 + 其任务
+        sqlx::query("INSERT INTO roles (id, name, status) VALUES ('role-c', '已归档角色', 'archived')")
+            .execute(&pool)
+            .await
+            .expect("insert archived role");
+        insert_role_task_raw(&pool, "r-archived", "role-c", "Q1", false, false, 0).await;
+        insert_role_task_raw(&pool, "r-active", "role-a", "Q1", false, false, 0).await;
+        insert_butler_task_raw(&pool, "b-active", "Q2", false, false, 0).await;
+
+        let all = list_all_tasks(&pool, None, None).await.expect("list all");
+
+        let ids: Vec<&str> = all.iter().map(|t| t.id.as_str()).collect();
+        assert!(ids.contains(&"r-active"), "活跃角色任务应包含");
+        assert!(ids.contains(&"b-active"), "管家任务应包含");
+        assert!(!ids.contains(&"r-archived"), "归档角色任务应被排除");
+    }
+
+    #[tokio::test]
+    async fn list_all_tasks_orders_by_quadrant_then_completed_then_big_rock_then_owner_then_sort() {
+        let pool = setup_test_db().await;
+        // Q1 未完成大石头 (role-a) — 应排第一
+        insert_role_task_raw(&pool, "r-q1-rock", "role-a", "Q1", false, true, 0).await;
+        // Q1 未完成普通 (role-a, sort_order=0) — 应排第二
+        insert_role_task_raw(&pool, "r-q1-normal", "role-a", "Q1", false, false, 0).await;
+        // Q1 已完成 — 应排第三（is_completed ASC: 0在前, 1在后）
+        insert_role_task_raw(&pool, "r-q1-done", "role-a", "Q1", true, false, 1).await;
+        // Q2 butler 未完成 — Q2 在 Q1 之后
+        insert_butler_task_raw(&pool, "b-q2", "Q2", false, false, 0).await;
+        // Q2 role-b 未完成 — owner_type 'butler' < 'role' 字典序，但 'butler' 排在前
+        insert_role_task_raw(&pool, "r-q2-b", "role-b", "Q2", false, false, 0).await;
+
+        let all = list_all_tasks(&pool, None, None).await.expect("list all");
+        let ids: Vec<&str> = all.iter().map(|t| t.id.as_str()).collect();
+
+        // Q1 在 Q2 前
+        assert_eq!(ids[0], "r-q1-rock", "Q1 大石头优先");
+        assert_eq!(ids[1], "r-q1-normal", "Q1 普通未完成");
+        assert_eq!(ids[2], "r-q1-done", "Q1 已完成排最后");
+        // Q2: butler 排在 role 前 (owner_type ASC: 'butler' < 'role')
+        assert_eq!(ids[3], "b-q2", "Q2 butler 在 role 前");
+        assert_eq!(ids[4], "r-q2-b", "Q2 role-b 在 butler 后");
     }
 }

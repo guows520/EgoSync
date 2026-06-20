@@ -1,5 +1,5 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Circle, Edit2, GripVertical, Loader2, Plus, Trash2 } from 'lucide-react';
+import { useState, type ReactNode } from 'react';
+import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Circle, Edit2, Filter, GripVertical, Loader2, Plus, Target, Trash2 } from 'lucide-react';
 import {
   DndContext,
   DragOverlay,
@@ -128,8 +128,8 @@ function pointerWithinFallbackToClosestCenter(args: Parameters<typeof pointerWit
   return pointerCollisions.length > 0 ? pointerCollisions : closestCenter(args);
 }
 
-function SortableTaskCard({ task, callbacks, isClassifying }: { task: Task; callbacks: TaskCardCallbacks; isClassifying?: boolean }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id });
+function SortableTaskCard({ task, callbacks, isClassifying, disabled = false }: { task: Task; callbacks: TaskCardCallbacks; isClassifying?: boolean; disabled?: boolean }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id, disabled });
   const style = {
     transform: CSS.Transform.toString(transform),
     transition: transition ?? 'transform 200ms ease',
@@ -145,15 +145,17 @@ function SortableTaskCard({ task, callbacks, isClassifying }: { task: Task; call
         callbacks={callbacks}
         isClassifying={isClassifying}
         dragHandle={
-          <button
-            {...attributes}
-            {...listeners}
-            onClick={event => event.stopPropagation()}
-            className="text-slate-300 hover:text-slate-500 cursor-grab active:cursor-grabbing shrink-0 mt-0.5 touch-none"
-            aria-label={`拖动排序 ${task.title}`}
-          >
-            <GripVertical size={18} />
-          </button>
+          disabled ? undefined : (
+            <button
+              {...attributes}
+              {...listeners}
+              onClick={event => event.stopPropagation()}
+              className="text-slate-300 hover:text-slate-500 cursor-grab active:cursor-grabbing shrink-0 mt-0.5 touch-none"
+              aria-label={`拖动排序 ${task.title}`}
+            >
+              <GripVertical size={18} />
+            </button>
+          )
         }
       />
     </div>
@@ -166,33 +168,6 @@ function CompletedTaskCard({ task, callbacks }: { task: Task; callbacks: TaskCar
       className={cn(CARD_BASE_CLASS, 'opacity-60 scale-[0.99]')}
     >
       <TaskCardBody task={task} callbacks={callbacks} />
-    </div>
-  );
-}
-
-// 象限组折叠容器：grid-rows 300ms 动画 + 折叠态用 inert 把内容整体移出焦点顺序与无障碍树，
-// 避免键盘/读屏用户 Tab 进入视觉上已收起（高度 0）的卡片。React 18.2 无 inert prop，经 ref 设置 DOM 属性。
-function CollapsibleSection({ id, collapsed, children }: { id: string; collapsed: boolean; children: ReactNode }) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const node = ref.current;
-    if (!node) return;
-    if (collapsed) {
-      node.setAttribute('inert', '');
-    } else {
-      node.removeAttribute('inert');
-    }
-  }, [collapsed]);
-  return (
-    <div
-      id={id}
-      ref={ref}
-      className={cn(
-        'grid transition-[grid-template-rows] duration-300 ease-in-out motion-reduce:transition-none',
-        collapsed ? 'grid-rows-[0fr]' : 'grid-rows-[1fr]',
-      )}
-    >
-      <div className="overflow-hidden">{children}</div>
     </div>
   );
 }
@@ -218,12 +193,22 @@ const quadrantEmptyHint: Record<TaskQuadrant, string> = {
   Q4: '没有可有可无的任务，注意力很集中',
 };
 
+const quadrantChips: Array<{ value: TaskQuadrant | 'all'; label: string }> = [
+  { value: 'all', label: '全部' },
+  { value: 'Q1', label: 'Q1' },
+  { value: 'Q2', label: 'Q2' },
+  { value: 'Q3', label: 'Q3' },
+  { value: 'Q4', label: 'Q4' },
+];
+
 export function TasksTab({ role, tasks, isLoading, error, classifyingIds = EMPTY_CLASSIFYING_IDS, onOpenTask, onDeleteTask, onReorderTasks, onToggleComplete }: TasksTabProps) {
   const [pendingDeleteTask, setPendingDeleteTask] = useState<Task | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState('');
   const [activeId, setActiveId] = useState<string | null>(null);
   const [actionError, setActionError] = useState('');
+  const [quadrantFilter, setQuadrantFilter] = useState<TaskQuadrant | 'all'>('all');
+  const [showBigRocksOnly, setShowBigRocksOnly] = useState(false);
   // 按象限折叠已完成任务列表：默认折叠，避免占据大量空间淫没未完成任务
   const [expandedCompleted, setExpandedCompleted] = useState<Record<TaskQuadrant, boolean>>({
     Q1: false,
@@ -233,20 +218,6 @@ export function TasksTab({ role, tasks, isLoading, error, classifyingIds = EMPTY
   });
   const toggleCompletedSection = (quadrant: TaskQuadrant) => {
     setExpandedCompleted(prev => ({ ...prev, [quadrant]: !prev[quadrant] }));
-  };
-  // 按象限折叠整组（未完成 + 已完成子区）：默认全展开，不持久化，组件卸载即复位
-  const [collapsedQuadrants, setCollapsedQuadrants] = useState<Set<TaskQuadrant>>(() => new Set());
-  const quadrantRegionBaseId = useId();
-  const toggleQuadrant = (quadrant: TaskQuadrant) => {
-    setCollapsedQuadrants(prev => {
-      const next = new Set(prev);
-      if (next.has(quadrant)) {
-        next.delete(quadrant);
-      } else {
-        next.add(quadrant);
-      }
-      return next;
-    });
   };
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -277,7 +248,12 @@ export function TasksTab({ role, tasks, isLoading, error, classifyingIds = EMPTY
   }
 
   const activeStyle = role.color ? { color: role.color, borderColor: role.color } : undefined;
-  const groupedTasks = tasks.reduce<Record<TaskQuadrant, Task[]>>(
+  const allQuadrants = Object.keys(quadrantLabels) as TaskQuadrant[];
+  const visibleTasks = tasks.filter(task => (
+    (quadrantFilter === 'all' || task.quadrant === quadrantFilter)
+    && (!showBigRocksOnly || task.isBigRock)
+  ));
+  const groupedTasks = visibleTasks.reduce<Record<TaskQuadrant, Task[]>>(
     (groups, task) => {
       groups[task.quadrant].push(task);
       return groups;
@@ -286,7 +262,8 @@ export function TasksTab({ role, tasks, isLoading, error, classifyingIds = EMPTY
   );
 
   const orderBySort = (a: Task, b: Task) => (Number(b.isBigRock) - Number(a.isBigRock)) || (a.sortOrder - b.sortOrder);
-  const allQuadrants = Object.keys(quadrantLabels) as TaskQuadrant[];
+  const isFiltered = quadrantFilter !== 'all' || showBigRocksOnly;
+  const visibleQuadrants = quadrantFilter === 'all' ? allQuadrants : [quadrantFilter];
   const incompleteByQuadrant = {} as Record<TaskQuadrant, Task[]>;
   const completedByQuadrant = {} as Record<TaskQuadrant, Task[]>;
   allQuadrants.forEach(quadrant => {
@@ -320,6 +297,7 @@ export function TasksTab({ role, tasks, isLoading, error, classifyingIds = EMPTY
     setActiveId(null);
     const { active, over } = event;
     if (!over || active.id === over.id) return;
+    if (isFiltered) return;
     const activeKey = String(active.id);
     const overKey = String(over.id);
     const quadrant = allQuadrants.find(q => incompleteByQuadrant[q].some(task => task.id === activeKey));
@@ -345,23 +323,59 @@ export function TasksTab({ role, tasks, isLoading, error, classifyingIds = EMPTY
   return (
     <>
       <div className="space-y-6">
-      <div className="flex justify-end">
-        <button
-          onClick={() => onOpenTask(null)}
-          className="inline-flex items-center gap-1.5 hover:bg-slate-200 px-2.5 py-1.5 rounded-md transition-colors text-[13px] font-medium"
-          style={activeStyle}
-        >
-          <Plus size={16}/> 新增任务
-        </button>
-      </div>
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h3 className="text-[15px] font-semibold text-slate-800">任务清单</h3>
+              <p className="mt-0.5 text-[12px] text-slate-500">管理当前角色的任务</p>
+            </div>
+            <button
+              onClick={() => onOpenTask(null)}
+              className="inline-flex items-center gap-1.5 hover:bg-slate-200 px-2.5 py-1.5 rounded-md transition-colors text-[13px] font-medium w-fit shrink-0"
+              style={activeStyle}
+            >
+              <Plus size={16}/> 新增任务
+            </button>
+          </div>
+
+          <div className="flex items-center gap-1.5 flex-wrap rounded-xl border border-slate-200 bg-white/70 px-3 py-2.5" role="group" aria-label="按象限筛选">
+            <Filter size={14} className="text-slate-400" />
+            {quadrantChips.map(chip => (
+              <button
+                key={chip.value}
+                type="button"
+                onClick={() => setQuadrantFilter(chip.value)}
+                aria-pressed={quadrantFilter === chip.value}
+                className={cn(
+                  'px-2.5 py-1 rounded-md text-[12px] font-medium transition-colors motion-reduce:transition-none',
+                  quadrantFilter === chip.value ? 'bg-indigo-100 text-indigo-700' : 'text-slate-500 hover:bg-slate-100',
+                )}
+              >
+                {chip.label}
+              </button>
+            ))}
+            <span className="w-px h-4 bg-slate-200 mx-0.5" />
+            <button
+              type="button"
+              onClick={() => setShowBigRocksOnly(prev => !prev)}
+              aria-pressed={showBigRocksOnly}
+              className={cn(
+                'inline-flex items-center gap-1 px-2 py-1 rounded-md text-[12px] font-medium transition-colors motion-reduce:transition-none',
+                showBigRocksOnly ? 'bg-amber-100 text-amber-700' : 'text-slate-500 hover:bg-slate-100',
+              )}
+            >
+              <Target size={13} /> 只看大石头
+            </button>
+          </div>
+        </div>
 
       {actionError && (
         <div role="alert" className="text-[13px] text-red-600">{actionError}</div>
       )}
 
-      {tasks.length === 0 ? (
+      {visibleTasks.length === 0 ? (
         <div className="rounded-xl border border-dashed border-slate-200 bg-white/70 p-6 text-center text-[13px] text-slate-500">
-          还没有任务，先添加一个小目标吧
+          {tasks.length === 0 ? '还没有任务，先添加一个小目标吧' : '当前筛选无匹配任务'}
         </div>
       ) : (
         <DndContext
@@ -371,12 +385,10 @@ export function TasksTab({ role, tasks, isLoading, error, classifyingIds = EMPTY
           onDragEnd={handleDragEnd}
           onDragCancel={() => setActiveId(null)}
         >
-          {allQuadrants.map(quadrant => {
+          {visibleQuadrants.map(quadrant => {
             const count = groupedTasks[quadrant].length;
             const completedTasks = completedByQuadrant[quadrant];
             const isExpanded = expandedCompleted[quadrant];
-            const isCollapsed = collapsedQuadrants.has(quadrant);
-            const regionId = `${quadrantRegionBaseId}-${quadrant}`;
             const titleSpan = (
               <span className={cn('text-[12px] font-bold tracking-widest', quadrantTitleColor[quadrant])}>
                 {quadrantLabels[quadrant]}
@@ -405,48 +417,39 @@ export function TasksTab({ role, tasks, isLoading, error, classifyingIds = EMPTY
 
             return (
               <div key={quadrant}>
-                <button
-                  type="button"
-                  onClick={() => toggleQuadrant(quadrant)}
-                  aria-expanded={!isCollapsed}
-                  aria-controls={regionId}
-                  className="flex items-center justify-between w-full mb-3"
-                >
+                <div className="flex items-center justify-between w-full mb-3">
                   <span className="flex items-center gap-1.5">
-                    {isCollapsed ? <ChevronRight size={14} className="text-slate-400" /> : <ChevronDown size={14} className="text-slate-400" />}
                     {titleSpan}
                   </span>
                   {countBadge}
-                </button>
-                <CollapsibleSection id={regionId} collapsed={isCollapsed}>
-                  <div className="space-y-2.5">
-                    <SortableContext
-                      items={incompleteByQuadrant[quadrant].map(task => task.id)}
-                      strategy={verticalListSortingStrategy}
-                    >
-                      {incompleteByQuadrant[quadrant].map(task => (
-                        <SortableTaskCard key={task.id} task={task} callbacks={callbacks} isClassifying={classifyingIds.has(task.id)} />
+                </div>
+                <div className="space-y-2.5">
+                  <SortableContext
+                    items={incompleteByQuadrant[quadrant].map(task => task.id)}
+                    strategy={verticalListSortingStrategy}
+                  >
+                    {incompleteByQuadrant[quadrant].map(task => (
+                      <SortableTaskCard key={task.id} task={task} callbacks={callbacks} isClassifying={classifyingIds.has(task.id)} disabled={isFiltered} />
+                    ))}
+                  </SortableContext>
+                  {completedTasks.length > 0 && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => toggleCompletedSection(quadrant)}
+                        aria-expanded={isExpanded}
+                        className="flex items-center gap-1.5 px-2 py-1 text-[12px] font-medium text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-md transition-colors w-fit"
+                      >
+                        {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                        <CheckCircle2 size={14} className="text-emerald-500" />
+                        <span>已完成 ({completedTasks.length})</span>
+                      </button>
+                      {isExpanded && completedTasks.map(task => (
+                        <CompletedTaskCard key={task.id} task={task} callbacks={callbacks} />
                       ))}
-                    </SortableContext>
-                    {completedTasks.length > 0 && (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() => toggleCompletedSection(quadrant)}
-                          aria-expanded={isExpanded}
-                          className="flex items-center gap-1.5 px-2 py-1 text-[12px] font-medium text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-md transition-colors w-fit"
-                        >
-                          {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                          <CheckCircle2 size={14} className="text-emerald-500" />
-                          <span>已完成 ({completedTasks.length})</span>
-                        </button>
-                        {isExpanded && completedTasks.map(task => (
-                          <CompletedTaskCard key={task.id} task={task} callbacks={callbacks} />
-                        ))}
-                      </>
-                    )}
-                  </div>
-                </CollapsibleSection>
+                    </>
+                  )}
+                </div>
               </div>
             );
           })}

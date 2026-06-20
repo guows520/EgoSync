@@ -2,10 +2,12 @@ import { useState } from 'react';
 import { Sparkles, Target, X } from 'lucide-react';
 import { Modal } from '../layout/Modal';
 import type { CreateTaskInput, Task, TaskQuadrant, UpdateTaskInput } from '../../types/task';
+import type { Role } from '../../types/role';
 import type { TaskScope } from '../../hooks/useTasks';
 
 interface TaskModalProps {
   scope: TaskScope;
+  roles?: Role[];
   task?: Task | null;
   onClose: () => void;
   onSave: (input: CreateTaskInput | UpdateTaskInput) => Promise<void> | void;
@@ -21,7 +23,7 @@ const quadrantOptions: Array<{ value: TaskQuadrant; label: string }> = [
 /** 新建任务时的「智能判断」特殊选项值。 */
 const AUTO_QUADRANT = 'auto';
 
-export function TaskModal({ scope, task, onClose, onSave }: TaskModalProps) {
+export function TaskModal({ scope, roles = [], task, onClose, onSave }: TaskModalProps) {
   const isEditing = !!task;
   const [title, setTitle] = useState(task?.title ?? '');
   // 新建任务时默认「智能判断」，编辑时预填当前象限
@@ -30,6 +32,7 @@ export function TaskModal({ scope, task, onClose, onSave }: TaskModalProps) {
   );
   const [deadline, setDeadline] = useState(task?.deadline ?? '');
   const [isBigRock, setIsBigRock] = useState(task?.isBigRock ?? false);
+  const [ownerValue, setOwnerValue] = useState(scope.ownerType === 'role' ? scope.roleId : 'butler');
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -57,9 +60,12 @@ export function TaskModal({ scope, task, onClose, onSave }: TaskModalProps) {
           isBigRock,
         });
       } else {
+        const ownerScope: TaskScope = ownerValue === 'butler'
+          ? { ownerType: 'butler' }
+          : { ownerType: 'role', roleId: ownerValue };
         await onSave({
-          ownerType: scope.ownerType,
-          ...(scope.ownerType === 'role' ? { roleId: scope.roleId } : {}),
+          ownerType: ownerScope.ownerType,
+          ...(ownerScope.ownerType === 'role' ? { roleId: ownerScope.roleId } : {}),
           title: trimmedTitle,
           // 新建时若用户选了「自动判断」则不传 quadrant，后端触发 LLM 分类
           ...(explicitQuadrant ? { quadrant: explicitQuadrant } : {}),
@@ -90,6 +96,22 @@ export function TaskModal({ scope, task, onClose, onSave }: TaskModalProps) {
         </div>
         
         <div className="space-y-5">
+          {!isEditing && scope.ownerType === 'butler' && roles.length > 0 && (
+            <div>
+              <label htmlFor="task-owner" className="block text-[13px] font-medium text-slate-700 mb-1.5">任务归属</label>
+              <select
+                id="task-owner"
+                value={ownerValue}
+                onChange={event => setOwnerValue(event.target.value)}
+                className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-[13px] focus:ring-2 focus:ring-indigo-500/20 outline-none"
+              >
+                <option value="butler">管家</option>
+                {roles.map(role => (
+                  <option key={role.id} value={role.id}>{role.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
           <div>
             <label htmlFor="task-title" className="block text-[13px] font-medium text-slate-700 mb-1.5">任务内容</label>
             <input

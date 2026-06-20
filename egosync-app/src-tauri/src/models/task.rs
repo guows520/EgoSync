@@ -48,6 +48,30 @@ pub struct CreateTaskInput {
     pub is_big_rock: Option<bool>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct CrossRoleTask {
+    pub id: String,
+    pub owner_type: String,
+    pub role_id: Option<String>,
+    pub title: String,
+    pub deadline: Option<String>,
+    pub quadrant: String,
+    pub is_big_rock: bool,
+    pub is_completed: bool,
+    pub completed_at: Option<String>,
+    pub sort_order: i32,
+    pub protection_status: String,
+    pub confidence: Option<f64>,
+    pub manual_override: bool,
+    pub classification_reason: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub deleted_at: Option<String>,
+    pub role_name: Option<String>,
+    pub role_color: Option<String>,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateTaskInput {

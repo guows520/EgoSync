@@ -74,6 +74,14 @@
   background: var(--text-muted);
 }
 
+.thin-horizontal-scrollbar::-webkit-scrollbar {
+  height: 4px;
+}
+
+.thin-horizontal-scrollbar::-webkit-scrollbar-thumb {
+  border-radius: 9999px;
+}
+
 /* Animations */
 .breathe {
   animation: breathe var(--duration-breath) ease-in-out infinite;

@@ -31,6 +31,16 @@ export interface Task {
   deletedAt: string | null;
 }
 
+export interface CrossRoleTask extends Task {
+  roleName: string | null;
+  roleColor: string | null;
+}
+
+export interface AllTasksFilter {
+  quadrant?: TaskQuadrant;
+  isBigRock?: boolean;
+}
+
 export interface CreateTaskInput {
   ownerType?: TaskOwnerType;
   roleId?: string | null;

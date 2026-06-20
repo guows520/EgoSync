@@ -30,12 +30,12 @@ vi.mock('./ButlerSettingsContent', () => ({
   ButlerSettingsContent: () => <div>管家设置内容</div>,
 }));
 
-vi.mock('../role/TasksTab', () => ({
-  TasksTab: () => <div>任务内容</div>,
+vi.mock('./TaskOverviewTab', () => ({
+  TaskOverviewTab: () => <div>任务总览内容</div>,
 }));
 
-vi.mock('../../hooks/useTasks', () => ({
-  useTasks: () => ({
+vi.mock('../../hooks/useAllTasks', () => ({
+  useAllTasks: () => ({
     tasks: [],
     isLoading: false,
     error: null,
@@ -44,7 +44,6 @@ vi.mock('../../hooks/useTasks', () => ({
     createTask: vi.fn(),
     updateTask: vi.fn(),
     deleteTask: vi.fn(),
-    reorderTasks: vi.fn(),
     toggleComplete: vi.fn(),
   }),
 }));

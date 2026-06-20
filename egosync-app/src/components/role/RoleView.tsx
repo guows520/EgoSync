@@ -103,8 +103,14 @@ export function RoleView({
           />
         </div>
 
-        {openTab && (
-          <div className="w-[40%] bg-slate-50/60 dark:bg-slate-800/60 flex flex-col backdrop-blur-sm border-l border-white/40 dark:border-slate-700/40 shadow-[-8px_0_24px_rgba(0,0,0,0.02)] animate-in slide-in-from-right-8 duration-300">
+        <div
+          className={cn(
+            'bg-slate-50/60 dark:bg-slate-800/60 flex flex-col backdrop-blur-sm border-l border-white/40 dark:border-slate-700/40 shadow-[-8px_0_24px_rgba(0,0,0,0.02)] overflow-hidden transition-all duration-500 ease-in-out',
+            openTab ? 'w-[40%] opacity-100' : 'w-0 opacity-0 border-l-0 shadow-none pointer-events-none',
+          )}
+          aria-hidden={!openTab}
+        >
+          {openTab && (
             <RoleWorkspacePanel
               role={role}
               roles={roles}
@@ -120,8 +126,8 @@ export function RoleView({
               onTargetMemoryHandled={() => setTargetMemoryId(null)}
               onSourceMessageClick={handleSourceMessageClick}
             />
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </div>
   );

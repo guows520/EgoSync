@@ -114,6 +114,76 @@ describe('TasksTab', () => {
     expect(screen.getByText('智能分类中…')).toBeInTheDocument();
   });
 
+  it('顶部使用标题新增任务与筛选卡片的上下结构', () => {
+    render(
+      <TasksTab
+        role={role}
+        tasks={tasks}
+        isLoading={false}
+        error={null}
+        onOpenTask={vi.fn()}
+        onDeleteTask={vi.fn()}
+        onReorderTasks={vi.fn()}
+        onToggleComplete={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('heading', { name: '任务清单' })).toBeInTheDocument();
+    expect(screen.getByText('管理当前角色的任务')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '新增任务' })).toHaveClass('shrink-0');
+    expect(screen.getByRole('group', { name: '按象限筛选' })).toBeInTheDocument();
+  });
+
+  it('顶部象限筛选只显示选中的象限，点全部恢复全量展示', () => {
+    render(
+      <TasksTab
+        role={role}
+        tasks={tasks}
+        isLoading={false}
+        error={null}
+        onOpenTask={vi.fn()}
+        onDeleteTask={vi.fn()}
+        onReorderTasks={vi.fn()}
+        onToggleComplete={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Q2' }));
+    expect(screen.queryByText('准备季度规划')).not.toBeInTheDocument();
+    expect(screen.getByText('整理会议纪要')).toBeInTheDocument();
+    expect(screen.queryByText('Q1 · 重要且紧急')).not.toBeInTheDocument();
+    expect(screen.getByText('Q2 · 重要不紧急')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '拖动排序 整理会议纪要' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '全部' }));
+    expect(screen.getByText('准备季度规划')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '拖动排序 准备季度规划' })).toBeInTheDocument();
+  });
+
+  it('只看大石头筛选可与象限筛选叠加', () => {
+    render(
+      <TasksTab
+        role={role}
+        tasks={tasks}
+        isLoading={false}
+        error={null}
+        onOpenTask={vi.fn()}
+        onDeleteTask={vi.fn()}
+        onReorderTasks={vi.fn()}
+        onToggleComplete={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '只看大石头' }));
+    expect(screen.getByText('准备季度规划')).toBeInTheDocument();
+    expect(screen.queryByText('整理会议纪要')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '拖动排序 准备季度规划' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Q2' }));
+    expect(screen.queryByText('准备季度规划')).not.toBeInTheDocument();
+    expect(screen.getByText('当前筛选无匹配任务')).toBeInTheDocument();
+  });
+
   it('每个未完成任务卡片渲染拖拽手柄', () => {
     render(
       <TasksTab
@@ -470,9 +540,9 @@ describe('TasksTab', () => {
       />,
     );
 
-    const q1Header = screen.getByRole('button', { name: /Q1 · 重要且紧急/ });
+    const q1Header = screen.getByText('Q1 · 重要且紧急').closest('div');
     expect(q1Header).toHaveTextContent('2');
-    const q2Header = screen.getByRole('button', { name: /Q2 · 重要不紧急/ });
+    const q2Header = screen.getByText('Q2 · 重要不紧急').closest('div');
     expect(q2Header).toHaveTextContent('1');
   });
 
@@ -496,8 +566,7 @@ describe('TasksTab', () => {
     expect(screen.getByText('没有可有可无的任务，注意力很集中')).toBeInTheDocument();
     // Q1 非空，不显示鼓励文案
     expect(screen.queryByText('没有紧急任务，太棒了！')).not.toBeInTheDocument();
-    // 空象限不渲染折叠按钮
-    expect(screen.queryByRole('button', { name: /Q2 · 重要不紧急/ })).not.toBeInTheDocument();
+    expect(screen.getByText('Q2 · 重要不紧急')).toBeInTheDocument();
   });
 
   it('AC3 边界：完全无任务时仅显示全局空态，不显示任何象限鼓励文案', () => {
@@ -512,7 +581,7 @@ describe('TasksTab', () => {
     expect(screen.queryByText('没有可有可无的任务，注意力很集中')).not.toBeInTheDocument();
   });
 
-  it('AC6：非空象限组默认展开，点击标题折叠（aria-expanded 切换）', () => {
+  it('象限组标题为静态展示，不再作为折叠按钮', () => {
     render(
       <TasksTab
         role={role}
@@ -526,14 +595,9 @@ describe('TasksTab', () => {
       />,
     );
 
-    const q1Header = screen.getByRole('button', { name: /Q1 · 重要且紧急/ });
-    expect(q1Header).toHaveAttribute('aria-expanded', 'true');
-
-    fireEvent.click(q1Header);
-    expect(q1Header).toHaveAttribute('aria-expanded', 'false');
-
-    fireEvent.click(q1Header);
-    expect(q1Header).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('Q1 · 重要且紧急')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Q1 · 重要且紧急/ })).not.toBeInTheDocument();
+    expect(screen.getByText('准备季度规划')).toBeInTheDocument();
   });
 
   it('AC3：空象限标题右侧显示 (0) 计数 badge', () => {
@@ -553,60 +617,5 @@ describe('TasksTab', () => {
 
     const q2Header = screen.getByText('Q2 · 重要不紧急').closest('div');
     expect(q2Header).toHaveTextContent('0');
-  });
-
-  it('AC6：折叠区使用 grid-rows 300ms 过渡并尊重 reduce-motion，折叠时切到 0fr', () => {
-    render(
-      <TasksTab
-        role={role}
-        tasks={[tasks[0]]}
-        isLoading={false}
-        error={null}
-        onOpenTask={vi.fn()}
-        onDeleteTask={vi.fn()}
-        onReorderTasks={vi.fn()}
-        onToggleComplete={vi.fn()}
-      />,
-    );
-
-    const q1Header = screen.getByRole('button', { name: /Q1 · 重要且紧急/ });
-    const regionId = q1Header.getAttribute('aria-controls');
-    expect(regionId).toBeTruthy();
-    const region = document.getElementById(regionId!);
-    expect(region).not.toBeNull();
-    expect(region!.className).toContain('transition-[grid-template-rows]');
-    expect(region!.className).toContain('duration-300');
-    expect(region!.className).toContain('motion-reduce:transition-none');
-    expect(region!.className).toContain('grid-rows-[1fr]');
-
-    fireEvent.click(q1Header);
-    expect(region!.className).toContain('grid-rows-[0fr]');
-  });
-
-  it('AC6/无障碍：折叠后内容区标记 inert 退出焦点与无障碍树，展开后移除', () => {
-    render(
-      <TasksTab
-        role={role}
-        tasks={[tasks[0]]}
-        isLoading={false}
-        error={null}
-        onOpenTask={vi.fn()}
-        onDeleteTask={vi.fn()}
-        onReorderTasks={vi.fn()}
-        onToggleComplete={vi.fn()}
-      />,
-    );
-
-    const q1Header = screen.getByRole('button', { name: /Q1 · 重要且紧急/ });
-    const regionId = q1Header.getAttribute('aria-controls');
-    const region = document.getElementById(regionId!);
-    expect(region).not.toBeNull();
-    expect(region!.hasAttribute('inert')).toBe(false);
-
-    fireEvent.click(q1Header);
-    expect(region!.hasAttribute('inert')).toBe(true);
-
-    fireEvent.click(q1Header);
-    expect(region!.hasAttribute('inert')).toBe(false);
   });
 });

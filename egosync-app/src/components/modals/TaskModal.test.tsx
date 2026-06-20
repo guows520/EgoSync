@@ -165,6 +165,48 @@ describe('TaskModal', () => {
     });
   });
 
+  it('管家范围新建任务时可选择归属角色', async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <TaskModal
+        scope={{ ownerType: 'butler' }}
+        roles={[
+          {
+            id: 'role-1',
+            name: '产品',
+            icon: 'target',
+            color: '#4F46E5',
+            goal: '',
+            personalityPrompt: '',
+            status: 'active',
+            energy: 100,
+            skillsConfig: '{}',
+            proactivityLevel: 'moderate',
+            archivedAt: null,
+            createdAt: '2026-06-01T00:00:00Z',
+            updatedAt: '2026-06-01T00:00:00Z',
+          },
+        ]}
+        onClose={vi.fn()}
+        onSave={onSave}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText('任务归属'), { target: { value: 'role-1' } });
+    fireEvent.change(screen.getByLabelText('任务内容'), { target: { value: '跨角色任务' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存任务' }));
+
+    await waitFor(() => {
+      expect(onSave).toHaveBeenCalledWith({
+        ownerType: 'role',
+        roleId: 'role-1',
+        title: '跨角色任务',
+        isBigRock: false,
+      });
+    });
+  });
+
   it('后端返回 big_rock 限制错误时显示对应中文消息且弹窗保持打开', async () => {
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const onClose = vi.fn();

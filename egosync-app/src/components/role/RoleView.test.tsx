@@ -4,7 +4,12 @@ import { RoleView } from './RoleView';
 import type { Role } from '../../types/role';
 
 vi.mock('./RoleHeader', () => ({
-  RoleHeader: () => <div>角色头部</div>,
+  RoleHeader: ({ onToggleTab }: any) => (
+    <div>
+      角色头部
+      <button type="button" onClick={() => onToggleTab('tasks')}>任务</button>
+    </div>
+  ),
 }));
 
 vi.mock('../chat/ChatStream', () => ({
@@ -136,5 +141,33 @@ describe('RoleView memory reference navigation', () => {
       roleId: null,
     });
     expect(screen.getByTestId('role-source-target')).toHaveTextContent('none');
+  });
+
+  it('打开任务侧栏时使用单一宽度过渡，不再叠加 slide-in 动画', () => {
+    const { container } = render(
+      <RoleView
+        role={role}
+        onOpenTask={vi.fn()}
+        initialTab={null}
+        onTabConsumed={vi.fn()}
+        onUpdateRole={vi.fn()}
+        onArchiveRole={vi.fn()}
+        onDeleteRole={vi.fn()}
+        activeRoleCount={1}
+      />,
+    );
+
+    const panelShell = container.querySelector('[aria-hidden="true"]');
+    expect(panelShell).toHaveClass('w-0');
+    expect(panelShell).toHaveClass('transition-all');
+    expect(panelShell).not.toHaveClass('slide-in-from-right-8');
+
+    fireEvent.click(screen.getByRole('button', { name: '任务' }));
+
+    const openPanelShell = container.querySelector('[aria-hidden="false"]');
+    expect(openPanelShell).toHaveClass('w-[40%]');
+    expect(openPanelShell).toHaveClass('duration-500');
+    expect(openPanelShell).not.toHaveClass('slide-in-from-right-8');
+    expect(screen.getByTestId('role-current-tab')).toHaveTextContent('tasks');
   });
 });

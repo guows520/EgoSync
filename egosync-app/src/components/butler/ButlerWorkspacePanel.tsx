@@ -4,11 +4,11 @@ import { cn } from '../../lib/utils';
 import { DashboardTab } from './DashboardTab';
 import { MemoryTab } from '../role/MemoryTab';
 import { ButlerSettingsContent } from './ButlerSettingsContent';
-import { TasksTab } from '../role/TasksTab';
+import { TaskOverviewTab } from './TaskOverviewTab';
 import { memoryService } from '../../services/memoryService';
-import { useTasks } from '../../hooks/useTasks';
+import { useAllTasks } from '../../hooks/useAllTasks';
 import type { MemoryCategory } from '../../types/memory';
-import type { Task, TaskActions } from '../../types/task';
+import type { AllTasksFilter, Task, TaskActions, TaskQuadrant } from '../../types/task';
 import type { TaskScope } from '../../hooks/useTasks';
 
 export function ButlerWorkspacePanel({
@@ -42,17 +42,23 @@ export function ButlerWorkspacePanel({
   const [memoryCategory, setMemoryCategory] = useState<MemoryCategory | undefined>();
   const [memoryCountReloadKey, setMemoryCountReloadKey] = useState(0);
 
-  const { tasks, isLoading: isLoadingTasks, error: tasksError, classifyingIds, createTask, updateTask, deleteTask, reorderTasks, toggleComplete } = useTasks({ ownerType: 'butler' });
+  const [quadrantFilter, setQuadrantFilter] = useState<TaskQuadrant | 'all'>('all');
+  const [showBigRocksOnly, setShowBigRocksOnly] = useState(false);
+  const allTasksFilter: AllTasksFilter = {
+    ...(quadrantFilter === 'all' ? {} : { quadrant: quadrantFilter }),
+    ...(showBigRocksOnly ? { isBigRock: true } : {}),
+  };
+  const { tasks, isLoading: isLoadingTasks, error: tasksError, classifyingIds, createTask, updateTask, deleteTask, toggleComplete } = useAllTasks(allTasksFilter);
 
   useEffect(() => {
     onTasksApiReady?.('butler', {
       createTask,
       updateTask,
       deleteTask,
-      reorderTasks,
+      reorderTasks: async () => {},
       toggleComplete,
     });
-  }, [createTask, deleteTask, onTasksApiReady, updateTask, reorderTasks, toggleComplete]);
+  }, [createTask, deleteTask, onTasksApiReady, updateTask, toggleComplete]);
 
   const effectiveMemoryCategory = targetMemoryId ? undefined : memoryCategory;
 
@@ -100,7 +106,7 @@ export function ButlerWorkspacePanel({
             仪表盘
           </button>
           <button onClick={() => setTab('tasks')} className={cn("pb-3.5 text-[14px] font-medium transition-colors border-b-[3px]", currentTab === 'tasks' ? "text-indigo-600 border-current" : "border-transparent text-slate-500 hover:text-slate-800")}>
-            通用任务
+            任务概览
           </button>
           <button onClick={() => setTab('memory')} className={cn("pb-3.5 text-[14px] font-medium transition-colors border-b-[3px]", currentTab === 'memory' ? "text-indigo-600 border-current" : "border-transparent text-slate-500 hover:text-slate-800")}>
             {memoryLabel}
@@ -116,15 +122,18 @@ export function ButlerWorkspacePanel({
       <div className="flex-1 overflow-y-auto p-6 scroll-smooth">
         {currentTab === 'dashboard' && <DashboardTab roles={roles} onViewChange={onViewChange} />}
         {currentTab === 'tasks' && (
-          <TasksTab
-            role={{ color: '#6366F1' }}
+          <TaskOverviewTab
+            roles={roles}
             tasks={tasks}
             isLoading={isLoadingTasks}
             error={tasksError}
             classifyingIds={classifyingIds}
-            onOpenTask={(task: Task | null) => onOpenTask({ ownerType: 'butler' }, task)}
+            quadrantFilter={quadrantFilter}
+            onQuadrantFilterChange={setQuadrantFilter}
+            showBigRocksOnly={showBigRocksOnly}
+            onToggleBigRocksOnly={() => setShowBigRocksOnly(value => !value)}
+            onOpenTask={onOpenTask}
             onDeleteTask={deleteTask}
-            onReorderTasks={reorderTasks}
             onToggleComplete={toggleComplete}
           />
         )}

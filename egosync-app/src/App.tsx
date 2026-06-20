@@ -303,6 +303,7 @@ export default function App() {
       {taskModalContext && (
         <TaskModal
           scope={taskModalContext.scope}
+          roles={roles}
           task={taskModalContext.task}
           onClose={() => setTaskModalContext(null)}
           onSave={handleSaveTask}

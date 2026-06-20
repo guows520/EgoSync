@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Circle, Edit2, GripVertical, Loader2, Plus, Trash2 } from 'lucide-react';
 import {
   DndContext,
@@ -170,11 +170,52 @@ function CompletedTaskCard({ task, callbacks }: { task: Task; callbacks: TaskCar
   );
 }
 
+// 象限组折叠容器：grid-rows 300ms 动画 + 折叠态用 inert 把内容整体移出焦点顺序与无障碍树，
+// 避免键盘/读屏用户 Tab 进入视觉上已收起（高度 0）的卡片。React 18.2 无 inert prop，经 ref 设置 DOM 属性。
+function CollapsibleSection({ id, collapsed, children }: { id: string; collapsed: boolean; children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const node = ref.current;
+    if (!node) return;
+    if (collapsed) {
+      node.setAttribute('inert', '');
+    } else {
+      node.removeAttribute('inert');
+    }
+  }, [collapsed]);
+  return (
+    <div
+      id={id}
+      ref={ref}
+      className={cn(
+        'grid transition-[grid-template-rows] duration-300 ease-in-out motion-reduce:transition-none',
+        collapsed ? 'grid-rows-[0fr]' : 'grid-rows-[1fr]',
+      )}
+    >
+      <div className="overflow-hidden">{children}</div>
+    </div>
+  );
+}
+
 const quadrantLabels: Record<TaskQuadrant, string> = {
   Q1: 'Q1 · 重要且紧急',
   Q2: 'Q2 · 重要不紧急',
   Q3: 'Q3 · 紧急不重要',
   Q4: 'Q4 · 不重要不紧急',
+};
+
+const quadrantTitleColor: Record<TaskQuadrant, string> = {
+  Q1: 'text-red-600',
+  Q2: 'text-blue-600',
+  Q3: 'text-slate-600',
+  Q4: 'text-slate-400',
+};
+
+const quadrantEmptyHint: Record<TaskQuadrant, string> = {
+  Q1: '没有紧急任务，太棒了！',
+  Q2: '暂无重要规划，别忘了为长远目标留出时间',
+  Q3: '没有需要应付的杂事，很清爽',
+  Q4: '没有可有可无的任务，注意力很集中',
 };
 
 export function TasksTab({ role, tasks, isLoading, error, classifyingIds = EMPTY_CLASSIFYING_IDS, onOpenTask, onDeleteTask, onReorderTasks, onToggleComplete }: TasksTabProps) {
@@ -192,6 +233,20 @@ export function TasksTab({ role, tasks, isLoading, error, classifyingIds = EMPTY
   });
   const toggleCompletedSection = (quadrant: TaskQuadrant) => {
     setExpandedCompleted(prev => ({ ...prev, [quadrant]: !prev[quadrant] }));
+  };
+  // 按象限折叠整组（未完成 + 已完成子区）：默认全展开，不持久化，组件卸载即复位
+  const [collapsedQuadrants, setCollapsedQuadrants] = useState<Set<TaskQuadrant>>(() => new Set());
+  const quadrantRegionBaseId = useId();
+  const toggleQuadrant = (quadrant: TaskQuadrant) => {
+    setCollapsedQuadrants(prev => {
+      const next = new Set(prev);
+      if (next.has(quadrant)) {
+        next.delete(quadrant);
+      } else {
+        next.add(quadrant);
+      }
+      return next;
+    });
   };
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -239,7 +294,6 @@ export function TasksTab({ role, tasks, isLoading, error, classifyingIds = EMPTY
     incompleteByQuadrant[quadrant] = group.filter(task => !task.isCompleted).sort(orderBySort);
     completedByQuadrant[quadrant] = group.filter(task => task.isCompleted).sort(orderBySort);
   });
-  const quadrants = allQuadrants.filter(quadrant => groupedTasks[quadrant].length > 0);
 
   const callbacks: TaskCardCallbacks = {
     onOpenTask: task => onOpenTask(task),
@@ -317,41 +371,82 @@ export function TasksTab({ role, tasks, isLoading, error, classifyingIds = EMPTY
           onDragEnd={handleDragEnd}
           onDragCancel={() => setActiveId(null)}
         >
-          {quadrants.map(quadrant => {
+          {allQuadrants.map(quadrant => {
+            const count = groupedTasks[quadrant].length;
             const completedTasks = completedByQuadrant[quadrant];
             const isExpanded = expandedCompleted[quadrant];
+            const isCollapsed = collapsedQuadrants.has(quadrant);
+            const regionId = `${quadrantRegionBaseId}-${quadrant}`;
+            const titleSpan = (
+              <span className={cn('text-[12px] font-bold tracking-widest', quadrantTitleColor[quadrant])}>
+                {quadrantLabels[quadrant]}
+              </span>
+            );
+            const countBadge = (
+              <span className="inline-flex items-center justify-center min-w-[20px] px-1.5 rounded-full bg-slate-100 text-slate-500 text-[11px] font-semibold">
+                {count}
+              </span>
+            );
+
+            if (count === 0) {
+              return (
+                <div key={quadrant}>
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="flex items-center gap-1.5">
+                      <span className="w-3.5 shrink-0" aria-hidden="true" />
+                      {titleSpan}
+                    </span>
+                    {countBadge}
+                  </div>
+                  <p className="text-[12.5px] text-slate-400">{quadrantEmptyHint[quadrant]}</p>
+                </div>
+              );
+            }
+
             return (
               <div key={quadrant}>
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-[12px] font-bold tracking-widest text-slate-400 uppercase">{quadrantLabels[quadrant]}</h3>
-                </div>
-                <div className="space-y-2.5">
-                  <SortableContext
-                    items={incompleteByQuadrant[quadrant].map(task => task.id)}
-                    strategy={verticalListSortingStrategy}
-                  >
-                    {incompleteByQuadrant[quadrant].map(task => (
-                      <SortableTaskCard key={task.id} task={task} callbacks={callbacks} isClassifying={classifyingIds.has(task.id)} />
-                    ))}
-                  </SortableContext>
-                  {completedTasks.length > 0 && (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => toggleCompletedSection(quadrant)}
-                        aria-expanded={isExpanded}
-                        className="flex items-center gap-1.5 px-2 py-1 text-[12px] font-medium text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-md transition-colors w-fit"
-                      >
-                        {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                        <CheckCircle2 size={14} className="text-emerald-500" />
-                        <span>已完成 ({completedTasks.length})</span>
-                      </button>
-                      {isExpanded && completedTasks.map(task => (
-                        <CompletedTaskCard key={task.id} task={task} callbacks={callbacks} />
+                <button
+                  type="button"
+                  onClick={() => toggleQuadrant(quadrant)}
+                  aria-expanded={!isCollapsed}
+                  aria-controls={regionId}
+                  className="flex items-center justify-between w-full mb-3"
+                >
+                  <span className="flex items-center gap-1.5">
+                    {isCollapsed ? <ChevronRight size={14} className="text-slate-400" /> : <ChevronDown size={14} className="text-slate-400" />}
+                    {titleSpan}
+                  </span>
+                  {countBadge}
+                </button>
+                <CollapsibleSection id={regionId} collapsed={isCollapsed}>
+                  <div className="space-y-2.5">
+                    <SortableContext
+                      items={incompleteByQuadrant[quadrant].map(task => task.id)}
+                      strategy={verticalListSortingStrategy}
+                    >
+                      {incompleteByQuadrant[quadrant].map(task => (
+                        <SortableTaskCard key={task.id} task={task} callbacks={callbacks} isClassifying={classifyingIds.has(task.id)} />
                       ))}
-                    </>
-                  )}
-                </div>
+                    </SortableContext>
+                    {completedTasks.length > 0 && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => toggleCompletedSection(quadrant)}
+                          aria-expanded={isExpanded}
+                          className="flex items-center gap-1.5 px-2 py-1 text-[12px] font-medium text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-md transition-colors w-fit"
+                        >
+                          {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                          <CheckCircle2 size={14} className="text-emerald-500" />
+                          <span>已完成 ({completedTasks.length})</span>
+                        </button>
+                        {isExpanded && completedTasks.map(task => (
+                          <CompletedTaskCard key={task.id} task={task} callbacks={callbacks} />
+                        ))}
+                      </>
+                    )}
+                  </div>
+                </CollapsibleSection>
               </div>
             );
           })}

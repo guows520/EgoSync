@@ -1,5 +1,10 @@
 # Deferred Work
 
+## Deferred from: code review of 3-6-quadrant-grouped-display (2026-06-20)
+
+- **`task.quadrant` 非法值致渲染前分桶崩溃 (LOW→deferred, pre-existing)**：`TasksTab.tsx:252-258` 的 `groupedTasks[task.quadrant].push(task)` 未校验 quadrant ∈ {Q1..Q4}；若上游写入非法象限值（理论脏数据）将抛 TypeError。该 reduce 非本 story 引入，渲染侧用 `allQuadrants` 遍历安全，仅分桶侧暴露。建议分桶处加 `if (!groupedTasks[task.quadrant]) return;` 兜底，或在类型/DB 层收敛取值域。
+- **前端测试套件全量运行 flaky (MED→deferred, pre-existing/越界)**：`ButlerSettingsContent.test.tsx:95`（`getByRole('switch',{name:'find-skills'})`）在全量 `vitest run` 下失败，但单独运行 11/11 通过 → 测试隔离/异步竞态导致的 flaky。与 story 3-6 仅改 `TasksTab` 的 diff 无因果关系，但使 3-6 的「test:frontend 199 全通过」声明当前不可复现。建议单独立项排查（疑似并行执行下共享 mock/计时竞态）。
+
 ## Deferred from: code review of 3-4-big-rock-marking (2026-06-19)
 
 - **big_rock 计数检查与写入非原子（TOCTOU 竞态，LOW→deferred，V1 单用户可接受）**：`db/tasks.rs:13-44`（create_task）与 `:67-113`（update_task）中 `count_big_rocks_by_role` 与 INSERT/UPDATE 未包裹同一事务，并发写入（用户 + opencode agent）理论上可双双读到 count<3 而突破 3 个上限。V1 单用户桌面应用实际风险极低；若未来引入多写入方，应仿照 `reorder_tasks` 用事务包裹 count+write。

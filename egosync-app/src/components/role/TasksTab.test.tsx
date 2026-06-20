@@ -424,4 +424,189 @@ describe('TasksTab', () => {
     expect(atRiskCard?.className).toContain('border-l-amber-400');
     expect(normalCard?.className).not.toContain('border-l-amber-400');
   });
+
+  it('AC1：四象限标题按象限配色（Q1 红 / Q2 蓝 / Q3 灰 / Q4 淡灰）', () => {
+    const oneEach: Task[] = (['Q1', 'Q2', 'Q3', 'Q4'] as const).map((quadrant, i) => ({
+      ...tasks[0],
+      id: `q-${quadrant}`,
+      title: `${quadrant} 任务`,
+      quadrant,
+      isBigRock: false,
+      deadline: null,
+      sortOrder: i,
+    }));
+
+    render(
+      <TasksTab
+        role={role}
+        tasks={oneEach}
+        isLoading={false}
+        error={null}
+        onOpenTask={vi.fn()}
+        onDeleteTask={vi.fn()}
+        onReorderTasks={vi.fn()}
+        onToggleComplete={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Q1 · 重要且紧急').className).toContain('text-red-600');
+    expect(screen.getByText('Q2 · 重要不紧急').className).toContain('text-blue-600');
+    expect(screen.getByText('Q3 · 紧急不重要').className).toContain('text-slate-600');
+    expect(screen.getByText('Q4 · 不重要不紧急').className).toContain('text-slate-400');
+  });
+
+  it('AC2：每组标题右侧显示任务数 badge（含已完成）', () => {
+    // Q1 含 1 未完成 + 1 已完成 = 2；Q2 含 1 未完成 = 1
+    render(
+      <TasksTab
+        role={role}
+        tasks={[tasks[0], tasks[1], completedTask]}
+        isLoading={false}
+        error={null}
+        onOpenTask={vi.fn()}
+        onDeleteTask={vi.fn()}
+        onReorderTasks={vi.fn()}
+        onToggleComplete={vi.fn()}
+      />,
+    );
+
+    const q1Header = screen.getByRole('button', { name: /Q1 · 重要且紧急/ });
+    expect(q1Header).toHaveTextContent('2');
+    const q2Header = screen.getByRole('button', { name: /Q2 · 重要不紧急/ });
+    expect(q2Header).toHaveTextContent('1');
+  });
+
+  it('AC3：空象限显示鼓励文案且无任务卡片，非空象限不显示鼓励文案', () => {
+    // 仅 1 条 Q1 任务 → Q2/Q3/Q4 为空
+    render(
+      <TasksTab
+        role={role}
+        tasks={[tasks[0]]}
+        isLoading={false}
+        error={null}
+        onOpenTask={vi.fn()}
+        onDeleteTask={vi.fn()}
+        onReorderTasks={vi.fn()}
+        onToggleComplete={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('暂无重要规划，别忘了为长远目标留出时间')).toBeInTheDocument();
+    expect(screen.getByText('没有需要应付的杂事，很清爽')).toBeInTheDocument();
+    expect(screen.getByText('没有可有可无的任务，注意力很集中')).toBeInTheDocument();
+    // Q1 非空，不显示鼓励文案
+    expect(screen.queryByText('没有紧急任务，太棒了！')).not.toBeInTheDocument();
+    // 空象限不渲染折叠按钮
+    expect(screen.queryByRole('button', { name: /Q2 · 重要不紧急/ })).not.toBeInTheDocument();
+  });
+
+  it('AC3 边界：完全无任务时仅显示全局空态，不显示任何象限鼓励文案', () => {
+    render(
+      <TasksTab role={role} tasks={[]} isLoading={false} error={null} onOpenTask={vi.fn()} onDeleteTask={vi.fn()} onReorderTasks={noop} onToggleComplete={noop} />,
+    );
+
+    expect(screen.getByText('还没有任务，先添加一个小目标吧')).toBeInTheDocument();
+    expect(screen.queryByText('没有紧急任务，太棒了！')).not.toBeInTheDocument();
+    expect(screen.queryByText('暂无重要规划，别忘了为长远目标留出时间')).not.toBeInTheDocument();
+    expect(screen.queryByText('没有需要应付的杂事，很清爽')).not.toBeInTheDocument();
+    expect(screen.queryByText('没有可有可无的任务，注意力很集中')).not.toBeInTheDocument();
+  });
+
+  it('AC6：非空象限组默认展开，点击标题折叠（aria-expanded 切换）', () => {
+    render(
+      <TasksTab
+        role={role}
+        tasks={[tasks[0]]}
+        isLoading={false}
+        error={null}
+        onOpenTask={vi.fn()}
+        onDeleteTask={vi.fn()}
+        onReorderTasks={vi.fn()}
+        onToggleComplete={vi.fn()}
+      />,
+    );
+
+    const q1Header = screen.getByRole('button', { name: /Q1 · 重要且紧急/ });
+    expect(q1Header).toHaveAttribute('aria-expanded', 'true');
+
+    fireEvent.click(q1Header);
+    expect(q1Header).toHaveAttribute('aria-expanded', 'false');
+
+    fireEvent.click(q1Header);
+    expect(q1Header).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  it('AC3：空象限标题右侧显示 (0) 计数 badge', () => {
+    // 仅 1 条 Q1 任务 → Q2/Q3/Q4 为空
+    render(
+      <TasksTab
+        role={role}
+        tasks={[tasks[0]]}
+        isLoading={false}
+        error={null}
+        onOpenTask={vi.fn()}
+        onDeleteTask={vi.fn()}
+        onReorderTasks={vi.fn()}
+        onToggleComplete={vi.fn()}
+      />,
+    );
+
+    const q2Header = screen.getByText('Q2 · 重要不紧急').closest('div');
+    expect(q2Header).toHaveTextContent('0');
+  });
+
+  it('AC6：折叠区使用 grid-rows 300ms 过渡并尊重 reduce-motion，折叠时切到 0fr', () => {
+    render(
+      <TasksTab
+        role={role}
+        tasks={[tasks[0]]}
+        isLoading={false}
+        error={null}
+        onOpenTask={vi.fn()}
+        onDeleteTask={vi.fn()}
+        onReorderTasks={vi.fn()}
+        onToggleComplete={vi.fn()}
+      />,
+    );
+
+    const q1Header = screen.getByRole('button', { name: /Q1 · 重要且紧急/ });
+    const regionId = q1Header.getAttribute('aria-controls');
+    expect(regionId).toBeTruthy();
+    const region = document.getElementById(regionId!);
+    expect(region).not.toBeNull();
+    expect(region!.className).toContain('transition-[grid-template-rows]');
+    expect(region!.className).toContain('duration-300');
+    expect(region!.className).toContain('motion-reduce:transition-none');
+    expect(region!.className).toContain('grid-rows-[1fr]');
+
+    fireEvent.click(q1Header);
+    expect(region!.className).toContain('grid-rows-[0fr]');
+  });
+
+  it('AC6/无障碍：折叠后内容区标记 inert 退出焦点与无障碍树，展开后移除', () => {
+    render(
+      <TasksTab
+        role={role}
+        tasks={[tasks[0]]}
+        isLoading={false}
+        error={null}
+        onOpenTask={vi.fn()}
+        onDeleteTask={vi.fn()}
+        onReorderTasks={vi.fn()}
+        onToggleComplete={vi.fn()}
+      />,
+    );
+
+    const q1Header = screen.getByRole('button', { name: /Q1 · 重要且紧急/ });
+    const regionId = q1Header.getAttribute('aria-controls');
+    const region = document.getElementById(regionId!);
+    expect(region).not.toBeNull();
+    expect(region!.hasAttribute('inert')).toBe(false);
+
+    fireEvent.click(q1Header);
+    expect(region!.hasAttribute('inert')).toBe(true);
+
+    fireEvent.click(q1Header);
+    expect(region!.hasAttribute('inert')).toBe(false);
+  });
 });

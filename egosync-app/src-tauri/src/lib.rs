@@ -256,6 +256,10 @@ pub fn run() {
             // 内部错误只 warn，不阻塞 Tauri setup。
             services::task_deadline_watch::spawn_hourly_watch(pool.clone());
 
+            // Story 3.5: 每小时检查 Q2 任务保护状态，连续被挤压标记 at_risk。
+            // 内部错误只 warn，不阻塞 Tauri setup。
+            services::task_protection_watch::spawn_hourly_watch(pool.clone());
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -300,6 +304,7 @@ pub fn run() {
             commands::task::task_delete,
             commands::task::task_reorder,
             commands::task::task_toggle_complete,
+            commands::task::task_check_protection_status,
             commands::mcp::mcp_server_list,
             commands::mcp::mcp_server_list_for_role,
             commands::mcp::mcp_server_list_available_for_role,

@@ -13,6 +13,7 @@ vi.mock('../services/taskService', () => ({
     delete: vi.fn(),
     reorder: vi.fn(),
     toggleComplete: vi.fn(),
+    checkProtectionStatus: vi.fn(),
   },
 }));
 
@@ -167,5 +168,30 @@ describe('useTasks', () => {
     await waitFor(() => expect(taskService.listButler).toHaveBeenCalledTimes(1));
     expect(taskService.listByRole).not.toHaveBeenCalled();
     expect(result.current.tasks).toEqual([butlerTask]);
+  });
+
+  it('挂载时触发一次 Q2 保护检查（task_check_protection_status）', async () => {
+    vi.mocked(taskService.listByRole).mockResolvedValue([task]);
+    vi.mocked(taskService.checkProtectionStatus).mockResolvedValue(0);
+
+    renderHook(() => useTasks({ ownerType: 'role', roleId: 'role-1' }));
+
+    await waitFor(() => expect(taskService.checkProtectionStatus).toHaveBeenCalledTimes(1));
+  });
+
+  it('保护检查失败不影响任务列表加载（容错）', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.mocked(taskService.checkProtectionStatus).mockRejectedValueOnce(new Error('boom'));
+    vi.mocked(taskService.listByRole).mockResolvedValue([task]);
+
+    const { result } = renderHook(() => useTasks({ ownerType: 'role', roleId: 'role-1' }));
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(taskService.checkProtectionStatus).toHaveBeenCalledTimes(1);
+    expect(taskService.listByRole).toHaveBeenCalledWith('role-1');
+    expect(result.current.tasks).toEqual([task]);
+    expect(result.current.error).toBeNull();
+
+    warnSpy.mockRestore();
   });
 });

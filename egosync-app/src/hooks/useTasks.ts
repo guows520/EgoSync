@@ -63,24 +63,30 @@ export function useTasks(scope: TaskScope | null) {
     setIsLoading(true);
     setError(null);
 
-    const loadPromise = scope.ownerType === 'role'
-      ? taskService.listByRole(scope.roleId)
-      : taskService.listButler();
-
-    loadPromise
-      .then(items => {
+    const load = async () => {
+      // Story 3.5: 打开任务面板时先触发一次 Q2 保护检查，使 at_risk 状态即时反映。
+      // 容错：失败仅 console.warn，绝不阻塞后续列表加载。
+      try {
+        await taskService.checkProtectionStatus();
+      } catch (e) {
+        console.warn('Q2 保护状态检查失败（忽略，不影响任务加载）:', e);
+      }
+      try {
+        const items = scope.ownerType === 'role'
+          ? await taskService.listByRole(scope.roleId)
+          : await taskService.listButler();
         if (!cancelled) setTasks(items);
-      })
-      .catch(e => {
+      } catch (e) {
         console.error('加载任务失败:', e);
         if (!cancelled) {
           setTasks([]);
           setError(TASK_LOAD_ERROR);
         }
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) setIsLoading(false);
-      });
+      }
+    };
+    void load();
 
     return () => {
       cancelled = true;

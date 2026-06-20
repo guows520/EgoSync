@@ -111,6 +111,7 @@ pub async fn update_task(
              quadrant = COALESCE(?4, quadrant),
              is_big_rock = COALESCE(?5, is_big_rock),
              manual_override = CASE WHEN ?6 THEN 1 ELSE manual_override END,
+             protection_status = 'normal',
              updated_at = ?7
          WHERE id = ?8 AND deleted_at IS NULL",
     )
@@ -241,6 +242,7 @@ pub async fn set_task_completion(
          SET is_completed = ?1,
              completed_at = ?2,
              is_big_rock = CASE WHEN ?1 THEN 0 ELSE is_big_rock END,
+             protection_status = 'normal',
              updated_at = ?3
          WHERE id = ?4 AND deleted_at IS NULL",
     )
@@ -450,6 +452,60 @@ pub async fn list_imminent_tasks_for_escalation(
     .fetch_all(pool)
     .await
     .map_err(|e| AppError::DbError(format!("查询临期任务失败: {}", e)))
+}
+
+/// Story 3.5：将「连续过期未处理」的 Q2 任务标记为 `at_risk`。
+///
+/// 命中条件：quadrant = 'Q2'、未完成、未软删除、`updated_at <= threshold`（即距今 ≥ 阈值天数），
+/// 且当前不是 `at_risk`（避免无意义写入）。`threshold` 为完整 ISO 时间戳字符串
+/// （格式同 `chrono_now_pub()`：`YYYY-MM-DDTHH:MM:SSZ`），可与 `updated_at` 直接字符串比较。
+///
+/// **关键：不刷新 `updated_at`**。保护状态完全由 `updated_at` 距今天数派生，若标记时刷新时间戳，
+/// 下一轮重算会立即把它判回 `normal`，导致永远标不上 / 状态抖动。
+/// 返回被标记的行数。
+pub async fn mark_stale_q2_at_risk(
+    pool: &SqlitePool,
+    threshold: &str,
+) -> Result<u64, AppError> {
+    let result = sqlx::query(
+        "UPDATE tasks
+         SET protection_status = 'at_risk'
+         WHERE quadrant = 'Q2'
+           AND is_completed = 0
+           AND deleted_at IS NULL
+           AND updated_at <= ?1
+           AND protection_status != 'at_risk'",
+    )
+    .bind(threshold)
+    .execute(pool)
+    .await
+    .map_err(|e| AppError::DbError(format!("标记 Q2 任务 at_risk 失败: {}", e)))?;
+
+    Ok(result.rows_affected())
+}
+
+/// Story 3.5：将「已被处理 / 不再符合 at_risk 条件」的任务恢复为 `normal`。
+///
+/// 命中条件：当前为 `at_risk`、未软删除，且满足以下任一「已解除」情形：
+/// 非 Q2（如临期升入 Q1）、已完成、或 `updated_at > threshold`（近期被处理过）。
+/// 同样**不刷新 `updated_at`**（保护状态是派生量，不应改写交互时间）。返回被恢复的行数。
+pub async fn clear_protection_for_resolved(
+    pool: &SqlitePool,
+    threshold: &str,
+) -> Result<u64, AppError> {
+    let result = sqlx::query(
+        "UPDATE tasks
+         SET protection_status = 'normal'
+         WHERE protection_status = 'at_risk'
+           AND deleted_at IS NULL
+           AND (quadrant != 'Q2' OR is_completed = 1 OR updated_at > ?1)",
+    )
+    .bind(threshold)
+    .execute(pool)
+    .await
+    .map_err(|e| AppError::DbError(format!("恢复任务 protection_status 失败: {}", e)))?;
+
+    Ok(result.rows_affected())
 }
 
 #[cfg(test)]
@@ -1164,5 +1220,196 @@ mod tests {
 
         let result = reorder_tasks(&pool, &[role_task.id.clone(), butler_task.id.clone()]).await;
         assert!(matches!(result, Err(AppError::ValidationError(_))));
+    }
+
+    // ---- Story 3.5: Q2 保护状态 ----
+
+    /// 直接 INSERT 一条任务，精确控制 quadrant / is_completed / protection_status / updated_at，
+    /// 避免依赖真实时钟与 create_task 的默认值。
+    #[allow(clippy::too_many_arguments)]
+    async fn insert_protection_task(
+        pool: &SqlitePool,
+        id: &str,
+        quadrant: &str,
+        is_completed: bool,
+        protection_status: &str,
+        updated_at: &str,
+    ) {
+        sqlx::query(
+            "INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, protection_status, created_at, updated_at)
+             VALUES (?1, 'role', 'role-a', ?2, ?3, ?4, ?5, '2026-01-01T00:00:00Z', ?6)",
+        )
+        .bind(id)
+        .bind(format!("任务 {}", id))
+        .bind(quadrant)
+        .bind(is_completed as i32)
+        .bind(protection_status)
+        .bind(updated_at)
+        .execute(pool)
+        .await
+        .expect("insert protection task");
+    }
+
+    async fn protection_status_of(pool: &SqlitePool, id: &str) -> String {
+        sqlx::query_scalar::<_, String>("SELECT protection_status FROM tasks WHERE id = ?1")
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .expect("fetch protection_status")
+    }
+
+    async fn updated_at_of(pool: &SqlitePool, id: &str) -> String {
+        sqlx::query_scalar::<_, String>("SELECT updated_at FROM tasks WHERE id = ?1")
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .expect("fetch updated_at")
+    }
+
+    const THRESHOLD: &str = "2026-06-10T00:00:00Z";
+    const STALE: &str = "2026-01-01T00:00:00Z"; // <= THRESHOLD，视为过期
+    const RECENT: &str = "2026-12-31T00:00:00Z"; // > THRESHOLD，视为近期
+
+    #[tokio::test]
+    async fn mark_stale_q2_at_risk_marks_only_stale_incomplete_q2() {
+        let pool = setup_test_db().await;
+        insert_protection_task(&pool, "q2-stale", "Q2", false, "normal", STALE).await;
+        insert_protection_task(&pool, "q2-recent", "Q2", false, "normal", RECENT).await;
+        insert_protection_task(&pool, "q2-done", "Q2", true, "normal", STALE).await;
+        insert_protection_task(&pool, "q1-stale", "Q1", false, "normal", STALE).await;
+
+        let marked = mark_stale_q2_at_risk(&pool, THRESHOLD).await.expect("mark");
+
+        assert_eq!(marked, 1, "仅过期、未完成的 Q2 任务被标记");
+        assert_eq!(protection_status_of(&pool, "q2-stale").await, "at_risk");
+        assert_eq!(protection_status_of(&pool, "q2-recent").await, "normal", "近期 Q2 不标记");
+        assert_eq!(protection_status_of(&pool, "q2-done").await, "normal", "已完成 Q2 不标记");
+        assert_eq!(protection_status_of(&pool, "q1-stale").await, "normal", "非 Q2 不标记");
+    }
+
+    #[tokio::test]
+    async fn mark_stale_q2_at_risk_does_not_refresh_updated_at() {
+        let pool = setup_test_db().await;
+        insert_protection_task(&pool, "q2-stale", "Q2", false, "normal", STALE).await;
+
+        mark_stale_q2_at_risk(&pool, THRESHOLD).await.expect("mark");
+
+        assert_eq!(protection_status_of(&pool, "q2-stale").await, "at_risk");
+        assert_eq!(
+            updated_at_of(&pool, "q2-stale").await,
+            STALE,
+            "标记 at_risk 不得刷新 updated_at"
+        );
+    }
+
+    #[tokio::test]
+    async fn clear_protection_for_resolved_restores_resolved_tasks() {
+        let pool = setup_test_db().await;
+        // at_risk 的 Q1（已非 Q2）应恢复 normal
+        insert_protection_task(&pool, "q1-at-risk", "Q1", false, "at_risk", STALE).await;
+        // at_risk 且近期处理过的 Q2 应恢复 normal
+        insert_protection_task(&pool, "q2-recent-at-risk", "Q2", false, "at_risk", RECENT).await;
+        // at_risk 且已完成的 Q2 应恢复 normal
+        insert_protection_task(&pool, "q2-done-at-risk", "Q2", true, "at_risk", STALE).await;
+        // at_risk 且仍过期的 Q2 不应被清除（保持 at_risk）
+        insert_protection_task(&pool, "q2-stale-at-risk", "Q2", false, "at_risk", STALE).await;
+
+        let cleared = clear_protection_for_resolved(&pool, THRESHOLD).await.expect("clear");
+
+        assert_eq!(cleared, 3, "三条已解除的应被恢复");
+        assert_eq!(protection_status_of(&pool, "q1-at-risk").await, "normal");
+        assert_eq!(protection_status_of(&pool, "q2-recent-at-risk").await, "normal");
+        assert_eq!(protection_status_of(&pool, "q2-done-at-risk").await, "normal");
+        assert_eq!(
+            protection_status_of(&pool, "q2-stale-at-risk").await,
+            "at_risk",
+            "仍过期的 Q2 保持 at_risk"
+        );
+    }
+
+    #[tokio::test]
+    async fn clear_protection_for_resolved_does_not_refresh_updated_at() {
+        let pool = setup_test_db().await;
+        insert_protection_task(&pool, "q1-at-risk", "Q1", false, "at_risk", RECENT).await;
+
+        clear_protection_for_resolved(&pool, THRESHOLD).await.expect("clear");
+
+        assert_eq!(protection_status_of(&pool, "q1-at-risk").await, "normal");
+        assert_eq!(
+            updated_at_of(&pool, "q1-at-risk").await,
+            RECENT,
+            "恢复 normal 不得刷新 updated_at"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_task_resets_protection_status_to_normal() {
+        let pool = setup_test_db().await;
+        let task = create_simple_task(&pool, "role-a", "Q2 任务").await;
+        // 模拟该任务已被标记为 at_risk
+        sqlx::query("UPDATE tasks SET protection_status = 'at_risk' WHERE id = ?1")
+            .bind(&task.id)
+            .execute(&pool)
+            .await
+            .expect("set at_risk");
+
+        let updated = update_task(
+            &pool,
+            &task.id,
+            &UpdateTaskInput {
+                title: Some("改个标题".to_string()),
+                deadline: None,
+                quadrant: None,
+                is_big_rock: None,
+            },
+        )
+        .await
+        .expect("update task");
+
+        assert_eq!(updated.protection_status, "normal", "编辑即处理，应复位 normal");
+    }
+
+    #[tokio::test]
+    async fn set_task_completion_resets_protection_status_to_normal() {
+        let pool = setup_test_db().await;
+        let task = create_simple_task(&pool, "role-a", "Q2 任务").await;
+        sqlx::query("UPDATE tasks SET protection_status = 'at_risk' WHERE id = ?1")
+            .bind(&task.id)
+            .execute(&pool)
+            .await
+            .expect("set at_risk");
+
+        let completed = set_task_completion(&pool, &task.id, true)
+            .await
+            .expect("complete task");
+
+        assert_eq!(completed.protection_status, "normal", "完成即交互，应复位 normal");
+    }
+
+    #[tokio::test]
+    async fn recompute_protection_status_clears_then_marks_in_one_pass() {
+        // 端到端验证 service 层 recompute_protection_status 在单次调用内
+        // 先 clear（恢复已解除的）再 mark（标记过期的），且组合幂等：
+        // 已是 at_risk 且仍过期的任务保持不变、不重复计入返回值。
+        // 使用 2020/2099 这类远离 now±3天 阈值的固定时间戳，避免依赖真实时钟。
+        let pool = setup_test_db().await;
+        // 过期、未完成、Q2、当前 normal → 应被 mark 为 at_risk（计入返回值）
+        insert_protection_task(&pool, "q2-stale-normal", "Q2", false, "normal", "2020-01-01T00:00:00Z").await;
+        // 过期、未完成、Q2、当前已是 at_risk → 保持 at_risk，不被 clear，不重复计数
+        insert_protection_task(&pool, "q2-stale-at-risk", "Q2", false, "at_risk", "2020-01-01T00:00:00Z").await;
+        // at_risk 的 Q1（已非 Q2）→ 应被 clear 回 normal
+        insert_protection_task(&pool, "q1-at-risk", "Q1", false, "at_risk", "2020-01-01T00:00:00Z").await;
+        // 近期 Q2 normal → 不动
+        insert_protection_task(&pool, "q2-recent", "Q2", false, "normal", "2099-01-01T00:00:00Z").await;
+
+        let marked = crate::services::task_protection_watch::recompute_protection_status(&pool)
+            .await
+            .expect("recompute protection status");
+
+        assert_eq!(marked, 1, "仅本次新标记的过期 Q2 计入返回值（已 at_risk 的不重复计数）");
+        assert_eq!(protection_status_of(&pool, "q2-stale-normal").await, "at_risk");
+        assert_eq!(protection_status_of(&pool, "q2-stale-at-risk").await, "at_risk", "仍过期保持 at_risk");
+        assert_eq!(protection_status_of(&pool, "q1-at-risk").await, "normal", "非 Q2 被清回 normal");
+        assert_eq!(protection_status_of(&pool, "q2-recent").await, "normal", "近期 Q2 不标记");
     }
 }

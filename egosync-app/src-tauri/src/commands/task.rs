@@ -101,6 +101,13 @@ pub async fn task_toggle_complete(
     tasks::set_task_completion(&pool, &task_id, is_completed).await
 }
 
+/// Story 3.5：前端启动 / 打开任务面板时主动触发一次 Q2 保护检查。
+/// 返回本次被标记 `at_risk` 的任务数量。命令层只薄封装，重算逻辑在 service 内。
+#[tauri::command]
+pub async fn task_check_protection_status(pool: State<'_, DbPool>) -> Result<u64, AppError> {
+    crate::services::task_protection_watch::recompute_protection_status(&pool).await
+}
+
 fn validate_title(title: &str) -> Result<(), AppError> {
     if title.trim().is_empty() {
         return Err(AppError::ValidationError("任务标题不能为空".to_string()));

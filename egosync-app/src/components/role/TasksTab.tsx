@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react';
-import { CheckCircle2, ChevronDown, ChevronRight, Circle, Edit2, GripVertical, Loader2, Plus, Trash2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Circle, Edit2, GripVertical, Loader2, Plus, Trash2 } from 'lucide-react';
 import {
   DndContext,
   DragOverlay,
@@ -77,6 +77,15 @@ function TaskCardBody({ task, callbacks, dragHandle, isClassifying }: { task: Ta
         <div className="flex items-center gap-2 mt-2.5 flex-wrap">
           {task.deadline && <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-red-50 text-red-600 border border-red-100">{task.deadline}</span>}
           {task.isBigRock && <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-amber-50 text-amber-600 border border-amber-100">大石头</span>}
+          {task.protectionStatus === 'at_risk' && (
+            <span
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-amber-50 text-amber-600 border border-amber-100"
+              aria-label="重要任务被持续挤压，建议尽快处理"
+            >
+              <AlertTriangle size={11} />
+              被挤压
+            </span>
+          )}
           {isClassifying && (
             <span
               className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-indigo-50 text-indigo-600 border border-indigo-100"
@@ -129,7 +138,7 @@ function SortableTaskCard({ task, callbacks, isClassifying }: { task: Task; call
     <div
       ref={setNodeRef}
       style={style}
-      className={cn(CARD_BASE_CLASS, isDragging && 'opacity-50')}
+      className={cn(CARD_BASE_CLASS, isDragging && 'opacity-50', task.protectionStatus === 'at_risk' && 'border-l-4 border-l-amber-400')}
     >
       <TaskCardBody
         task={task}
@@ -348,7 +357,7 @@ export function TasksTab({ role, tasks, isLoading, error, classifyingIds = EMPTY
           })}
           <DragOverlay dropAnimation={{ duration: 200, easing: 'cubic-bezier(0.18, 0.67, 0.6, 1.22)' }}>
             {activeTask ? (
-              <div className={cn(CARD_BASE_CLASS, 'shadow-lg opacity-90')}>
+              <div className={cn(CARD_BASE_CLASS, 'shadow-lg opacity-90', activeTask.protectionStatus === 'at_risk' && 'border-l-4 border-l-amber-400')}>
                 <TaskCardBody task={activeTask} callbacks={callbacks} />
               </div>
             ) : null}

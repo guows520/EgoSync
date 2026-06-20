@@ -14,3 +14,4 @@ pub mod sidecar;
 pub mod skill_registry;
 pub mod task_classifier;
 pub mod task_deadline_watch;
+pub mod task_protection_watch;

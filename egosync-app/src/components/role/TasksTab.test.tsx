@@ -384,4 +384,44 @@ describe('TasksTab', () => {
     expect(editButtons[0]).toHaveAccessibleName('编辑 大石头任务');
     expect(editButtons[1]).toHaveAccessibleName('编辑 非大石头任务');
   });
+
+  it('protectionStatus 为 at_risk 的 Q2 任务渲染「被挤压」预警，normal 任务不渲染', () => {
+    const atRiskTask: Task = {
+      ...tasks[1],
+      id: 'task-at-risk',
+      title: '被持续挤压的重要任务',
+      quadrant: 'Q2',
+      protectionStatus: 'at_risk',
+    };
+    const normalTask: Task = {
+      ...tasks[1],
+      id: 'task-normal',
+      title: '正常的 Q2 任务',
+      quadrant: 'Q2',
+      protectionStatus: 'normal',
+    };
+
+    render(
+      <TasksTab
+        role={role}
+        tasks={[atRiskTask, normalTask]}
+        isLoading={false}
+        error={null}
+        onOpenTask={vi.fn()}
+        onDeleteTask={vi.fn()}
+        onReorderTasks={vi.fn()}
+        onToggleComplete={vi.fn()}
+      />,
+    );
+
+    const badges = screen.getAllByLabelText('重要任务被持续挤压，建议尽快处理');
+    expect(badges).toHaveLength(1);
+    expect(screen.getByText('被挤压')).toBeInTheDocument();
+
+    // AC3: at_risk 卡片渲染琥珀左竖线（border-l-4 border-l-amber-400），normal 卡片不渲染
+    const atRiskCard = screen.getByText('被持续挤压的重要任务').closest('[class*="rounded-xl"]');
+    const normalCard = screen.getByText('正常的 Q2 任务').closest('[class*="rounded-xl"]');
+    expect(atRiskCard?.className).toContain('border-l-amber-400');
+    expect(normalCard?.className).not.toContain('border-l-amber-400');
+  });
 });

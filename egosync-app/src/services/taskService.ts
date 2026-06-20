@@ -16,4 +16,6 @@ export const taskService = {
     invoke<void>('task_reorder', { taskIds }),
   toggleComplete: (id: string, isCompleted: boolean) =>
     invoke<Task>('task_toggle_complete', { taskId: id, isCompleted }),
+  checkProtectionStatus: () =>
+    invoke<number>('task_check_protection_status'),
 };

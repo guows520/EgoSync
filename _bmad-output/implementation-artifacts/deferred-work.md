@@ -60,3 +60,9 @@ All items resolved in the same session:
 - add_to_role 不校验归档角色（mcp_server.rs::add_to_role）：可对 archived 角色建立 MCP 绑定，full_sync 会给 archived agent 加 disable 兜底，仅状态污染。
 - sync_role_updated_with_skills_and_mcp 未处理 archived disable 标记（agent_config.rs）：单角色同步路径未设 disable，full_sync 与 sync_role_archived 兜底，低风险。
 - 角色级 MCP 硬隔离需真实 opencode 数据流人工 UAT（2.0d 根因领域）：动态切换顶层 mcp scope 对已建 session 的即时生效性仅有单测覆盖，需人工复验。Dev Agent Record 已承认 E2E 未返回结构化结论。
+
+## Deferred from: code review of 3-5-q2-protection-at-risk (2026-06-20)
+
+- **历法计算三处重复 (LOW, 整洁度/DRY)**：`days_to_ymd` 与「now±N 天 → ISO 时间戳」逻辑在 `services/task_protection_watch.rs:50-78`、`services/task_deadline_watch.rs:55-79`、`db/settings.rs:145-174` 三处各有一份（含 719468/146097 等魔数）。本 story 新增第三份。建议抽公共时间工具（如 `util::clock`）统一，单测集中。属既有扩散，非本 story 引入。
+- **`spawn_hourly_watch` 无优雅关闭 (LOW, 生命周期)**：`task_protection_watch.rs:88-100` 的后台 `loop { ... interval.tick() }` 无取消/关闭钩子，应用退出时随进程结束。与既有 `task_deadline_watch::spawn_hourly_watch` 完全同模式，属全局后台任务生命周期约定，非本 story 单独承担。
+- **状态字面量硬编码无共享常量 (LOW, 漂移风险)**：`'at_risk'` / `'normal'` 在 `db/tasks.rs:466-509`（mark/clear/update/completion）、`commands`、前端 `TasksTab.tsx` / 类型层多处以裸字符串出现，无 Rust 端共享常量或枚举护栏，拼写漂移不会被编译期捕获。建议后续统一为 `ProtectionStatus` 枚举 + `as_str()`。

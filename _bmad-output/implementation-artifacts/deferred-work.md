@@ -1,5 +1,9 @@
 # Deferred Work
 
+## Deferred from: code review of 4-1-background-scheduler-work-loop (2026-06-20)
+
+- **同一 tick 多角色到期并发 spawn (LOW→deferred, 属 4.2 范畴)**：`services/scheduler.rs:111` 对每个到期角色独立 `tokio::spawn`，当前为占位实现无副作用。Story 4.2 接入 LLM 调用后，若多个角色 interval 对齐（如同时到达整点 4h/8h 边界）会瞬时并发多个 LLM 请求，可能触发 provider 限流或资源峰值。建议 4.2 实现时引入并发上限（信号量）或错峰抖动。
+
 ## Deferred from: code review of 3-6-quadrant-grouped-display (2026-06-20)
 
 - **`task.quadrant` 非法值致渲染前分桶崩溃 (LOW→deferred, pre-existing)**：`TasksTab.tsx:252-258` 的 `groupedTasks[task.quadrant].push(task)` 未校验 quadrant ∈ {Q1..Q4}；若上游写入非法象限值（理论脏数据）将抛 TypeError。该 reduce 非本 story 引入，渲染侧用 `allQuadrants` 遍历安全，仅分桶侧暴露。建议分桶处加 `if (!groupedTasks[task.quadrant]) return;` 兜底，或在类型/DB 层收敛取值域。

@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Plus, X, Download, Trash2, Loader2, Check, AlertCircle, ArchiveRestore } from 'lucide-react';
+import { Plus, X, Download, Trash2, Loader2, Check, AlertCircle, ArchiveRestore, Clock } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { llmConfigService } from '../../services/llmConfigService';
 import { roleService } from '../../services/roleService';
 import { mcpService } from '../../services/mcpService';
+import { schedulerService } from '../../services/schedulerService';
 import type { LlmConfig, CreateLlmConfigInput, UpdateLlmConfigInput } from '../../types/settings';
 import type { McpServer, McpServerType } from '../../types/mcp';
 import type { Role } from '../../types/role';
@@ -52,6 +53,10 @@ export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRol
   const [mcpTestResult, setMcpTestResult] = useState<{ id: string; status: 'success' | 'error'; message: string } | null>(null);
   const [pendingDeleteMcp, setPendingDeleteMcp] = useState<McpServer | null>(null);
   const [mcpImportJson, setMcpImportJson] = useState('');
+  const [schedulerTimes, setSchedulerTimes] = useState<{ moderate: string[]; proactive: string[] }>({ moderate: [], proactive: [] });
+  const [isSavingScheduler, setIsSavingScheduler] = useState(false);
+  const [schedulerError, setSchedulerError] = useState('');
+  const [schedulerSaved, setSchedulerSaved] = useState(false);
 
   const loadConfigs = useCallback(async () => {
     try {
@@ -84,11 +89,64 @@ export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRol
     }
   }, []);
 
+  const loadSchedulerTimes = useCallback(async () => {
+    setSchedulerError('');
+    try {
+      const times = await schedulerService.getTimes();
+      setSchedulerTimes(times);
+    } catch (e) {
+      console.error('加载调度时间失败:', e);
+      setSchedulerError(typeof e === 'string' ? e : '调度时间加载失败，请稍后重试');
+    }
+  }, []);
+
   useEffect(() => {
     loadConfigs();
     loadArchivedRoles();
     loadMcpServers();
-  }, [loadArchivedRoles, loadConfigs, loadMcpServers]);
+    loadSchedulerTimes();
+  }, [loadArchivedRoles, loadConfigs, loadMcpServers, loadSchedulerTimes]);
+
+  const handleAddSchedulerTime = (level: 'moderate' | 'proactive') => {
+    setSchedulerSaved(false);
+    setSchedulerTimes(prev => ({
+      ...prev,
+      [level]: [...prev[level], '12:00'].sort(),
+    }));
+  };
+
+  const handleRemoveSchedulerTime = (level: 'moderate' | 'proactive', index: number) => {
+    setSchedulerSaved(false);
+    setSchedulerTimes(prev => ({
+      ...prev,
+      [level]: prev[level].filter((_, i) => i !== index),
+    }));
+  };
+
+  const handleSchedulerTimeChange = (level: 'moderate' | 'proactive', index: number, value: string) => {
+    setSchedulerSaved(false);
+    setSchedulerTimes(prev => {
+      const next = [...prev[level]];
+      next[index] = value;
+      return { ...prev, [level]: next };
+    });
+  };
+
+  const handleSaveSchedulerTimes = async () => {
+    setIsSavingScheduler(true);
+    setSchedulerError('');
+    setSchedulerSaved(false);
+    try {
+      const saved = await schedulerService.setTimes(schedulerTimes.moderate, schedulerTimes.proactive);
+      setSchedulerTimes(saved);
+      setSchedulerSaved(true);
+      setTimeout(() => setSchedulerSaved(false), 3000);
+    } catch (e) {
+      setSchedulerError(typeof e === 'string' ? e : '调度时间保存失败，请检查输入');
+    } finally {
+      setIsSavingScheduler(false);
+    }
+  };
 
   const handleEdit = (conf: LlmConfig) => {
     setEditForm({ name: conf.name, provider: conf.provider, baseUrl: conf.baseUrl, model: conf.model, apiKey: '' });
@@ -317,12 +375,13 @@ export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRol
           </div>
           <button onClick={() => { setTab('llm'); setIsEditing(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'llm' ? "bg-white text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 hover:bg-slate-200/50")}>模型配置 (BYOK)</button>
           <button onClick={() => { setTab('mcp'); setIsEditing(false); setIsEditingMcp(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'mcp' ? "bg-white text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 hover:bg-slate-200/50")}>MCP 工具</button>
+          <button onClick={() => { setTab('scheduler'); setIsEditing(false); setIsEditingMcp(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'scheduler' ? "bg-white text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 hover:bg-slate-200/50")}>调度时间</button>
           <button onClick={() => { setTab('data'); setIsEditing(false); setIsEditingMcp(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'data' ? "bg-white text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 hover:bg-slate-200/50")}>数据与主权</button>
           <button onClick={() => { setTab('mission'); setIsEditing(false); setIsEditingMcp(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'mission' ? "bg-white text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 hover:bg-slate-200/50")}>使命宣言</button>
         </div>
         <div className="flex-1 p-10 overflow-y-auto">
           <div className="flex justify-between items-center mb-8">
-            <h3 className="text-[24px] font-semibold text-slate-800">{tab === 'llm' ? 'LLM Provider 配置' : tab === 'mcp' ? 'MCP 工具配置' : tab === 'data' ? '数据与隐私' : '个人使命宣言'}</h3>
+            <h3 className="text-[24px] font-semibold text-slate-800">{tab === 'llm' ? 'LLM Provider 配置' : tab === 'mcp' ? 'MCP 工具配置' : tab === 'scheduler' ? '调度时间配置' : tab === 'data' ? '数据与隐私' : '个人使命宣言'}</h3>
             <button
               onClick={() => {
                 if (tab === 'mcp' && isEditingMcp) {
@@ -560,6 +619,81 @@ export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRol
                   </div>
                 </div>
               )}
+            </div>
+          )}
+
+          {tab === 'scheduler' && (
+            <div className="space-y-6">
+              <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-4 text-[13px] text-indigo-800 leading-relaxed flex items-start gap-2">
+                <Clock size={16} className="mt-0.5 shrink-0" />
+                <span>为每个主动性档位设置每日触发时间点（本地时间，精确到分钟）。所有 moderate / proactive 角色共用对应档位的时间点，保存后下次调度自动生效。</span>
+              </div>
+
+              {schedulerError && (
+                <div className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-[13px] text-red-600 flex items-center gap-2">
+                  <AlertCircle size={14} /> {schedulerError}
+                </div>
+              )}
+
+              <div className="space-y-6">
+                {(['moderate', 'proactive'] as const).map(level => (
+                  <div key={level} className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
+                    <div className="flex items-center gap-2 mb-4">
+                      <span className="text-[15px] font-medium text-slate-800">
+                        {level === 'moderate' ? '适度建议' : '积极主动'}
+                      </span>
+                      <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-500">
+                        {schedulerTimes[level].length} 个时间点
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {schedulerTimes[level].map((time, index) => (
+                        <div key={index} className="flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1.5">
+                          <input
+                            type="time"
+                            value={time}
+                            onChange={e => handleSchedulerTimeChange(level, index, e.target.value)}
+                            className="text-[13px] text-slate-700 outline-none bg-transparent"
+                          />
+                          <button
+                            type="button"
+                            aria-label={`删除 ${time}`}
+                            onClick={() => handleRemoveSchedulerTime(level, index)}
+                            className="text-slate-400 hover:text-red-500 transition-colors"
+                          >
+                            <X size={14} />
+                          </button>
+                        </div>
+                      ))}
+                      {schedulerTimes[level].length < 12 && (
+                        <button
+                          type="button"
+                          onClick={() => handleAddSchedulerTime(level)}
+                          className="inline-flex items-center gap-1 rounded-lg border border-dashed border-slate-300 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-500 hover:border-indigo-300 hover:text-indigo-600 transition-colors"
+                        >
+                          <Plus size={14} /> 添加
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={handleSaveSchedulerTimes}
+                  disabled={isSavingScheduler}
+                  className="px-5 py-2.5 bg-indigo-600 text-white rounded-lg text-[13px] font-medium hover:bg-indigo-700 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1.5"
+                >
+                  {isSavingScheduler ? <Loader2 size={14} className="animate-loading-spin" /> : null}
+                  保存调度时间
+                </button>
+                {schedulerSaved && (
+                  <span className="text-[13px] text-emerald-600 flex items-center gap-1.5">
+                    <Check size={14} /> 已保存
+                  </span>
+                )}
+              </div>
             </div>
           )}
 

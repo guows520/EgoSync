@@ -4,6 +4,7 @@ pub mod llm_config;
 pub mod memory;
 pub mod mcp;
 pub mod role;
+pub mod scheduler;
 pub mod secret;
 pub mod skill;
 pub mod task;

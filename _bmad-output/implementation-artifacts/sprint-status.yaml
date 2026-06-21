@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-21
-last_updated: 2026-06-20T10:52:00+08:00
+last_updated: 2026-06-21T14:43:00+08:00
 project: "探索 (EgoSync)"
 project_key: NOKEY
 tracking_system: file-system
@@ -90,14 +90,14 @@ development_status:
   3-5-q2-protection-at-risk: done
   3-6-quadrant-grouped-display: done
   3-7-butler-all-roles-task-tab: done
-  epic-3-retrospective: optional
+  epic-3-retrospective: done
 
   # ============================================================
   # Epic 4: 主动循环、通知与仪表盘 (Proactive Loop, Notifications & Dashboard)
   # ============================================================
-  epic-4: backlog
-  4-1-background-scheduler-work-loop: backlog
-  4-2-proactive-suggestion-generation: backlog
+  epic-4: in-progress
+  4-1-background-scheduler-work-loop: done
+  4-2-proactive-suggestion-generation: in-progress
   4-3-proactivity-dial-behavior: backlog
   4-4-suggestion-actioncard-confirm-reject: backlog
   4-5-three-tier-notification: backlog

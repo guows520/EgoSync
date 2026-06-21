@@ -260,6 +260,11 @@ pub fn run() {
             // 内部错误只 warn，不阻塞 Tauri setup。
             services::task_protection_watch::spawn_hourly_watch(pool.clone());
 
+            // Story 4.1: 角色后台调度器，按 proactivity_level 配置频率运行工作循环。
+            // 60 秒基础 tick，每次 tick 动态查询角色列表，passive 跳过。
+            // 内部错误只 warn，不阻塞 Tauri setup。
+            services::scheduler::spawn_scheduler(pool.clone());
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -331,6 +336,8 @@ pub fn run() {
             commands::app::app_get_butler_skills,
             commands::app::app_update_butler_skills,
             commands::app::app_sidecar_status,
+            commands::scheduler::scheduler_get_times,
+            commands::scheduler::scheduler_set_times,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

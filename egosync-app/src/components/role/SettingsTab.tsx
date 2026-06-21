@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, Archive, Trash2, AlertCircle, Upload, ChevronDown, ChevronUp } from 'lucide-react';
+import { Check, Trash2, AlertCircle, Upload, ChevronDown, ChevronUp } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { ROLE_COLORS, ROLE_ICONS, getRoleIconComponent, normalizeColorHex, normalizeIconId } from '../../lib/roleIcons';
 import { roleService } from '../../services/roleService';
@@ -13,13 +13,11 @@ import { ProactivityToggle } from './ProactivityToggle';
 interface SettingsTabProps {
   role: Role;
   activeRoles?: Role[];
-  activeRoleCount: number;
+  activeRoleCount?: number;
   onUpdateRole?: (role: Role) => void;
   onArchiveRole?: (id: string) => Promise<void> | void;
   onDeleteRole?: (id: string) => Promise<void> | void;
 }
-
-type DangerAction = 'archive' | 'delete' | null;
 
 type SkillKey = 'findSkills' | 'skillCreator';
 
@@ -45,10 +43,7 @@ const SKILL_OPTIONS: Array<{ key: SkillKey; title: string; source: string; descr
 export function SettingsTab({
   role,
   activeRoles,
-  activeRoleCount,
   onUpdateRole,
-  onArchiveRole,
-  onDeleteRole,
 }: SettingsTabProps) {
   const [roleName, setRoleName] = useState(role.name);
   const [roleGoal, setRoleGoal] = useState(role.goal);
@@ -85,17 +80,12 @@ export function SettingsTab({
   const [pendingMcpId, setPendingMcpId] = useState<string | null>(null);
   const [settingsSavedMessage, setSettingsSavedMessage] = useState('');
   const [error, setError] = useState('');
-  const [dangerAction, setDangerAction] = useState<DangerAction>(null);
-  const [deleteConfirmName, setDeleteConfirmName] = useState('');
-  const [isDangerSubmitting, setIsDangerSubmitting] = useState(false);
   const activeRoleIdRef = useRef(role.id);
 
   useEffect(() => {
     activeRoleIdRef.current = role.id;
   }, [role.id]);
 
-  const canRemoveRole = activeRoleCount > 1;
-  const deleteNameMatches = deleteConfirmName.trim() === role.name;
   const filteredAvailableMcpServers = useMemo(() => {
     const query = mcpSearch.trim().toLowerCase();
     if (!query) return availableMcpServers;
@@ -120,8 +110,6 @@ export function SettingsTab({
     setIsSavingProactivity(false);
     setSettingsSavedMessage('');
     setError('');
-    setDangerAction(null);
-    setDeleteConfirmName('');
     setSkillPreview(null);
     setOpencodeSkills([]);
     setOpencodeSkipped([]);
@@ -509,33 +497,6 @@ export function SettingsTab({
       setError(toFriendlyError(e, '主动性级别保存失败，请稍后重试'));
     } finally {
       setIsSavingProactivity(false);
-    }
-  };
-
-  const handleArchive = async () => {
-    setIsDangerSubmitting(true);
-    setError('');
-    try {
-      await onArchiveRole?.(role.id);
-      setDangerAction(null);
-    } catch (e) {
-      setError(toFriendlyError(e, '归档失败，请稍后重试'));
-    } finally {
-      setIsDangerSubmitting(false);
-    }
-  };
-
-  const handleDelete = async () => {
-    if (!deleteNameMatches) return;
-    setIsDangerSubmitting(true);
-    setError('');
-    try {
-      await onDeleteRole?.(role.id);
-      setDangerAction(null);
-    } catch (e) {
-      setError(toFriendlyError(e, '删除失败，请稍后重试'));
-    } finally {
-      setIsDangerSubmitting(false);
     }
   };
 
@@ -1003,33 +964,6 @@ export function SettingsTab({
         </button>
       </div>
 
-      <div className="pt-6 border-t border-red-100">
-        <label className="text-[14px] font-semibold text-red-600 block mb-3">危险区域</label>
-        {!canRemoveRole && (
-          <p className="mb-3 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-[13px] text-amber-700">{MIN_ACTIVE_ROLE_MESSAGE}</p>
-        )}
-        <div className="space-y-3">
-          <button
-            type="button"
-            disabled={!canRemoveRole}
-            onClick={() => setDangerAction('archive')}
-            className="w-full flex items-center justify-between rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-[13px] font-medium text-amber-700 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <span className="flex items-center gap-2"><Archive size={15} /> 归档角色</span>
-            <span>保留历史数据</span>
-          </button>
-          <button
-            type="button"
-            disabled={!canRemoveRole}
-            onClick={() => setDangerAction('delete')}
-            className="w-full flex items-center justify-between rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-[13px] font-medium text-red-600 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <span className="flex items-center gap-2"><Trash2 size={15} /> 永久删除</span>
-            <span>不可撤销</span>
-          </button>
-        </div>
-      </div>
-
       {deleteSkillTarget && (
         <div className="fixed inset-0 z-[220] flex items-center justify-center bg-slate-900/20 backdrop-blur-sm">
           <div role="dialog" aria-modal="true" aria-label="删除自定义 Skill" className="w-[380px] rounded-2xl bg-white p-6 shadow-2xl">
@@ -1046,39 +980,6 @@ export function SettingsTab({
                 className="rounded-lg bg-red-600 px-5 py-2.5 text-[13px] font-medium text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {pendingSkill === deleteSkillTarget.id ? '删除中...' : '确认删除'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {dangerAction && (
-        <div className="fixed inset-0 z-[220] flex items-center justify-center bg-slate-900/20 backdrop-blur-sm">
-          <div className="w-[380px] rounded-2xl bg-white p-6 shadow-2xl">
-            <h3 className="mb-3 text-[16px] font-semibold text-slate-800">
-              {dangerAction === 'archive' ? '确认归档角色' : '永久删除角色'}
-            </h3>
-            <p className="mb-5 text-[14px] leading-relaxed text-slate-600">
-              {dangerAction === 'archive'
-                ? `归档「${role.name}」后，侧边栏将不再显示该角色，但历史数据会保留。`
-                : `删除「${role.name}」会永久移除角色以及关联对话。请输入角色名确认。`}
-            </p>
-            {dangerAction === 'delete' && (
-              <input
-                value={deleteConfirmName}
-                onChange={e => setDeleteConfirmName(e.target.value)}
-                placeholder={role.name}
-                className="mb-4 w-full rounded-lg border border-slate-200 px-4 py-2.5 text-[14px] outline-none focus:border-red-400 focus:ring-2 focus:ring-red-500/10"
-              />
-            )}
-            <div className="flex justify-end gap-3">
-              <button onClick={() => setDangerAction(null)} className="rounded-lg border border-slate-200 px-5 py-2.5 text-[13px] font-medium text-slate-600 hover:bg-slate-50">取消</button>
-              <button
-                onClick={dangerAction === 'archive' ? handleArchive : handleDelete}
-                disabled={isDangerSubmitting || (dangerAction === 'delete' && !deleteNameMatches)}
-                className={cn('rounded-lg px-5 py-2.5 text-[13px] font-medium text-white disabled:cursor-not-allowed disabled:opacity-50', dangerAction === 'archive' ? 'bg-amber-600 hover:bg-amber-700' : 'bg-red-600 hover:bg-red-700')}
-              >
-                {isDangerSubmitting ? '处理中...' : dangerAction === 'archive' ? '确认归档' : '永久删除'}
               </button>
             </div>
           </div>

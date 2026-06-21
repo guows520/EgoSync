@@ -264,11 +264,10 @@ export function MemoryTab({
               aria-pressed={selected}
               onClick={() => setSelectedCategory(filter.value ?? undefined)}
               className={cn(
-                'px-3 py-1.5 rounded-full border text-[12px] font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:ring-offset-1',
-                selected
-                  ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
-                  : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-slate-800'
+                'px-2.5 py-1 rounded-md text-[12px] font-medium transition-colors',
+                selected ? 'text-slate-700' : 'text-slate-500 hover:bg-slate-100'
               )}
+              style={selected ? { backgroundColor: 'color-mix(in srgb, var(--role-accent) 15%, white)', color: 'var(--role-accent)' } : undefined}
             >
               {filter.label}
             </button>

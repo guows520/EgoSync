@@ -75,8 +75,8 @@ function TaskCardBody({ task, callbacks, dragHandle, isClassifying }: { task: Ta
           {task.title}
         </p>
         <div className="flex items-center gap-2 mt-2.5 flex-wrap">
-          {task.deadline && <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-red-50 text-red-600 border border-red-100">{task.deadline}</span>}
-          {task.isBigRock && <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-amber-50 text-amber-600 border border-amber-100">大石头</span>}
+          {task.deadline && <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-transparent text-slate-500 border border-slate-300">{task.deadline}</span>}
+          {task.isBigRock && <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-transparent text-amber-600 border border-amber-400">大石头</span>}
           {task.protectionStatus === 'at_risk' && (
             <span
               className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-amber-50 text-amber-600 border border-amber-100"
@@ -180,10 +180,10 @@ const quadrantLabels: Record<TaskQuadrant, string> = {
 };
 
 const quadrantTitleColor: Record<TaskQuadrant, string> = {
-  Q1: 'text-red-600',
-  Q2: 'text-blue-600',
-  Q3: 'text-slate-600',
-  Q4: 'text-slate-400',
+  Q1: 'text-slate-900',
+  Q2: 'text-slate-900',
+  Q3: 'text-slate-900',
+  Q4: 'text-slate-900',
 };
 
 const quadrantEmptyHint: Record<TaskQuadrant, string> = {
@@ -338,8 +338,8 @@ export function TasksTab({ role, tasks, isLoading, error, classifyingIds = EMPTY
             </button>
           </div>
 
-          <div className="flex items-center gap-1.5 flex-wrap rounded-xl border border-slate-200 bg-white/70 px-3 py-2.5" role="group" aria-label="按象限筛选">
-            <Filter size={14} className="text-slate-400" />
+          <div className="flex items-center gap-1 flex-nowrap rounded-xl border border-slate-200 bg-white/70 px-2.5 py-2" role="group" aria-label="按象限筛选">
+            <Filter size={14} className="text-slate-400 shrink-0" />
             {quadrantChips.map(chip => (
               <button
                 key={chip.value}
@@ -347,20 +347,21 @@ export function TasksTab({ role, tasks, isLoading, error, classifyingIds = EMPTY
                 onClick={() => setQuadrantFilter(chip.value)}
                 aria-pressed={quadrantFilter === chip.value}
                 className={cn(
-                  'px-2.5 py-1 rounded-md text-[12px] font-medium transition-colors motion-reduce:transition-none',
-                  quadrantFilter === chip.value ? 'bg-indigo-100 text-indigo-700' : 'text-slate-500 hover:bg-slate-100',
+                  'px-2 py-0.5 rounded-md text-[12px] font-medium transition-colors motion-reduce:transition-none whitespace-nowrap',
+                  quadrantFilter === chip.value ? 'text-slate-700' : 'text-slate-500 hover:bg-slate-100',
                 )}
+                style={quadrantFilter === chip.value ? { backgroundColor: 'color-mix(in srgb, var(--role-accent) 15%, white)', color: 'var(--role-accent)' } : undefined}
               >
                 {chip.label}
               </button>
             ))}
-            <span className="w-px h-4 bg-slate-200 mx-0.5" />
+            <span className="w-px h-4 bg-slate-200 mx-0.5 shrink-0" />
             <button
               type="button"
               onClick={() => setShowBigRocksOnly(prev => !prev)}
               aria-pressed={showBigRocksOnly}
               className={cn(
-                'inline-flex items-center gap-1 px-2 py-1 rounded-md text-[12px] font-medium transition-colors motion-reduce:transition-none',
+                'inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[12px] font-medium transition-colors motion-reduce:transition-none whitespace-nowrap',
                 showBigRocksOnly ? 'bg-amber-100 text-amber-700' : 'text-slate-500 hover:bg-slate-100',
               )}
             >

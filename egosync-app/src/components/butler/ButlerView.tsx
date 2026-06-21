@@ -73,7 +73,7 @@ export function ButlerView({ roles, onViewChange, archivedRoles, onRestoreRole, 
 
       <div className="flex-1 flex overflow-hidden">
         {/* Chat Area */}
-        <div className={cn("flex flex-col relative bg-white/40 dark:bg-slate-900/40 transition-all duration-500 ease-in-out", openTab ? "w-[60%] border-r border-slate-200/60 dark:border-slate-700/60" : "w-full")}>
+        <div className={cn("flex flex-col relative bg-white/40 dark:bg-slate-900/40 transition-all duration-500 ease-in-out", openTab ? "w-[65%] border-r border-slate-200/60 dark:border-slate-700/60" : "w-full")}>
           <ChatStream
             role={null}
             onMemoryReferenceClick={handleMemoryReferenceClick}
@@ -87,7 +87,7 @@ export function ButlerView({ roles, onViewChange, archivedRoles, onRestoreRole, 
 
         {/* Workspace Panel */}
         {openTab && (
-          <div className="w-[40%] bg-slate-50/60 dark:bg-slate-800/60 flex flex-col backdrop-blur-sm border-l border-white/40 dark:border-slate-700/40 shadow-[-8px_0_24px_rgba(0,0,0,0.02)] animate-in slide-in-from-right-8 duration-300">
+          <div className="w-[35%] bg-white dark:bg-slate-900 flex flex-col border-l border-slate-200/60 dark:border-slate-700/60 animate-in slide-in-from-right-8 duration-300">
             <ButlerWorkspacePanel
               roles={roles}
               currentTab={openTab}

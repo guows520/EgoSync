@@ -21,9 +21,6 @@ interface RoleWorkspacePanelProps {
   onOpenTask?: (task: Task | null) => void;
   onTasksApiReady?: (actions: TaskActions) => void;
   onUpdateRole?: (role: Role) => void;
-  onArchiveRole?: (id: string) => Promise<void> | void;
-  onDeleteRole?: (id: string) => Promise<void> | void;
-  activeRoleCount?: number;
   targetMemoryId?: string | null;
   onTargetMemoryHandled?: () => void;
   onSourceMessageClick?: (target: SourceNavigationTarget) => void;
@@ -37,9 +34,6 @@ export function RoleWorkspacePanel({
   onOpenTask,
   onTasksApiReady,
   onUpdateRole,
-  onArchiveRole,
-  onDeleteRole,
-  activeRoleCount,
   targetMemoryId,
   onTargetMemoryHandled,
   onSourceMessageClick,
@@ -165,10 +159,7 @@ export function RoleWorkspacePanel({
           <SettingsTab
             role={role}
             activeRoles={roles ?? []}
-            activeRoleCount={activeRoleCount ?? 1}
             onUpdateRole={onUpdateRole}
-            onArchiveRole={onArchiveRole}
-            onDeleteRole={onDeleteRole}
           />
         )}
       </div>

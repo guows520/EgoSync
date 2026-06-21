@@ -226,7 +226,6 @@ export default function App() {
     const accent = normalizeColorHex(activeRole.color);
     return {
       '--role-accent': accent,
-      backgroundColor: `${accent}0F`, // 6% alpha
     } as React.CSSProperties;
   }, [roles, currentView]);
 
@@ -283,9 +282,6 @@ export default function App() {
               initialTab={roleInitialTab}
               onTabConsumed={() => setRoleInitialTab(null)}
               onUpdateRole={handleUpdateRole}
-              onArchiveRole={handleArchiveRole}
-              onDeleteRole={handleDeleteRole}
-              activeRoleCount={roles.length}
               sourceNavigationTarget={pendingRoleSourceNavigation?.roleId === r.id ? pendingRoleSourceNavigation : null}
               onSourceNavigationHandled={() => setPendingRoleSourceNavigation(null)}
               onButlerSourceNavigation={handleButlerSourceNavigation}

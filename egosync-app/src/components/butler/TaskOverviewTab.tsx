@@ -43,10 +43,10 @@ const quadrantLabels: Record<TaskQuadrant, string> = {
 };
 
 const quadrantTitleColor: Record<TaskQuadrant, string> = {
-  Q1: 'text-red-600',
-  Q2: 'text-blue-600',
-  Q3: 'text-slate-600',
-  Q4: 'text-slate-400',
+  Q1: 'text-slate-900',
+  Q2: 'text-slate-900',
+  Q3: 'text-slate-900',
+  Q4: 'text-slate-900',
 };
 
 const quadrantEmptyHint: Record<TaskQuadrant, string> = {
@@ -99,7 +99,7 @@ function TaskCard({
         {task.isCompleted ? <CheckCircle2 size={20} strokeWidth={2.5} /> : <Circle size={20} strokeWidth={2.5} />}
       </button>
       <div className="flex-1 min-w-0">
-        <div className="flex items-start justify-between gap-3">
+        <div>
           <p
             className={cn(
               'text-[14.5px] font-medium leading-snug',
@@ -108,17 +108,10 @@ function TaskCard({
           >
             {task.title}
           </p>
-          <span
-            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-50 text-slate-600 border border-slate-100 shrink-0"
-            title={ownerLabel(task)}
-          >
-            <span className="w-2 h-2 rounded-full" style={{ backgroundColor: color }} />
-            {ownerLabel(task)}
-          </span>
         </div>
         <div className="flex items-center gap-2 mt-2.5 flex-wrap">
-          {task.deadline && <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-red-50 text-red-600 border border-red-100">{task.deadline}</span>}
-          {task.isBigRock && <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-amber-50 text-amber-600 border border-amber-100">大石头</span>}
+          {task.deadline && <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-transparent text-slate-500 border border-slate-300">{task.deadline}</span>}
+          {task.isBigRock && <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-transparent text-amber-600 border border-amber-400">大石头</span>}
           {task.protectionStatus === 'at_risk' && (
             <span
               className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-amber-50 text-amber-600 border border-amber-100"
@@ -137,6 +130,12 @@ function TaskCard({
               智能分类中…
             </span>
           )}
+        </div>
+      </div>
+      <div className="shrink-0 self-center flex items-center justify-end" title={ownerLabel(task)}>
+        <div className="flex items-center gap-1.5" style={{ width: '64px', justifyContent: 'flex-start' }}>
+          <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: color }} />
+          <span className="text-[11px] font-semibold text-slate-600 whitespace-nowrap truncate">{ownerLabel(task)}</span>
         </div>
       </div>
       <div className="flex items-start gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
@@ -189,6 +188,9 @@ export function TaskOverviewTab({ roles, tasks, isLoading, error, classifyingIds
 
   const toggleOwner = (key: string) => {
     setDeselectedOwners(prev => {
+      if (prev.size === 0) {
+        return new Set(ownerOptions.filter(o => o.key !== key).map(o => o.key));
+      }
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
       else next.add(key);
@@ -318,14 +320,14 @@ export function TaskOverviewTab({ roles, tasks, isLoading, error, classifyingIds
                   onClick={toggleAllOwners}
                   aria-pressed={deselectedOwners.size === 0}
                   className={cn(
-                    'shrink-0 px-2.5 py-1 rounded-full text-[12px] font-medium transition-colors motion-reduce:transition-none',
-                    deselectedOwners.size === 0 ? 'bg-slate-800 text-white' : 'text-slate-500 hover:bg-slate-100',
+                    'shrink-0 px-2.5 py-1 rounded-md text-[12px] font-medium transition-colors motion-reduce:transition-none',
+                    deselectedOwners.size === 0 ? 'bg-indigo-100 text-indigo-700' : 'text-slate-500 hover:bg-slate-100',
                   )}
                 >
                   全部
                 </button>
                 {ownerOptions.map(owner => {
-                  const selected = !deselectedOwners.has(owner.key);
+                  const selected = deselectedOwners.size > 0 && !deselectedOwners.has(owner.key);
                   return (
                     <button
                       key={owner.key}
@@ -333,8 +335,8 @@ export function TaskOverviewTab({ roles, tasks, isLoading, error, classifyingIds
                       onClick={() => toggleOwner(owner.key)}
                       aria-pressed={selected}
                       className={cn(
-                        'shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[12px] font-medium border transition-colors motion-reduce:transition-none',
-                        selected ? 'border-slate-300 bg-white text-slate-700' : 'border-transparent text-slate-400 hover:bg-slate-100',
+                        'shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[12px] font-medium transition-colors motion-reduce:transition-none',
+                        selected ? 'bg-indigo-100 text-indigo-700' : 'text-slate-500 hover:bg-slate-100',
                       )}
                     >
                       <span className="w-2 h-2 rounded-full" style={{ backgroundColor: selected ? owner.color : '#CBD5E1' }} />

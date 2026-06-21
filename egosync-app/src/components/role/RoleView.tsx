@@ -16,9 +16,9 @@ interface RoleViewProps {
   initialTab: string | null;
   onTabConsumed: () => void;
   onUpdateRole: (role: Role) => void;
-  onArchiveRole: (id: string) => Promise<void> | void;
-  onDeleteRole: (id: string) => Promise<void> | void;
-  activeRoleCount: number;
+  onArchiveRole?: (id: string) => Promise<void> | void;
+  onDeleteRole?: (id: string) => Promise<void> | void;
+  activeRoleCount?: number;
   sourceNavigationTarget?: SourceNavigationTarget | null;
   onSourceNavigationHandled?: () => void;
   onButlerSourceNavigation?: (target: SourceNavigationTarget) => void;
@@ -33,9 +33,6 @@ export function RoleView({
   initialTab,
   onTabConsumed,
   onUpdateRole,
-  onArchiveRole,
-  onDeleteRole,
-  activeRoleCount,
   sourceNavigationTarget: externalSourceNavigationTarget,
   onSourceNavigationHandled,
   onButlerSourceNavigation,
@@ -89,7 +86,7 @@ export function RoleView({
         <div
           className={cn(
             'flex flex-col relative bg-white/40 dark:bg-slate-900/40 transition-all duration-500 ease-in-out',
-            openTab ? 'w-[60%] border-r border-slate-200/60 dark:border-slate-700/60' : 'w-full',
+            openTab ? 'w-[65%] border-r border-slate-200/60 dark:border-slate-700/60' : 'w-full',
           )}
         >
           <ChatStream
@@ -105,8 +102,8 @@ export function RoleView({
 
         <div
           className={cn(
-            'bg-slate-50/60 dark:bg-slate-800/60 flex flex-col backdrop-blur-sm border-l border-white/40 dark:border-slate-700/40 shadow-[-8px_0_24px_rgba(0,0,0,0.02)] overflow-hidden transition-all duration-500 ease-in-out',
-            openTab ? 'w-[40%] opacity-100' : 'w-0 opacity-0 border-l-0 shadow-none pointer-events-none',
+            'bg-white dark:bg-slate-900 flex flex-col border-l border-slate-200/60 dark:border-slate-700/60 overflow-hidden transition-all duration-500 ease-in-out',
+            openTab ? 'w-[35%] opacity-100' : 'w-0 opacity-0 border-l-0 shadow-none pointer-events-none',
           )}
           aria-hidden={!openTab}
         >
@@ -119,9 +116,6 @@ export function RoleView({
               onOpenTask={(task: Task | null) => onOpenTask({ ownerType: 'role', roleId: role.id }, task)}
               onTasksApiReady={(actions: TaskActions) => onTasksApiReady?.(`role:${role.id}`, actions)}
               onUpdateRole={onUpdateRole}
-              onArchiveRole={onArchiveRole}
-              onDeleteRole={onDeleteRole}
-              activeRoleCount={activeRoleCount}
               targetMemoryId={targetMemoryId}
               onTargetMemoryHandled={() => setTargetMemoryId(null)}
               onSourceMessageClick={handleSourceMessageClick}

@@ -57,7 +57,7 @@ export function Sidebar({ roles, currentView, onViewChange, isSettingsOpen, onOp
 
   return (
     <aside
-      className="w-16 border-r flex flex-col items-center py-6 z-10 shrink-0 shadow-sm relative transition-colors duration-300 bg-[#F1F3F5] border-slate-200 dark:bg-slate-800 dark:border-slate-700"
+      className="w-16 flex flex-col items-center pt-6 pb-6 z-10 shrink-0 relative transition-colors duration-300 bg-[#F1F3F5] dark:bg-slate-800"
       role="navigation"
       aria-label="角色导航"
     >

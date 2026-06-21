@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { cn } from './lib/utils';
 import { Sidebar } from './components/layout/Sidebar';
+import { TitleBar } from './components/layout/TitleBar';
 import { ButlerView } from './components/butler/ButlerView';
 import { RoleView } from './components/role/RoleView';
 import { OnboardingView } from './components/onboarding/OnboardingView';
@@ -220,18 +221,19 @@ export default function App() {
   const mainTint = useMemo(() => {
     const activeRole = roles.find(r => r.id === currentView);
     if (!activeRole) {
-      return { '--role-accent': BUTLER_ACCENT, '--role-bg-tint': 'transparent' } as React.CSSProperties;
+      return { '--role-accent': BUTLER_ACCENT } as React.CSSProperties;
     }
     const accent = normalizeColorHex(activeRole.color);
     return {
       '--role-accent': accent,
-      '--role-bg-tint': `${accent}0F`, // 6% alpha
+      backgroundColor: `${accent}0F`, // 6% alpha
     } as React.CSSProperties;
   }, [roles, currentView]);
 
   return (
-    <div className={cn("flex flex-col h-screen font-sans transition-colors duration-300 bg-[#F8F9FA] text-slate-900 selection:bg-indigo-100 dark:bg-slate-900 dark:text-slate-100 dark:selection:bg-indigo-900", theme === 'dark' && "dark")}>
-      <div className="flex-1 flex overflow-hidden relative">
+    <div className={cn("flex flex-col h-screen font-sans transition-colors duration-300 bg-[#F1F3F5] text-slate-900 selection:bg-indigo-100 dark:bg-slate-800 dark:text-slate-100 dark:selection:bg-indigo-900 border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden", theme === 'dark' && "dark")}>
+        <TitleBar />
+        <div className="flex-1 flex overflow-hidden relative">
         <Sidebar
           roles={roles}
           currentView={currentView}
@@ -248,11 +250,14 @@ export default function App() {
           isNotifOpen={isNotifOpen}
           onToggleNotif={() => setIsNotifOpen(v => !v)}
         />
-        
-        <main
-          className="flex-1 relative overflow-hidden backdrop-blur-3xl shadow-[inset_1px_0_10px_rgba(0,0,0,0.02)] transition-colors duration-300"
-          style={{ ...mainTint, backgroundColor: 'var(--role-bg-tint)' }}
+
+        <div
+          className="flex-1 flex flex-col overflow-hidden bg-[#F1F3F5] dark:bg-slate-800"
         >
+          <main
+            className="flex-1 relative overflow-hidden rounded-tl-2xl border-t border-l border-slate-200/60 dark:border-slate-700/60 bg-[#F8F9FA] dark:bg-slate-900 backdrop-blur-3xl transition-colors duration-300"
+            style={mainTint}
+          >
           {currentView === 'onboard' && <OnboardingView onComplete={handleOnboardingComplete} onOpenSettings={() => setIsSettingsOpen(true)} />}
           {currentView === 'butler' && (
             <ButlerView
@@ -287,8 +292,9 @@ export default function App() {
               onRoleSourceNavigation={handleRoleSourceNavigation}
             />
           ))}
-        </main>
-      </div>
+          </main>
+        </div>
+        </div>
 
       {isSettingsOpen && (
         <GlobalSettingsModal

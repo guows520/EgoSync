@@ -55,7 +55,12 @@
   }
 
   body {
-    @apply bg-[--bg-base] text-[--text-primary] antialiased overflow-hidden h-screen;
+    @apply text-[--text-primary] antialiased overflow-hidden h-screen;
+    background-color: transparent;
+  }
+
+  html {
+    background-color: transparent;
   }
 }
 

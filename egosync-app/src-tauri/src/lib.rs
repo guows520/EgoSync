@@ -38,6 +38,14 @@ pub fn run() {
 
     tauri::Builder::default()
         .setup(|app| {
+            // Windows: 移除 DWM 边框，消除无边框窗口左/下/右的黑色边线
+            #[cfg(target_os = "windows")]
+            {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.set_shadow(false);
+                }
+            }
+
             let app_data_dir = app
                 .path()
                 .app_data_dir()

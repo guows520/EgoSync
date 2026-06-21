@@ -176,6 +176,15 @@ pub async fn generate_suggestions(
         }
     };
 
+    if role.goal.trim().is_empty() && task_summary.is_empty() && memory_summary.is_empty() {
+        tracing::info!(
+            role_id = %role.id,
+            role_name = %role.name,
+            "角色无目标、无任务、无记忆，跳过 LLM 调用，本次无建议生成"
+        );
+        return Ok(Vec::new());
+    }
+
     let since_iso = seven_days_ago_iso();
     let recent_suggestions = match db::suggestions::list_recent_suggestions(main_pool, &role.id, &since_iso).await {
         Ok(list) => list,
@@ -230,17 +239,31 @@ pub async fn generate_suggestions(
         }
     };
 
-    let result: Vec<CreateSuggestionInput> = raw_suggestions
-        .into_iter()
-        .filter(|s| !is_exact_title_duplicate(&s.title, &recent_suggestions))
-        .map(|s| CreateSuggestionInput {
+    // 去重：先用 is_exact_title_duplicate 拦截近 7 天历史重复，
+    // 再在本批次内逐条登记归一化 title，避免同一次 LLM 返回的多条同名建议同时写入。
+    let mut batch_titles: Vec<String> = Vec::new();
+    let mut result: Vec<CreateSuggestionInput> = Vec::new();
+    for s in raw_suggestions {
+        let title = s.title.trim().to_string();
+        let content = s.content.trim().to_string();
+        if title.is_empty() || content.is_empty() {
+            continue;
+        }
+        if is_exact_title_duplicate(&title, &recent_suggestions) {
+            continue;
+        }
+        let normalized = normalize_title(&title);
+        if batch_titles.contains(&normalized) {
+            continue;
+        }
+        batch_titles.push(normalized);
+        result.push(CreateSuggestionInput {
             role_id: role.id.clone(),
-            title: s.title.trim().to_string(),
-            content: s.content.trim().to_string(),
+            title,
+            content,
             priority: s.priority.trim().to_lowercase(),
-        })
-        .filter(|s| !s.title.is_empty() && !s.content.is_empty())
-        .collect();
+        });
+    }
 
     Ok(result)
 }

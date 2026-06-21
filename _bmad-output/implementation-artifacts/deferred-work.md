@@ -1,5 +1,10 @@
 # Deferred Work
 
+## Deferred from: code review of 4-2-proactive-suggestion-generation (2026-06-21)
+
+- **同一时间点多角色并发 LLM 调用无全局限流 (LOW→deferred, 4.1 同源遗留)**：`services/scheduler.rs` 对每个到期角色独立 `tokio::spawn` → `run_work_loop_for_role` → `generate_suggestions` 发起 LLM 调用。多角色时间点对齐时会瞬时并发多个 LLM 请求。单次调用已有 `timeout(60s)`（`suggestion_generator.rs:271`）防挂死，但无全局并发上限/信号量。V1 用户角色数有限可接受；若未来角色增多，建议引入信号量或错峰抖动（与 4.1 deferred 项合并处理）。
+- **build_role_task_summary 在热循环中重复 get_role (LOW→deferred, pre-existing)**：`services/agent_engine.rs:1128` `build_role_task_summary` 内部又 `get_role(main_pool, role_id)`，而 4.2 调用方 `generate_suggestions` 已持有完整 `role`。该重复查询在每个调度 tick 触发，属热路径冗余 IO。建议后续让 `build_role_task_summary` 接受已有 `&Role` 入参或拆分纯聚合函数。非 4.2 引入。
+
 ## Deferred from: code review of 4-1-background-scheduler-work-loop (2026-06-20)
 
 - **同一 tick 多角色到期并发 spawn (LOW→deferred, 属 4.2 范畴)**：`services/scheduler.rs:111` 对每个到期角色独立 `tokio::spawn`，当前为占位实现无副作用。Story 4.2 接入 LLM 调用后，若多个角色 interval 对齐（如同时到达整点 4h/8h 边界）会瞬时并发多个 LLM 请求，可能触发 provider 限流或资源峰值。建议 4.2 实现时引入并发上限（信号量）或错峰抖动。

@@ -4,7 +4,7 @@ baseline_commit: c83d6dd
 
 # Story 4.2: 角色工作循环生成主动建议并存储
 
-Status: in-progress
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -100,48 +100,48 @@ so that 我能收到角色的主动帮助而不只是被动响应。
 
 ## Tasks / Subtasks
 
-- [ ] Rust：新增迁移 `migrations/016_suggestions.sql`（AC: 6）
-  - [ ] `CREATE TABLE IF NOT EXISTS suggestions (...)`，字段与约束见 AC6
-  - [ ] 三个索引：`idx_suggestions_role_id` / `idx_suggestions_status` / `idx_suggestions_created_at`
-  - [ ] 参考 `migrations/013_tasks.sql` 的写法（`created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))`、FK ON DELETE CASCADE）
+- [x] Rust：新增迁移 `migrations/016_suggestions.sql`（AC: 6）
+  - [x] `CREATE TABLE IF NOT EXISTS suggestions (...)`，字段与约束见 AC6
+  - [x] 三个索引：`idx_suggestions_role_id` / `idx_suggestions_status` / `idx_suggestions_created_at`
+  - [x] 参考 `migrations/013_tasks.sql` 的写法（`created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))`、FK ON DELETE CASCADE）
 
-- [ ] Rust：新增 `models/suggestion.rs`（AC: 1, 7）
-  - [ ] `Suggestion` 结构体（`Serialize, Deserialize, sqlx::FromRow` + `#[serde(rename_all = "camelCase")]`），字段与表对齐
-  - [ ] `models/mod.rs` 追加 `pub mod suggestion;`
-  - [ ] 参考 `models/task.rs` 的结构体风格
+- [x] Rust：新增 `models/suggestion.rs`（AC: 1, 7）
+  - [x] `Suggestion` 结构体（`Serialize, Deserialize, sqlx::FromRow` + `#[serde(rename_all = "camelCase")]`），字段与表对齐
+  - [x] `models/mod.rs` 追加 `pub mod suggestion;`
+  - [x] 参考 `models/task.rs` 的结构体风格
 
-- [ ] Rust：新增 `db/suggestions.rs`（AC: 1, 3）
-  - [ ] `pub async fn create_suggestion(pool, &CreateSuggestionInput) -> Result<Suggestion, AppError>`（生成 uuid + `chrono_now_pub()` 时间戳，参考 `db/roles.rs:11`）
-  - [ ] `pub async fn list_recent_suggestions(pool, role_id, since_iso) -> Result<Vec<Suggestion>, AppError>`（查近 7 天，供去重）
-  - [ ] `db/mod.rs` 追加 `pub mod suggestions;`
-  - [ ] 所有查询用 `?` 处理错误，禁止 `.unwrap()`；错误用 `AppError::DbError`
+- [x] Rust：新增 `db/suggestions.rs`（AC: 1, 3）
+  - [x] `pub async fn create_suggestion(pool, &CreateSuggestionInput) -> Result<Suggestion, AppError>`（生成 uuid + `chrono_now_pub()` 时间戳，参考 `db/roles.rs:11`）
+  - [x] `pub async fn list_recent_suggestions(pool, role_id, since_iso) -> Result<Vec<Suggestion>, AppError>`（查近 7 天，供去重）
+  - [x] `db/mod.rs` 追加 `pub mod suggestions;`
+  - [x] 所有查询用 `?` 处理错误，禁止 `.unwrap()`；错误用 `AppError::DbError`
 
-- [ ] Rust：新增 `services/suggestion_generator.rs`（AC: 1, 2, 3, 4, 5, 7）
-  - [ ] `build_suggestion_prompt(role, goal, task_summary, memory_summary) -> Vec<ChatCompletionMessage>`（纯函数，system 强制严格 JSON 输出，user 注入上下文）
-  - [ ] LLM 调用：复用 `resolve_default_provider` + `chat_stream` + `mpsc` 累积 + `timeout` + 大小上限（照 `memory_pipeline.rs:419-467`）
-  - [ ] `parse_suggestions_response(&str) -> Result<Vec<RawSuggestion>, AppError>`（纯函数，`strip_json_code_fence` + `serde_json::from_str`，校验 priority 合法、裁剪到最多 3 条）
-  - [ ] `build_suggestion_prompt` 入参含近 7 天已有建议，在 user 段注入「已有建议清单」+ 指示 LLM 规避重复（LLM 判重，AC3）
-  - [ ] `is_exact_title_duplicate(candidate, recent_suggestions) -> bool`（纯函数，归一化 title 精确匹配的确定性兜底）
-  - [ ] `pub async fn generate_suggestions(main_pool, role) -> Result<Vec<CreateSuggestionInput>, AppError>`（编排：聚合上下文 + 近 7 天建议→prompt→LLM→解析→title 兜底过滤→返回；失败时 `Ok(Vec::new())` 降级）
-  - [ ] `services/mod.rs` 追加 `pub mod suggestion_generator;`
+- [x] Rust：新增 `services/suggestion_generator.rs`（AC: 1, 2, 3, 4, 5, 7）
+  - [x] `build_suggestion_prompt(role, task_summary, memory_summary, recent_suggestions) -> Vec<ChatCompletionMessage>`（纯函数，system 强制严格 JSON 输出，user 注入上下文）
+  - [x] LLM 调用：复用 `resolve_default_provider` + `chat_stream` + `mpsc` 累积 + `timeout` + 大小上限（照 `memory_pipeline.rs:419-467`）
+  - [x] `parse_suggestions_response(&str) -> Result<Vec<RawSuggestion>, AppError>`（纯函数，`strip_json_code_fence` + `serde_json::from_str`，校验 priority 合法、裁剪到最多 3 条）
+  - [x] `build_suggestion_prompt` 入参含近 7 天已有建议，在 user 段注入「已有建议清单」+ 指示 LLM 规避重复（LLM 判重，AC3）
+  - [x] `is_exact_title_duplicate(candidate, recent_suggestions) -> bool`（纯函数，归一化 title 精确匹配的确定性兜底）
+  - [x] `pub async fn generate_suggestions(main_pool, role) -> Result<Vec<CreateSuggestionInput>, AppError>`（编排：聚合上下文 + 近 7 天建议→prompt→LLM→解析→title 兜底过滤→返回；失败时 `Ok(Vec::new())` 降级）
+  - [x] `services/mod.rs` 追加 `pub mod suggestion_generator;`
 
-- [ ] Rust：把 `run_work_loop_for_role` 占位实现替换为真实逻辑（AC: 1, 4, 5）
-  - [ ] 调用 `suggestion_generator::generate_suggestions(pool, role)`
-  - [ ] 对返回的每条建议调 `db::suggestions::create_suggestion` 写入 `pending`
-  - [ ] 0 条时 `tracing::info!` 记录"无建议"；写入成功记录条数；任何错误 `tracing::warn!` 并返回 `Ok(())`（不向上抛，保持调度器稳定）
-  - [ ] 保持函数签名 `async fn run_work_loop_for_role(pool: &SqlitePool, role: &Role) -> Result<(), AppError>` 不变
+- [x] Rust：把 `run_work_loop_for_role` 占位实现替换为真实逻辑（AC: 1, 4, 5）
+  - [x] 调用 `suggestion_generator::generate_suggestions(pool, role)`
+  - [x] 对返回的每条建议调 `db::suggestions::create_suggestion` 写入 `pending`
+  - [x] 0 条时 `tracing::info!` 记录"无建议"；写入成功记录条数；任何错误 `tracing::warn!` 并返回 `Ok(())`（不向上抛，保持调度器稳定）
+  - [x] 保持函数签名 `async fn run_work_loop_for_role(pool: &SqlitePool, role: &Role) -> Result<(), AppError>` 不变
 
-- [ ] Rust：单元测试（AC: 2, 3, 4, 7）
-  - [ ] `suggestion_generator.rs` 底部 `#[cfg(test)] mod tests`
-  - [ ] `parse_suggestions_response`：合法 JSON（含/不含 code fence）→ 正确解析；超过 3 条 → 裁剪；非法 priority → 过滤或报错；空数组 → `Ok(vec![])`；非 JSON → `Err`
-  - [ ] `is_exact_title_duplicate`：归一化 title 相同 → true；不同 → false；空近期列表 → false
-  - [ ] `build_suggestion_prompt`：验证 system 含"严格 JSON"约束、user 含 goal/task/memory 占位、且含近 7 天已有建议清单与「规避重复」指示
-  - [ ] （可选）`db/suggestions.rs` 集成测试：用内存/临时 DB 验证 create + list_recent
+- [x] Rust：单元测试（AC: 2, 3, 4, 7）
+  - [x] `suggestion_generator.rs` 底部 `#[cfg(test)] mod tests`
+  - [x] `parse_suggestions_response`：合法 JSON（含/不含 code fence）→ 正确解析；超过 3 条 → 裁剪；非法 priority → 过滤或报错；空数组 → `Ok(vec![])`；非 JSON → `Err`
+  - [x] `is_exact_title_duplicate`：归一化 title 相同 → true；不同 → false；空近期列表 → false
+  - [x] `build_suggestion_prompt`：验证 system 含"严格 JSON"约束、user 含 goal/task/memory 占位、且含近 7 天已有建议清单与「规避重复」指示
+  - [x] （可选）`db/suggestions.rs` 集成测试：用内存/临时 DB 验证 create + list_recent
 
-- [ ] 验证（AC: 1-8）
-  - [ ] `cargo test --manifest-path egosync-app/src-tauri/Cargo.toml` 通过
-  - [ ] `npm --prefix "egosync-app" run build` 通过
-  - [ ] `npm --prefix "egosync-app" run test:frontend` 通过
+- [x] 验证（AC: 1-8）
+  - [x] `cargo test --manifest-path egosync-app/src-tauri/Cargo.toml` 通过（437 passed, 0 failed）
+  - [x] `npm --prefix "egosync-app" run build` 通过
+  - [x] `npm --prefix "egosync-app" run test:frontend` 通过（216 passed, 0 failed）
 
 ## Dev Notes
 
@@ -252,13 +252,46 @@ system prompt 强制 LLM **只输出严格 JSON**，建议顶层格式：
 ## Dev Agent Record
 
 ### Agent Model Used
+Claude Sonnet 4 (Windsurf Cascade)
 
 ### Debug Log References
+无
 
 ### Completion Notes List
+- 新建 `migrations/016_suggestions.sql`：`suggestions` 表（id, role_id, title, content, priority, status, rejection_reason, converted_task_id, created_at），3 个索引，FK ON DELETE CASCADE
+- 新建 `models/suggestion.rs`：`Suggestion`（FromRow + camelCase）+ `CreateSuggestionInput`
+- 新建 `db/suggestions.rs`：`create_suggestion`（uuid + chrono_now_pub）+ `list_recent_suggestions`（按 role_id + since_iso 查询）+ `get_suggestion`
+- 新建 `services/suggestion_generator.rs`：
+  - `build_suggestion_prompt`：纯函数，system 强制严格 JSON，user 注入角色信息/任务摘要/记忆摘要/近 7 天已有建议（含去重指示）
+  - `parse_suggestions_response`：纯函数，strip_json_code_fence + serde 解析，过滤非法 priority，裁剪到最多 3 条
+  - `is_exact_title_duplicate`：纯函数，归一化 title（trim + lowercase）精确匹配确定性兜底
+  - `generate_suggestions`：编排函数，聚合 task_summary + memory_summary + recent_suggestions → prompt → LLM 调用 → 解析 → title 兜底过滤 → 返回 `Vec<CreateSuggestionInput>`；所有失败降级为 `Ok(Vec::new())`
+  - `call_llm`：复用 memory_pipeline 模式（mpsc + timeout 60s + 128KB 上限 + disable_thinking）
+  - 21 个单元测试覆盖全部纯函数
+- 修改 `services/scheduler.rs`：`run_work_loop_for_role` 从占位替换为真实逻辑 — 调用 `generate_suggestions` → 逐条 `create_suggestion` 写入 → 任何错误 `tracing::warn!` + 继续 → 最终 `Ok(())`
+- 修改 `models/mod.rs` / `db/mod.rs` / `services/mod.rs`：各追加模块声明
+- 全量 Rust 测试 437 passed / 0 failed（含 21 个新增 suggestion_generator 测试）
+- 前端构建成功，前端测试 216 passed / 0 failed
+- 零回归：调度器 4.1 测试、记忆管线测试、任务测试全部通过
 
 ### File List
+- `egosync-app/src-tauri/migrations/016_suggestions.sql` — **新建**：suggestions 表 + 3 个索引
+- `egosync-app/src-tauri/src/models/suggestion.rs` — **新建**：Suggestion + CreateSuggestionInput 模型
+- `egosync-app/src-tauri/src/db/suggestions.rs` — **新建**：create_suggestion + list_recent_suggestions + get_suggestion
+- `egosync-app/src-tauri/src/services/suggestion_generator.rs` — **新建**：建议生成服务（prompt 构造 + LLM 调用 + JSON 解析 + 去重 + 编排 + 21 个单测）
+- `egosync-app/src-tauri/src/services/scheduler.rs` — **修改**：run_work_loop_for_role 占位实现替换为真实建议生成逻辑
+- `egosync-app/src-tauri/src/models/mod.rs` — **修改**：追加 `pub mod suggestion;`
+- `egosync-app/src-tauri/src/db/mod.rs` — **修改**：追加 `pub mod suggestions;`
+- `egosync-app/src-tauri/src/services/mod.rs` — **修改**：追加 `pub mod suggestion_generator;`
 
 ### Change Log
+- 2026-06-21: Story 4.2 实现完成 — 新建 suggestions 表 + 模型 + DB 访问层 + 建议生成服务，填充 scheduler 工作循环逻辑，21 个单测通过，全量测试零回归
 
 ### Review Findings
+
+_代码评审 2026-06-21（范围：故事 4.2 File List 8 文件，baseline c83d6dd；三层对抗审查 Blind / Edge / Auditor）_
+
+- [x] [Review][Patch] AC4 空上下文角色短路跳过 LLM [egosync-app/src-tauri/src/services/suggestion_generator.rs:179-186] — 已修复：当 `goal` 为空且任务摘要、记忆摘要均为空时直接 `tracing::info!` + 返回空建议，不再发起无谓 LLM 调用。（由 Decision 转 Patch，boss 选择修复）
+- [x] [Review][Patch] 批次内同名建议去重 [egosync-app/src-tauri/src/services/suggestion_generator.rs:242-266] — 已修复：以近 7 天历史 title 为基线 + 本批次内 `seen_titles` 逐条登记归一化 title，统一拦截历史与同批次重复。21 项 suggestion_generator 单测通过。
+- [x] [Review][Defer] 同一时间点多角色并发 LLM 调用无全局限流 [egosync-app/src-tauri/src/services/scheduler.rs] — deferred, 4.1 已记录的同源遗留项；单次有 `timeout(60s)` 保护，V1 角色数有限可接受。
+- [x] [Review][Defer] build_role_task_summary 在热循环中重复 get_role [egosync-app/src-tauri/src/services/agent_engine.rs:1128] — deferred, pre-existing；`role` 已在手却再查一次 DB，4.2 每 tick 调用使其成为热路径，建议后续接受已有 role 入参。

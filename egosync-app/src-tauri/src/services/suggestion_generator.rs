@@ -321,6 +321,53 @@ async fn call_llm(
     Ok(response)
 }
 
+/// 通知级别枚举 — Story 4.5 三级通知系统的消费类型。
+///
+/// `Whisper` < `Tap` < `Knock`，由 `max_notification_level_for_proactivity` 按主动性档位约束。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum NotificationLevel {
+    Whisper,
+    Tap,
+    Knock,
+}
+
+/// 根据主动性档位返回允许的最高通知级别。
+///
+/// - `proactive` → `Knock`（允许"敲门"）
+/// - `moderate` → `Tap`（最高"轻触"，不允许"敲门"）
+/// - `passive` / 未知值 → `Whisper`（安全降级）
+///
+/// 此函数无当前消费者，供 Story 4.5 直接调用。
+pub fn max_notification_level_for_proactivity(proactivity_level: &str) -> NotificationLevel {
+    match proactivity_level {
+        "proactive" => NotificationLevel::Knock,
+        "moderate" => NotificationLevel::Tap,
+        _ => NotificationLevel::Whisper,
+    }
+}
+
+/// 根据主动性档位过滤建议列表。
+///
+/// - `proactive` → 保留全部（high / medium / low）
+/// - `moderate` → 过滤掉 `priority = "low"`，保留 `high` + `medium`
+/// - `passive` / 未知值 → 返回空 `Vec`（安全降级）
+///
+/// 不修改 `CreateSuggestionInput` 的任何字段，只做过滤。
+pub fn filter_suggestions_by_proactivity(
+    suggestions: Vec<CreateSuggestionInput>,
+    proactivity_level: &str,
+) -> Vec<CreateSuggestionInput> {
+    match proactivity_level {
+        "proactive" => suggestions,
+        "moderate" => suggestions
+            .into_iter()
+            .filter(|s| s.priority != "low")
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -527,5 +574,118 @@ mod tests {
     fn strip_fence_returns_as_is_for_non_json() {
         let input = "not json";
         assert_eq!(strip_json_code_fence(input), "not json");
+    }
+
+    // --- filter_suggestions_by_proactivity tests ---
+
+    fn make_create_input(priority: &str) -> CreateSuggestionInput {
+        CreateSuggestionInput {
+            role_id: "test-role-id".to_string(),
+            title: "测试建议".to_string(),
+            content: "测试内容".to_string(),
+            priority: priority.to_string(),
+        }
+    }
+
+    #[test]
+    fn filter_moderate_removes_low_keeps_high_and_medium() {
+        let inputs = vec![
+            make_create_input("high"),
+            make_create_input("medium"),
+            make_create_input("low"),
+        ];
+        let result = filter_suggestions_by_proactivity(inputs, "moderate");
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].priority, "high");
+        assert_eq!(result[1].priority, "medium");
+    }
+
+    #[test]
+    fn filter_proactive_keeps_all() {
+        let inputs = vec![
+            make_create_input("high"),
+            make_create_input("medium"),
+            make_create_input("low"),
+        ];
+        let result = filter_suggestions_by_proactivity(inputs, "proactive");
+        assert_eq!(result.len(), 3);
+    }
+
+    #[test]
+    fn filter_passive_returns_empty() {
+        let inputs = vec![
+            make_create_input("high"),
+            make_create_input("medium"),
+        ];
+        let result = filter_suggestions_by_proactivity(inputs, "passive");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn filter_unknown_level_returns_empty() {
+        let inputs = vec![make_create_input("high")];
+        let result = filter_suggestions_by_proactivity(inputs, "unknown");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn filter_empty_input_returns_empty() {
+        let inputs: Vec<CreateSuggestionInput> = vec![];
+        let result = filter_suggestions_by_proactivity(inputs, "moderate");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn filter_mixed_priorities_correct_filtering() {
+        let inputs = vec![
+            make_create_input("low"),
+            make_create_input("high"),
+            make_create_input("low"),
+            make_create_input("medium"),
+            make_create_input("high"),
+        ];
+        let result = filter_suggestions_by_proactivity(inputs, "moderate");
+        assert_eq!(result.len(), 3);
+        assert_eq!(result.iter().filter(|s| s.priority == "low").count(), 0);
+        assert_eq!(result.iter().filter(|s| s.priority == "high").count(), 2);
+        assert_eq!(result.iter().filter(|s| s.priority == "medium").count(), 1);
+    }
+
+    // --- max_notification_level_for_proactivity tests ---
+
+    #[test]
+    fn notification_level_passive_returns_whisper() {
+        assert_eq!(
+            max_notification_level_for_proactivity("passive"),
+            NotificationLevel::Whisper
+        );
+    }
+
+    #[test]
+    fn notification_level_moderate_returns_tap() {
+        assert_eq!(
+            max_notification_level_for_proactivity("moderate"),
+            NotificationLevel::Tap
+        );
+    }
+
+    #[test]
+    fn notification_level_proactive_returns_knock() {
+        assert_eq!(
+            max_notification_level_for_proactivity("proactive"),
+            NotificationLevel::Knock
+        );
+    }
+
+    #[test]
+    fn notification_level_unknown_returns_whisper() {
+        assert_eq!(
+            max_notification_level_for_proactivity("unknown"),
+            NotificationLevel::Whisper
+        );
+        assert_eq!(
+            max_notification_level_for_proactivity(""),
+            NotificationLevel::Whisper
+        );
     }
 }

@@ -164,6 +164,11 @@ pub async fn run_work_loop_for_role(pool: &SqlitePool, role: &Role) -> Result<()
         }
     };
 
+    let suggestions = crate::services::suggestion_generator::filter_suggestions_by_proactivity(
+        suggestions,
+        &role.proactivity_level,
+    );
+
     if suggestions.is_empty() {
         tracing::info!(
             role_id = %role.id,

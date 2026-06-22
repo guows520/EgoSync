@@ -1,5 +1,9 @@
 # Deferred Work
 
+## Deferred from: code review of 4-3-proactivity-dial-behavior (2026-06-22)
+
+- **`moderate` 档过滤未校验 priority 取值域 (LOW→deferred, pre-existing 4.2)**：`filter_suggestions_by_proactivity`（`suggestion_generator.rs`）在 `moderate` 档仅 `filter(|s| s.priority != "low")`，任何非精确 `"low"` 的值（含 LLM 返回的未知优先级如 `"urgent"`）都会被保留。根因在 4.2 的 `generate_suggestions`（`suggestion_generator.rs:264`）只做 `trim().to_lowercase()`，不校验 priority 是否属 `ALLOWED_PRIORITIES`。非本 story 引入；保留语义对 AC2 无害（只显式丢弃 low）。建议在 4.2 生成侧或 `create_suggestion` 写入侧统一收敛 priority 取值域时一并处理。
+
 ## Deferred from: code review of 4-2-proactive-suggestion-generation (2026-06-21)
 
 - **同一时间点多角色并发 LLM 调用无全局限流 (LOW→deferred, 4.1 同源遗留)**：`services/scheduler.rs` 对每个到期角色独立 `tokio::spawn` → `run_work_loop_for_role` → `generate_suggestions` 发起 LLM 调用。多角色时间点对齐时会瞬时并发多个 LLM 请求。单次调用已有 `timeout(60s)`（`suggestion_generator.rs:271`）防挂死，但无全局并发上限/信号量。V1 用户角色数有限可接受；若未来角色增多，建议引入信号量或错峰抖动（与 4.1 deferred 项合并处理）。

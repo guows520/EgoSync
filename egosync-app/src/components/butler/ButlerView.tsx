@@ -3,6 +3,7 @@ import { Home, BarChart2, ListTodo, BrainCircuit, Sliders } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { ButlerWorkspacePanel } from './ButlerWorkspacePanel';
 import { ChatStream } from '../chat/ChatStream';
+import { useSuggestions } from '../../hooks/useSuggestions';
 import type { SourceNavigationTarget } from '../../types/chat';
 import type { Task, TaskActions } from '../../types/task';
 import type { TaskScope } from '../../hooks/useTasks';
@@ -22,6 +23,7 @@ export function ButlerView({ roles, onViewChange, archivedRoles, onRestoreRole, 
   const [openTab, setOpenTab] = useState<'dashboard' | 'tasks' | 'memory' | 'settings' | null>(null);
   const [targetMemoryId, setTargetMemoryId] = useState<string | null>(null);
   const [sourceNavigationTarget, setSourceNavigationTarget] = useState<SourceNavigationTarget | null>(null);
+  const { suggestions, confirmSuggestion, rejectSuggestion, removeSuggestion } = useSuggestions();
 
   useEffect(() => {
     if (!externalSourceNavigationTarget) return;
@@ -82,6 +84,10 @@ export function ButlerView({ roles, onViewChange, archivedRoles, onRestoreRole, 
               setSourceNavigationTarget(null);
               onSourceNavigationHandled?.();
             }}
+            suggestions={suggestions}
+            onConfirmSuggestion={confirmSuggestion}
+            onRejectSuggestion={rejectSuggestion}
+            onDismissSuggestion={removeSuggestion}
           />
         </div>
 

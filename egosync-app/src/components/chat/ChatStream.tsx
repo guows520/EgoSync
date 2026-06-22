@@ -1,13 +1,15 @@
 import { useState, useEffect, useRef, useCallback, Fragment } from 'react';
-import { FolderOpen } from 'lucide-react';
+import { FolderOpen, Home } from 'lucide-react';
 import { chatService } from '../../services/chatService';
 import { useTauriEvent } from '../../hooks/useTauriEvent';
 import { ChatBubble, ExecutionTrace } from './ChatBubble';
 import { ChatInput } from './ChatInput';
 import { ChatHeader } from './ChatHeader';
+import { ActionCard } from '../butler/ActionCard';
 import { getRoleIconComponent, normalizeColorHex } from '../../lib/roleIcons';
 import type { ChatMessage, StreamPayload, Conversation, TitleUpdatedPayload, SourceNavigationTarget, MessageProcessEvent, ExecutionTraceBlock, ExecutionTraceDetail } from '../../types/chat';
 import type { Role } from '../../types/role';
+import type { SuggestionWithRole } from '../../types/suggestion';
 
 interface ChatStreamProps {
   /** 角色视图传入对应 Role；管家/onboarding 视图传 null。 */
@@ -15,6 +17,10 @@ interface ChatStreamProps {
   onMemoryReferenceClick?: (memoryId: string) => void;
   sourceNavigationTarget?: SourceNavigationTarget | null;
   onSourceNavigationHandled?: () => void;
+  suggestions?: SuggestionWithRole[];
+  onConfirmSuggestion?: (id: string) => void;
+  onRejectSuggestion?: (id: string, reason: string) => void;
+  onDismissSuggestion?: (id: string) => void;
 }
 
 type StreamBubbleState = { id: string | null; content: string };
@@ -492,6 +498,10 @@ export function ChatStream({
   onMemoryReferenceClick,
   sourceNavigationTarget,
   onSourceNavigationHandled,
+  suggestions = [],
+  onConfirmSuggestion,
+  onRejectSuggestion,
+  onDismissSuggestion,
 }: ChatStreamProps) {
   const roleId = role?.id ?? null;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -1064,6 +1074,27 @@ export function ChatStream({
                 </div>
               </Fragment>
             ))}
+          {suggestions.length > 0 && !isStreaming && onConfirmSuggestion && onRejectSuggestion && onDismissSuggestion && (
+            <div className="flex flex-col gap-1.5 items-start">
+              <div className="flex items-center gap-2 mb-1">
+                <div className="w-5 h-5 rounded-md bg-slate-800 dark:bg-indigo-600 text-white flex items-center justify-center">
+                  <Home size={12} />
+                </div>
+                <span className="text-xs text-slate-400 font-medium">管家</span>
+              </div>
+              <div className="w-full max-w-[85%] space-y-2">
+                {suggestions.map(suggestion => (
+                  <ActionCard
+                    key={suggestion.id}
+                    suggestion={suggestion}
+                    onConfirm={onConfirmSuggestion}
+                    onReject={onRejectSuggestion}
+                    onDismiss={onDismissSuggestion}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
           {streamingTraceBlocks.length > 0 && !streamingTraceAnchorMessageId && (
             <ExecutionTrace blocks={streamingTraceBlocks} defaultExpanded />
           )}

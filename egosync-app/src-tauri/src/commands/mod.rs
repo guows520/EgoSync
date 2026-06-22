@@ -7,4 +7,5 @@ pub mod role;
 pub mod scheduler;
 pub mod secret;
 pub mod skill;
+pub mod suggestion;
 pub mod task;

@@ -346,6 +346,9 @@ pub fn run() {
             commands::app::app_sidecar_status,
             commands::scheduler::scheduler_get_times,
             commands::scheduler::scheduler_set_times,
+            commands::suggestion::suggestion_list_pending,
+            commands::suggestion::suggestion_confirm,
+            commands::suggestion::suggestion_reject,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

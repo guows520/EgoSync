@@ -54,6 +54,7 @@ pub fn build_suggestion_prompt(
     task_summary: &str,
     memory_summary: &str,
     recent_suggestions: &[Suggestion],
+    rejected_suggestions: &[Suggestion],
 ) -> Vec<ChatCompletionMessage> {
     let system = "你是 EgoSync 的角色主动建议生成器。只输出严格 JSON 对象，不要 Markdown、code fence 或解释文本。\
 顶层格式必须是 {\"suggestions\":[{\"title\":\"...\",\"content\":\"...\",\"priority\":\"high|medium|low\"}]}。\
@@ -90,6 +91,20 @@ title 是简短标题（不超过 30 字），content 是具体建议内容（10
             existing_lines.join("\n")
         ));
         user.push_str("\n请不要生成与以上已有建议重复或高度相似的新建议。若没有新的有价值建议，返回空数组。\n");
+    }
+
+    if !rejected_suggestions.is_empty() {
+        let rejected_lines: Vec<String> = rejected_suggestions
+            .iter()
+            .map(|s| {
+                let reason = s.rejection_reason.as_deref().unwrap_or("未知");
+                format!("- 标题：{} | 拒绝原因：{}", s.title, reason)
+            })
+            .collect();
+        user.push_str(&format!(
+            "\n[用户曾拒绝的建议]\n{}\n请避免生成与以上被拒绝建议类似的内容。\n",
+            rejected_lines.join("\n")
+        ));
     }
 
     user.push_str("\n请基于以上上下文，为该角色生成 0-3 条有价值的主动建议。");
@@ -198,7 +213,19 @@ pub async fn generate_suggestions(
         }
     };
 
-    let prompt = build_suggestion_prompt(role, &task_summary, &memory_summary, &recent_suggestions);
+    let rejected_suggestions = match db::suggestions::list_rejected_suggestions(main_pool, &role.id, &since_iso).await {
+        Ok(list) => list,
+        Err(e) => {
+            tracing::warn!(
+                role_id = %role.id,
+                error = %e,
+                "查询已拒绝建议失败，继续生成建议（无拒绝反馈上下文）"
+            );
+            Vec::new()
+        }
+    };
+
+    let prompt = build_suggestion_prompt(role, &task_summary, &memory_summary, &recent_suggestions, &rejected_suggestions);
 
     let provider = match agent_engine::resolve_default_provider(main_pool).await {
         Ok(p) => p,
@@ -507,7 +534,7 @@ mod tests {
     #[test]
     fn prompt_system_contains_strict_json_constraint() {
         let role = make_test_role();
-        let prompt = build_suggestion_prompt(&role, "", "", &[]);
+        let prompt = build_suggestion_prompt(&role, "", "", &[], &[]);
         assert_eq!(prompt[0].role, "system");
         assert!(prompt[0].content.contains("严格 JSON"));
         assert!(prompt[0].content.contains("suggestions"));
@@ -516,7 +543,7 @@ mod tests {
     #[test]
     fn prompt_user_contains_role_goal() {
         let role = make_test_role();
-        let prompt = build_suggestion_prompt(&role, "", "", &[]);
+        let prompt = build_suggestion_prompt(&role, "", "", &[], &[]);
         assert_eq!(prompt[1].role, "user");
         assert!(prompt[1].content.contains("推进产品落地"));
         assert!(prompt[1].content.contains("产品经理"));
@@ -525,14 +552,14 @@ mod tests {
     #[test]
     fn prompt_user_contains_task_summary() {
         let role = make_test_role();
-        let prompt = build_suggestion_prompt(&role, "[未完成] 写需求文档", "", &[]);
+        let prompt = build_suggestion_prompt(&role, "[未完成] 写需求文档", "", &[], &[]);
         assert!(prompt[1].content.contains("写需求文档"));
     }
 
     #[test]
     fn prompt_user_contains_memory_summary() {
         let role = make_test_role();
-        let prompt = build_suggestion_prompt(&role, "", "用户偏好简洁汇报", &[]);
+        let prompt = build_suggestion_prompt(&role, "", "用户偏好简洁汇报", &[], &[]);
         assert!(prompt[1].content.contains("简洁汇报"));
     }
 
@@ -543,7 +570,7 @@ mod tests {
             make_suggestion("1", "已有建议A", "已有内容A"),
             make_suggestion("2", "已有建议B", "已有内容B"),
         ];
-        let prompt = build_suggestion_prompt(&role, "", "", &recent);
+        let prompt = build_suggestion_prompt(&role, "", "", &recent, &[]);
         assert!(prompt[1].content.contains("已有建议A"));
         assert!(prompt[1].content.contains("已有建议B"));
         assert!(prompt[1].content.contains("重复"));
@@ -552,7 +579,7 @@ mod tests {
     #[test]
     fn prompt_user_no_dedup_section_when_empty() {
         let role = make_test_role();
-        let prompt = build_suggestion_prompt(&role, "", "", &[]);
+        let prompt = build_suggestion_prompt(&role, "", "", &[], &[]);
         assert!(!prompt[1].content.contains("已有建议"));
     }
 
@@ -687,5 +714,53 @@ mod tests {
             max_notification_level_for_proactivity(""),
             NotificationLevel::Whisper
         );
+    }
+
+    // --- rejected suggestions injection tests ---
+
+    fn make_rejected_suggestion(id: &str, title: &str, reason: &str) -> Suggestion {
+        Suggestion {
+            id: id.to_string(),
+            role_id: "test-role-id".to_string(),
+            title: title.to_string(),
+            content: "内容".to_string(),
+            priority: "medium".to_string(),
+            status: "rejected".to_string(),
+            rejection_reason: Some(reason.to_string()),
+            converted_task_id: None,
+            created_at: "2026-06-20T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn prompt_contains_rejected_suggestions_section_when_non_empty() {
+        let role = make_test_role();
+        let rejected = vec![
+            make_rejected_suggestion("1", "建议A", "irrelevant"),
+            make_rejected_suggestion("2", "建议B", "bad_timing"),
+        ];
+        let prompt = build_suggestion_prompt(&role, "", "", &[], &rejected);
+        assert!(prompt[1].content.contains("用户曾拒绝的建议"));
+        assert!(prompt[1].content.contains("建议A"));
+        assert!(prompt[1].content.contains("irrelevant"));
+        assert!(prompt[1].content.contains("建议B"));
+        assert!(prompt[1].content.contains("bad_timing"));
+        assert!(prompt[1].content.contains("请避免生成与以上被拒绝建议类似的内容"));
+    }
+
+    #[test]
+    fn prompt_no_rejected_section_when_empty() {
+        let role = make_test_role();
+        let prompt = build_suggestion_prompt(&role, "", "", &[], &[]);
+        assert!(!prompt[1].content.contains("用户曾拒绝的建议"));
+    }
+
+    #[test]
+    fn prompt_rejected_suggestion_with_none_reason_shows_unknown() {
+        let role = make_test_role();
+        let mut rejected = make_rejected_suggestion("1", "建议A", "irrelevant");
+        rejected.rejection_reason = None;
+        let prompt = build_suggestion_prompt(&role, "", "", &[], &[rejected]);
+        assert!(prompt[1].content.contains("未知"));
     }
 }

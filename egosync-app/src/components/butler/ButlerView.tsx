@@ -4,11 +4,32 @@ import { cn } from '../../lib/utils';
 import { ButlerWorkspacePanel } from './ButlerWorkspacePanel';
 import { ChatStream } from '../chat/ChatStream';
 import { useSuggestions } from '../../hooks/useSuggestions';
+import { ActionCard } from './ActionCard';
 import type { SourceNavigationTarget } from '../../types/chat';
 import type { Task, TaskActions } from '../../types/task';
 import type { TaskScope } from '../../hooks/useTasks';
+import type { NotificationWithRole } from '../../types/notification';
+import type { SuggestionWithRole } from '../../types/suggestion';
 
-export function ButlerView({ roles, onViewChange, archivedRoles, onRestoreRole, onUpdateRole, onRoleSourceNavigation, sourceNavigationTarget: externalSourceNavigationTarget, onSourceNavigationHandled, onOpenTask, onTasksApiReady }: {
+/// Story 4.5: 将敲门通知映射为 ActionCard 可消费的 SuggestionWithRole 结构（复用建议卡片组件）。
+function knockToSuggestion(n: NotificationWithRole): SuggestionWithRole {
+  return {
+    id: n.id,
+    roleId: n.roleId,
+    title: n.content,
+    content: '',
+    priority: 'high',
+    status: 'pending',
+    rejectionReason: null,
+    convertedTaskId: null,
+    createdAt: n.createdAt,
+    roleName: n.roleName,
+    roleIcon: n.roleIcon,
+    roleColor: n.roleColor,
+  };
+}
+
+export function ButlerView({ roles, onViewChange, archivedRoles, onRestoreRole, onUpdateRole, onRoleSourceNavigation, sourceNavigationTarget: externalSourceNavigationTarget, onSourceNavigationHandled, onOpenTask, onTasksApiReady, knockNotifications, onDismissKnock }: {
   roles: any[];
   onViewChange: (view: string) => void;
   archivedRoles: any[];
@@ -19,6 +40,8 @@ export function ButlerView({ roles, onViewChange, archivedRoles, onRestoreRole, 
   onSourceNavigationHandled: () => void;
   onOpenTask: (scope: TaskScope, task?: Task | null) => void;
   onTasksApiReady: (key: string, actions: TaskActions) => void;
+  knockNotifications: NotificationWithRole[];
+  onDismissKnock: (id: string) => void;
 }) {
   const [openTab, setOpenTab] = useState<'dashboard' | 'tasks' | 'memory' | 'settings' | null>(null);
   const [targetMemoryId, setTargetMemoryId] = useState<string | null>(null);
@@ -76,6 +99,23 @@ export function ButlerView({ roles, onViewChange, archivedRoles, onRestoreRole, 
       <div className="flex-1 flex overflow-hidden">
         {/* Chat Area */}
         <div className={cn("flex flex-col relative bg-white/40 dark:bg-slate-900/40 transition-all duration-500 ease-in-out", openTab ? "w-[65%] border-r border-slate-200/60 dark:border-slate-700/60" : "w-full")}>
+          {knockNotifications.length > 0 && (
+            <div className="px-4 pt-4 space-y-3 shrink-0">
+              {knockNotifications.map(n => (
+                <ActionCard
+                  key={n.id}
+                  suggestion={knockToSuggestion(n)}
+                  onConfirm={() => {}}
+                  onReject={() => {}}
+                  onDismiss={onDismissKnock}
+                  confirmLabel="立即处理"
+                  rejectLabel="稍后"
+                  directRejectReason="later"
+                  hideDescription
+                />
+              ))}
+            </div>
+          )}
           <ChatStream
             role={null}
             onMemoryReferenceClick={handleMemoryReferenceClick}

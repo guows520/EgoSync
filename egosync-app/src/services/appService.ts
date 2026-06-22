@@ -7,4 +7,6 @@ export const appService = {
   isLlmConfigured: () => invoke<boolean>('app_is_llm_configured'),
   getButlerSkills: () => invoke<ButlerSkillsConfig>('app_get_butler_skills'),
   updateButlerSkills: (input: UpdateRoleSkillsInput) => invoke<ButlerSkillsConfig>('app_update_butler_skills', { input }),
+  getSetting: (key: string) => invoke<string | null>('app_get_setting', { key }),
+  setSetting: (key: string, value: string) => invoke<void>('app_set_setting', { key, value }),
 };

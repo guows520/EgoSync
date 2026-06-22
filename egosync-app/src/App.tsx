@@ -16,8 +16,11 @@ import { NotificationPanel } from './components/notifications/NotificationPanel'
 import { appService } from './services/appService';
 import { roleService } from './services/roleService';
 import { useTauriEvent } from './hooks/useTauriEvent';
+import { useNotifications } from './hooks/useNotifications';
 import { normalizeColorHex } from './lib/roleIcons';
+import { playNotificationSound } from './lib/notificationSound';
 import type { Role } from './types/role';
+import type { NotificationNewPayload } from './types/notification';
 import type { SourceNavigationTarget } from './types/chat';
 import type { CreateTaskInput, Task, TaskActions, UpdateTaskInput } from './types/task';
 import type { TaskScope } from './hooks/useTasks';
@@ -48,7 +51,34 @@ export default function App() {
   const [pendingRoleSourceNavigation, setPendingRoleSourceNavigation] = useState<SourceNavigationTarget | null>(null);
   const [pendingButlerSourceNavigation, setPendingButlerSourceNavigation] = useState<SourceNavigationTarget | null>(null);
   const [isNotifOpen, setIsNotifOpen] = useState(false);
+  const { alertUnreadCount, whisperUnreadCount, notifications, isLoading: isNotifLoading, markAsRead } = useNotifications();
   const taskActionsRef = useRef(new Map<string, TaskActions>());
+
+  const knockNotifications = useMemo(
+    () => notifications.filter(n => n.level === 'knock' && !n.isRead),
+    [notifications]
+  );
+
+  const handleDismissKnock = useCallback((id: string) => {
+    markAsRead(id);
+  }, [markAsRead]);
+
+  // Story 4.5: 敲门通知到达时，若用户开启声音设置则播放提示音（默认关闭）
+  useTauriEvent<NotificationNewPayload>(
+    'notification:new',
+    useCallback((payload: NotificationNewPayload) => {
+      if (payload.level !== 'knock') return;
+      void (async () => {
+        try {
+          const enabled = await appService.getSetting('notification.knock_sound');
+          if (enabled === 'true') playNotificationSound();
+        } catch (e) {
+          console.error('读取敲门声音设置失败:', e);
+        }
+      })();
+    }, []),
+    []
+  );
 
   // Story 2.5: 管家涌现角色提议（非 onboarding 模式）
   const [butlerProposal, setButlerProposal] = useState<RoleProposal | null>(null);
@@ -248,6 +278,8 @@ export default function App() {
           onEditRole={(id: string) => { setCurrentView(id); setRoleInitialTab('settings'); setIsSettingsOpen(false); }}
           isNotifOpen={isNotifOpen}
           onToggleNotif={() => setIsNotifOpen(v => !v)}
+          unreadCount={alertUnreadCount}
+          whisperUnread={whisperUnreadCount}
         />
 
         <div
@@ -270,6 +302,8 @@ export default function App() {
               onSourceNavigationHandled={() => setPendingButlerSourceNavigation(null)}
               onOpenTask={handleOpenTask}
               onTasksApiReady={handleTasksApiReady}
+              knockNotifications={knockNotifications}
+              onDismissKnock={handleDismissKnock}
             />
           )}
           {roles.map(r => r.id === currentView && (
@@ -312,7 +346,7 @@ export default function App() {
         />
       )}
       {isAddRoleOpen && <AddRoleModal onClose={() => setIsAddRoleOpen(false)} onAdd={(role: Role) => { setRoles(prev => [...prev, role]); setIsAddRoleOpen(false); }} />}
-      {isNotifOpen && <NotificationPanel onClose={() => setIsNotifOpen(false)} />}
+      {isNotifOpen && <NotificationPanel onClose={() => setIsNotifOpen(false)} notifications={notifications} isLoading={isNotifLoading} markAsRead={markAsRead} />}
       <RoleConfirmModal
         open={isButlerProposalOpen}
         proposal={butlerProposal}

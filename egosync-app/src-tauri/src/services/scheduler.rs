@@ -17,11 +17,15 @@ use std::time::Duration;
 
 use chrono::{Local, Timelike};
 use sqlx::SqlitePool;
+use tauri::{AppHandle, Emitter};
 use tokio::time::Instant;
 
 use crate::db;
 use crate::error::AppError;
+use crate::models::notification::NotificationNewPayload;
 use crate::models::role::Role;
+use crate::services::notification_service;
+use crate::services::suggestion_generator::NotificationLevel;
 
 /// `moderate` 角色的默认触发时间点（本地时间）：09:00、14:00、21:00（每日 3 次）
 pub const DEFAULT_MODERATE_TIMES: &[&str] = &["09:00", "14:00", "21:00"];
@@ -141,7 +145,11 @@ fn trigger_key(date: chrono::NaiveDate, hhmm: &str) -> String {
 /// 工作循环 — 调用建议生成服务，将生成的建议写入 DB。
 ///
 /// 永不向上抛错：内部所有失败都降级为 `tracing::warn!` + 返回 `Ok(())`。
-pub async fn run_work_loop_for_role(pool: &SqlitePool, role: &Role) -> Result<(), AppError> {
+pub async fn run_work_loop_for_role(
+    pool: &SqlitePool,
+    role: &Role,
+    app_handle: Option<&AppHandle>,
+) -> Result<(), AppError> {
     tracing::info!(
         role_id = %role.id,
         role_name = %role.name,
@@ -191,6 +199,56 @@ pub async fn run_work_loop_for_role(pool: &SqlitePool, role: &Role) -> Result<()
                     priority = %s.priority,
                     "建议已写入"
                 );
+
+                // Story 4.5: 为每条建议生成对应级别的通知
+                let notification_level = match s.priority.as_str() {
+                    "high" => NotificationLevel::Knock,
+                    "medium" => NotificationLevel::Tap,
+                    _ => NotificationLevel::Whisper,
+                };
+
+                match notification_service::create_notification_for_role(
+                    pool,
+                    &role.id,
+                    notification_level,
+                    &s.title,
+                )
+                .await
+                {
+                    Ok(notification) => {
+                        tracing::info!(
+                            role_id = %role.id,
+                            suggestion_id = %s.id,
+                            notification_id = %notification.id,
+                            requested = ?notification_level,
+                            actual_level = %notification.level,
+                            "通知已创建"
+                        );
+
+                        // emit Tauri Event（如果有 AppHandle）
+                        if let Some(handle) = app_handle {
+                            let payload = NotificationNewPayload {
+                                id: notification.id.clone(),
+                                level: notification.level.clone(),
+                                content: notification.content.clone(),
+                                role_id: role.id.clone(),
+                                role_name: role.name.clone(),
+                                role_icon: role.icon.clone(),
+                                role_color: role.color.clone(),
+                                created_at: notification.created_at.clone(),
+                            };
+                            let _ = handle.emit("notification:new", &payload);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            role_id = %role.id,
+                            suggestion_id = %s.id,
+                            error = %e,
+                            "通知创建失败（不影响建议写入）"
+                        );
+                    }
+                }
             }
             Err(e) => {
                 tracing::warn!(
@@ -224,7 +282,7 @@ pub async fn run_work_loop_for_role(pool: &SqlitePool, role: &Role) -> Result<()
 ///
 /// 首次启动延迟：消耗 `interval.tick()` 的首次立即返回，避免启动时并发太多后台任务。
 /// 同一角色同一时间点（同一日期+同一 HH:MM）只触发一次，跨天自动重置。
-pub fn spawn_scheduler(pool: SqlitePool) {
+pub fn spawn_scheduler(pool: SqlitePool, app_handle: AppHandle) {
     tauri::async_runtime::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(BASE_TICK_SECS));
         // 消耗首次立即 tick，避免启动时并发太多后台任务
@@ -283,11 +341,12 @@ pub fn spawn_scheduler(pool: SqlitePool) {
                 // 每个角色独立 spawn 执行，互不阻塞
                 let pool_clone = pool.clone();
                 let role_clone = role.clone();
+                let handle_clone = app_handle.clone();
                 tokio::spawn(async move {
                     // 墙钟时间戳（ISO 8601），便于日志排查实际触发时刻
                     let triggered_at = crate::db::settings::chrono_now_pub();
                     let start = Instant::now();
-                    let result = run_work_loop_for_role(&pool_clone, &role_clone).await;
+                    let result = run_work_loop_for_role(&pool_clone, &role_clone, Some(&handle_clone)).await;
                     let elapsed = start.elapsed().as_millis() as u64;
 
                     match result {
@@ -514,7 +573,7 @@ mod tests {
             .await
             .expect("failed to create test db");
 
-        let result = run_work_loop_for_role(&pool, &role).await;
+        let result = run_work_loop_for_role(&pool, &role, None).await;
         assert!(result.is_ok());
     }
 }

@@ -8,6 +8,12 @@ import '@testing-library/jest-dom'
     if (cmd === 'chat_get_history') {
       return Promise.resolve([]);
     }
+    if (cmd === 'notification_list') {
+      return Promise.resolve([]);
+    }
+    if (cmd === 'notification_count_unread') {
+      return Promise.resolve(0);
+    }
     return Promise.resolve(null);
   },
   transformCallback: (cb: any) => {

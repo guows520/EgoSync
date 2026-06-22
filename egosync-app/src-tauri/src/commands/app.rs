@@ -61,3 +61,20 @@ pub async fn app_sidecar_status(
         uptime_secs: mgr.uptime_secs(),
     })
 }
+
+#[tauri::command]
+pub async fn app_get_setting(
+    key: String,
+    pool: State<'_, DbPool>,
+) -> Result<Option<String>, AppError> {
+    app_settings::get_setting(&pool, &key).await
+}
+
+#[tauri::command]
+pub async fn app_set_setting(
+    key: String,
+    value: String,
+    pool: State<'_, DbPool>,
+) -> Result<(), AppError> {
+    app_settings::set_setting(&pool, &key, &value).await
+}

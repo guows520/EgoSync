@@ -1,5 +1,10 @@
 # Deferred Work
 
+## Deferred from: code review of 4-5-three-tier-notification (2026-06-22)
+
+- **每日敲门上限存在竞态 (LOW→deferred)**：`services/notification_service.rs:82-93` 的 `create_notification_for_role` 先 `count_knock_today` 再 insert，两步非原子。调度器对每个到期角色独立 `tokio::spawn`，多角色时间点对齐时第 4+ 次 knock 可能在计数与写入之间穿插，导致超过 `DAILY_KNOCK_LIMIT`。当前调度节奏下影响小。建议后续用单事务 + 行锁或 `INSERT ... WHERE (SELECT count...) < 3` 收敛。
+- **mark_read 对已读通知返回 NotFound 语义误导 (LOW→deferred)**：`db/notifications.rs:58-62` 对已读通知返回 `AppError::NotFound("通知 X 已读")`，错误变体与语义不符。前端 `NotificationPanel`/`App` 均有 `!isRead` 守卫，当前无功能影响。建议改为幂等返回 Ok 或使用 `ValidationError`。
+
 ## Deferred from: code review of 4-3-proactivity-dial-behavior (2026-06-22)
 
 - **`moderate` 档过滤未校验 priority 取值域 (LOW→deferred, pre-existing 4.2)**：`filter_suggestions_by_proactivity`（`suggestion_generator.rs`）在 `moderate` 档仅 `filter(|s| s.priority != "low")`，任何非精确 `"low"` 的值（含 LLM 返回的未知优先级如 `"urgent"`）都会被保留。根因在 4.2 的 `generate_suggestions`（`suggestion_generator.rs:264`）只做 `trim().to_lowercase()`，不校验 priority 是否属 `ALLOWED_PRIORITIES`。非本 story 引入；保留语义对 AC2 无害（只显式丢弃 low）。建议在 4.2 生成侧或 `create_suggestion` 写入侧统一收敛 priority 取值域时一并处理。

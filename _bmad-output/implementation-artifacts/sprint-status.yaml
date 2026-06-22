@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-21
-last_updated: 2026-06-22T10:05:00+08:00
+last_updated: 2026-06-22T17:28:00+08:00
 project: "探索 (EgoSync)"
 project_key: NOKEY
 tracking_system: file-system
@@ -100,7 +100,7 @@ development_status:
   4-2-proactive-suggestion-generation: done
   4-3-proactivity-dial-behavior: done
   4-4-suggestion-actioncard-confirm-reject: done
-  4-5-three-tier-notification: backlog
+  4-5-three-tier-notification: done
   4-6-q2-protection-butler-reminder: backlog
   4-7-dashboard-real-role-status: backlog
   4-8-energy-calculation-engine: backlog

@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Plus, X, Download, Trash2, Loader2, Check, AlertCircle, ArchiveRestore, Clock } from 'lucide-react';
+import { Plus, X, Download, Trash2, Loader2, Check, AlertCircle, ArchiveRestore, Clock, Bell } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { llmConfigService } from '../../services/llmConfigService';
 import { roleService } from '../../services/roleService';
 import { mcpService } from '../../services/mcpService';
 import { schedulerService } from '../../services/schedulerService';
+import { appService } from '../../services/appService';
 import type { LlmConfig, CreateLlmConfigInput, UpdateLlmConfigInput } from '../../types/settings';
 import type { McpServer, McpServerType } from '../../types/mcp';
 import type { Role } from '../../types/role';
@@ -57,6 +58,8 @@ export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRol
   const [isSavingScheduler, setIsSavingScheduler] = useState(false);
   const [schedulerError, setSchedulerError] = useState('');
   const [schedulerSaved, setSchedulerSaved] = useState(false);
+  const [knockSoundEnabled, setKnockSoundEnabled] = useState(false);
+  const [isSavingSound, setIsSavingSound] = useState(false);
 
   const loadConfigs = useCallback(async () => {
     try {
@@ -100,12 +103,36 @@ export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRol
     }
   }, []);
 
+  const loadKnockSound = useCallback(async () => {
+    try {
+      const value = await appService.getSetting('notification.knock_sound');
+      setKnockSoundEnabled(value === 'true');
+    } catch (e) {
+      console.error('加载声音设置失败:', e);
+    }
+  }, []);
+
+  const handleToggleKnockSound = async () => {
+    const next = !knockSoundEnabled;
+    setKnockSoundEnabled(next);
+    setIsSavingSound(true);
+    try {
+      await appService.setSetting('notification.knock_sound', String(next));
+    } catch (e) {
+      console.error('保存声音设置失败:', e);
+      setKnockSoundEnabled(!next);
+    } finally {
+      setIsSavingSound(false);
+    }
+  };
+
   useEffect(() => {
     loadConfigs();
     loadArchivedRoles();
     loadMcpServers();
     loadSchedulerTimes();
-  }, [loadArchivedRoles, loadConfigs, loadMcpServers, loadSchedulerTimes]);
+    loadKnockSound();
+  }, [loadArchivedRoles, loadConfigs, loadMcpServers, loadSchedulerTimes, loadKnockSound]);
 
   const handleAddSchedulerTime = (level: 'moderate' | 'proactive') => {
     setSchedulerSaved(false);
@@ -693,6 +720,37 @@ export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRol
                     <Check size={14} /> 已保存
                   </span>
                 )}
+              </div>
+
+              <div className="pt-6 border-t border-slate-200">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-start gap-3">
+                    <div className="w-10 h-10 rounded-lg bg-indigo-50 flex items-center justify-center text-indigo-600 shrink-0">
+                      <Bell size={18} />
+                    </div>
+                    <div>
+                      <h4 className="text-[15px] font-medium text-slate-800">敲门通知声音</h4>
+                      <p className="text-[13px] text-slate-500 mt-0.5">收到「敲门」级别通知时播放提示音</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={knockSoundEnabled}
+                    aria-label="敲门通知声音开关"
+                    disabled={isSavingSound}
+                    onClick={handleToggleKnockSound}
+                    className={cn(
+                      "relative w-12 h-6 rounded-full transition-colors duration-200 shrink-0 disabled:opacity-50",
+                      knockSoundEnabled ? "bg-indigo-600" : "bg-slate-300"
+                    )}
+                  >
+                    <span className={cn(
+                      "absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow-sm transition-transform duration-200",
+                      knockSoundEnabled && "translate-x-6"
+                    )} />
+                  </button>
+                </div>
               </div>
             </div>
           )}

@@ -10,6 +10,14 @@ interface ActionCardProps {
   onConfirm: (id: string) => void;
   onReject: (id: string, reason: string) => void;
   onDismiss: (id: string) => void;
+  /** 确认按钮文案（默认「确认」） */
+  confirmLabel?: string;
+  /** 拒绝按钮文案（默认「拒绝」） */
+  rejectLabel?: string;
+  /** 设置后点击拒绝直接以该原因拒绝，不展示原因选择器（用于敲门通知「稍后」） */
+  directRejectReason?: string;
+  /** 隐藏正文描述（敲门通知标题即内容，无需正文） */
+  hideDescription?: boolean;
 }
 
 type CardStatus = 'pending' | 'confirming' | 'confirmed' | 'rejecting' | 'rejected';
@@ -41,7 +49,7 @@ function formatRelativeTime(iso: string): string {
   return new Date(created).toLocaleDateString();
 }
 
-export function ActionCard({ suggestion, onConfirm, onReject, onDismiss }: ActionCardProps) {
+export function ActionCard({ suggestion, onConfirm, onReject, onDismiss, confirmLabel = '确认', rejectLabel = '拒绝', directRejectReason, hideDescription = false }: ActionCardProps) {
   const [status, setStatus] = useState<CardStatus>('pending');
   const [showRejectionReasons, setShowRejectionReasons] = useState(false);
   const [selectedReason, setSelectedReason] = useState<RejectReason | null>(null);
@@ -61,8 +69,19 @@ export function ActionCard({ suggestion, onConfirm, onReject, onDismiss }: Actio
 
   const handleRejectClick = useCallback(() => {
     if (status !== 'pending') return;
+    if (directRejectReason !== undefined) {
+      setSelectedReason('other');
+      setStatus('rejecting');
+      Promise.resolve(onReject(suggestion.id, directRejectReason)).then(() => {
+        setStatus('rejected');
+      }).catch(() => {
+        setStatus('pending');
+        setSelectedReason(null);
+      });
+      return;
+    }
     setShowRejectionReasons(true);
-  }, [status]);
+  }, [status, directRejectReason, onReject, suggestion.id]);
 
   const handleReasonSelect = useCallback((reason: RejectReason) => {
     if (status !== 'pending') return;
@@ -144,7 +163,7 @@ export function ActionCard({ suggestion, onConfirm, onReject, onDismiss }: Actio
                 {priorityLabel}
               </span>
             </div>
-            <p className="text-[12px] text-slate-500 mt-1">{suggestion.content}</p>
+            {!hideDescription && <p className="text-[12px] text-slate-500 mt-1">{suggestion.content}</p>}
             <div className="flex items-center gap-2 mt-2 text-[11px] text-slate-400">
               <span className="font-medium" style={{ color: suggestion.roleColor }}>{suggestion.roleName}</span>
               {relativeTime && (
@@ -185,14 +204,14 @@ export function ActionCard({ suggestion, onConfirm, onReject, onDismiss }: Actio
             onClick={handleRejectClick}
             className="px-3 py-1.5 rounded-lg text-[13px] font-medium text-slate-500 border border-slate-200 hover:bg-slate-50 hover:text-slate-700 transition-colors motion-reduce:transition-none"
           >
-            拒绝
+            {rejectLabel}
           </button>
           <button
             type="button"
             onClick={handleConfirm}
             className="px-4 py-1.5 rounded-lg text-[13px] font-medium bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm transition-colors motion-reduce:transition-none"
           >
-            确认
+            {confirmLabel}
           </button>
         </div>
       )}

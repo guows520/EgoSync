@@ -7,5 +7,6 @@ pub mod roles;
 pub mod settings;
 pub mod skill_bindings;
 pub mod skills;
+pub mod notifications;
 pub mod suggestions;
 pub mod tasks;

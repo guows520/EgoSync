@@ -21,6 +21,8 @@ interface ChatStreamProps {
   onConfirmSuggestion?: (id: string) => void;
   onRejectSuggestion?: (id: string, reason: string) => void;
   onDismissSuggestion?: (id: string) => void;
+  /** Story 4.6: 外部递增此值时触发对话历史重新加载 */
+  refreshTrigger?: number;
 }
 
 type StreamBubbleState = { id: string | null; content: string };
@@ -502,6 +504,7 @@ export function ChatStream({
   onConfirmSuggestion,
   onRejectSuggestion,
   onDismissSuggestion,
+  refreshTrigger,
 }: ChatStreamProps) {
   const roleId = role?.id ?? null;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -630,6 +633,19 @@ export function ChatStream({
     };
     init();
   }, [resetProcessEvents, loadConversations, resetStreamingState, roleId]);
+
+  // Story 4.6: refreshTrigger 递增时重新加载当前对话历史（Q2 提醒写入后刷新）
+  useEffect(() => {
+    if (refreshTrigger === undefined || refreshTrigger === 0) return;
+    const convId = conversationIdRef.current;
+    if (!convId) return;
+    chatService.getHistory(convId).then(history => {
+      if (conversationIdRef.current !== convId) return;
+      setMessages(prev => mergeHistoryWithLocalMessages(history, prev));
+    }).catch(e => {
+      console.error('Q2 提醒刷新对话历史失败:', e);
+    });
+  }, [refreshTrigger]);
 
   useEffect(() => {
     if (!sourceNavigationTarget) return;

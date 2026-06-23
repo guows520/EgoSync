@@ -21,6 +21,7 @@ import { normalizeColorHex } from './lib/roleIcons';
 import { playNotificationSound } from './lib/notificationSound';
 import type { Role } from './types/role';
 import type { NotificationNewPayload } from './types/notification';
+import type { Q2ReminderPayload } from './types/q2Reminder';
 import type { SourceNavigationTarget } from './types/chat';
 import type { CreateTaskInput, Task, TaskActions, UpdateTaskInput } from './types/task';
 import type { TaskScope } from './hooks/useTasks';
@@ -76,6 +77,16 @@ export default function App() {
           console.error('读取敲门声音设置失败:', e);
         }
       })();
+    }, []),
+    []
+  );
+
+  // Story 4.6: Q2 保护提醒事件到达时，递增 refreshTrigger 触发管家对话刷新
+  const [butlerChatRefreshTrigger, setButlerChatRefreshTrigger] = useState(0);
+  useTauriEvent<Q2ReminderPayload>(
+    'q2:reminder',
+    useCallback((_payload: Q2ReminderPayload) => {
+      setButlerChatRefreshTrigger(t => t + 1);
     }, []),
     []
   );
@@ -304,6 +315,7 @@ export default function App() {
               onTasksApiReady={handleTasksApiReady}
               knockNotifications={knockNotifications}
               onDismissKnock={handleDismissKnock}
+              chatRefreshTrigger={butlerChatRefreshTrigger}
             />
           )}
           {roles.map(r => r.id === currentView && (

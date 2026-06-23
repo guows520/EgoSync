@@ -282,7 +282,7 @@ pub async fn run_work_loop_for_role(
 ///
 /// 首次启动延迟：消耗 `interval.tick()` 的首次立即返回，避免启动时并发太多后台任务。
 /// 同一角色同一时间点（同一日期+同一 HH:MM）只触发一次，跨天自动重置。
-pub fn spawn_scheduler(pool: SqlitePool, app_handle: AppHandle) {
+pub fn spawn_scheduler(pool: SqlitePool, conv_pool: crate::db::pool::ConversationsPool, app_handle: AppHandle) {
     tauri::async_runtime::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(BASE_TICK_SECS));
         // 消耗首次立即 tick，避免启动时并发太多后台任务
@@ -375,6 +375,18 @@ pub fn spawn_scheduler(pool: SqlitePool, app_handle: AppHandle) {
 
             // 清理已归档/删除角色的状态，避免内存随角色 churn 无界增长
             last_triggered_map.retain(|id, _| active_ids.contains(id.as_str()));
+
+            // Story 4.6: 每次 tick 都检查 Q2 保护提醒（不受触发时间点限制）
+            // 频率控制由 q2_reminders 表的 last_reminded_at 管理（每日 ≤ 1 次）
+            if let Err(e) = crate::services::q2_protection_reminder::check_and_generate_reminders(
+                &pool,
+                &conv_pool,
+                Some(&app_handle),
+            )
+            .await
+            {
+                tracing::warn!(error = %e, "Q2 保护提醒检查失败（降级继续）");
+            }
 
             interval.tick().await;
         }

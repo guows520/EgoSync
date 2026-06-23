@@ -23,4 +23,6 @@ export const taskService = {
     invoke<Task>('task_toggle_complete', { taskId: id, isCompleted }),
   checkProtectionStatus: () =>
     invoke<number>('task_check_protection_status'),
+  checkQ2Reminders: () =>
+    invoke<void>('task_check_q2_reminders'),
 };

@@ -1,4 +1,5 @@
-import { Bell, X } from 'lucide-react';
+import { Bell, X, ChevronDown, ChevronUp } from 'lucide-react';
+import { useState } from 'react';
 import { cn } from '../../lib/utils';
 import type { NotificationWithRole } from '../../types/notification';
 
@@ -30,6 +31,10 @@ interface NotificationPanelProps {
 }
 
 export function NotificationPanel({ onClose, notifications, isLoading, markAsRead }: NotificationPanelProps) {
+  const [readExpanded, setReadExpanded] = useState(false);
+
+  const unread = notifications.filter(n => !n.isRead);
+  const read = notifications.filter(n => n.isRead);
 
   return (
     <div
@@ -49,18 +54,15 @@ export function NotificationPanel({ onClose, notifications, isLoading, markAsRea
           {!isLoading && notifications.length === 0 && (
             <div className="text-center text-[13px] text-slate-400 py-12">暂时没有新通知</div>
           )}
-          {notifications.map(n => {
+          {unread.map(n => {
             const lc = levelConfig[n.level] ?? levelConfig.whisper;
             return (
               <div
                 key={n.id}
                 role="article"
                 aria-label={`${n.roleName} - ${lc.label} 通知`}
-                onClick={() => { if (!n.isRead) markAsRead(n.id); }}
-                className={cn(
-                  "bg-white border border-slate-200 rounded-xl p-4 shadow-sm hover:shadow-md hover:-translate-y-px transition-all duration-200 cursor-pointer motion-reduce:transition-none",
-                  n.isRead && "opacity-50"
-                )}
+                onClick={() => markAsRead(n.id)}
+                className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm hover:shadow-md hover:-translate-y-px transition-all duration-200 cursor-pointer motion-reduce:transition-none"
               >
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2">
@@ -74,6 +76,42 @@ export function NotificationPanel({ onClose, notifications, isLoading, markAsRea
               </div>
             );
           })}
+          {read.length > 0 && (
+            <div className="pt-2">
+              <button
+                onClick={() => setReadExpanded(v => !v)}
+                className="w-full flex items-center justify-center gap-1.5 py-2 text-[12px] text-slate-400 hover:text-slate-600 transition-colors"
+              >
+                {readExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                已读 ({read.length})
+              </button>
+              {readExpanded && (
+                <div className="space-y-1.5 mt-2">
+                  {read.map(n => {
+                    const lc = levelConfig[n.level] ?? levelConfig.whisper;
+                    return (
+                      <div
+                        key={n.id}
+                        role="article"
+                        aria-label={`${n.roleName} - ${lc.label} 已读通知`}
+                        className="bg-slate-50 border border-slate-100 rounded-lg px-3 py-2 opacity-60"
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full" style={{ backgroundColor: n.roleColor }}></span>
+                            <span className="text-[12px] font-medium text-slate-500">{n.roleName}</span>
+                          </div>
+                          <span className={cn("px-1.5 py-0.5 rounded text-[9px] font-bold border", lc.cls)}>{lc.label}</span>
+                        </div>
+                        <p className="text-[12px] text-slate-400 leading-snug mt-1 line-clamp-2">{n.content}</p>
+                        <p className="text-[10px] text-slate-300 mt-1">{formatRelativeTime(n.createdAt)}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

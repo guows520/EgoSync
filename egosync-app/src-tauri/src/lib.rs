@@ -271,7 +271,7 @@ pub fn run() {
             // Story 4.1: 角色后台调度器，按 proactivity_level 配置频率运行工作循环。
             // 60 秒基础 tick，每次 tick 动态查询角色列表，passive 跳过。
             // 内部错误只 warn，不阻塞 Tauri setup。
-            services::scheduler::spawn_scheduler(pool.clone(), app.handle().clone());
+            services::scheduler::spawn_scheduler(pool.clone(), conv_pool.clone(), app.handle().clone());
 
             Ok(())
         })
@@ -319,6 +319,7 @@ pub fn run() {
             commands::task::task_reorder,
             commands::task::task_toggle_complete,
             commands::task::task_check_protection_status,
+            commands::task::task_check_q2_reminders,
             commands::mcp::mcp_server_list,
             commands::mcp::mcp_server_list_for_role,
             commands::mcp::mcp_server_list_available_for_role,

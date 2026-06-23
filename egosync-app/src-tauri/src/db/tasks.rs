@@ -158,6 +158,9 @@ pub async fn update_task(
         return Err(AppError::NotFound(format!("任务 {} 不存在", id)));
     }
 
+    // Story 4.6: 用户编辑任务即处理，清除 Q2 提醒记录
+    let _ = crate::db::q2_reminders::delete_reminder_for_task(pool, id).await;
+
     get_active_task(pool, id).await
 }
 
@@ -284,6 +287,9 @@ pub async fn set_task_completion(
     if result.rows_affected() != 1 {
         return Err(AppError::NotFound(format!("任务 {} 不存在", id)));
     }
+
+    // Story 4.6: 用户完成任务即处理，清除 Q2 提醒记录
+    let _ = crate::db::q2_reminders::delete_reminder_for_task(pool, id).await;
 
     get_active_task(pool, id).await
 }
@@ -481,6 +487,28 @@ pub async fn list_imminent_tasks_for_escalation(
     .map_err(|e| AppError::DbError(format!("查询临期任务失败: {}", e)))
 }
 
+/// Story 4.6：查询所有 `protection_status = 'at_risk'` AND `quadrant = 'Q2'` AND `is_completed = 0`
+/// AND `deleted_at IS NULL` 的任务，JOIN `roles` 获取角色信息（需返回角色名用于提醒文案）。
+pub async fn list_at_risk_q2_tasks(pool: &SqlitePool) -> Result<Vec<CrossRoleTask>, AppError> {
+    sqlx::query_as::<_, CrossRoleTask>(
+        "SELECT t.id, t.owner_type, t.role_id, t.title, t.deadline, t.quadrant,
+                t.is_big_rock, t.is_completed, t.completed_at, t.sort_order,
+                t.protection_status, t.confidence, t.manual_override,
+                t.classification_reason, t.created_at, t.updated_at, t.deleted_at,
+                r.name AS role_name, r.color AS role_color
+         FROM tasks t
+         LEFT JOIN roles r ON t.role_id = r.id
+         WHERE t.protection_status = 'at_risk'
+           AND t.quadrant = 'Q2'
+           AND t.is_completed = 0
+           AND t.deleted_at IS NULL
+         ORDER BY t.updated_at ASC",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| AppError::DbError(format!("查询 at_risk Q2 任务失败: {}", e)))
+}
+
 /// Story 3.5：将「连续过期未处理」的 Q2 任务标记为 `at_risk`。
 ///
 /// 命中条件：quadrant = 'Q2'、未完成、未软删除、`updated_at <= threshold`（即距今 ≥ 阈值天数），
@@ -604,6 +632,21 @@ mod tests {
         .execute(&pool)
         .await
         .expect("failed to create tasks table");
+
+        // Story 4.6: q2_reminders 表（update_task / set_task_completion 清除提醒记录测试需要）
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS q2_reminders (
+                id TEXT PRIMARY KEY NOT NULL,
+                task_id TEXT NOT NULL,
+                reminded_count INTEGER NOT NULL DEFAULT 1,
+                last_reminded_at TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                UNIQUE(task_id)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("failed to create q2_reminders table");
 
         pool
     }
@@ -1595,5 +1638,83 @@ mod tests {
         // Q2: butler 排在 role 前 (owner_type ASC: 'butler' < 'role')
         assert_eq!(ids[3], "b-q2", "Q2 butler 在 role 前");
         assert_eq!(ids[4], "r-q2-b", "Q2 role-b 在 butler 后");
+    }
+
+    // ---- Story 4.6: Q2 保护提醒 ----
+
+    #[tokio::test]
+    async fn list_at_risk_q2_tasks_returns_only_at_risk_incomplete_q2() {
+        let pool = setup_test_db().await;
+        // at_risk Q2 未完成 → 应返回
+        insert_protection_task(&pool, "q2-at-risk", "Q2", false, "at_risk", STALE).await;
+        // normal Q2 未完成 → 排除
+        insert_protection_task(&pool, "q2-normal", "Q2", false, "normal", STALE).await;
+        // at_risk Q2 已完成 → 排除
+        insert_protection_task(&pool, "q2-done", "Q2", true, "at_risk", STALE).await;
+        // at_risk Q1 未完成 → 排除
+        insert_protection_task(&pool, "q1-at-risk", "Q1", false, "at_risk", STALE).await;
+
+        let tasks = list_at_risk_q2_tasks(&pool).await.expect("list at_risk q2");
+
+        let ids: Vec<&str> = tasks.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, vec!["q2-at-risk"], "仅 at_risk 未完成 Q2 返回");
+        assert_eq!(tasks[0].role_name.as_deref(), Some("产品"), "应 JOIN 角色名");
+    }
+
+    #[tokio::test]
+    async fn update_task_clears_q2_reminder_record() {
+        let pool = setup_test_db().await;
+        let task = create_simple_task(&pool, "role-a", "Q2 任务").await;
+
+        // 写入一条提醒记录
+        crate::db::q2_reminders::upsert_reminder(&pool, &task.id)
+            .await
+            .expect("upsert reminder");
+
+        // 确认记录存在
+        let before = crate::db::q2_reminders::get_reminder_for_task(&pool, &task.id)
+            .await
+            .expect("get before");
+        assert!(before.is_some());
+
+        // 更新任务 → 应清除提醒记录
+        update_task(
+            &pool,
+            &task.id,
+            &UpdateTaskInput {
+                title: Some("改标题".to_string()),
+                deadline: None,
+                quadrant: None,
+                is_big_rock: None,
+            },
+        )
+        .await
+        .expect("update task");
+
+        let after = crate::db::q2_reminders::get_reminder_for_task(&pool, &task.id)
+            .await
+            .expect("get after");
+        assert!(after.is_none(), "更新任务后应清除 Q2 提醒记录");
+    }
+
+    #[tokio::test]
+    async fn toggle_task_complete_clears_q2_reminder_record() {
+        let pool = setup_test_db().await;
+        let task = create_simple_task(&pool, "role-a", "Q2 任务").await;
+
+        // 写入一条提醒记录
+        crate::db::q2_reminders::upsert_reminder(&pool, &task.id)
+            .await
+            .expect("upsert reminder");
+
+        // 完成任务 → 应清除提醒记录
+        set_task_completion(&pool, &task.id, true)
+            .await
+            .expect("complete task");
+
+        let after = crate::db::q2_reminders::get_reminder_for_task(&pool, &task.id)
+            .await
+            .expect("get after complete");
+        assert!(after.is_none(), "完成任务后应清除 Q2 提醒记录");
     }
 }

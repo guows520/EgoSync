@@ -52,6 +52,7 @@ describe('ButlerView memory reference navigation', () => {
         onTasksApiReady={vi.fn()}
         knockNotifications={[]}
         onDismissKnock={vi.fn()}
+        chatRefreshTrigger={0}
       />,
     );
 
@@ -82,6 +83,7 @@ describe('ButlerView memory reference navigation', () => {
         onTasksApiReady={vi.fn()}
         knockNotifications={[]}
         onDismissKnock={vi.fn()}
+        chatRefreshTrigger={0}
       />,
     );
 
@@ -114,6 +116,7 @@ describe('ButlerView memory reference navigation', () => {
         onTasksApiReady={vi.fn()}
         knockNotifications={[]}
         onDismissKnock={vi.fn()}
+        chatRefreshTrigger={0}
       />,
     );
 

@@ -120,6 +120,24 @@ pub async fn task_check_protection_status(pool: State<'_, DbPool>) -> Result<u64
     crate::services::task_protection_watch::recompute_protection_status(&pool).await
 }
 
+/// Story 4.6：手动触发 Q2 保护提醒检查。
+/// 前端可在打开管家视角时主动调用，确保 at_risk 状态即时反映。
+/// 传入 `app_handle` 以 emit `q2:reminder` 事件，与调度器路径一致，
+/// 保证手动触发生成的提醒也能即时刷新管家对话。
+#[tauri::command]
+pub async fn task_check_q2_reminders(
+    app_handle: tauri::AppHandle,
+    pool: State<'_, DbPool>,
+    conv_pool: State<'_, crate::db::pool::ConversationsPool>,
+) -> Result<(), AppError> {
+    crate::services::q2_protection_reminder::check_and_generate_reminders(
+        &pool,
+        &conv_pool,
+        Some(&app_handle),
+    )
+    .await
+}
+
 fn validate_title(title: &str) -> Result<(), AppError> {
     if title.trim().is_empty() {
         return Err(AppError::ValidationError("任务标题不能为空".to_string()));

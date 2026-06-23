@@ -9,6 +9,7 @@ pub mod memory_pipeline;
 pub mod memory_query;
 pub mod notification_service;
 pub mod mcp_server;
+pub mod q2_protection_reminder;
 pub mod role_config;
 pub mod secret_store;
 pub mod sidecar;

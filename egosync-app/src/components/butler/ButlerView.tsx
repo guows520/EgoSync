@@ -5,6 +5,7 @@ import { ButlerWorkspacePanel } from './ButlerWorkspacePanel';
 import { ChatStream } from '../chat/ChatStream';
 import { useSuggestions } from '../../hooks/useSuggestions';
 import { ActionCard } from './ActionCard';
+import { taskService } from '../../services/taskService';
 import type { SourceNavigationTarget } from '../../types/chat';
 import type { Task, TaskActions } from '../../types/task';
 import type { TaskScope } from '../../hooks/useTasks';
@@ -29,7 +30,7 @@ function knockToSuggestion(n: NotificationWithRole): SuggestionWithRole {
   };
 }
 
-export function ButlerView({ roles, onViewChange, archivedRoles, onRestoreRole, onUpdateRole, onRoleSourceNavigation, sourceNavigationTarget: externalSourceNavigationTarget, onSourceNavigationHandled, onOpenTask, onTasksApiReady, knockNotifications, onDismissKnock }: {
+export function ButlerView({ roles, onViewChange, archivedRoles, onRestoreRole, onUpdateRole, onRoleSourceNavigation, sourceNavigationTarget: externalSourceNavigationTarget, onSourceNavigationHandled, onOpenTask, onTasksApiReady, knockNotifications, onDismissKnock, chatRefreshTrigger }: {
   roles: any[];
   onViewChange: (view: string) => void;
   archivedRoles: any[];
@@ -42,6 +43,7 @@ export function ButlerView({ roles, onViewChange, archivedRoles, onRestoreRole, 
   onTasksApiReady: (key: string, actions: TaskActions) => void;
   knockNotifications: NotificationWithRole[];
   onDismissKnock: (id: string) => void;
+  chatRefreshTrigger: number;
 }) {
   const [openTab, setOpenTab] = useState<'dashboard' | 'tasks' | 'memory' | 'settings' | null>(null);
   const [targetMemoryId, setTargetMemoryId] = useState<string | null>(null);
@@ -52,6 +54,13 @@ export function ButlerView({ roles, onViewChange, archivedRoles, onRestoreRole, 
     if (!externalSourceNavigationTarget) return;
     setSourceNavigationTarget(externalSourceNavigationTarget);
   }, [externalSourceNavigationTarget]);
+
+  // Story 4.6: 打开管家视角时主动触发一次 Q2 保护提醒检查
+  useEffect(() => {
+    taskService.checkQ2Reminders().catch((e: unknown) => {
+      console.warn('Q2 保护提醒检查失败:', e);
+    });
+  }, []);
 
   const toggleTab = (tab: 'dashboard' | 'tasks' | 'memory' | 'settings') => {
     setOpenTab(prev => prev === tab ? null : tab);
@@ -128,6 +137,7 @@ export function ButlerView({ roles, onViewChange, archivedRoles, onRestoreRole, 
             onConfirmSuggestion={confirmSuggestion}
             onRejectSuggestion={rejectSuggestion}
             onDismissSuggestion={removeSuggestion}
+            refreshTrigger={chatRefreshTrigger}
           />
         </div>
 

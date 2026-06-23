@@ -408,7 +408,7 @@ mod tests {
             .await
             .unwrap();
 
-        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, protection_status, created_at, updated_at) VALUES ('t1', 'role', 'r1', 'task1', 'Q2', 0, 'at_risk', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
+        sqlx::query(&format!("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, protection_status, created_at, updated_at) VALUES ('t1', 'role', 'r1', 'task1', 'Q2', 0, '{}', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')", crate::models::task::ProtectionStatus::AtRisk.as_str()))
             .execute(&pool)
             .await
             .unwrap();
@@ -447,9 +447,10 @@ mod tests {
         }
         // 3 at_risk Q2 → at_risk_penalty = 60
         for i in 1..=3 {
-            sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, protection_status, created_at, updated_at) VALUES (?1, 'role', 'r1', ?2, 'Q2', 0, 'at_risk', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
+            sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, protection_status, created_at, updated_at) VALUES (?1, 'role', 'r1', ?2, 'Q2', 0, ?3, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
                 .bind(format!("ar{}", i))
                 .bind(format!("风险任务{}", i))
+                .bind(crate::models::task::ProtectionStatus::AtRisk.as_str())
                 .execute(&pool)
                 .await
                 .unwrap();
@@ -538,9 +539,10 @@ mod tests {
                 .unwrap();
         }
         for i in 1..=3 {
-            sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, protection_status, created_at, updated_at) VALUES (?1, 'role', 'r1', ?2, 'Q2', 0, 'at_risk', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
+            sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, protection_status, created_at, updated_at) VALUES (?1, 'role', 'r1', ?2, 'Q2', 0, ?3, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
                 .bind(format!("ar{}", i))
                 .bind(format!("风险任务{}", i))
+                .bind(crate::models::task::ProtectionStatus::AtRisk.as_str())
                 .execute(&pool)
                 .await
                 .unwrap();

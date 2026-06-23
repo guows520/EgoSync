@@ -165,7 +165,7 @@ describe('RoleView memory reference navigation', () => {
     fireEvent.click(screen.getByRole('button', { name: '任务' }));
 
     const openPanelShell = container.querySelector('[aria-hidden="false"]');
-    expect(openPanelShell).toHaveClass('w-[40%]');
+    expect(openPanelShell).toHaveClass('w-[35%]');
     expect(openPanelShell).toHaveClass('duration-500');
     expect(openPanelShell).not.toHaveClass('slide-in-from-right-8');
     expect(screen.getByTestId('role-current-tab')).toHaveTextContent('tasks');

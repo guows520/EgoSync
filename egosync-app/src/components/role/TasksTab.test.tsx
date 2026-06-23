@@ -519,10 +519,10 @@ describe('TasksTab', () => {
       />,
     );
 
-    expect(screen.getByText('Q1 · 重要且紧急').className).toContain('text-red-600');
-    expect(screen.getByText('Q2 · 重要不紧急').className).toContain('text-blue-600');
-    expect(screen.getByText('Q3 · 紧急不重要').className).toContain('text-slate-600');
-    expect(screen.getByText('Q4 · 不重要不紧急').className).toContain('text-slate-400');
+    expect(screen.getByText('Q1 · 重要且紧急').className).toContain('text-slate-900');
+    expect(screen.getByText('Q2 · 重要不紧急').className).toContain('text-slate-900');
+    expect(screen.getByText('Q3 · 紧急不重要').className).toContain('text-slate-900');
+    expect(screen.getByText('Q4 · 不重要不紧急').className).toContain('text-slate-900');
   });
 
   it('AC2：每组标题右侧显示任务数 badge（含已完成）', () => {

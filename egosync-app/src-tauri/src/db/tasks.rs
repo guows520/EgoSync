@@ -1,7 +1,7 @@
 use sqlx::SqlitePool;
 
 use crate::error::AppError;
-use crate::models::task::{CreateTaskInput, CrossRoleTask, Task, TaskOwnerType, UpdateTaskInput};
+use crate::models::task::{CreateTaskInput, CrossRoleTask, ProtectionStatus, Task, TaskOwnerType, UpdateTaskInput};
 
 const TASK_SELECT_COLUMNS: &str = "id, owner_type, role_id, title, deadline, quadrant, is_big_rock, is_completed, completed_at, sort_order, protection_status, confidence, manual_override, classification_reason, created_at, updated_at, deleted_at";
 const ALLOWED_QUADRANTS: &[&str] = &["Q1", "Q2", "Q3", "Q4"];
@@ -28,7 +28,7 @@ pub async fn create_task(pool: &SqlitePool, input: &CreateTaskInput) -> Result<T
 
     sqlx::query(
         "INSERT INTO tasks (id, owner_type, role_id, title, deadline, quadrant, is_big_rock, is_completed, sort_order, protection_status, manual_override, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, 'normal', ?9, ?10, ?11)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9, ?10, ?11, ?12)",
     )
     .bind(&id)
     .bind(owner_type)
@@ -38,6 +38,7 @@ pub async fn create_task(pool: &SqlitePool, input: &CreateTaskInput) -> Result<T
     .bind(quadrant)
     .bind(is_big_rock)
     .bind(sort_order)
+    .bind(ProtectionStatus::Normal.as_str())
     .bind(manual_override)
     .bind(&now)
     .bind(&now)
@@ -498,12 +499,13 @@ pub async fn list_at_risk_q2_tasks(pool: &SqlitePool) -> Result<Vec<CrossRoleTas
                 r.name AS role_name, r.color AS role_color
          FROM tasks t
          LEFT JOIN roles r ON t.role_id = r.id
-         WHERE t.protection_status = 'at_risk'
+         WHERE t.protection_status = ?
            AND t.quadrant = 'Q2'
            AND t.is_completed = 0
            AND t.deleted_at IS NULL
          ORDER BY t.updated_at ASC",
     )
+    .bind(ProtectionStatus::AtRisk.as_str())
     .fetch_all(pool)
     .await
     .map_err(|e| AppError::DbError(format!("查询 at_risk Q2 任务失败: {}", e)))
@@ -524,14 +526,16 @@ pub async fn mark_stale_q2_at_risk(
 ) -> Result<u64, AppError> {
     let result = sqlx::query(
         "UPDATE tasks
-         SET protection_status = 'at_risk'
+         SET protection_status = ?1
          WHERE quadrant = 'Q2'
            AND is_completed = 0
            AND deleted_at IS NULL
-           AND updated_at <= ?1
-           AND protection_status != 'at_risk'",
+           AND updated_at <= ?2
+           AND protection_status != ?3",
     )
+    .bind(ProtectionStatus::AtRisk.as_str())
     .bind(threshold)
+    .bind(ProtectionStatus::AtRisk.as_str())
     .execute(pool)
     .await
     .map_err(|e| AppError::DbError(format!("标记 Q2 任务 at_risk 失败: {}", e)))?;
@@ -550,11 +554,13 @@ pub async fn clear_protection_for_resolved(
 ) -> Result<u64, AppError> {
     let result = sqlx::query(
         "UPDATE tasks
-         SET protection_status = 'normal'
-         WHERE protection_status = 'at_risk'
+         SET protection_status = ?1
+         WHERE protection_status = ?2
            AND deleted_at IS NULL
-           AND (quadrant != 'Q2' OR is_completed = 1 OR updated_at > ?1)",
+           AND (quadrant != 'Q2' OR is_completed = 1 OR updated_at > ?3)",
     )
+    .bind(ProtectionStatus::Normal.as_str())
+    .bind(ProtectionStatus::AtRisk.as_str())
     .bind(threshold)
     .execute(pool)
     .await

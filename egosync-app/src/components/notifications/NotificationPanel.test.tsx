@@ -54,6 +54,7 @@ describe('NotificationPanel', () => {
     render(
       <NotificationPanel onClose={vi.fn()} notifications={[readNotification]} isLoading={false} markAsRead={markAsRead} />,
     );
+    fireEvent.click(screen.getByRole('button', { name: /已读/ }));
     fireEvent.click(screen.getByRole('article'));
     expect(markAsRead).not.toHaveBeenCalled();
   });

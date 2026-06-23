@@ -14,6 +14,39 @@ impl TaskOwnerType {
     }
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProtectionStatus {
+    Normal,
+    AtRisk,
+}
+
+impl ProtectionStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ProtectionStatus::Normal => "normal",
+            ProtectionStatus::AtRisk => "at_risk",
+        }
+    }
+}
+
+impl std::str::FromStr for ProtectionStatus {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "normal" => Ok(ProtectionStatus::Normal),
+            "at_risk" => Ok(ProtectionStatus::AtRisk),
+            other => Err(format!("无效的 protection_status 值: {}", other)),
+        }
+    }
+}
+
+impl std::fmt::Display for ProtectionStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
 pub struct Task {

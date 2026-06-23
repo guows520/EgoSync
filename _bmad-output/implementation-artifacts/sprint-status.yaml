@@ -95,7 +95,7 @@ development_status:
   # ============================================================
   # Epic 4: 主动循环、通知与仪表盘 (Proactive Loop, Notifications & Dashboard)
   # ============================================================
-  epic-4: in-progress
+  epic-4: done
   4-1-background-scheduler-work-loop: done
   4-2-proactive-suggestion-generation: done
   4-3-proactivity-dial-behavior: done
@@ -104,7 +104,7 @@ development_status:
   4-6-q2-protection-butler-reminder: done
   4-7-dashboard-real-role-status: done
   4-8-energy-calculation-engine: done
-  epic-4-retrospective: optional
+  epic-4-retrospective: done
 
   # ============================================================
   # Epic 5: 使命宣言与冲突仲裁 (Mission & Arbitration)

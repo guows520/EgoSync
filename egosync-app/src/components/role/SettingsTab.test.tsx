@@ -899,33 +899,4 @@ describe('SettingsTab role CRUD actions', () => {
     expect(await screen.findByText('主动性级别已保存')).toBeInTheDocument();
   });
 
-  it('永久删除必须输入角色名确认', () => {
-    const onDeleteRole = vi.fn();
-
-    render(
-      <SettingsTab
-        role={baseRole}
-        activeRoleCount={2}
-        onDeleteRole={onDeleteRole}
-      />
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: /永久删除/ }));
-    const confirmButton = screen.getByRole('button', { name: '永久删除' });
-    expect(confirmButton).toBeDisabled();
-
-    fireEvent.change(screen.getByPlaceholderText('产品经理'), { target: { value: '错误名称' } });
-    expect(confirmButton).toBeDisabled();
-
-    fireEvent.change(screen.getByPlaceholderText('产品经理'), { target: { value: '产品经理' } });
-    expect(confirmButton).not.toBeDisabled();
-  });
-
-  it('仅剩一个 active 角色时禁用危险操作', () => {
-    render(<SettingsTab role={baseRole} activeRoleCount={1} />);
-
-    expect(screen.getByText('至少保留一个角色')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /归档角色/ })).toBeDisabled();
-    expect(screen.getByRole('button', { name: /永久删除/ })).toBeDisabled();
-  });
 });

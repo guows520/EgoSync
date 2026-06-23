@@ -21,7 +21,7 @@ use crate::llm::anthropic::AnthropicProvider;
 use crate::llm::openai::OpenAiProvider;
 use crate::llm::traits::{ChatCompletionMessage, ChatOptions, LlmProvider, StreamEvent};
 use crate::models::role::Role;
-use crate::models::task::Task;
+use crate::models::task::{ProtectionStatus, Task};
 use crate::services::secret_store;
 
 /// LLM 调用超时上限（秒）。failure 后降级到 Q2，不阻塞用户创建任务。
@@ -498,7 +498,7 @@ mod tests {
             is_completed: false,
             completed_at: None,
             sort_order: 0,
-            protection_status: "normal".to_string(),
+            protection_status: ProtectionStatus::Normal.as_str().to_string(),
             confidence: None,
             manual_override: false,
             classification_reason: None,

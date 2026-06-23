@@ -1225,6 +1225,10 @@ mod tests {
             .execute(&pool)
             .await
             .expect("create roles schema");
+        sqlx::raw_sql(include_str!("../../migrations/019_energy_updated_at.sql"))
+            .execute(&pool)
+            .await
+            .expect("add energy_updated_at column");
         sqlx::raw_sql(include_str!("../../migrations/004_memories.sql"))
             .execute(&pool)
             .await

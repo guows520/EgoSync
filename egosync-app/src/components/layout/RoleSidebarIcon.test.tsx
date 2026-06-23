@@ -150,7 +150,7 @@ describe('RoleSidebarIcon', () => {
     expect(dot).toHaveStyle({ backgroundColor: '#F59E0B' });
   });
 
-  it('shows gray energy dot for low energy (<40)', () => {
+  it('shows red energy dot for low energy (<40)', () => {
     const { container } = render(
       <RoleSidebarIcon
         role={mockRoleLowEnergy}
@@ -160,7 +160,7 @@ describe('RoleSidebarIcon', () => {
       />
     );
     const dot = container.querySelector('[aria-hidden="true"]');
-    expect(dot).toHaveStyle({ backgroundColor: '#9CA3AF' });
+    expect(dot).toHaveStyle({ backgroundColor: '#EF4444' });
   });
 
   it('applies inline backgroundColor style when active with hex color', () => {

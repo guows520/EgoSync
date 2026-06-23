@@ -160,6 +160,7 @@ mod tests {
                 personality_prompt TEXT NOT NULL DEFAULT '',
                 status TEXT NOT NULL DEFAULT 'active',
                 energy INTEGER NOT NULL DEFAULT 100,
+                energy_updated_at TEXT,
                 skills_config TEXT NOT NULL DEFAULT '{}',
                 proactivity_level TEXT NOT NULL DEFAULT 'moderate',
                 archived_at TEXT,

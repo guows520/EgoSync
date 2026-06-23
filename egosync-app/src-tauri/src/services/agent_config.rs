@@ -736,6 +736,7 @@ mod tests {
             personality_prompt: String::new(),
             status: status.to_string(),
             energy: 100,
+            energy_updated_at: None,
             skills_config: skills_config.to_string(),
             proactivity_level: "moderate".to_string(),
             archived_at: None,

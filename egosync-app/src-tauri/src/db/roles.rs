@@ -6,7 +6,7 @@ use crate::models::role::{
     CreateRoleInput, Role, UpdateRoleInput, UpdateRoleProactivityInput, UpdateRoleSkillsInput,
 };
 
-const ROLE_SELECT_COLUMNS: &str = "id, name, icon, color, goal, personality_prompt, status, energy, skills_config, proactivity_level, archived_at, created_at, updated_at";
+const ROLE_SELECT_COLUMNS: &str = "id, name, icon, color, goal, personality_prompt, status, energy, energy_updated_at, skills_config, proactivity_level, archived_at, created_at, updated_at";
 
 pub async fn create_role(pool: &SqlitePool, input: &CreateRoleInput) -> Result<Role, AppError> {
     let id = uuid::Uuid::new_v4().to_string();
@@ -272,6 +272,27 @@ pub async fn delete_role(
     Ok(())
 }
 
+pub async fn update_energy(
+    pool: &SqlitePool,
+    role_id: &str,
+    energy: i32,
+    energy_updated_at: &str,
+) -> Result<(), AppError> {
+    let result = sqlx::query(
+        "UPDATE roles SET energy = ?1, energy_updated_at = ?2 WHERE id = ?3",
+    )
+    .bind(energy)
+    .bind(energy_updated_at)
+    .bind(role_id)
+    .execute(pool)
+    .await
+    .map_err(|e| AppError::DbError(format!("更新能量值失败: {}", e)))?;
+    if result.rows_affected() != 1 {
+        return Err(AppError::NotFound(format!("角色 {} 不存在", role_id)));
+    }
+    Ok(())
+}
+
 pub async fn count_active_roles(pool: &SqlitePool) -> Result<i64, AppError> {
     let count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM roles WHERE status = 'active'")
         .fetch_one(pool)
@@ -303,6 +324,7 @@ mod tests {
                 personality_prompt TEXT NOT NULL DEFAULT '',
                 status TEXT NOT NULL DEFAULT 'active',
                 energy INTEGER NOT NULL DEFAULT 100,
+                energy_updated_at TEXT,
                 skills_config TEXT NOT NULL DEFAULT '{}',
                 proactivity_level TEXT NOT NULL DEFAULT 'moderate',
                 archived_at TEXT,
@@ -520,5 +542,32 @@ mod tests {
         create_test_role(&pool, "学习者").await;
 
         assert_eq!(count_active_roles(&pool).await.unwrap(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_update_energy_writes_energy_and_timestamp() {
+        let pool = setup_test_db().await;
+        let role = create_test_role(&pool, "产品经理").await;
+
+        update_energy(&pool, &role.id, 42, "2026-06-23T12:00:00Z")
+            .await
+            .unwrap();
+
+        let updated = get_role(&pool, &role.id).await.unwrap();
+        assert_eq!(updated.energy, 42);
+        assert_eq!(
+            updated.energy_updated_at.as_deref(),
+            Some("2026-06-23T12:00:00Z")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_energy_returns_not_found_for_missing_role() {
+        let pool = setup_test_db().await;
+
+        let err = update_energy(&pool, "nonexistent", 50, "2026-06-23T12:00:00Z")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AppError::NotFound(_)));
     }
 }

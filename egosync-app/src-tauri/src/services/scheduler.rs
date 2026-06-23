@@ -21,6 +21,7 @@ use tauri::{AppHandle, Emitter};
 use tokio::time::Instant;
 
 use crate::db;
+use crate::db::pool::ConversationsPool;
 use crate::error::AppError;
 use crate::models::notification::NotificationNewPayload;
 use crate::models::role::Role;
@@ -147,6 +148,7 @@ fn trigger_key(date: chrono::NaiveDate, hhmm: &str) -> String {
 /// 永不向上抛错：内部所有失败都降级为 `tracing::warn!` + 返回 `Ok(())`。
 pub async fn run_work_loop_for_role(
     pool: &SqlitePool,
+    conv_pool: &ConversationsPool,
     role: &Role,
     app_handle: Option<&AppHandle>,
 ) -> Result<(), AppError> {
@@ -270,6 +272,18 @@ pub async fn run_work_loop_for_role(
         "工作循环建议写入完成"
     );
 
+    // Story 4.8: 工作循环完成后重新计算角色能量值
+    if let Err(e) = crate::services::energy_calculator::calculate_and_update_energy(
+        pool, conv_pool, role,
+    ).await {
+        tracing::warn!(
+            role_id = %role.id,
+            role_name = %role.name,
+            error = %e,
+            "能量值计算失败（不影响工作循环结果）"
+        );
+    }
+
     Ok(())
 }
 
@@ -340,13 +354,14 @@ pub fn spawn_scheduler(pool: SqlitePool, conv_pool: crate::db::pool::Conversatio
 
                 // 每个角色独立 spawn 执行，互不阻塞
                 let pool_clone = pool.clone();
+                let conv_pool_clone = conv_pool.clone();
                 let role_clone = role.clone();
                 let handle_clone = app_handle.clone();
                 tokio::spawn(async move {
                     // 墙钟时间戳（ISO 8601），便于日志排查实际触发时刻
                     let triggered_at = crate::db::settings::chrono_now_pub();
                     let start = Instant::now();
-                    let result = run_work_loop_for_role(&pool_clone, &role_clone, Some(&handle_clone)).await;
+                    let result = run_work_loop_for_role(&pool_clone, &conv_pool_clone, &role_clone, Some(&handle_clone)).await;
                     let elapsed = start.elapsed().as_millis() as u64;
 
                     match result {
@@ -572,6 +587,7 @@ mod tests {
             personality_prompt: String::new(),
             status: "active".to_string(),
             energy: 100,
+            energy_updated_at: None,
             skills_config: "{}".to_string(),
             proactivity_level: "moderate".to_string(),
             archived_at: None,
@@ -585,7 +601,95 @@ mod tests {
             .await
             .expect("failed to create test db");
 
-        let result = run_work_loop_for_role(&pool, &role, None).await;
+        sqlx::query(
+            "CREATE TABLE roles (
+                id TEXT PRIMARY KEY NOT NULL,
+                name TEXT NOT NULL,
+                icon TEXT NOT NULL DEFAULT '🎯',
+                color TEXT NOT NULL DEFAULT '#6366F1',
+                goal TEXT NOT NULL DEFAULT '',
+                personality_prompt TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'active',
+                energy INTEGER NOT NULL DEFAULT 100,
+                energy_updated_at TEXT,
+                skills_config TEXT NOT NULL DEFAULT '{}',
+                proactivity_level TEXT NOT NULL DEFAULT 'moderate',
+                archived_at TEXT,
+                created_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00Z',
+                updated_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00Z'
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("failed to create roles table");
+
+        sqlx::query("INSERT INTO roles (id, name) VALUES ('test-role-id', '测试角色')")
+            .execute(&pool)
+            .await
+            .expect("failed to insert role");
+
+        sqlx::query(
+            "CREATE TABLE tasks (
+                id TEXT PRIMARY KEY NOT NULL,
+                owner_type TEXT NOT NULL DEFAULT 'role',
+                role_id TEXT,
+                title TEXT NOT NULL,
+                deadline TEXT,
+                quadrant TEXT NOT NULL DEFAULT 'Q2',
+                is_big_rock INTEGER NOT NULL DEFAULT 0,
+                is_completed INTEGER NOT NULL DEFAULT 0,
+                completed_at TEXT,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                protection_status TEXT NOT NULL DEFAULT 'normal',
+                confidence REAL,
+                manual_override INTEGER NOT NULL DEFAULT 0,
+                classification_reason TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                deleted_at TEXT
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("failed to create tasks table");
+
+        sqlx::query(
+            "CREATE TABLE notifications (
+                id TEXT PRIMARY KEY NOT NULL,
+                role_id TEXT NOT NULL,
+                level TEXT NOT NULL CHECK (level IN ('whisper', 'tap', 'knock')),
+                content TEXT NOT NULL,
+                is_read INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00Z',
+                FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("failed to create notifications table");
+
+        let conv_pool = crate::db::pool::ConversationsPool(
+            sqlx::sqlite::SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect("sqlite::memory:")
+                .await
+                .expect("failed to create conv test db"),
+        );
+
+        sqlx::query(
+            "CREATE TABLE conversations (
+                id TEXT PRIMARY KEY NOT NULL,
+                role_id TEXT,
+                title TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )",
+        )
+        .execute(&*conv_pool)
+        .await
+        .expect("failed to create conversations table");
+
+        let result = run_work_loop_for_role(&pool, &conv_pool, &role, None).await;
         assert!(result.is_ok());
     }
 }

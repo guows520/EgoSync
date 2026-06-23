@@ -17,7 +17,7 @@ interface RoleSidebarIconProps {
 function getEnergyColor(energy: number): string {
   if (energy >= 80) return '#10B981'; // 翠绿
   if (energy >= 40) return '#F59E0B'; // 琥珀
-  return '#9CA3AF'; // 暗淡灰（不用红色）
+  return '#EF4444'; // 红色（与仪表盘 red-500 一致）
 }
 
 function renderIcon(icon: string) {

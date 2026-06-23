@@ -9,6 +9,7 @@ pub struct Role {
     pub personality_prompt: String,
     pub status: String,
     pub energy: i32,
+    pub energy_updated_at: Option<String>,
     pub skills_config: String,
     pub proactivity_level: String,
     pub archived_at: Option<String>,

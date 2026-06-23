@@ -613,6 +613,113 @@ pub async fn get_task_stats_for_roles(
     Ok(stats)
 }
 
+fn compute_7_days_ago_threshold() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let now_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    let threshold_secs = now_secs - 7 * 86400;
+    let threshold_secs = threshold_secs.max(0);
+    let days = threshold_secs / 86400;
+    let rem = threshold_secs % 86400;
+    let hours = rem / 3600;
+    let minutes = (rem % 3600) / 60;
+    let seconds = rem % 60;
+    let (y, m, d) = days_to_ymd(days);
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        y, m, d, hours, minutes, seconds
+    )
+}
+
+fn days_to_ymd(days: i64) -> (i64, u32, u32) {
+    let days = days + 719468;
+    let era = if days >= 0 { days } else { days - 146096 } / 146097;
+    let doe = (days - era * 146097) as u32;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = (yoe as i64) + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d)
+}
+
+pub async fn count_completed_tasks_in_last_7_days_for_role(
+    pool: &SqlitePool,
+    role_id: &str,
+) -> Result<i64, AppError> {
+    let threshold = compute_7_days_ago_threshold();
+    let count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM tasks
+         WHERE owner_type = 'role' AND role_id = ?1
+           AND is_completed = 1 AND completed_at IS NOT NULL
+           AND completed_at >= ?2
+           AND deleted_at IS NULL",
+    )
+    .bind(role_id)
+    .bind(&threshold)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| AppError::DbError(format!("查询最近7天完成任务数失败: {}", e)))?;
+    Ok(count)
+}
+
+pub async fn count_total_tasks_for_role(
+    pool: &SqlitePool,
+    role_id: &str,
+) -> Result<i64, AppError> {
+    let count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM tasks
+         WHERE owner_type = 'role' AND role_id = ?1
+           AND deleted_at IS NULL",
+    )
+    .bind(role_id)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| AppError::DbError(format!("查询角色任务总数失败: {}", e)))?;
+    Ok(count)
+}
+
+pub async fn count_at_risk_q2_tasks_for_role(
+    pool: &SqlitePool,
+    role_id: &str,
+) -> Result<i64, AppError> {
+    let count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM tasks
+         WHERE owner_type = 'role' AND role_id = ?1
+           AND protection_status = 'at_risk'
+           AND quadrant = 'Q2'
+           AND is_completed = 0
+           AND deleted_at IS NULL",
+    )
+    .bind(role_id)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| AppError::DbError(format!("查询 at_risk Q2 任务数失败: {}", e)))?;
+    Ok(count)
+}
+
+pub async fn count_active_big_rocks_for_role(
+    pool: &SqlitePool,
+    role_id: &str,
+) -> Result<i64, AppError> {
+    let count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM tasks
+         WHERE owner_type = 'role' AND role_id = ?1
+           AND is_big_rock = 1
+           AND is_completed = 0
+           AND deleted_at IS NULL",
+    )
+    .bind(role_id)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| AppError::DbError(format!("查询活跃大石头数量失败: {}", e)))?;
+    Ok(count)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -636,6 +743,7 @@ mod tests {
                 personality_prompt TEXT NOT NULL DEFAULT '',
                 status TEXT NOT NULL DEFAULT 'active',
                 energy INTEGER NOT NULL DEFAULT 100,
+                energy_updated_at TEXT,
                 skills_config TEXT NOT NULL DEFAULT '{}',
                 proactivity_level TEXT NOT NULL DEFAULT 'moderate',
                 archived_at TEXT,
@@ -1816,5 +1924,98 @@ mod tests {
         let pool = setup_test_db().await;
         let stats = get_task_stats_for_roles(&pool, &[]).await.expect("get stats");
         assert!(stats.is_empty());
+    }
+
+    // ---- Story 4.8: 任务统计查询函数测试 ----
+
+    #[allow(clippy::too_many_arguments)]
+    async fn insert_energy_test_task(
+        pool: &SqlitePool,
+        id: &str,
+        role_id: &str,
+        quadrant: &str,
+        is_completed: bool,
+        completed_at: Option<&str>,
+        is_big_rock: bool,
+        protection_status: &str,
+        deleted_at: Option<&str>,
+    ) {
+        sqlx::query(
+            "INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, completed_at, is_big_rock, protection_status, sort_order, created_at, updated_at, deleted_at)
+             VALUES (?1, 'role', ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', ?9)",
+        )
+        .bind(id)
+        .bind(role_id)
+        .bind(format!("任务 {}", id))
+        .bind(quadrant)
+        .bind(is_completed as i32)
+        .bind(completed_at)
+        .bind(is_big_rock as i32)
+        .bind(protection_status)
+        .bind(deleted_at)
+        .execute(pool)
+        .await
+        .expect("insert energy test task");
+    }
+
+    #[tokio::test]
+    async fn count_completed_tasks_in_last_7_days_counts_correctly() {
+        let pool = setup_test_db().await;
+        let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        let old = "2020-01-01T00:00:00Z";
+
+        insert_energy_test_task(&pool, "t-recent", "role-a", "Q1", true, Some(&now), false, "normal", None).await;
+        insert_energy_test_task(&pool, "t-old", "role-a", "Q1", true, Some(old), false, "normal", None).await;
+        insert_energy_test_task(&pool, "t-incomplete", "role-a", "Q1", false, None, false, "normal", None).await;
+        insert_energy_test_task(&pool, "t-deleted", "role-a", "Q1", true, Some(&now), false, "normal", Some("2026-01-01T00:00:00Z")).await;
+
+        let count = count_completed_tasks_in_last_7_days_for_role(&pool, "role-a")
+            .await
+            .expect("count");
+        assert_eq!(count, 1, "仅最近7天完成且未删除的任务应被统计");
+    }
+
+    #[tokio::test]
+    async fn count_total_tasks_for_role_counts_all_undeleted() {
+        let pool = setup_test_db().await;
+        insert_energy_test_task(&pool, "t1", "role-a", "Q1", false, None, false, "normal", None).await;
+        insert_energy_test_task(&pool, "t2", "role-a", "Q2", true, Some("2026-06-01T00:00:00Z"), false, "normal", None).await;
+        insert_energy_test_task(&pool, "t3", "role-a", "Q2", false, None, true, "normal", None).await;
+        insert_energy_test_task(&pool, "t4", "role-a", "Q1", false, None, false, "normal", Some("2026-01-01T00:00:00Z")).await;
+
+        let count = count_total_tasks_for_role(&pool, "role-a")
+            .await
+            .expect("count");
+        assert_eq!(count, 3, "已删除任务应被排除");
+    }
+
+    #[tokio::test]
+    async fn count_at_risk_q2_tasks_for_role_counts_correctly() {
+        let pool = setup_test_db().await;
+        insert_energy_test_task(&pool, "q2-atrisk", "role-a", "Q2", false, None, false, "at_risk", None).await;
+        insert_energy_test_task(&pool, "q2-normal", "role-a", "Q2", false, None, false, "normal", None).await;
+        insert_energy_test_task(&pool, "q1-atrisk", "role-a", "Q1", false, None, false, "at_risk", None).await;
+        insert_energy_test_task(&pool, "q2-done", "role-a", "Q2", true, Some("2026-06-01T00:00:00Z"), false, "at_risk", None).await;
+        insert_energy_test_task(&pool, "q2-atrisk-del", "role-a", "Q2", false, None, false, "at_risk", Some("2026-01-01T00:00:00Z")).await;
+
+        let count = count_at_risk_q2_tasks_for_role(&pool, "role-a")
+            .await
+            .expect("count");
+        assert_eq!(count, 1, "仅 at_risk + Q2 + 未完成 + 未删除");
+    }
+
+    #[tokio::test]
+    async fn count_active_big_rocks_for_role_counts_correctly() {
+        let pool = setup_test_db().await;
+        insert_energy_test_task(&pool, "br1", "role-a", "Q2", false, None, true, "normal", None).await;
+        insert_energy_test_task(&pool, "br2", "role-a", "Q2", false, None, true, "normal", None).await;
+        insert_energy_test_task(&pool, "br-done", "role-a", "Q2", true, Some("2026-06-01T00:00:00Z"), true, "normal", None).await;
+        insert_energy_test_task(&pool, "br-del", "role-a", "Q2", false, None, true, "normal", Some("2026-01-01T00:00:00Z")).await;
+        insert_energy_test_task(&pool, "normal", "role-a", "Q2", false, None, false, "normal", None).await;
+
+        let count = count_active_big_rocks_for_role(&pool, "role-a")
+            .await
+            .expect("count");
+        assert_eq!(count, 2, "仅 is_big_rock + 未完成 + 未删除");
     }
 }

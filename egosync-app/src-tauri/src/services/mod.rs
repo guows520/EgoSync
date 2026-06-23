@@ -4,6 +4,7 @@ pub mod agent_engine;
 pub mod butler_config;
 pub mod dashboard_service;
 pub mod delegate_bridge;
+pub mod energy_calculator;
 pub mod event_router;
 pub mod llm_config;
 pub mod memory_pipeline;

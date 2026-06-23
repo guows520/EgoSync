@@ -563,6 +563,56 @@ pub async fn clear_protection_for_resolved(
     Ok(result.rows_affected())
 }
 
+/// 仪表盘批量任务统计：一次 GROUP BY 查询获取所有角色的 pending 任务数和紧急任务数。
+#[derive(Debug, Clone, Default)]
+pub struct TaskStats {
+    pub pending_count: i64,
+    pub urgent_count: i64,
+}
+
+pub async fn get_task_stats_for_roles(
+    pool: &SqlitePool,
+    role_ids: &[String],
+) -> Result<std::collections::HashMap<String, TaskStats>, AppError> {
+    if role_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+
+    let placeholders = role_ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+    let sql = format!(
+        "SELECT role_id, COUNT(*) as pending_count,
+                SUM(CASE WHEN quadrant = 'Q1' THEN 1 ELSE 0 END) as urgent_count
+         FROM tasks
+         WHERE owner_type = 'role' AND is_completed = 0 AND deleted_at IS NULL
+           AND role_id IN ({})
+         GROUP BY role_id",
+        placeholders
+    );
+
+    let mut query = sqlx::query_as::<_, (String, i64, Option<i64>)>(&sql);
+    for id in role_ids {
+        query = query.bind(id);
+    }
+
+    let rows = query
+        .fetch_all(pool)
+        .await
+        .map_err(|e| AppError::DbError(format!("批量查询任务统计失败: {}", e)))?;
+
+    let mut stats = std::collections::HashMap::new();
+    for (role_id, pending_count, urgent_count) in rows {
+        stats.insert(
+            role_id,
+            TaskStats {
+                pending_count,
+                urgent_count: urgent_count.unwrap_or(0),
+            },
+        );
+    }
+
+    Ok(stats)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1716,5 +1766,55 @@ mod tests {
             .await
             .expect("get after complete");
         assert!(after.is_none(), "完成任务后应清除 Q2 提醒记录");
+    }
+
+    #[tokio::test]
+    async fn get_task_stats_for_roles_counts_pending_and_urgent() {
+        let pool = setup_test_db().await;
+
+        // role-a: 2 pending (1 Q1 urgent + 1 Q2), 1 completed
+        create_task(
+            &pool,
+            &CreateTaskInput {
+                owner_type: None,
+                role_id: Some("role-a".to_string()),
+                title: "紧急任务".to_string(),
+                deadline: None,
+                quadrant: Some("Q1".to_string()),
+                is_big_rock: None,
+            },
+        )
+        .await
+        .expect("create Q1 task");
+        create_simple_task(&pool, "role-a", "普通任务").await;
+        let completed = create_simple_task(&pool, "role-a", "已完成任务").await;
+        set_task_completion(&pool, &completed.id, true)
+            .await
+            .expect("complete task");
+
+        // role-b: 1 pending Q2
+        create_simple_task(&pool, "role-b", "学习任务").await;
+
+        let stats = get_task_stats_for_roles(
+            &pool,
+            &["role-a".to_string(), "role-b".to_string()],
+        )
+        .await
+        .expect("get stats");
+
+        let a = stats.get("role-a").expect("role-a stats");
+        assert_eq!(a.pending_count, 2, "role-a 应有 2 个待办");
+        assert_eq!(a.urgent_count, 1, "role-a 应有 1 个紧急 Q1 任务");
+
+        let b = stats.get("role-b").expect("role-b stats");
+        assert_eq!(b.pending_count, 1, "role-b 应有 1 个待办");
+        assert_eq!(b.urgent_count, 0, "role-b 无紧急任务");
+    }
+
+    #[tokio::test]
+    async fn get_task_stats_for_roles_empty_returns_empty() {
+        let pool = setup_test_db().await;
+        let stats = get_task_stats_for_roles(&pool, &[]).await.expect("get stats");
+        assert!(stats.is_empty());
     }
 }

@@ -356,6 +356,7 @@ pub fn run() {
             commands::notification::notification_list,
             commands::notification::notification_mark_read,
             commands::notification::notification_count_unread,
+            commands::dashboard::dashboard_get_status,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

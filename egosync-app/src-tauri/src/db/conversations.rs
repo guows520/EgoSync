@@ -408,6 +408,33 @@ pub async fn update_message_routing_metadata(
     Ok(())
 }
 
+pub async fn get_last_active_for_roles(
+    pool: &ConversationsPool,
+    role_ids: &[String],
+) -> Result<std::collections::HashMap<String, String>, AppError> {
+    if role_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+
+    let placeholders = role_ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+    let sql = format!(
+        "SELECT role_id, MAX(updated_at) FROM conversations WHERE role_id IN ({}) GROUP BY role_id",
+        placeholders
+    );
+
+    let mut query = sqlx::query_as::<_, (String, String)>(&sql);
+    for id in role_ids {
+        query = query.bind(id);
+    }
+
+    let rows = query
+        .fetch_all(&**pool)
+        .await
+        .map_err(|e| AppError::DbError(format!("批量查询角色最近活跃时间失败: {}", e)))?;
+
+    Ok(rows.into_iter().collect())
+}
+
 fn chrono_now() -> String {
     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
@@ -777,5 +804,63 @@ mod tests {
         assert_eq!(listed.len(), 1);
         // 原样存回 —— DB 层不解析 JSON，保留给上层
         assert_eq!(listed[0].routing_metadata.as_deref(), Some(metadata));
+    }
+
+    #[tokio::test]
+    async fn test_get_last_active_for_roles() {
+        let pool = setup_test_pool().await;
+
+        // role-a 有两条对话，updated_at 不同
+        let conv_a1 = create_conversation(&pool, Some("role-a")).await.unwrap();
+        let conv_a2 = create_conversation(&pool, Some("role-a")).await.unwrap();
+
+        // 更新 conv_a1 的 updated_at 为更晚的时间
+        sqlx::query("UPDATE conversations SET updated_at = '2026-06-23T12:00:00Z' WHERE id = ?")
+            .bind(&conv_a1.id)
+            .execute(&*pool)
+            .await
+            .expect("update conv_a1");
+        sqlx::query("UPDATE conversations SET updated_at = '2026-06-22T10:00:00Z' WHERE id = ?")
+            .bind(&conv_a2.id)
+            .execute(&*pool)
+            .await
+            .expect("update conv_a2");
+
+        // role-b 有一条对话
+        let conv_b = create_conversation(&pool, Some("role-b")).await.unwrap();
+        sqlx::query("UPDATE conversations SET updated_at = '2026-06-21T08:00:00Z' WHERE id = ?")
+            .bind(&conv_b.id)
+            .execute(&*pool)
+            .await
+            .expect("update conv_b");
+
+        let map = get_last_active_for_roles(
+            &pool,
+            &["role-a".to_string(), "role-b".to_string(), "role-c".to_string()],
+        )
+        .await
+        .expect("get last active");
+
+        assert_eq!(
+            map.get("role-a").map(|s| s.as_str()),
+            Some("2026-06-23T12:00:00Z"),
+            "role-a 应取最新 updated_at"
+        );
+        assert_eq!(
+            map.get("role-b").map(|s| s.as_str()),
+            Some("2026-06-21T08:00:00Z"),
+            "role-b 取唯一对话的 updated_at"
+        );
+        assert!(
+            !map.contains_key("role-c"),
+            "role-c 无对话不应出现在结果中"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_last_active_for_roles_empty() {
+        let pool = setup_test_pool().await;
+        let map = get_last_active_for_roles(&pool, &[]).await.expect("get last active");
+        assert!(map.is_empty());
     }
 }

@@ -2,6 +2,7 @@ pub mod agent_bridge;
 pub mod agent_config;
 pub mod agent_engine;
 pub mod butler_config;
+pub mod dashboard_service;
 pub mod delegate_bridge;
 pub mod event_router;
 pub mod llm_config;

@@ -120,7 +120,7 @@ export function ButlerWorkspacePanel({
         </button>
       </div>
       <div className="flex-1 overflow-y-auto p-6 scroll-smooth">
-        {currentTab === 'dashboard' && <DashboardTab roles={roles} onViewChange={onViewChange} />}
+        {currentTab === 'dashboard' && <DashboardTab onViewChange={onViewChange} />}
         {currentTab === 'tasks' && (
           <TaskOverviewTab
             roles={roles}

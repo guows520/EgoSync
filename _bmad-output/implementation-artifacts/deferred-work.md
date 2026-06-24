@@ -1,5 +1,9 @@
 # Deferred Work
 
+## Deferred from: code review of 5-1-mission-statement-setting (2026-06-24)
+
+- **缺少 ButlerSettingsContent 使命宣言组件级测试 (LOW→deferred, 测试增强)**：`ButlerSettingsContent.test.tsx` 无 mission 加载/结构化 JSON 解析/保存反馈的断言。service 层 `missionService.test.ts` 已覆盖 invoke 参数，但组件层逻辑（`format='structured'` 时的 JSON 解析填充、模式切换、保存成功反馈）未被测试锁定。建议后续补一组组件测试覆盖加载填充与结构化往返。
+
 ## Deferred from: code review of 4-5-three-tier-notification (2026-06-22)
 
 - **每日敲门上限存在竞态 (LOW→deferred)**：`services/notification_service.rs:82-93` 的 `create_notification_for_role` 先 `count_knock_today` 再 insert，两步非原子。调度器对每个到期角色独立 `tokio::spawn`，多角色时间点对齐时第 4+ 次 knock 可能在计数与写入之间穿插，导致超过 `DAILY_KNOCK_LIMIT`。当前调度节奏下影响小。建议后续用单事务 + 行锁或 `INSERT ... WHERE (SELECT count...) < 3` 收敛。

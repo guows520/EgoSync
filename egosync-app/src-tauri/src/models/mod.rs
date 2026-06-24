@@ -3,6 +3,7 @@ pub mod chat;
 pub mod dashboard;
 pub mod memory;
 pub mod mcp;
+pub mod mission;
 pub mod notification;
 pub mod q2_reminder;
 pub mod role;

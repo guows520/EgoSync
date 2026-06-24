@@ -4,6 +4,7 @@ pub mod dashboard;
 pub mod llm_config;
 pub mod memory;
 pub mod mcp;
+pub mod mission;
 pub mod notification;
 pub mod role;
 pub mod scheduler;

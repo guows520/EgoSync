@@ -2,3 +2,7 @@
 # will have compiled files and executables
 /target/
 /gen/schemas
+
+# 应用运行产生的临时日志
+run-stdout.txt
+run-stderr.txt

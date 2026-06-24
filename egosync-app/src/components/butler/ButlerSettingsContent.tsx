@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { AlertCircle, Check, ChevronDown, ChevronUp, Trash2, Upload } from 'lucide-react';
+import { AlertCircle, Check, ChevronDown, ChevronUp, Loader2, Pencil, Plus, Trash2, Upload, X } from 'lucide-react';
 import { getRoleIconComponent, normalizeColorHex } from '../../lib/roleIcons';
 import { cn } from '../../lib/utils';
 import { appService } from '../../services/appService';
+import { missionService } from '../../services/missionService';
 import { roleService } from '../../services/roleService';
 import { skillService } from '../../services/skillService';
 import type { ButlerSkillsConfig, Role } from '../../types/role';
@@ -39,6 +40,14 @@ interface ButlerSettingsContentProps {
 
 export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], onRestoreRole, onUpdateRole }: ButlerSettingsContentProps) {
   const [mission, setMission] = useState('');
+  const [missionFormat, setMissionFormat] = useState<'free' | 'structured'>('free');
+  const [structuredMission, setStructuredMission] = useState('');
+  const [structuredPrinciple, setStructuredPrinciple] = useState('');
+  const [structuredRoles, setStructuredRoles] = useState<Array<{ name: string; goal: string }>>([]);
+  const [isMissionModalOpen, setIsMissionModalOpen] = useState(false);
+  const [isLoadingMission, setIsLoadingMission] = useState(true);
+  const [isSavingMission, setIsSavingMission] = useState(false);
+  const [missionSavedMessage, setMissionSavedMessage] = useState('');
   const [skills, setSkills] = useState<ButlerSkillsState>(DEFAULT_SKILLS);
   const [isLoadingButlerSkills, setIsLoadingButlerSkills] = useState(true);
   const [registrySkills, setRegistrySkills] = useState<SkillRegistryEntry[]>([]);
@@ -61,10 +70,62 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
   const [settingsSavedMessage, setSettingsSavedMessage] = useState('');
   const [error, setError] = useState('');
   const templates = [
-    '家庭优先：家人的健康与陪伴是一切决策的第一优先级。',
-    '事业与家庭平衡：在事业高速成长的同时，确保每周至少两个晚上属于家人。',
-    '终身学习：持续投入时间学习新知识，每月至少完成一本书或一门课程。'
+    '我的使命是成为一个以原则为中心的人，在生活的各个维度保持平衡与成长。\n\n生活：保持身心健康，经济上勤勉节俭，为家人提供安稳的生活基础。\n关爱：把家人放在第一位——每周至少两个晚上专属陪伴，在重要决策中先问"这对家庭意味着什么"。对朋友真诚相待，值得信任。\n学习：保持终身学习者的心态，每月至少读完一本书或掌握一项新技能，用成长带动身边的人。\n遗产：通过专业能力创造真实价值，每年至少完成一个有长期影响力的项目，让世界因我的存在而更好一点。',
+    '我的使命是以家庭为根基，以事业为翅膀，在两者之间找到动态平衡。\n\n作为伴侣和父母：我是家人可以依靠的人。无论工作多忙，家人的健康与快乐始终是第一优先级。每周保留专属家庭时间，重要家庭事件不因工作让步。\n作为职业人：在工作中追求卓越和影响力，但绝不以牺牲家庭为代价。优先做有长期价值的事，而非短期回报的事。\n作为学习者：每季度审视一次生活平衡状态，及时调整。保持开放心态，从每次挫折中学习。\n作为社区成员：力所能及地回馈社会，每年参与至少一次公益或志愿服务。',
+    '我的使命是持续成长自己，并用成长去服务和影响他人。\n\n个人成长：每天保留30分钟独处反思时间，定期审视生活是否偏离本心。每月深入阅读一本书，每年掌握一个全新领域。\n家庭关系：用耐心和倾听经营亲密关系，成为家人成长的支持者，而非评判者。\n专业贡献：用专业能力解决真实问题，主动分享知识与经验，帮助他人少走弯路。\n精神传承：活出自己想要传递给下一代的价值观——诚实、勤勉、善良、勇气。决定权始终在自己手中，但要为每个决定负责。',
+    '家庭第一。\n在诚信问题上决不妥协。\n未听取正反双方意见，不妄下断语。\n征求他人意见。\n诚恳但立场坚定。\n每年掌握一种新技能。\n今天计划明天的工作。\n态度积极。\n保持幽默感。\n生活与工作有条不紊。\n别怕犯错，怕的是不能吸取教训。\n协助属下成功。\n多请教别人。\n专注于当前的工作，不为下一次任务或提升瞎操心。',
   ];
+
+  const structuredTemplate = {
+    mission: '堂堂正正地生活，并且对他人有所影响，对社会有所贡献。',
+    principle: '有慈悲心——亲近人群，不分贵贱，热爱每一个人。\n甘愿牺牲——为人生使命奉献时间、才智和金钱。\n激励他人——以身作则，证明人为万物之长，可以克服一切困难。\n施加影响——用实际行动改善他人的生活。',
+    roles: [
+      { name: '丈夫/妻子', goal: '妻子/丈夫是我这一生中最重要的人，我们同甘共苦，携手前行。' },
+      { name: '父亲/母亲', goal: '我要帮助子女体验乐趣无穷的人生。' },
+      { name: '儿子/兄弟', goal: '我不忘父母、手足的亲情，随时对他们施以援手。' },
+      { name: '变革者', goal: '我能激发和催化团队成员的优异表现。' },
+      { name: '学者', goal: '我每天都学习很多重要的新知识。' },
+    ],
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    setIsLoadingMission(true);
+    missionService.get()
+      .then(m => {
+        if (!cancelled && m) {
+          setMissionFormat(m.format);
+          if (m.format === 'structured' && m.content) {
+            try {
+              const parsed = JSON.parse(m.content);
+              if (Array.isArray(parsed.roles)) {
+                setStructuredMission(parsed.mission ?? '');
+                setStructuredPrinciple(parsed.principle ?? '');
+                setStructuredRoles(parsed.roles.map((r: { name?: string; goal?: string }) => ({ name: r.name ?? '', goal: r.goal ?? '' })));
+              } else {
+                setStructuredMission(parsed.mission ?? '');
+                setStructuredPrinciple(parsed.principle ?? parsed.value ?? '');
+                setStructuredRoles([{ name: parsed.role ?? '', goal: parsed.goal ?? '' }]);
+              }
+            } catch {
+              setMissionFormat('free');
+              setMission(m.content);
+            }
+          } else {
+            setMission(m.content ?? '');
+          }
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setError('使命宣言加载失败，请稍后重试');
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoadingMission(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -279,6 +340,37 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
     }
   };
 
+  const handleSaveMission = async () => {
+    setIsSavingMission(true);
+    setMissionSavedMessage('');
+    setError('');
+    try {
+      let content: string | null;
+      let format: 'free' | 'structured';
+      if (missionFormat === 'structured') {
+        const allRolesEmpty = structuredRoles.every(r => !r.name.trim() && !r.goal.trim());
+        const isEmpty = !structuredMission.trim() && !structuredPrinciple.trim() && allRolesEmpty;
+        content = isEmpty ? null : JSON.stringify({
+          mission: structuredMission,
+          principle: structuredPrinciple,
+          roles: structuredRoles.filter(r => r.name.trim() || r.goal.trim()),
+        });
+        format = 'structured';
+      } else {
+        content = mission || null;
+        format = 'free';
+      }
+      await missionService.update(content, format);
+      setMissionSavedMessage('使命宣言已保存');
+      setTimeout(() => setMissionSavedMessage(''), MESSAGE_TIMEOUT_MS);
+      if (missionFormat === 'structured') setIsMissionModalOpen(false);
+    } catch {
+      setError('使命宣言保存失败，请稍后重试');
+    } finally {
+      setIsSavingMission(false);
+    }
+  };
+
   const handleCustomSkillDelete = async () => {
     if (!deleteSkillTarget) return;
     const skillId = deleteSkillTarget.id;
@@ -307,20 +399,92 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
       </div>
       <div className="pt-6 border-t border-slate-200/80">
         <label className="text-[14px] font-semibold text-slate-800 block mb-3">您的个人使命宣言</label>
-        <textarea
-          value={mission}
-          onChange={e => setMission(e.target.value)}
-          placeholder="个人使命宣言是你人生各角色间的优先级指南。当角色之间发生时间或资源冲突时，管家会依据它来做仲裁建议。"
-          rows={4}
-          className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none resize-none placeholder:text-slate-300"
-        />
-        <div className="mt-3 space-y-2">
-          <p className="text-[12px] text-slate-400 mb-1.5">参考模板（点击填入）：</p>
-          {templates.map((t, i) => (
-            <button key={i} onClick={() => setMission(t)} className="block w-full text-left px-3 py-2 rounded-lg border border-slate-200 text-[13px] text-slate-600 hover:bg-indigo-50 hover:border-indigo-200 hover:text-indigo-700 transition-colors">
-              {t}
+        <div className="flex gap-2 mb-3">
+          <button
+            type="button"
+            onClick={() => setMissionFormat('free')}
+            disabled={isLoadingMission}
+            className={cn('px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60', missionFormat === 'free' ? 'bg-indigo-600 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50')}
+          >
+            自由文本
+          </button>
+          <button
+            type="button"
+            onClick={() => setMissionFormat('structured')}
+            disabled={isLoadingMission}
+            className={cn('px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60', missionFormat === 'structured' ? 'bg-indigo-600 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50')}
+          >
+            结构化模板
+          </button>
+        </div>
+        {isLoadingMission ? (
+          <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 text-[13px] text-slate-500">正在加载使命宣言...</div>
+        ) : missionFormat === 'free' ? (
+          <>
+            <textarea
+              value={mission}
+              onChange={e => setMission(e.target.value)}
+              placeholder="个人使命宣言是你人生各角色间的优先级指南。当角色之间发生时间或资源冲突时，管家会依据它来做仲裁建议。"
+              rows={6}
+              className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none resize-none placeholder:text-slate-300"
+            />
+            <div className="mt-3 space-y-2">
+              <p className="text-[12px] text-slate-400 mb-1.5">参考模板（点击填入）：</p>
+              {templates.map((t, i) => (
+                <button key={i} onClick={() => setMission(t)} className="block w-full text-left px-3 py-2 rounded-lg border border-slate-200 text-[13px] text-slate-600 hover:bg-indigo-50 hover:border-indigo-200 hover:text-indigo-700 transition-colors">
+                  {t.split('\n')[0]}
+                </button>
+              ))}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="rounded-lg border border-slate-200 bg-white p-4 space-y-3">
+              <div>
+                <span className="text-[12px] text-slate-400">使命</span>
+                <p className={cn('text-[14px] mt-0.5', structuredMission ? 'text-slate-700' : 'text-slate-300')}>
+                  {structuredMission || '未设定'}
+                </p>
+              </div>
+              <div>
+                <span className="text-[12px] text-slate-400">原则</span>
+                <p className={cn('text-[14px] mt-0.5 whitespace-pre-line', structuredPrinciple ? 'text-slate-700' : 'text-slate-300')}>
+                  {structuredPrinciple || '未设定'}
+                </p>
+              </div>
+              <div>
+                <span className="text-[12px] text-slate-400">角色</span>
+                <p className={cn('text-[14px] mt-0.5', structuredRoles.some(r => r.name.trim()) ? 'text-slate-700' : 'text-slate-300')}>
+                  {structuredRoles.filter(r => r.name.trim()).map(r => r.name).join('、') || '未设定'}
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsMissionModalOpen(true)}
+              className="mt-4 inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-4 py-2 text-[13px] font-medium text-slate-600 hover:bg-slate-50 transition-colors"
+            >
+              <Pencil size={14} /> 编辑使命宣言
             </button>
-          ))}
+          </>
+        )}
+        <div className="mt-3 flex items-center gap-3">
+          {missionFormat === 'free' && (
+            <button
+              type="button"
+              onClick={handleSaveMission}
+              disabled={isSavingMission || isLoadingMission}
+              className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-[13px] font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isSavingMission && <Loader2 size={14} className="animate-spin" />}
+              {isSavingMission ? '保存中...' : '保存使命宣言'}
+            </button>
+          )}
+          {missionSavedMessage && (
+            <span className="text-[13px] text-emerald-600 flex items-center gap-1.5">
+              <Check size={14} /> {missionSavedMessage}
+            </span>
+          )}
         </div>
       </div>
       <div className="pt-6 border-t border-slate-200/80">
@@ -675,6 +839,132 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
                 className="rounded-lg bg-red-600 px-5 py-2.5 text-[13px] font-medium text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {pendingSkill === deleteSkillTarget.id ? '删除中...' : '确认删除'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isMissionModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setIsMissionModalOpen(false)}>
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="编辑使命宣言"
+            onClick={e => e.stopPropagation()}
+            className="w-[640px] max-h-[85vh] overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl"
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-[16px] font-semibold text-slate-800">编辑使命宣言</h3>
+              <button type="button" onClick={() => setIsMissionModalOpen(false)} className="text-slate-400 hover:text-slate-600 transition-colors">
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="text-[13px] font-medium text-slate-600 block mb-1.5">使命</label>
+                <textarea
+                  value={structuredMission}
+                  onChange={e => setStructuredMission(e.target.value)}
+                  placeholder="一句话概括你的人生使命。例如：堂堂正正地生活，并且对他人有所影响，对社会有所贡献。"
+                  rows={2}
+                  className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none resize-none placeholder:text-slate-300"
+                />
+              </div>
+              <div>
+                <label className="text-[13px] font-medium text-slate-600 block mb-1.5">原则</label>
+                <textarea
+                  value={structuredPrinciple}
+                  onChange={e => setStructuredPrinciple(e.target.value)}
+                  placeholder={'你信奉的核心原则和行为准则。例如：\n有慈悲心——亲近人群，不分贵贱\n甘愿牺牲——为人生使命奉献时间、才智和金钱\n诚信——在诚信问题上决不妥协'}
+                  rows={5}
+                  className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none resize-none placeholder:text-slate-300"
+                />
+              </div>
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-[13px] font-medium text-slate-600">角色与目标</label>
+                  <span className="text-[11px] text-slate-400">{structuredRoles.length}/7</span>
+                </div>
+                <div className="space-y-2">
+                  {structuredRoles.map((r, i) => (
+                    <div key={i} className="flex items-start gap-2">
+                      <input
+                        type="text"
+                        value={r.name}
+                        onChange={e => {
+                          const next = [...structuredRoles];
+                          next[i] = { ...next[i], name: e.target.value };
+                          setStructuredRoles(next);
+                        }}
+                        placeholder="角色名称"
+                        className="w-28 shrink-0 bg-white border border-slate-200 rounded-lg px-3 py-2 text-[13px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none placeholder:text-slate-300"
+                      />
+                      <textarea
+                        value={r.goal}
+                        onChange={e => {
+                          const next = [...structuredRoles];
+                          next[i] = { ...next[i], goal: e.target.value };
+                          setStructuredRoles(next);
+                        }}
+                        placeholder="该角色的目标与承诺"
+                        rows={2}
+                        className="flex-1 bg-white border border-slate-200 rounded-lg px-3 py-2 text-[13px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none resize-none placeholder:text-slate-300"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setStructuredRoles(structuredRoles.filter((_, idx) => idx !== i))}
+                        className="shrink-0 mt-1.5 text-slate-400 hover:text-red-500 transition-colors"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  ))}
+                  {structuredRoles.length < 7 && (
+                    <button
+                      type="button"
+                      onClick={() => setStructuredRoles([...structuredRoles, { name: '', goal: '' }])}
+                      className="inline-flex items-center gap-1.5 text-[12px] text-indigo-600 hover:text-indigo-700 transition-colors"
+                    >
+                      <Plus size={14} /> 添加角色
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="pt-2 border-t border-slate-100">
+                <p className="text-[12px] text-slate-400 mb-1.5">柯维四段式示例（点击填入）：</p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStructuredMission(structuredTemplate.mission);
+                    setStructuredPrinciple(structuredTemplate.principle);
+                    setStructuredRoles(structuredTemplate.roles.map(r => ({ ...r })));
+                  }}
+                  className="block w-full text-left px-3 py-2 rounded-lg border border-slate-200 text-[13px] text-slate-600 hover:bg-indigo-50 hover:border-indigo-200 hover:text-indigo-700 transition-colors"
+                >
+                  柯维四段式示例：使命 → 原则 → 角色与目标
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-5 flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setIsMissionModalOpen(false)}
+                className="rounded-lg border border-slate-200 px-5 py-2.5 text-[13px] font-medium text-slate-600 hover:bg-slate-50"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveMission}
+                disabled={isSavingMission}
+                className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-5 py-2.5 text-[13px] font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isSavingMission && <Loader2 size={14} className="animate-spin" />}
+                {isSavingMission ? '保存中...' : '保存'}
               </button>
             </div>
           </div>

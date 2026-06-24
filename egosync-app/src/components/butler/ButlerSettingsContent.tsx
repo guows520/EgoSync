@@ -8,6 +8,7 @@ import { roleService } from '../../services/roleService';
 import { skillService } from '../../services/skillService';
 import type { ButlerSkillsConfig, Role } from '../../types/role';
 import type { OpencodeSkillCandidate, SkillImportPreview, SkillRegistryEntry } from '../../types/skill';
+import type { InferredValues, InferenceEligibility } from '../../types/mission';
 
 type ButlerSkillsState = ButlerSkillsConfig;
 
@@ -69,6 +70,12 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
   const [isImportingSkill, setIsImportingSkill] = useState(false);
   const [settingsSavedMessage, setSettingsSavedMessage] = useState('');
   const [error, setError] = useState('');
+  const [inferredValues, setInferredValues] = useState<InferredValues | null>(null);
+  const [isInferring, setIsInferring] = useState(false);
+  const [inferenceDismissed, setInferenceDismissed] = useState(false);
+  const [inferenceEligibility, setInferenceEligibility] = useState<InferenceEligibility | null>(null);
+  const [isInferenceModalOpen, setIsInferenceModalOpen] = useState(false);
+  const [editableSummary, setEditableSummary] = useState('');
   const templates = [
     '我的使命是成为一个以原则为中心的人，在生活的各个维度保持平衡与成长。\n\n生活：保持身心健康，经济上勤勉节俭，为家人提供安稳的生活基础。\n关爱：把家人放在第一位——每周至少两个晚上专属陪伴，在重要决策中先问"这对家庭意味着什么"。对朋友真诚相待，值得信任。\n学习：保持终身学习者的心态，每月至少读完一本书或掌握一项新技能，用成长带动身边的人。\n遗产：通过专业能力创造真实价值，每年至少完成一个有长期影响力的项目，让世界因我的存在而更好一点。',
     '我的使命是以家庭为根基，以事业为翅膀，在两者之间找到动态平衡。\n\n作为伴侣和父母：我是家人可以依靠的人。无论工作多忙，家人的健康与快乐始终是第一优先级。每周保留专属家庭时间，重要家庭事件不因工作让步。\n作为职业人：在工作中追求卓越和影响力，但绝不以牺牲家庭为代价。优先做有长期价值的事，而非短期回报的事。\n作为学习者：每季度审视一次生活平衡状态，及时调整。保持开放心态，从每次挫折中学习。\n作为社区成员：力所能及地回馈社会，每年参与至少一次公益或志愿服务。',
@@ -115,6 +122,15 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
             setMission(m.content ?? '');
           }
         }
+        if (!cancelled) {
+          missionService.checkInferenceEligibility()
+            .then(eligibility => {
+              if (!cancelled) setInferenceEligibility(eligibility);
+            })
+            .catch(() => {
+              if (!cancelled) setInferenceEligibility(null);
+            });
+        }
       })
       .catch(() => {
         if (!cancelled) setError('使命宣言加载失败，请稍后重试');
@@ -126,6 +142,12 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
       cancelled = true;
     };
   }, []);
+
+  const refreshEligibility = () => {
+    missionService.checkInferenceEligibility()
+      .then(eligibility => setInferenceEligibility(eligibility))
+      .catch(() => setInferenceEligibility(null));
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -162,6 +184,54 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
       cancelled = true;
     };
   }, []);
+
+  const handleTriggerInference = async () => {
+    setIsInferring(true);
+    setError('');
+    setInferredValues(null);
+    setInferenceDismissed(false);
+    try {
+      const result = await missionService.inferValues();
+      if (result) {
+        setInferredValues(result);
+        setEditableSummary(result.summary);
+        setIsInferenceModalOpen(true);
+      } else {
+        setError('暂无足够数据进行推断');
+      }
+    } catch {
+      setInferredValues(null);
+      setError('推断失败，请稍后重试');
+    } finally {
+      setIsInferring(false);
+    }
+  };
+
+  const handleAdoptInferred = async () => {
+    if (!inferredValues) return;
+    setIsSavingMission(true);
+    setError('');
+    try {
+      await missionService.update(editableSummary, 'free');
+      setMission(editableSummary);
+      setMissionFormat('free');
+      setInferredValues(null);
+      setIsInferenceModalOpen(false);
+      setMissionSavedMessage('已采纳推断的价值观');
+      setTimeout(() => setMissionSavedMessage(''), MESSAGE_TIMEOUT_MS);
+      refreshEligibility();
+    } catch {
+      setError('采纳推断价值观失败，请稍后重试');
+    } finally {
+      setIsSavingMission(false);
+    }
+  };
+
+  const handleDismissInferred = () => {
+    setInferenceDismissed(true);
+    setInferredValues(null);
+    setIsInferenceModalOpen(false);
+  };
 
   const saveSkills = async (nextSkills: ButlerSkillsState, pendingKey: string) => {
     const previousSkills = skills;
@@ -364,6 +434,7 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
       setMissionSavedMessage('使命宣言已保存');
       setTimeout(() => setMissionSavedMessage(''), MESSAGE_TIMEOUT_MS);
       if (missionFormat === 'structured') setIsMissionModalOpen(false);
+      refreshEligibility();
     } catch {
       setError('使命宣言保存失败，请稍后重试');
     } finally {
@@ -415,6 +486,25 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
             className={cn('px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60', missionFormat === 'structured' ? 'bg-indigo-600 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50')}
           >
             结构化模板
+          </button>
+          <button
+            type="button"
+            onClick={handleTriggerInference}
+            disabled={!inferenceEligibility?.eligible}
+            title={inferenceEligibility && !inferenceEligibility.eligible ? inferenceEligibility.reason : ''}
+            className={cn(
+              'ml-auto px-3 py-1.5 text-[12px] font-medium transition-colors',
+              isInferring
+                ? 'pointer-events-none text-slate-400'
+                : 'text-slate-500 hover:text-indigo-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-slate-500',
+            )}
+          >
+            {isInferring ? (
+              <span className="inline-flex items-center gap-1">
+                <Loader2 size={12} className="animate-loading-spin text-indigo-500" />
+                推断中...
+              </span>
+            ) : '推断使命宣言'}
           </button>
         </div>
         {isLoadingMission ? (
@@ -965,6 +1055,70 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
               >
                 {isSavingMission && <Loader2 size={14} className="animate-spin" />}
                 {isSavingMission ? '保存中...' : '保存'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isInferenceModalOpen && inferredValues && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setIsInferenceModalOpen(false)}>
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="推断的使命宣言"
+            onClick={e => e.stopPropagation()}
+            className="w-[480px] rounded-2xl bg-white p-6 shadow-2xl"
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-[16px] font-semibold text-slate-800">基于行为推断的使命宣言</h3>
+              <button type="button" onClick={() => setIsInferenceModalOpen(false)} className="text-slate-400 hover:text-slate-600 transition-colors">
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <div className="text-[13px] font-medium text-slate-600 mb-1.5">推断的优先级</div>
+                <div className="space-y-1.5">
+                  {inferredValues.values.map((v, i) => (
+                    <div key={i} className="text-[13px] text-slate-700 leading-relaxed">
+                      {v}
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <div className="text-[13px] font-medium text-slate-600 mb-1">推断的使命宣言</div>
+                <textarea
+                  value={editableSummary}
+                  onChange={e => setEditableSummary(e.target.value)}
+                  rows={4}
+                  className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-[14px] text-slate-800 leading-relaxed focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none resize-none"
+                />
+                {inferredValues.confidence < 0.7 && (
+                  <p className="text-[12px] text-slate-400 mt-1.5">（置信度较低，仅供参考）</p>
+                )}
+              </div>
+            </div>
+
+            <div className="mt-5 flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={handleDismissInferred}
+                disabled={isSavingMission}
+                className="rounded-lg border border-slate-200 px-5 py-2.5 text-[13px] font-medium text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                不准确
+              </button>
+              <button
+                type="button"
+                onClick={handleAdoptInferred}
+                disabled={isSavingMission}
+                className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-5 py-2.5 text-[13px] font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isSavingMission && <Loader2 size={14} className="animate-spin" />}
+                {isSavingMission ? '保存中...' : '确认采纳'}
               </button>
             </div>
           </div>

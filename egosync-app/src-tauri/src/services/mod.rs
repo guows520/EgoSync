@@ -8,6 +8,7 @@ pub mod energy_calculator;
 pub mod event_router;
 pub mod llm_config;
 pub mod memory_pipeline;
+pub mod mission_inferrer;
 pub mod memory_query;
 pub mod notification_service;
 pub mod mcp_server;

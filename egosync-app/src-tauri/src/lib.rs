@@ -359,6 +359,8 @@ pub fn run() {
             commands::dashboard::dashboard_get_status,
             commands::mission::mission_get,
             commands::mission::mission_update,
+            commands::mission::mission_infer,
+            commands::mission::mission_infer_eligibility,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

@@ -1,9 +1,10 @@
 use tauri::State;
 
 use crate::db::mission as mission_db;
-use crate::db::pool::DbPool;
+use crate::db::pool::{ConversationsPool, DbPool};
 use crate::error::AppError;
 use crate::models::mission::Mission;
+use crate::services::mission_inferrer::{self, InferredValues, InferenceEligibility};
 
 fn validate_format(format: &str) -> Result<(), AppError> {
     if format != "free" && format != "structured" {
@@ -28,6 +29,23 @@ pub async fn mission_update(
 ) -> Result<Mission, AppError> {
     validate_format(&format)?;
     mission_db::upsert_mission(&pool, content.as_deref(), &format).await
+}
+
+#[tauri::command]
+pub async fn mission_infer(
+    pool: State<'_, DbPool>,
+    conv_pool: State<'_, ConversationsPool>,
+) -> Result<Option<InferredValues>, AppError> {
+    let outcome = mission_inferrer::infer_values(&pool, &conv_pool).await?;
+    Ok(outcome.values)
+}
+
+#[tauri::command]
+pub async fn mission_infer_eligibility(
+    pool: State<'_, DbPool>,
+    conv_pool: State<'_, ConversationsPool>,
+) -> Result<InferenceEligibility, AppError> {
+    mission_inferrer::check_eligibility(&pool, &conv_pool).await
 }
 
 #[cfg(test)]

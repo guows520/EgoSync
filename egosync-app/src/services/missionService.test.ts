@@ -105,4 +105,35 @@ describe('missionService', () => {
       await expect(missionService.update('内容', 'free')).rejects.toThrow('DB error');
     });
   });
+
+  describe('inferValues', () => {
+    it('调用 mission_infer 命令', async () => {
+      mockInvoke.mockResolvedValue(null);
+
+      await missionService.inferValues();
+
+      expect(mockInvoke).toHaveBeenCalledWith('mission_infer');
+    });
+
+    it('返回 InferredValues 对象', async () => {
+      const inferred = {
+        values: ['家庭陪伴 > 工作效率 > 个人学习'],
+        summary: '用户频繁优先处理家庭相关任务',
+        confidence: 0.85,
+      };
+      mockInvoke.mockResolvedValue(inferred);
+
+      const result = await missionService.inferValues();
+
+      expect(result).toEqual(inferred);
+    });
+
+    it('数据不足时返回 null', async () => {
+      mockInvoke.mockResolvedValue(null);
+
+      const result = await missionService.inferValues();
+
+      expect(result).toBeNull();
+    });
+  });
 });

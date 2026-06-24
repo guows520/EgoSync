@@ -2,6 +2,7 @@ import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { ButlerSettingsContent } from './ButlerSettingsContent';
 import { appService } from '../../services/appService';
+import { missionService } from '../../services/missionService';
 import { roleService } from '../../services/roleService';
 import { skillService } from '../../services/skillService';
 import type { Role } from '../../types/role';
@@ -30,6 +31,15 @@ vi.mock('../../services/skillService', () => ({
     importOpencode: vi.fn(),
     delete: vi.fn(),
     removeFromRole: vi.fn(),
+  },
+}));
+
+vi.mock('../../services/missionService', () => ({
+  missionService: {
+    get: vi.fn(),
+    update: vi.fn(),
+    inferValues: vi.fn(),
+    checkInferenceEligibility: vi.fn(),
   },
 }));
 
@@ -80,6 +90,9 @@ describe('ButlerSettingsContent', () => {
     vi.mocked(skillService.discoverOpencode).mockResolvedValue({ items: [], skipped: { total: 0, reasons: [] } });
     vi.mocked(skillService.importOpencode).mockResolvedValue({ status: 'imported', entry: null, synced: true });
     vi.mocked(roleService.list).mockResolvedValue([baseRole, secondRole]);
+    vi.mocked(missionService.get).mockResolvedValue(null);
+    vi.mocked(missionService.inferValues).mockResolvedValue(null);
+    vi.mocked(missionService.checkInferenceEligibility).mockResolvedValue({ eligible: true, reason: '' });
   });
 
   it('展示并持久化管家 Skill 配置', async () => {
@@ -475,6 +488,143 @@ describe('ButlerSettingsContent', () => {
         overwriteExisting: false,
         roleScope: { allRoles: false, roleIds: ['__butler__', 'role-1'] },
       });
+    });
+  });
+
+  describe('推断价值观区域', () => {
+    it('点击推断按钮后调用 inferValues 并展示推断结果', async () => {
+      vi.mocked(missionService.get).mockResolvedValue(null);
+      vi.mocked(missionService.inferValues).mockResolvedValue({
+        values: ['家庭陪伴 > 工作效率 > 个人学习'],
+        summary: '用户频繁优先处理家庭相关任务',
+        confidence: 0.85,
+      });
+
+      render(<ButlerSettingsContent />);
+
+      const triggerBtn = await screen.findByRole('button', { name: '推断使命宣言' });
+      expect(triggerBtn).not.toBeDisabled();
+      fireEvent.click(triggerBtn);
+
+      expect(await screen.findByText('基于行为推断的使命宣言')).toBeInTheDocument();
+      expect(screen.getByText('家庭陪伴 > 工作效率 > 个人学习')).toBeInTheDocument();
+      expect(screen.getByText('用户频繁优先处理家庭相关任务')).toBeInTheDocument();
+      expect(screen.queryByText('（置信度较低，仅供参考）')).not.toBeInTheDocument();
+    });
+
+    it('低置信度时显示提示', async () => {
+      vi.mocked(missionService.get).mockResolvedValue(null);
+      vi.mocked(missionService.inferValues).mockResolvedValue({
+        values: ['健康 > 事业'],
+        summary: '注重健康优先',
+        confidence: 0.5,
+      });
+
+      render(<ButlerSettingsContent />);
+
+      fireEvent.click(await screen.findByRole('button', { name: '推断使命宣言' }));
+
+      expect(await screen.findByText('（置信度较低，仅供参考）')).toBeInTheDocument();
+    });
+
+    it('点击确认采纳后调用 mission_update 并隐藏推断区域', async () => {
+      vi.mocked(missionService.get).mockResolvedValue(null);
+      vi.mocked(missionService.inferValues).mockResolvedValue({
+        values: ['家庭陪伴 > 工作效率'],
+        summary: '家庭优先',
+        confidence: 0.8,
+      });
+      vi.mocked(missionService.update).mockResolvedValue({
+        id: 'singleton',
+        content: '家庭优先',
+        format: 'free',
+        updatedAt: '2026-06-24T10:00:00Z',
+      });
+
+      render(<ButlerSettingsContent />);
+
+      fireEvent.click(await screen.findByRole('button', { name: '推断使命宣言' }));
+      const adoptBtn = await screen.findByRole('button', { name: '确认采纳' });
+      fireEvent.click(adoptBtn);
+
+      await waitFor(() => {
+        expect(missionService.update).toHaveBeenCalledWith('家庭优先', 'free');
+      });
+      await waitFor(() => {
+        expect(screen.queryByText('基于行为推断的使命宣言')).not.toBeInTheDocument();
+      });
+    });
+
+    it('点击不准确后隐藏推断区域', async () => {
+      vi.mocked(missionService.get).mockResolvedValue(null);
+      vi.mocked(missionService.inferValues).mockResolvedValue({
+        values: ['健康 > 事业'],
+        summary: '注重健康',
+        confidence: 0.7,
+      });
+
+      render(<ButlerSettingsContent />);
+
+      fireEvent.click(await screen.findByRole('button', { name: '推断使命宣言' }));
+      const dismissBtn = await screen.findByRole('button', { name: '不准确' });
+      fireEvent.click(dismissBtn);
+
+      await waitFor(() => {
+        expect(screen.queryByText('基于行为推断的使命宣言')).not.toBeInTheDocument();
+      });
+      expect(missionService.update).not.toHaveBeenCalled();
+    });
+
+    it('已设定使命时推断按钮仍可点击', async () => {
+      vi.mocked(missionService.get).mockResolvedValue({
+        id: 'singleton',
+        content: '我的使命',
+        format: 'free',
+        updatedAt: '2026-06-24T10:00:00Z',
+      });
+
+      render(<ButlerSettingsContent />);
+
+      const triggerBtn = await screen.findByRole('button', { name: '推断使命宣言' });
+      expect(triggerBtn).not.toBeDisabled();
+      expect(missionService.inferValues).not.toHaveBeenCalled();
+    });
+
+    it('推断返回 null 时不显示推断区域', async () => {
+      vi.mocked(missionService.get).mockResolvedValue(null);
+      vi.mocked(missionService.inferValues).mockResolvedValue(null);
+
+      render(<ButlerSettingsContent />);
+
+      fireEvent.click(await screen.findByRole('button', { name: '推断使命宣言' }));
+
+      await waitFor(() => {
+        expect(missionService.inferValues).toHaveBeenCalled();
+      });
+      expect(screen.queryByText('基于行为推断的使命宣言')).not.toBeInTheDocument();
+    });
+
+    it('数据不足时按钮禁用且悬浮提示原因', async () => {
+      vi.mocked(missionService.get).mockResolvedValue(null);
+      vi.mocked(missionService.checkInferenceEligibility).mockResolvedValue({
+        eligible: false,
+        reason: '对话记录不足（当前 2 轮，需至少 5 轮）',
+      });
+
+      render(<ButlerSettingsContent />);
+
+      const triggerBtn = await screen.findByRole('button', { name: '推断使命宣言' });
+      expect(triggerBtn).toBeDisabled();
+      expect(triggerBtn).toHaveAttribute('title', '对话记录不足（当前 2 轮，需至少 5 轮）');
+    });
+
+    it('组件加载时不自动调用 inferValues', async () => {
+      vi.mocked(missionService.get).mockResolvedValue(null);
+
+      render(<ButlerSettingsContent />);
+
+      await screen.findByRole('button', { name: '推断使命宣言' });
+      expect(missionService.inferValues).not.toHaveBeenCalled();
     });
   });
 });

@@ -228,6 +228,8 @@ impl SidecarManager {
         for (key, value) in &self.extra_env {
             command.env(key, value);
         }
+        // Ensure localhost traffic bypasses any system proxy (Clash, V2Ray, etc.)
+        command.env("NO_PROXY", "localhost,127.0.0.1");
         self.stderr_buf.lock().await.clear();
         let mut child = command.spawn().map_err(|e| {
             AppError::SidecarError(format!(
@@ -312,6 +314,7 @@ impl SidecarManager {
     pub async fn health_check(&self) -> bool {
         let client = match reqwest::Client::builder()
             .timeout(HEALTH_CHECK_TIMEOUT)
+            .no_proxy()
             .build()
         {
             Ok(c) => c,

@@ -1061,22 +1061,52 @@ export function ChatStream({
               {sourceNavigationNotice}
             </div>
           )}
-          {messages
-            .filter(m =>
+          {(() => {
+            const showSuggestions = suggestions.length > 0 && !isStreaming && onConfirmSuggestion && onRejectSuggestion && onDismissSuggestion;
+            const filteredMessages = messages.filter(m =>
               m.role !== 'system'
               && (m.role !== 'assistant' || m.content.trim().length > 0 || m.thinkingContent.trim().length > 0)
               && Boolean(m.isComplete || m.content || m.thinkingContent)
-            )
-            .map(msg => (
+            );
+
+            if (!showSuggestions) {
+              return filteredMessages.map(msg => (
+                <Fragment key={msg.id}>
+                  {streamingTraceAnchorMessageId === msg.id && (
+                    <ExecutionTrace blocks={streamingTraceBlocks} defaultExpanded />
+                  )}
+                  <div
+                    data-testid={`chat-message-${msg.id}`}
+                    ref={node => { messageRefs.current[msg.id] = node; }}
+                    className={highlightedMessageId === msg.id ? 'rounded-xl ring-2 ring-indigo-400 ring-offset-4 ring-offset-white' : undefined}
+                  >
+                    <ChatBubble
+                      message={msg}
+                      executionTraceBlocks={suppressedProcessMessageIds.has(msg.id) ? [] : processEventsToTraceBlocks(processEventsByMessageId[msg.id] ?? [])}
+                      assistantName={role?.name}
+                      assistantIcon={assistantIcon}
+                      assistantColor={assistantColor}
+                      onMemoryReferenceClick={onMemoryReferenceClick}
+                    />
+                  </div>
+                </Fragment>
+              ));
+            }
+
+            const oldestSuggestionTime = Math.min(...suggestions.map(s => Date.parse(s.createdAt)).filter(Number.isFinite));
+            const suggestionInsertionIndex = Number.isFinite(oldestSuggestionTime)
+              ? filteredMessages.findIndex(m => Date.parse(m.createdAt) > oldestSuggestionTime)
+              : filteredMessages.length;
+            const insertAt = suggestionInsertionIndex === -1 ? filteredMessages.length : suggestionInsertionIndex;
+
+            const renderMessage = (msg: ChatMessage) => (
               <Fragment key={msg.id}>
                 {streamingTraceAnchorMessageId === msg.id && (
                   <ExecutionTrace blocks={streamingTraceBlocks} defaultExpanded />
                 )}
                 <div
                   data-testid={`chat-message-${msg.id}`}
-                  ref={node => {
-                    messageRefs.current[msg.id] = node;
-                  }}
+                  ref={node => { messageRefs.current[msg.id] = node; }}
                   className={highlightedMessageId === msg.id ? 'rounded-xl ring-2 ring-indigo-400 ring-offset-4 ring-offset-white' : undefined}
                 >
                   <ChatBubble
@@ -1089,28 +1119,36 @@ export function ChatStream({
                   />
                 </div>
               </Fragment>
-            ))}
-          {suggestions.length > 0 && !isStreaming && onConfirmSuggestion && onRejectSuggestion && onDismissSuggestion && (
-            <div className="flex flex-col gap-1.5 items-start">
-              <div className="flex items-center gap-2 mb-1">
-                <div className="w-5 h-5 rounded-md bg-slate-800 dark:bg-indigo-600 text-white flex items-center justify-center">
-                  <Home size={12} />
+            );
+
+            const renderSuggestionBlock = () => (
+              <div className="flex flex-col gap-1.5 items-start" key="__suggestions__">
+                <div className="flex items-center gap-2 mb-1">
+                  <div className="w-5 h-5 rounded-md bg-slate-800 dark:bg-indigo-600 text-white flex items-center justify-center">
+                    <Home size={12} />
+                  </div>
+                  <span className="text-xs text-slate-400 font-medium">管家</span>
                 </div>
-                <span className="text-xs text-slate-400 font-medium">管家</span>
+                <div className="w-full max-w-[85%] space-y-2">
+                  {suggestions.map(suggestion => (
+                    <ActionCard
+                      key={suggestion.id}
+                      suggestion={suggestion}
+                      onConfirm={onConfirmSuggestion}
+                      onReject={onRejectSuggestion}
+                      onDismiss={onDismissSuggestion}
+                    />
+                  ))}
+                </div>
               </div>
-              <div className="w-full max-w-[85%] space-y-2">
-                {suggestions.map(suggestion => (
-                  <ActionCard
-                    key={suggestion.id}
-                    suggestion={suggestion}
-                    onConfirm={onConfirmSuggestion}
-                    onReject={onRejectSuggestion}
-                    onDismiss={onDismissSuggestion}
-                  />
-                ))}
-              </div>
-            </div>
-          )}
+            );
+
+            return [
+              ...filteredMessages.slice(0, insertAt).map(renderMessage),
+              renderSuggestionBlock(),
+              ...filteredMessages.slice(insertAt).map(renderMessage),
+            ];
+          })()}
           {streamingTraceBlocks.length > 0 && !streamingTraceAnchorMessageId && (
             <ExecutionTrace blocks={streamingTraceBlocks} defaultExpanded />
           )}

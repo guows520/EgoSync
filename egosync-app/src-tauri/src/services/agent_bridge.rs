@@ -18,7 +18,10 @@ impl AgentBridge {
     pub fn new(port: u16) -> Self {
         Self {
             base_url: format!("http://127.0.0.1:{}", port),
-            http_client: reqwest::Client::new(),
+            http_client: reqwest::Client::builder()
+                .no_proxy()
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
         }
     }
 

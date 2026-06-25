@@ -116,7 +116,7 @@ development_status:
   5-4-three-step-arbitration: deferred-v2
   5-5-arbitration-modal-visualization: deferred-v2
   5-6-arbitration-auto-execution: deferred-v2
-  epic-5-retrospective: optional
+  epic-5-retrospective: done
 
   # ============================================================
   # Epic 6: 节奏化简报与复盘 (Daily Briefing & Weekly Review Rhythm)

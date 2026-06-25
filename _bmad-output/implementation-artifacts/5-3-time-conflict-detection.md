@@ -4,10 +4,10 @@ baseline_commit: 6bf2956ef6ae1f43b6288314348e34d45e2b8780
 
 # Story 5.3: 系统自动检测多角色任务的时间冲突
 
-**Status:** done
+**Status:** deferred-v2
 **Epic:** Epic 5 — 使命宣言与冲突仲裁（Mission & Arbitration）
 **Previous Story:** 5-2-behavior-inferred-values (done)
-**Next Story:** 5-4-three-step-arbitration (backlog)
+**Next Story:** 5-4-three-step-arbitration (deferred-v2)
 
 ---
 

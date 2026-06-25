@@ -41,7 +41,7 @@ describe('TaskModal', () => {
 
     fireEvent.change(screen.getByLabelText('任务内容'), { target: { value: '准备 Q3 OKR 规划' } });
     fireEvent.change(screen.getByLabelText('四象限分类'), { target: { value: 'Q1' } });
-    fireEvent.change(screen.getByLabelText('截止时间'), { target: { value: '2026-06-30' } });
+    fireEvent.change(screen.getByLabelText('截止时间'), { target: { value: '2026-06-30T10:00' } });
     fireEvent.click(screen.getByLabelText('标记为本周大石头'));
     fireEvent.click(screen.getByRole('button', { name: '保存任务' }));
 
@@ -51,7 +51,7 @@ describe('TaskModal', () => {
         roleId: 'role-1',
         title: '准备 Q3 OKR 规划',
         quadrant: 'Q1',
-        deadline: '2026-06-30',
+        deadline: '2026-06-30T10:00:00Z',
         isBigRock: true,
       });
     });
@@ -148,7 +148,7 @@ describe('TaskModal', () => {
         scope={scope}
         onClose={vi.fn()}
         onSave={onSave}
-        task={sampleTask({ title: '带截止时间的任务', deadline: '2026-06-30', quadrant: 'Q1', isBigRock: true })}
+        task={sampleTask({ title: '带截止时间的任务', deadline: '2026-06-30T10:00:00Z', quadrant: 'Q1', isBigRock: true })}
       />,
     );
 

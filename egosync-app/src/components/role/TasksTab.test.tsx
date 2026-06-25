@@ -9,7 +9,7 @@ const tasks: Task[] = [
     ownerType: 'role',
     roleId: 'role-1',
     title: '准备季度规划',
-    deadline: '2026-06-30',
+    deadline: '2026-06-30T10:00:00Z',
     quadrant: 'Q1',
     isBigRock: true,
     isCompleted: false,
@@ -89,7 +89,7 @@ describe('TasksTab', () => {
 
     expect(screen.getByText('准备季度规划')).toBeInTheDocument();
     expect(screen.getByText('整理会议纪要')).toBeInTheDocument();
-    expect(screen.getByText('2026-06-30')).toBeInTheDocument();
+    expect(screen.getByText('06-30 10:00')).toBeInTheDocument();
     expect(screen.getByText('大石头')).toBeInTheDocument();
     expect(screen.queryByText('暂无任务')).not.toBeInTheDocument();
   });

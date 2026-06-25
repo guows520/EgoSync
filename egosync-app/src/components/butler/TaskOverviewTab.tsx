@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Circle, Edit2, Filter, Loader2, Plus, Target, Trash2, Users } from 'lucide-react';
 import { Modal } from '../layout/Modal';
-import { cn } from '../../lib/utils';
+import { cn, formatDeadline } from '../../lib/utils';
 import type { CrossRoleTask, TaskQuadrant } from '../../types/task';
 import type { Role } from '../../types/role';
 import type { TaskScope } from '../../hooks/useTasks';
@@ -110,7 +110,7 @@ function TaskCard({
           </p>
         </div>
         <div className="flex items-center gap-2 mt-2.5 flex-wrap">
-          {task.deadline && <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-transparent text-slate-500 border border-slate-300">{task.deadline}</span>}
+          {task.deadline && <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-transparent text-slate-500 border border-slate-300">{formatDeadline(task.deadline)}</span>}
           {task.isBigRock && <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-transparent text-amber-600 border border-amber-400">大石头</span>}
           {task.protectionStatus === 'at_risk' && (
             <span

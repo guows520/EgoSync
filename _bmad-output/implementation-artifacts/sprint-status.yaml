@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-21
-last_updated: 2026-06-24T19:50:00+08:00
+last_updated: 2026-06-25T09:07:00+08:00
 project: "探索 (EgoSync)"
 project_key: NOKEY
 tracking_system: file-system
@@ -109,13 +109,13 @@ development_status:
   # ============================================================
   # Epic 5: 使命宣言与冲突仲裁 (Mission & Arbitration)
   # ============================================================
-  epic-5: in-progress
+  epic-5: done
   5-1-mission-statement-setting: done
   5-2-behavior-inferred-values: done
-  5-3-time-conflict-detection: backlog
-  5-4-three-step-arbitration: backlog
-  5-5-arbitration-modal-visualization: backlog
-  5-6-arbitration-auto-execution: backlog
+  5-3-time-conflict-detection: deferred-v2
+  5-4-three-step-arbitration: deferred-v2
+  5-5-arbitration-modal-visualization: deferred-v2
+  5-6-arbitration-auto-execution: deferred-v2
   epic-5-retrospective: optional
 
   # ============================================================

@@ -50,8 +50,9 @@ pub async fn escalate_imminent_tasks(pool: &SqlitePool) -> Result<usize, AppErro
     Ok(upgraded)
 }
 
-/// 计算 `now + IMMINENT_DAYS` 的 ISO 8601 日期字符串（`YYYY-MM-DD`）。
-/// SQLite 中 `deadline` 列存储的是 `YYYY-MM-DD` 格式，可直接字符串比较。
+/// 计算 `now + IMMINENT_DAYS` 的 ISO 8601 日期时间字符串（`YYYY-MM-DDT23:59:59Z`）。
+/// deadline 列可能存储 `YYYY-MM-DD` 或 `YYYY-MM-DDTHH:MM:SSZ` 格式，
+/// 使用当天 23:59:59 作为阈值确保同日带时间的 deadline 仍能被字符串比较命中。
 fn compute_imminent_threshold() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let now_secs = SystemTime::now()
@@ -61,7 +62,7 @@ fn compute_imminent_threshold() -> String {
     let threshold_secs = now_secs + IMMINENT_DAYS * 86400;
     let days = threshold_secs / 86400;
     let (y, m, d) = days_to_ymd(days);
-    format!("{:04}-{:02}-{:02}", y, m, d)
+    format!("{:04}-{:02}-{:02}T23:59:59Z", y, m, d)
 }
 
 fn days_to_ymd(days: i64) -> (i64, u32, u32) {
@@ -102,12 +103,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn compute_imminent_threshold_is_iso_date() {
+    fn compute_imminent_threshold_is_iso_datetime() {
         let threshold = compute_imminent_threshold();
-        // 格式 YYYY-MM-DD
-        assert_eq!(threshold.len(), 10);
+        // 格式 YYYY-MM-DDT23:59:59Z
+        assert_eq!(threshold.len(), 20);
         assert_eq!(threshold.chars().nth(4), Some('-'));
         assert_eq!(threshold.chars().nth(7), Some('-'));
+        assert_eq!(threshold.chars().nth(10), Some('T'));
+        assert!(threshold.ends_with("Z"));
     }
 
     #[test]
@@ -118,7 +121,7 @@ mod tests {
         assert_eq!(parts.len(), 3);
         let year: i64 = parts[0].parse().expect("year should parse");
         let month: u32 = parts[1].parse().expect("month should parse");
-        let day: u32 = parts[2].parse().expect("day should parse");
+        let day: u32 = parts[2].split('T').next().unwrap().parse().expect("day should parse");
         assert!(year >= 2025, "年份应在合理范围内，得到 {}", year);
         assert!((1..=12).contains(&month), "月份越界：{}", month);
         assert!((1..=31).contains(&day), "日期越界：{}", day);

@@ -1,5 +1,33 @@
 # Deferred Work
 
+## Deferred from: Epic 5 产品决策 — 冲突仲裁三 Story 延迟至 V2 (2026-06-25)
+
+**涉及 Story**：5-4-three-step-arbitration / 5-5-arbitration-modal-visualization / 5-6-arbitration-auto-execution
+
+**决策原因**：
+当前冲突检测基于任务截止时间（deadline）的 ±1 小时窗口判断。但 deadline 仅代表"最晚需要完成的时间"，不代表"计划在此时执行"。两个 deadline 接近的任务完全可以提前完成其中一个，并不真正冲突。基于此粗粒度检测去做三步仲裁（使命对齐→四象限定位→能量平衡）并自动调整任务，逻辑链建立在不稳固的前提上。
+
+**根本问题**：要实现有意义的冲突检测，需要引入"计划时间段"（planned_start + planned_end 或 planned_date + estimated_minutes），让用户在周计划时为任务分配具体执行时间，再基于时间段重叠判断冲突。这符合《高效能人士的七个习惯》习惯三"个人管理四步骤"中"安排进度"步骤的描述。
+
+**为何不在 V1 做**：
+- 引入计划时间段需要新增数据库字段、前端周计划视图、时间拖拽交互等，整体改动较大
+- 与 V1"轻量"产品定位冲突，会增加用户输入负担
+- 5-3 的 datetime-local 改造已为 V2 打下基础（deadline 已支持精确到小时）
+
+**V2 方向**：
+1. 给任务增加"计划日期 + 预计耗时"字段（或 planned_start / planned_end）
+2. 引入书中描述的"周计划"视图，让用户为每个角色的要事安排具体时间段
+3. 基于时间段重叠（而非 deadline 接近）检测真正的执行冲突
+4. 在此基础上再实现 5-4 三步仲裁、5-5 仲裁可视化、5-6 自动执行
+5. 5-3 已完成的 conflicts 表、conflict_detector 服务、datetime-local 输入可复用
+
+## Deferred from: code review of 5-3-time-conflict-detection (2026-06-25)
+
+- **deadline 解析对非标准格式失败致漏检 (LOW→deferred)**：`db/conflicts.rs:195-219` `deadlines_within_one_hour` 仅解析 RFC3339 与 `%Y-%m-%d`。无秒/无时区（如 `2026-06-25T10:00`）解析为 None→返回 false→该任务对漏检冲突。依赖存储格式约定（ISO8601 Z），当前数据符合则无影响。建议后续显式校验/规范化 deadline 写入格式。
+- **deadline 字典序排序在混合格式下提前 break (LOW→deferred)**：`services/conflict_detector.rs:146-164` 排序按 deadline 字符串字典序，滑动窗口靠 `break` 提前终止。混合格式（date-only 与 full datetime）字典序与时间序不一致时会错误 break，漏检后续冲突。与上一条同源于格式约定。
+- **冲突历史无界增长 (LOW→deferred)**：`hooks/useConflicts.ts:22` 每次挂载经 `conflict_list` 加载全量冲突（含 resolved/dismissed）；`021_conflicts.sql` 无保留/清理策略。长期运行 conflicts 表与前端列表持续膨胀。建议加状态过滤的默认查询 + 定期归档/清理。
+- **冲突检测规模化性能 (LOW→deferred)**：`conflict_detector.rs:144-175` 双重循环 O(n²)；`conflicts.rs:135-154` `auto_resolve_stale_conflicts` 对每条 detected 冲突各发 2 次任务查询。每 60s 全量扫描，任务/冲突量大时调度器开销上升。建议批量查询或加时间窗口索引优化。
+
 ## Deferred from: code review of 5-1-mission-statement-setting (2026-06-24)
 
 - **缺少 ButlerSettingsContent 使命宣言组件级测试 (LOW→deferred, 测试增强)**：`ButlerSettingsContent.test.tsx` 无 mission 加载/结构化 JSON 解析/保存反馈的断言。service 层 `missionService.test.ts` 已覆盖 invoke 参数，但组件层逻辑（`format='structured'` 时的 JSON 解析填充、模式切换、保存成功反馈）未被测试锁定。建议后续补一组组件测试覆盖加载填充与结构化往返。

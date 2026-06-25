@@ -6,7 +6,6 @@ import { ButlerView } from './components/butler/ButlerView';
 import { RoleView } from './components/role/RoleView';
 import { OnboardingView } from './components/onboarding/OnboardingView';
 import { GlobalSettingsModal } from './components/settings/GlobalSettingsModal';
-import { ArbitrationModal } from './components/modals/ArbitrationModal';
 import { WeeklyReviewModal } from './components/modals/WeeklyReviewModal';
 import { TaskModal } from './components/modals/TaskModal';
 import { AddRoleModal } from './components/modals/AddRoleModal';
@@ -36,7 +35,6 @@ interface TaskModalContext {
 export default function App() {
   const [currentView, setCurrentView] = useState('butler');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isArbOpen, setIsArbOpen] = useState(false);
   const [isReviewOpen, setIsReviewOpen] = useState(false);
   const [taskModalContext, setTaskModalContext] = useState<TaskModalContext | null>(null);
   const [isAddRoleOpen, setIsAddRoleOpen] = useState(false);
@@ -346,7 +344,6 @@ export default function App() {
           onRefreshRoles={refreshAllRoles}
         />
       )}
-      {isArbOpen && <ArbitrationModal onClose={() => setIsArbOpen(false)} />}
       {isReviewOpen && <WeeklyReviewModal roles={roles} onClose={() => setIsReviewOpen(false)} />}
       {taskModalContext && (
         <TaskModal

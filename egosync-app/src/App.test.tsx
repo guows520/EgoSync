@@ -73,10 +73,6 @@ vi.mock('./components/settings/GlobalSettingsModal', () => ({
   GlobalSettingsModal: () => <div>设置</div>,
 }))
 
-vi.mock('./components/modals/ArbitrationModal', () => ({
-  ArbitrationModal: () => <div>仲裁</div>,
-}))
-
 vi.mock('./components/modals/WeeklyReviewModal', () => ({
   WeeklyReviewModal: () => <div>复盘</div>,
 }))

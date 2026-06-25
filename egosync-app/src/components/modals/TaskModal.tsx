@@ -23,6 +23,14 @@ const quadrantOptions: Array<{ value: TaskQuadrant; label: string }> = [
 /** 新建任务时的「智能判断」特殊选项值。 */
 const AUTO_QUADRANT = 'auto';
 
+function datetimeLocalToIso(value: string): string {
+  return value.length === 16 ? `${value}:00Z` : value;
+}
+
+function isoToDatetimeLocal(iso: string): string {
+  return iso.replace(/([+-]\d{2}:\d{2}|Z)$/, '').slice(0, 16);
+}
+
 export function TaskModal({ scope, roles = [], task, onClose, onSave }: TaskModalProps) {
   const isEditing = !!task;
   const [title, setTitle] = useState(task?.title ?? '');
@@ -30,7 +38,7 @@ export function TaskModal({ scope, roles = [], task, onClose, onSave }: TaskModa
   const [quadrant, setQuadrant] = useState<TaskQuadrant | typeof AUTO_QUADRANT>(
     task?.quadrant ?? AUTO_QUADRANT,
   );
-  const [deadline, setDeadline] = useState(task?.deadline ?? '');
+  const [deadline, setDeadline] = useState(task?.deadline ? isoToDatetimeLocal(task.deadline) : '');
   const [isBigRock, setIsBigRock] = useState(task?.isBigRock ?? false);
   const [ownerValue, setOwnerValue] = useState(scope.ownerType === 'role' ? scope.roleId : 'butler');
   const [isSaving, setIsSaving] = useState(false);
@@ -55,7 +63,7 @@ export function TaskModal({ scope, roles = [], task, onClose, onSave }: TaskModa
         const quadrantChanged = explicitQuadrant !== undefined && explicitQuadrant !== task!.quadrant;
         await onSave({
           title: trimmedTitle,
-          deadline: deadline || null,
+          deadline: deadline ? datetimeLocalToIso(deadline) : null,
           ...(quadrantChanged ? { quadrant: explicitQuadrant } : {}),
           isBigRock,
         });
@@ -69,7 +77,7 @@ export function TaskModal({ scope, roles = [], task, onClose, onSave }: TaskModa
           title: trimmedTitle,
           // 新建时若用户选了「自动判断」则不传 quadrant，后端触发 LLM 分类
           ...(explicitQuadrant ? { quadrant: explicitQuadrant } : {}),
-          ...(deadline ? { deadline } : {}),
+          ...(deadline ? { deadline: datetimeLocalToIso(deadline) } : {}),
           isBigRock,
         });
       }
@@ -151,7 +159,7 @@ export function TaskModal({ scope, roles = [], task, onClose, onSave }: TaskModa
               <label htmlFor="task-deadline" className="block text-[13px] font-medium text-slate-700 mb-1.5">截止时间</label>
               <input
                 id="task-deadline"
-                type="date"
+                type="datetime-local"
                 value={deadline}
                 onChange={event => setDeadline(event.target.value)}
                 className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-[13px] focus:ring-2 focus:ring-indigo-500/20 outline-none text-slate-600"

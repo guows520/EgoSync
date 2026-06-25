@@ -10,8 +10,8 @@ use crate::models::task::{CreateTaskInput, TaskOwnerType};
 const ALLOWED_REJECT_REASONS: &[&str] = &["irrelevant", "bad_timing", "already_done", "other"];
 
 #[tauri::command]
-pub async fn suggestion_list_pending(pool: State<'_, DbPool>) -> Result<Vec<SuggestionWithRole>, AppError> {
-    suggestions::list_pending_suggestions(&pool).await
+pub async fn suggestion_list_pending(conversation_id: String, pool: State<'_, DbPool>) -> Result<Vec<SuggestionWithRole>, AppError> {
+    suggestions::list_pending_suggestions(&pool, &conversation_id).await
 }
 
 #[tauri::command]
@@ -120,6 +120,7 @@ mod tests {
                 status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'confirmed', 'rejected')),
                 rejection_reason TEXT,
                 converted_task_id TEXT,
+                conversation_id TEXT,
                 created_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00Z',
                 FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE
             )",

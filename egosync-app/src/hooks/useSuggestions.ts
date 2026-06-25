@@ -15,7 +15,7 @@ export const REJECT_REASONS: { value: RejectReason; label: string }[] = [
   { value: 'other', label: '其他' },
 ];
 
-export function useSuggestions() {
+export function useSuggestions(conversationId: string | null) {
   const [suggestions, setSuggestions] = useState<SuggestionWithRole[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -28,12 +28,17 @@ export function useSuggestions() {
 
   useEffect(() => {
     let cancelled = false;
+    if (!conversationId) {
+      setSuggestions([]);
+      setIsLoading(false);
+      return;
+    }
     setIsLoading(true);
     setError(null);
 
     void (async () => {
       try {
-        const items = await suggestionService.listPending();
+        const items = await suggestionService.listPending(conversationId);
         if (!cancelled) setSuggestions(items);
       } catch (e) {
         console.error('加载待处理建议失败:', e);
@@ -49,7 +54,7 @@ export function useSuggestions() {
     return () => {
       cancelled = true;
     };
-  }, [reloadKey]);
+  }, [reloadKey, conversationId]);
 
   const removeSuggestion = useCallback((id: string) => {
     setSuggestions(prev => prev.filter(s => s.id !== id));

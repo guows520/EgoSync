@@ -3,7 +3,7 @@ use sqlx::SqlitePool;
 use crate::error::AppError;
 use crate::models::suggestion::{CreateSuggestionInput, Suggestion, SuggestionWithRole};
 
-const SUGGESTION_SELECT_COLUMNS: &str = "id, role_id, title, content, priority, status, rejection_reason, converted_task_id, created_at";
+const SUGGESTION_SELECT_COLUMNS: &str = "id, role_id, title, content, priority, status, rejection_reason, converted_task_id, conversation_id, created_at";
 
 pub async fn create_suggestion(
     pool: &SqlitePool,
@@ -13,14 +13,15 @@ pub async fn create_suggestion(
     let now = crate::db::settings::chrono_now_pub();
 
     sqlx::query(
-        "INSERT INTO suggestions (id, role_id, title, content, priority, status, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, 'pending', ?6)",
+        "INSERT INTO suggestions (id, role_id, title, content, priority, status, conversation_id, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'pending', ?6, ?7)",
     )
     .bind(&id)
     .bind(&input.role_id)
     .bind(&input.title)
     .bind(&input.content)
     .bind(&input.priority)
+    .bind(&input.conversation_id)
     .bind(&now)
     .execute(pool)
     .await
@@ -57,16 +58,17 @@ pub async fn list_recent_suggestions(
     .map_err(|e| AppError::DbError(format!("查询近期建议失败: {}", e)))
 }
 
-pub async fn list_pending_suggestions(pool: &SqlitePool) -> Result<Vec<SuggestionWithRole>, AppError> {
+pub async fn list_pending_suggestions(pool: &SqlitePool, conversation_id: &str) -> Result<Vec<SuggestionWithRole>, AppError> {
     sqlx::query_as::<_, SuggestionWithRole>(
         "SELECT s.id, s.role_id, s.title, s.content, s.priority, s.status,
-                s.rejection_reason, s.converted_task_id, s.created_at,
+                s.rejection_reason, s.converted_task_id, s.conversation_id, s.created_at,
                 r.name AS role_name, r.icon AS role_icon, r.color AS role_color
          FROM suggestions s
          INNER JOIN roles r ON s.role_id = r.id
-         WHERE s.status = 'pending'
+         WHERE s.status = 'pending' AND s.conversation_id = ?1
          ORDER BY s.created_at DESC",
     )
+    .bind(conversation_id)
     .fetch_all(pool)
     .await
     .map_err(|e| AppError::DbError(format!("查询待处理建议失败: {}", e)))
@@ -191,6 +193,7 @@ mod tests {
                 status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'confirmed', 'rejected')),
                 rejection_reason TEXT,
                 converted_task_id TEXT,
+                conversation_id TEXT,
                 created_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00Z',
                 FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE
             )",
@@ -236,8 +239,8 @@ mod tests {
         created_at: &str,
     ) {
         sqlx::query(
-            "INSERT INTO suggestions (id, role_id, title, content, priority, status, created_at)
-             VALUES (?1, ?2, ?3, '内容', 'medium', ?4, ?5)",
+            "INSERT INTO suggestions (id, role_id, title, content, priority, status, conversation_id, created_at)
+             VALUES (?1, ?2, ?3, '内容', 'medium', ?4, 'conv-1', ?5)",
         )
         .bind(id)
         .bind(role_id)
@@ -257,7 +260,7 @@ mod tests {
         insert_suggestion(&pool, "s3", "role-a", "建议C", "confirmed", "2026-06-19T10:00:00Z").await;
         insert_suggestion(&pool, "s4", "role-b", "建议D", "rejected", "2026-06-18T10:00:00Z").await;
 
-        let pending = list_pending_suggestions(&pool).await.expect("list pending");
+        let pending = list_pending_suggestions(&pool, "conv-1").await.expect("list pending");
         assert_eq!(pending.len(), 2);
         assert_eq!(pending[0].id, "s2");
         assert_eq!(pending[0].role_name, "学习");
@@ -271,7 +274,7 @@ mod tests {
     async fn list_pending_empty_when_no_pending() {
         let pool = setup_test_db().await;
         insert_suggestion(&pool, "s1", "role-a", "建议A", "confirmed", "2026-06-20T10:00:00Z").await;
-        let pending = list_pending_suggestions(&pool).await.expect("list pending");
+        let pending = list_pending_suggestions(&pool, "conv-1").await.expect("list pending");
         assert!(pending.is_empty());
     }
 

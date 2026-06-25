@@ -23,6 +23,7 @@ function knockToSuggestion(n: NotificationWithRole): SuggestionWithRole {
     status: 'pending',
     rejectionReason: null,
     convertedTaskId: null,
+    conversationId: null,
     createdAt: n.createdAt,
     roleName: n.roleName,
     roleIcon: n.roleIcon,
@@ -48,7 +49,8 @@ export function ButlerView({ roles, onViewChange, archivedRoles, onRestoreRole, 
   const [openTab, setOpenTab] = useState<'dashboard' | 'tasks' | 'memory' | 'settings' | null>(null);
   const [targetMemoryId, setTargetMemoryId] = useState<string | null>(null);
   const [sourceNavigationTarget, setSourceNavigationTarget] = useState<SourceNavigationTarget | null>(null);
-  const { suggestions, confirmSuggestion, rejectSuggestion, removeSuggestion } = useSuggestions();
+  const [butlerConversationId, setButlerConversationId] = useState<string | null>(null);
+  const { suggestions, confirmSuggestion, rejectSuggestion, removeSuggestion } = useSuggestions(butlerConversationId);
 
   useEffect(() => {
     if (!externalSourceNavigationTarget) return;
@@ -138,6 +140,7 @@ export function ButlerView({ roles, onViewChange, archivedRoles, onRestoreRole, 
             onRejectSuggestion={rejectSuggestion}
             onDismissSuggestion={removeSuggestion}
             refreshTrigger={chatRefreshTrigger}
+            onConversationIdChange={setButlerConversationId}
           />
         </div>
 

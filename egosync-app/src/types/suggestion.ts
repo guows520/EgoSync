@@ -7,6 +7,7 @@ export interface Suggestion {
   status: 'pending' | 'confirmed' | 'rejected';
   rejectionReason: string | null;
   convertedTaskId: string | null;
+  conversationId: string | null;
   createdAt: string;
 }
 

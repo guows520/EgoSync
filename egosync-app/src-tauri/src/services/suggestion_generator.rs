@@ -289,6 +289,7 @@ pub async fn generate_suggestions(
             title,
             content,
             priority: s.priority.trim().to_lowercase(),
+            conversation_id: None,
         });
     }
 
@@ -430,6 +431,7 @@ mod tests {
             status: "pending".to_string(),
             rejection_reason: None,
             converted_task_id: None,
+            conversation_id: None,
             created_at: "2026-06-20T00:00:00Z".to_string(),
         }
     }
@@ -612,6 +614,7 @@ mod tests {
             title: "测试建议".to_string(),
             content: "测试内容".to_string(),
             priority: priority.to_string(),
+            conversation_id: None,
         }
     }
 
@@ -729,6 +732,7 @@ mod tests {
             status: "rejected".to_string(),
             rejection_reason: Some(reason.to_string()),
             converted_task_id: None,
+            conversation_id: None,
             created_at: "2026-06-20T00:00:00Z".to_string(),
         }
     }

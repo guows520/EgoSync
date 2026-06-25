@@ -20,6 +20,7 @@ function makeSuggestion(id: string) {
     status: 'pending',
     rejectionReason: null,
     convertedTaskId: null,
+    conversationId: 'conv-1',
     createdAt: '2026-06-20T00:00:00Z',
     roleName: '产品',
     roleIcon: '🎯',
@@ -38,7 +39,7 @@ describe('useSuggestions', () => {
       return Promise.resolve(null);
     });
 
-    const { result } = renderHook(() => useSuggestions());
+    const { result } = renderHook(() => useSuggestions('conv-1'));
 
     await waitFor(() => {
       expect(result.current.suggestions).toHaveLength(2);
@@ -54,7 +55,7 @@ describe('useSuggestions', () => {
       return Promise.resolve(null);
     });
 
-    const { result } = renderHook(() => useSuggestions());
+    const { result } = renderHook(() => useSuggestions('conv-1'));
 
     await waitFor(() => {
       expect(result.current.suggestions).toHaveLength(2);
@@ -74,7 +75,7 @@ describe('useSuggestions', () => {
       return Promise.resolve(null);
     });
 
-    const { result } = renderHook(() => useSuggestions());
+    const { result } = renderHook(() => useSuggestions('conv-1'));
 
     await waitFor(() => {
       expect(result.current.suggestions).toHaveLength(2);
@@ -93,7 +94,7 @@ describe('useSuggestions', () => {
       return Promise.resolve(null);
     });
 
-    const { result } = renderHook(() => useSuggestions());
+    const { result } = renderHook(() => useSuggestions('conv-1'));
 
     await waitFor(() => {
       expect(result.current.suggestions).toHaveLength(2);
@@ -114,7 +115,7 @@ describe('useSuggestions', () => {
       return Promise.resolve(null);
     });
 
-    const { result } = renderHook(() => useSuggestions());
+    const { result } = renderHook(() => useSuggestions('conv-1'));
 
     await waitFor(() => {
       expect(result.current.suggestions).toHaveLength(1);
@@ -134,7 +135,7 @@ describe('useSuggestions', () => {
       return Promise.resolve(null);
     });
 
-    const { result } = renderHook(() => useSuggestions());
+    const { result } = renderHook(() => useSuggestions('conv-1'));
 
     await waitFor(() => {
       expect(result.current.error).not.toBeNull();
@@ -153,7 +154,7 @@ describe('useSuggestions', () => {
       return Promise.resolve(null);
     });
 
-    const { result } = renderHook(() => useSuggestions());
+    const { result } = renderHook(() => useSuggestions('conv-1'));
 
     await waitFor(() => {
       expect(result.current.suggestions).toHaveLength(1);
@@ -167,5 +168,19 @@ describe('useSuggestions', () => {
     await waitFor(() => {
       expect(result.current.suggestions[0].id).toBe('s2');
     });
+  });
+
+  it('conversationId 为 null 时不加载建议', async () => {
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'suggestion_list_pending') return Promise.resolve([makeSuggestion('s1')]);
+      return Promise.resolve(null);
+    });
+
+    const { result } = renderHook(() => useSuggestions(null));
+
+    await waitFor(() => {
+      expect(result.current.suggestions).toHaveLength(0);
+    });
+    expect(mockInvoke).not.toHaveBeenCalledWith('suggestion_list_pending', expect.anything());
   });
 });

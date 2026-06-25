@@ -188,6 +188,26 @@ pub async fn run_work_loop_for_role(
         return Ok(());
     }
 
+    // 获取管家会话 ID，将建议绑定到当前管家会话
+    let butler_conv_id = match crate::db::conversations::get_or_create_butler_conversation(conv_pool).await {
+        Ok(conv) => Some(conv.id),
+        Err(e) => {
+            tracing::warn!(
+                role_id = %role.id,
+                error = %e,
+                "获取管家会话失败，建议将不绑定会话"
+            );
+            None
+        }
+    };
+    let suggestions: Vec<_> = suggestions
+        .into_iter()
+        .map(|mut s| {
+            s.conversation_id = butler_conv_id.clone();
+            s
+        })
+        .collect();
+
     let mut written = 0;
     for input in &suggestions {
         match db::suggestions::create_suggestion(pool, input).await {

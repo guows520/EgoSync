@@ -9,6 +9,7 @@ pub struct Suggestion {
     pub status: String,
     pub rejection_reason: Option<String>,
     pub converted_task_id: Option<String>,
+    pub conversation_id: Option<String>,
     pub created_at: String,
 }
 
@@ -19,6 +20,7 @@ pub struct CreateSuggestionInput {
     pub title: String,
     pub content: String,
     pub priority: String,
+    pub conversation_id: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, sqlx::FromRow)]
@@ -32,6 +34,7 @@ pub struct SuggestionWithRole {
     pub status: String,
     pub rejection_reason: Option<String>,
     pub converted_task_id: Option<String>,
+    pub conversation_id: Option<String>,
     pub created_at: String,
     pub role_name: String,
     pub role_icon: String,

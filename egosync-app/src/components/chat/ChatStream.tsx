@@ -23,6 +23,8 @@ interface ChatStreamProps {
   onDismissSuggestion?: (id: string) => void;
   /** Story 4.6: 外部递增此值时触发对话历史重新加载 */
   refreshTrigger?: number;
+  /** 当前会话 ID 变化时通知父组件 */
+  onConversationIdChange?: (conversationId: string | null) => void;
 }
 
 type StreamBubbleState = { id: string | null; content: string };
@@ -505,6 +507,7 @@ export function ChatStream({
   onRejectSuggestion,
   onDismissSuggestion,
   refreshTrigger,
+  onConversationIdChange,
 }: ChatStreamProps) {
   const roleId = role?.id ?? null;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -569,7 +572,8 @@ export function ChatStream({
 
   useEffect(() => {
     conversationIdRef.current = conversation?.id ?? null;
-  }, [conversation?.id]);
+    onConversationIdChange?.(conversation?.id ?? null);
+  }, [conversation?.id, onConversationIdChange]);
 
   const resetStreamingState = useCallback(() => {
     streamGenerationRef.current += 1;

@@ -1945,6 +1945,11 @@ pub async fn resolve_default_provider(
             api_key,
             config.model,
         )?),
+        "minimax" => Arc::new(OpenAiProvider::new_with_reasoning_split(
+            config.base_url,
+            api_key,
+            config.model,
+        )?),
         _ => Arc::new(OpenAiProvider::new(config.base_url, api_key, config.model)?),
     };
 

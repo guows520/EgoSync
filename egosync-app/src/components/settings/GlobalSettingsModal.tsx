@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Plus, X, Download, Trash2, Loader2, Check, AlertCircle, ArchiveRestore, Clock, Bell } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { Modal } from '../layout/Modal';
 import { llmConfigService } from '../../services/llmConfigService';
 import { roleService } from '../../services/roleService';
 import { mcpService } from '../../services/mcpService';
@@ -60,6 +61,7 @@ export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRol
   const [schedulerSaved, setSchedulerSaved] = useState(false);
   const [knockSoundEnabled, setKnockSoundEnabled] = useState(false);
   const [isSavingSound, setIsSavingSound] = useState(false);
+  const [saveError, setSaveError] = useState('');
 
   const loadConfigs = useCallback(async () => {
     try {
@@ -216,7 +218,8 @@ export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRol
       await loadConfigs();
       setIsEditing(false);
     } catch (e: any) {
-      console.error('保存失败:', e);
+      const errMsg = typeof e === 'string' ? e : (e?.message || JSON.stringify(e));
+      setSaveError(errMsg);
     } finally {
       setIsSaving(false);
     }
@@ -418,9 +421,13 @@ export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRol
                   setMcpError('');
                   return;
                 }
+                if (tab === 'llm' && isEditing) {
+                  setIsEditing(false);
+                  return;
+                }
                 onClose();
               }}
-              aria-label={tab === 'mcp' && isEditingMcp ? '返回 MCP 工具列表' : '关闭全局设置'}
+              aria-label={tab === 'mcp' && isEditingMcp ? '返回 MCP 工具列表' : tab === 'llm' && isEditing ? '返回 LLM 配置列表' : '关闭全局设置'}
               className="p-2 text-slate-400 hover:bg-slate-100 rounded-full transition-colors"
             ><X size={24}/></button>
           </div>
@@ -451,7 +458,7 @@ export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRol
                       </div>
                       <div className="mt-3 pl-7 grid grid-cols-2 gap-y-2 text-[13px] text-slate-500">
                         <div><span className="text-slate-400 mr-2">模型:</span>{conf.model || '-'}</div>
-                        <div><span className="text-slate-400 mr-2">标准:</span>{conf.provider === 'anthropic' ? 'Anthropic (Claude)' : 'OpenAI 兼容'}</div>
+                        <div><span className="text-slate-400 mr-2">标准:</span>{conf.provider === 'anthropic' ? 'Anthropic (Claude)' : conf.provider === 'minimax' ? 'MiniMax' : 'OpenAI 兼容'}</div>
                       </div>
                       {testStatus !== 'idle' && testingConfigId === null && lastTestedConfigId === conf.id && (
                         <div className={cn("mt-3 pl-7 text-[13px] flex items-center gap-1.5", testStatus === 'success' ? 'text-green-600' : testStatus === 'error' ? 'text-red-600' : 'text-slate-500')}>
@@ -480,11 +487,12 @@ export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRol
                       <select value={editForm.provider} onChange={e => setEditForm({...editForm, provider: e.target.value})} className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none">
                         <option value="openai_compatible">OpenAI 兼容 (OpenAI, DeepSeek, Ollama...)</option>
                         <option value="anthropic">Anthropic (Claude)</option>
+                        <option value="minimax">MiniMax</option>
                       </select>
                     </div>
                     <div>
                       <label className="block text-[13px] font-medium text-slate-700 mb-1.5">Base URL</label>
-                      <input type="text" value={editForm.baseUrl} onChange={e => setEditForm({...editForm, baseUrl: e.target.value})} placeholder={editForm.provider === 'anthropic' ? 'https://api.anthropic.com' : 'https://api.openai.com/v1'} className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none font-mono" />
+                      <input type="text" value={editForm.baseUrl} onChange={e => setEditForm({...editForm, baseUrl: e.target.value})} placeholder={editForm.provider === 'anthropic' ? 'https://api.anthropic.com' : editForm.provider === 'minimax' ? 'https://api.minimaxi.com/v1' : 'https://api.openai.com/v1'} className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none font-mono" />
                     </div>
                     <div>
                       <label className="block text-[13px] font-medium text-slate-700 mb-1.5">API Key{editingId ? ' (留空则不修改)' : ''}</label>
@@ -492,7 +500,7 @@ export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRol
                     </div>
                     <div>
                       <label className="block text-[13px] font-medium text-slate-700 mb-1.5">Model Name</label>
-                      <input type="text" value={editForm.model} onChange={e => setEditForm({...editForm, model: e.target.value})} placeholder="gpt-4o" className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none font-mono" />
+                      <input type="text" value={editForm.model} onChange={e => setEditForm({...editForm, model: e.target.value})} placeholder={editForm.provider === 'minimax' ? 'MiniMax-M3' : 'gpt-4o'} className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none font-mono" />
                     </div>
                   </div>
                   <div className="mt-6 flex justify-end gap-3">
@@ -812,6 +820,22 @@ export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRol
           )}
         </div>
       </div>
+
+      {saveError && (
+        <Modal onClose={() => setSaveError('')} width="w-[420px]">
+          <div className="p-6">
+            <h2 className="text-[18px] font-semibold text-slate-800 flex items-center gap-2">
+              <AlertCircle size={20} className="text-red-500" /> 保存失败
+            </h2>
+            <p className="mt-3 text-[13px] leading-6 text-slate-600 break-all">{saveError}</p>
+            <div className="mt-6 flex justify-end">
+              <button onClick={() => setSaveError('')} className="px-5 py-2.5 bg-slate-800 text-white rounded-lg text-[13px] font-medium hover:bg-slate-700 transition-colors">
+                知道了
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }

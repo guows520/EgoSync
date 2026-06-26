@@ -110,6 +110,11 @@ pub async fn test_connection(pool: &SqlitePool, id: String) -> Result<(), AppErr
             api_key,
             config.model,
         )?),
+        "minimax" => Box::new(OpenAiProvider::new_with_reasoning_split(
+            config.base_url,
+            api_key,
+            config.model,
+        )?),
         _ => Box::new(OpenAiProvider::new(config.base_url, api_key, config.model)?),
     };
 
@@ -132,7 +137,7 @@ pub async fn sync_default_to_opencode(pool: &SqlitePool, agent_config: &AgentCon
 
         // Map EgoSync provider IDs to opencode-recognized provider IDs.
         let opencode_provider = match config.provider.as_str() {
-            "openai_compatible" | "openai" => "openai",
+            "openai_compatible" | "openai" | "minimax" => "openai",
             other => other,
         };
 
@@ -148,16 +153,39 @@ pub async fn sync_default_to_opencode(pool: &SqlitePool, agent_config: &AgentCon
         }
 
         let model_str = format!("{}/{}", opencode_provider, config.model);
+
+        // MiniMax needs reasoning_split=true to separate thinking content
+        // from the main response. We inject it as a model-level option so
+        // opencode's transform.ts routes it into providerOptions, which
+        // @ai-sdk/openai-compatible merges into the request body.
+        let model_entry = if config.provider == "minimax" {
+            serde_json::json!({
+                &config.model: {
+                    "options": { "reasoning_split": true }
+                }
+            })
+        } else {
+            serde_json::json!({ &config.model: {} })
+        };
+
         // Build provider entry with npm hint for compatible endpoints
         let mut provider_obj = serde_json::json!({
             "options": options,
-            "models": { &config.model: {} }
+            "models": model_entry
         });
         if opencode_provider == "openai" && !config.base_url.is_empty() {
             provider_obj.as_object_mut().unwrap().insert(
                 "npm".to_string(),
                 serde_json::json!("@ai-sdk/openai-compatible"),
             );
+            // Ensure providerOptions namespace matches what transform.ts
+            // expects for @ai-sdk/openai-compatible (issue #971 fix).
+            if config.provider == "minimax" {
+                provider_obj["options"]
+                    .as_object_mut()
+                    .unwrap()
+                    .insert("name".to_string(), serde_json::json!("openai"));
+            }
         }
 
         // Merge into the same opencode.json that AgentConfigService manages.

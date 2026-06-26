@@ -22,6 +22,7 @@ import type { Role } from './types/role';
 import type { NotificationNewPayload } from './types/notification';
 import type { Q2ReminderPayload } from './types/q2Reminder';
 import type { BriefingGeneratedPayload } from './types/briefing';
+import type { BigrockReminderPayload } from './types/bigrockReminder';
 import type { SourceNavigationTarget } from './types/chat';
 import type { CreateTaskInput, Task, TaskActions, UpdateTaskInput } from './types/task';
 import type { TaskScope } from './hooks/useTasks';
@@ -37,6 +38,7 @@ export default function App() {
   const [currentView, setCurrentView] = useState('butler');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isReviewOpen, setIsReviewOpen] = useState(false);
+  const [reviewInitialPhase, setReviewInitialPhase] = useState<'review' | 'plan'>('review');
   const [taskModalContext, setTaskModalContext] = useState<TaskModalContext | null>(null);
   const [isAddRoleOpen, setIsAddRoleOpen] = useState(false);
   const [roles, setRoles] = useState<Role[]>([]);
@@ -94,6 +96,17 @@ export default function App() {
   useTauriEvent<BriefingGeneratedPayload>(
     'briefing:generated',
     useCallback((_payload: BriefingGeneratedPayload) => {
+      setButlerChatRefreshTrigger(t => t + 1);
+    }, []),
+    []
+  );
+
+  // Story 6.3: 大石头规划提醒事件到达时，打开 WeeklyReviewModal 规划阶段
+  useTauriEvent<BigrockReminderPayload>(
+    'bigrock:reminder',
+    useCallback((_payload: BigrockReminderPayload) => {
+      setReviewInitialPhase('plan');
+      setIsReviewOpen(true);
       setButlerChatRefreshTrigger(t => t + 1);
     }, []),
     []
@@ -354,7 +367,7 @@ export default function App() {
           onRefreshRoles={refreshAllRoles}
         />
       )}
-      {isReviewOpen && <WeeklyReviewModal roles={roles} onClose={() => setIsReviewOpen(false)} />}
+      {isReviewOpen && <WeeklyReviewModal roles={roles} onClose={() => { setIsReviewOpen(false); setReviewInitialPhase('review'); }} initialPhase={reviewInitialPhase} />}
       {taskModalContext && (
         <TaskModal
           scope={taskModalContext.scope}

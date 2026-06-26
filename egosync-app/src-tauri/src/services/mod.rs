@@ -1,6 +1,7 @@
 pub mod agent_bridge;
 pub mod agent_config;
 pub mod agent_engine;
+pub mod bigrock_reminder;
 pub mod briefing_generator;
 pub mod butler_config;
 pub mod dashboard_service;

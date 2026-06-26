@@ -74,7 +74,7 @@ vi.mock('./components/settings/GlobalSettingsModal', () => ({
 }))
 
 vi.mock('./components/modals/WeeklyReviewModal', () => ({
-  WeeklyReviewModal: () => <div>复盘</div>,
+  WeeklyReviewModal: ({ initialPhase }: any) => <div data-testid="weekly-review" data-phase={initialPhase}>复盘</div>,
 }))
 
 vi.mock('./components/modals/TaskModal', () => ({
@@ -114,6 +114,7 @@ interface RoleProposedPayload {
 }
 
 let roleProposedHandler: ((payload: RoleProposedPayload) => void) | undefined
+let bigrockReminderHandler: ((payload: { message: string; notificationId: string }) => void) | undefined
 
 function mockNormalLaunch() {
   vi.mocked(appService.isFirstLaunch).mockResolvedValue(false)
@@ -124,12 +125,16 @@ function mockNormalLaunch() {
     if (eventName === 'role:proposed') {
       roleProposedHandler = handler as (payload: RoleProposedPayload) => void
     }
+    if (eventName === 'bigrock:reminder') {
+      bigrockReminderHandler = handler as (payload: { message: string; notificationId: string }) => void
+    }
   })
 }
 
 describe('App', () => {
   beforeEach(() => {
     roleProposedHandler = undefined
+    bigrockReminderHandler = undefined
     vi.clearAllMocks()
     mockNormalLaunch()
   })
@@ -201,5 +206,17 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: '管家来源处理完成' }))
 
     expect(screen.getByTestId('app-butler-source-target')).toHaveTextContent('none')
+  })
+
+  it('bigrock:reminder 事件到达时打开 WeeklyReviewModal 并设为 plan 阶段', async () => {
+    render(<App />)
+
+    await waitFor(() => expect(roleService.list).toHaveBeenCalledTimes(1))
+    expect(bigrockReminderHandler).toBeDefined()
+
+    bigrockReminderHandler?.({ message: '还没规划本周大石头，要安排一下吗？', notificationId: 'notif-1' })
+
+    expect(await screen.findByTestId('weekly-review')).toBeInTheDocument()
+    expect(screen.getByTestId('weekly-review')).toHaveAttribute('data-phase', 'plan')
   })
 })

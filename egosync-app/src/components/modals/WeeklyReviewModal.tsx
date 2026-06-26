@@ -3,8 +3,8 @@ import { CheckCircle2, ArrowRight, Plus, X, Check } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { Modal } from '../layout/Modal';
 
-export function WeeklyReviewModal({ roles: _roles, onClose }: any) {
-  const [phase, setPhase] = useState<'review' | 'plan'>('review');
+export function WeeklyReviewModal({ roles: _roles, onClose, initialPhase = 'review' }: any) {
+  const [phase, setPhase] = useState<'review' | 'plan'>(initialPhase);
   const [planItems, setPlanItems] = useState([
     { role: '产品经理', color: 'indigo', items: [''], suggestion: '上周「竞品分析」已完成，建议本周聚焦Q3路线图定稿' },
     { role: '家庭', color: 'amber', items: [''], suggestion: '本周末孩子有手工比赛，建议预留周六上午陪练' },

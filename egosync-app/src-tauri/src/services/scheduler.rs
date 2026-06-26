@@ -43,6 +43,9 @@ pub const PROACTIVE_TIMES_KEY: &str = "scheduler.proactive_times";
 /// 调度器基础 tick 间隔：60 秒
 const BASE_TICK_SECS: u64 = 60;
 
+/// Story 6.1: 简报时间读取失败时的降级默认值
+const DEFAULT_BRIEFING_TIME_FALLBACK: &str = "08:00";
+
 /// 每档最多允许的时间点数量
 const MAX_TIMES_PER_LEVEL: usize = 12;
 
@@ -325,6 +328,9 @@ pub fn spawn_scheduler(pool: SqlitePool, conv_pool: crate::db::pool::Conversatio
         // role_id → "YYYY-MM-DD HH:MM" 去重键
         let mut last_triggered_map: HashMap<String, String> = HashMap::new();
 
+        // Story 6.1: 简报触发去重 — 记录上次触发日期，每天只触发一次
+        let mut last_briefing_trigger_date: Option<String> = None;
+
         loop {
             // 每次 tick 动态读取活跃角色列表（不缓存）
             let roles = match db::roles::list_active_roles(&pool).await {
@@ -410,6 +416,44 @@ pub fn spawn_scheduler(pool: SqlitePool, conv_pool: crate::db::pool::Conversatio
 
             // 清理已归档/删除角色的状态，避免内存随角色 churn 无界增长
             last_triggered_map.retain(|id, _| active_ids.contains(id.as_str()));
+
+            // Story 6.1: 晨间简报触发 — 读取 app_settings 中的 briefing_time，
+            // 当前 HH:MM 匹配且当天尚未触发时，spawn 异步生成简报
+            let today_date = now_local.date_naive().format("%Y-%m-%d").to_string();
+            if last_briefing_trigger_date.as_deref() != Some(&today_date) {
+                let briefing_time = match crate::services::briefing_generator::get_briefing_time(&pool).await {
+                    Ok(t) => t,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "读取简报时间设置失败（降级跳过）");
+                        DEFAULT_BRIEFING_TIME_FALLBACK.to_string()
+                    }
+                };
+                if current_hhmm == briefing_time {
+                    last_briefing_trigger_date = Some(today_date.clone());
+                    let pool_clone = pool.clone();
+                    let conv_pool_clone = conv_pool.clone();
+                    let handle_clone = app_handle.clone();
+                    tokio::spawn(async move {
+                        match crate::services::briefing_generator::generate_briefing_if_needed(
+                            &pool_clone,
+                            &conv_pool_clone,
+                            Some(&handle_clone),
+                        )
+                        .await
+                        {
+                            Ok(true) => {
+                                tracing::info!(date = %today_date, "调度器触发简报生成完成");
+                            }
+                            Ok(false) => {
+                                tracing::info!(date = %today_date, "简报已存在或被跳过");
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = %e, date = %today_date, "调度器触发简报生成失败");
+                            }
+                        }
+                    });
+                }
+            }
 
             // Story 4.6: 每次 tick 都检查 Q2 保护提醒（不受触发时间点限制）
             // 频率控制由 q2_reminders 表的 last_reminded_at 管理（每日 ≤ 1 次）

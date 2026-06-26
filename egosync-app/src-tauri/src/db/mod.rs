@@ -1,4 +1,5 @@
 pub mod app_settings;
+pub mod briefings;
 pub mod conversations;
 pub mod memories;
 pub mod mcp_servers;

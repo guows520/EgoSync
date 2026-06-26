@@ -121,3 +121,10 @@ All items resolved in the same session:
 - **历法计算三处重复 (LOW, 整洁度/DRY)**：`days_to_ymd` 与「now±N 天 → ISO 时间戳」逻辑在 `services/task_protection_watch.rs:50-78`、`services/task_deadline_watch.rs:55-79`、`db/settings.rs:145-174` 三处各有一份（含 719468/146097 等魔数）。本 story 新增第三份。建议抽公共时间工具（如 `util::clock`）统一，单测集中。属既有扩散，非本 story 引入。
 - **`spawn_hourly_watch` 无优雅关闭 (LOW, 生命周期)**：`task_protection_watch.rs:88-100` 的后台 `loop { ... interval.tick() }` 无取消/关闭钩子，应用退出时随进程结束。与既有 `task_deadline_watch::spawn_hourly_watch` 完全同模式，属全局后台任务生命周期约定，非本 story 单独承担。
 - **状态字面量硬编码无共享常量 (LOW, 漂移风险)**：`'at_risk'` / `'normal'` 在 `db/tasks.rs:466-509`（mark/clear/update/completion）、`commands`、前端 `TasksTab.tsx` / 类型层多处以裸字符串出现，无 Rust 端共享常量或枚举护栏，拼写漂移不会被编译期捕获。建议后续统一为 `ProtectionStatus` 枚举 + `as_str()`。
+
+## Deferred from: code review of 6-1-daily-morning-briefing (2026-06-25)
+
+- **briefing_time 无格式校验 (LOW)**：`briefing_generator::get_briefing_time` 直接返回 `app_settings` 原始字符串，调度器用 `current_hhmm == briefing_time` 精确匹配。若配置为非 `HH:MM`（如 `8:00`、含空格、`25:00`）则永久不触发。配置入口属 Story 6.2，当前仅走默认值 `08:00`，无实际风险。建议 6.2 写入时校验格式。
+- **内存去重键在 spawn 前置 (LOW)**：`scheduler.rs:431-432` 在 `tokio::spawn` 之前即置 `last_briefing_trigger_date`，瞬时 LLM 失败（返回 Ok(false)）当天不再重试，需重启应用方可恢复。符合 AC10"同一天只触发一次"语义且避免 LLM 故障时每分钟重试，可改为仅在确认写入/已存在时置位作为未来优化。
+- **tick 精确分钟匹配可能跳过触发 (LOW)**：`scheduler.rs:431` 与现有角色调度器同模式，60s tick 若因系统休眠/负载漂移整分钟漏 tick，当天简报不触发（DB 去重不补触发）。属既有调度设计约定。
+- **50 条记忆窗口可能挤掉昨日记忆 (LOW)**：`briefing_generator.rs:186-196` 取最近 50 条记忆后在 Rust 侧过滤昨日，重度用户当日记忆 >50 条时昨日记忆段落可能为空。Dev Notes（story line 301）已知此约束。

@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod briefing;
 pub mod chat;
 pub mod dashboard;
 pub mod memory;

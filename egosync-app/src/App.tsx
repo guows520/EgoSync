@@ -21,6 +21,7 @@ import { playNotificationSound } from './lib/notificationSound';
 import type { Role } from './types/role';
 import type { NotificationNewPayload } from './types/notification';
 import type { Q2ReminderPayload } from './types/q2Reminder';
+import type { BriefingGeneratedPayload } from './types/briefing';
 import type { SourceNavigationTarget } from './types/chat';
 import type { CreateTaskInput, Task, TaskActions, UpdateTaskInput } from './types/task';
 import type { TaskScope } from './hooks/useTasks';
@@ -84,6 +85,15 @@ export default function App() {
   useTauriEvent<Q2ReminderPayload>(
     'q2:reminder',
     useCallback((_payload: Q2ReminderPayload) => {
+      setButlerChatRefreshTrigger(t => t + 1);
+    }, []),
+    []
+  );
+
+  // Story 6.1: 晨间简报生成事件到达时，递增 refreshTrigger 触发管家对话刷新
+  useTauriEvent<BriefingGeneratedPayload>(
+    'briefing:generated',
+    useCallback((_payload: BriefingGeneratedPayload) => {
       setButlerChatRefreshTrigger(t => t + 1);
     }, []),
     []

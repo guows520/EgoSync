@@ -69,6 +69,7 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
   const [isPickingDirectory, setIsPickingDirectory] = useState(false);
   const [isImportingSkill, setIsImportingSkill] = useState(false);
   const [settingsSavedMessage, setSettingsSavedMessage] = useState('');
+  const [briefingTime, setBriefingTime] = useState('08:00');
   const [error, setError] = useState('');
   const [inferredValues, setInferredValues] = useState<InferredValues | null>(null);
   const [isInferring, setIsInferring] = useState(false);
@@ -148,6 +149,12 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
       .then(eligibility => setInferenceEligibility(eligibility))
       .catch(() => setInferenceEligibility(null));
   };
+
+  useEffect(() => {
+    appService.getSetting('briefing_time')
+      .then(value => { if (value) setBriefingTime(value); })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -869,7 +876,24 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
       </div>
       <div className="pt-6 border-t border-slate-200/80">
         <label className="text-[14px] font-semibold text-slate-800 block mb-3">晨间简报时间</label>
-        <input type="time" defaultValue="08:00" className="bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none" />
+        <input
+          type="time"
+          value={briefingTime}
+          onChange={async (e) => {
+            const value = e.target.value;
+            setBriefingTime(value);
+            setSettingsSavedMessage('');
+            setError('');
+            try {
+              await appService.setSetting('briefing_time', value);
+              setSettingsSavedMessage('晨间简报时间已保存');
+              setTimeout(() => setSettingsSavedMessage(''), MESSAGE_TIMEOUT_MS);
+            } catch {
+              setError('晨间简报时间保存失败，请稍后重试');
+            }
+          }}
+          className="bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none"
+        />
         <p className="text-[12px] text-slate-400 mt-2 leading-relaxed">每天推送晨间简报的时间。</p>
       </div>
       <div className="pt-6 border-t border-slate-200/80">

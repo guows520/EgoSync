@@ -310,6 +310,7 @@ async fn build_default_provider(pool: &SqlitePool) -> Result<Box<dyn LlmProvider
 
     let provider: Box<dyn LlmProvider> = match config.provider.as_str() {
         "anthropic" => Box::new(AnthropicProvider::new(config.base_url, api_key, config.model)?),
+        "minimax" => Box::new(OpenAiProvider::new_with_reasoning_split(config.base_url, api_key, config.model)?),
         _ => Box::new(OpenAiProvider::new(config.base_url, api_key, config.model)?),
     };
     Ok(provider)

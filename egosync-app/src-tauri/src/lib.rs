@@ -361,6 +361,8 @@ pub fn run() {
             commands::mission::mission_update,
             commands::mission::mission_infer,
             commands::mission::mission_infer_eligibility,
+            commands::briefing::briefing_get_latest,
+            commands::briefing::briefing_generate_now,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

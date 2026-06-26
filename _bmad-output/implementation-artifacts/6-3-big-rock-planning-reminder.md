@@ -231,3 +231,16 @@ So that 每周都有明确的优先级锚点。
 ### Completion Notes List
 
 ### File List
+
+新增文件：
+- `src-tauri/src/services/bigrock_reminder.rs` — 大石头提醒检测服务
+- `src/types/bigrockReminder.ts` — 前端事件 payload 类型定义
+- `src/components/modals/WeeklyReviewModal.test.tsx` — WeeklyReviewModal initialPhase 测试
+
+修改文件：
+- `src-tauri/src/services/mod.rs` — 添加 `pub mod bigrock_reminder;`
+- `src-tauri/src/services/scheduler.rs` — tick 循环新增大石头提醒触发检查 + `last_bigrock_trigger_week` 去重 state + `iso_week_key` 函数
+- `src/App.tsx` — 新增 `bigrock:reminder` 事件监听 + `reviewInitialPhase` state
+- `src/App.test.tsx` — 新增 `bigrock:reminder` 事件测试用例
+- `src/components/modals/WeeklyReviewModal.tsx` — 新增 `initialPhase` prop
+- `index.html` — 新增内联加载屏，解决透明窗口首次加载不可见问题

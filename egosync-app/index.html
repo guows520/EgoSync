@@ -11,6 +11,26 @@
   </head>
   <body>
     <div id="root"></div>
+    <div id="app-loading" style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#F8F9FA;border-radius:12px;z-index:9999;">
+      <div style="width:28px;height:28px;border:3px solid #E5E7EB;border-top-color:#6366F1;border-radius:50%;animation:app-loading-spin 0.8s linear infinite;"></div>
+    </div>
+    <style>
+      @keyframes app-loading-spin { to { transform: rotate(360deg); } }
+      .dark #app-loading { background: #0F1117; }
+      .dark #app-loading > div { border-color: #374151; border-top-color: #6366F1; }
+    </style>
+    <script>
+      (function(){
+        var observer = new MutationObserver(function(mutations){
+          if (document.getElementById('root').children.length > 0) {
+            var loading = document.getElementById('app-loading');
+            if (loading) loading.remove();
+            observer.disconnect();
+          }
+        });
+        observer.observe(document.getElementById('root'), {childList: true});
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

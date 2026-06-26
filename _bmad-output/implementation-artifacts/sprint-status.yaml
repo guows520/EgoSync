@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-21
-last_updated: 2026-06-25T19:34:00+08:00
+last_updated: 2026-06-26T20:15:00+08:00
 project: "探索 (EgoSync)"
 project_key: NOKEY
 tracking_system: file-system
@@ -123,7 +123,7 @@ development_status:
   # ============================================================
   epic-6: in-progress
   6-1-daily-morning-briefing: done
-  6-2-schedule-config-briefing-review: backlog
+  6-2-schedule-config-briefing-review: done
   6-3-big-rock-planning-reminder: backlog
   6-4-weekly-review-scorecard: backlog
   6-5-weekly-review-modal-real-data: backlog

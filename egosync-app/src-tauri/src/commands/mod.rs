@@ -10,6 +10,7 @@ pub mod notification;
 pub mod role;
 pub mod scheduler;
 pub mod secret;
+pub mod settings;
 pub mod skill;
 pub mod suggestion;
 pub mod task;

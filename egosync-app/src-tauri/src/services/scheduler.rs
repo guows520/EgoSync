@@ -331,6 +331,17 @@ pub fn spawn_scheduler(pool: SqlitePool, conv_pool: crate::db::pool::Conversatio
         // Story 6.1: 简报触发去重 — 记录上次触发日期，每天只触发一次
         let mut last_briefing_trigger_date: Option<String> = None;
 
+        // Story 6.2 (AC7): 启动时读取节奏化时间配置（review/bigrock 为预留读取，
+        // 实际触发逻辑在 Story 6.3/6.4 实现）
+        match get_review_schedule(&pool).await {
+            Ok((day, time)) => tracing::debug!(review_day = %day, review_time = %time, "调度器启动读取周复盘时间配置"),
+            Err(e) => tracing::warn!(error = %e, "调度器启动读取周复盘时间配置失败（降级继续）"),
+        }
+        match get_bigrock_reminder_schedule(&pool).await {
+            Ok((day, time)) => tracing::debug!(bigrock_reminder_day = %day, bigrock_reminder_time = %time, "调度器启动读取大石头规划提醒时间配置"),
+            Err(e) => tracing::warn!(error = %e, "调度器启动读取大石头规划提醒时间配置失败（降级继续）"),
+        }
+
         loop {
             // 每次 tick 动态读取活跃角色列表（不缓存）
             let roles = match db::roles::list_active_roles(&pool).await {
@@ -470,6 +481,33 @@ pub fn spawn_scheduler(pool: SqlitePool, conv_pool: crate::db::pool::Conversatio
             interval.tick().await;
         }
     });
+}
+
+/// 读取周复盘时间配置（Story 6.4 实现触发逻辑）
+pub async fn get_review_schedule(pool: &SqlitePool) -> Result<(String, String), AppError> {
+    use crate::commands::settings::{DEFAULT_REVIEW_DAY, DEFAULT_REVIEW_TIME, KEY_REVIEW_DAY, KEY_REVIEW_TIME};
+    let day = db::app_settings::get_setting(pool, KEY_REVIEW_DAY)
+        .await?
+        .unwrap_or_else(|| DEFAULT_REVIEW_DAY.to_string());
+    let time = db::app_settings::get_setting(pool, KEY_REVIEW_TIME)
+        .await?
+        .unwrap_or_else(|| DEFAULT_REVIEW_TIME.to_string());
+    Ok((day, time))
+}
+
+/// 读取大石头规划提醒时间配置（Story 6.3 实现触发逻辑）
+pub async fn get_bigrock_reminder_schedule(pool: &SqlitePool) -> Result<(String, String), AppError> {
+    use crate::commands::settings::{
+        DEFAULT_BIGROCK_REMINDER_DAY, DEFAULT_BIGROCK_REMINDER_TIME, KEY_BIGROCK_REMINDER_DAY,
+        KEY_BIGROCK_REMINDER_TIME,
+    };
+    let day = db::app_settings::get_setting(pool, KEY_BIGROCK_REMINDER_DAY)
+        .await?
+        .unwrap_or_else(|| DEFAULT_BIGROCK_REMINDER_DAY.to_string());
+    let time = db::app_settings::get_setting(pool, KEY_BIGROCK_REMINDER_TIME)
+        .await?
+        .unwrap_or_else(|| DEFAULT_BIGROCK_REMINDER_TIME.to_string());
+    Ok((day, time))
 }
 
 #[cfg(test)]

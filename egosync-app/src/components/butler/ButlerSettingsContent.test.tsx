@@ -2,6 +2,7 @@ import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { ButlerSettingsContent } from './ButlerSettingsContent';
 import { appService } from '../../services/appService';
+import { scheduleService } from '../../services/scheduleService';
 import { missionService } from '../../services/missionService';
 import { roleService } from '../../services/roleService';
 import { skillService } from '../../services/skillService';
@@ -12,6 +13,13 @@ vi.mock('../../services/appService', () => ({
   appService: {
     getButlerSkills: vi.fn(),
     updateButlerSkills: vi.fn(),
+  },
+}));
+
+vi.mock('../../services/scheduleService', () => ({
+  scheduleService: {
+    getSchedule: vi.fn(),
+    updateSchedule: vi.fn(),
   },
 }));
 
@@ -93,6 +101,20 @@ describe('ButlerSettingsContent', () => {
     vi.mocked(missionService.get).mockResolvedValue(null);
     vi.mocked(missionService.inferValues).mockResolvedValue(null);
     vi.mocked(missionService.checkInferenceEligibility).mockResolvedValue({ eligible: true, reason: '' });
+    vi.mocked(scheduleService.getSchedule).mockResolvedValue({
+      briefingTime: '08:00',
+      reviewDay: '7',
+      reviewTime: '20:00',
+      bigrockReminderDay: '1',
+      bigrockReminderTime: '09:00',
+    });
+    vi.mocked(scheduleService.updateSchedule).mockResolvedValue({
+      briefingTime: '08:00',
+      reviewDay: '7',
+      reviewTime: '20:00',
+      bigrockReminderDay: '1',
+      bigrockReminderTime: '09:00',
+    });
   });
 
   it('展示并持久化管家 Skill 配置', async () => {
@@ -625,6 +647,96 @@ describe('ButlerSettingsContent', () => {
 
       await screen.findByRole('button', { name: '推断使命宣言' });
       expect(missionService.inferValues).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('节奏化时间配置', () => {
+    it('加载时调用 getSchedule 并填充表单', async () => {
+      vi.mocked(scheduleService.getSchedule).mockResolvedValue({
+        briefingTime: '07:30',
+        reviewDay: '3',
+        reviewTime: '19:00',
+        bigrockReminderDay: '2',
+        bigrockReminderTime: '10:00',
+      });
+
+      render(<ButlerSettingsContent />);
+
+      await waitFor(() => {
+        expect(scheduleService.getSchedule).toHaveBeenCalled();
+      });
+
+      const briefingInput = screen.getByDisplayValue('07:30');
+      expect(briefingInput).toHaveAttribute('type', 'time');
+
+      const reviewSelect = screen.getByDisplayValue('周三');
+      expect(reviewSelect).toBeInTheDocument();
+
+      const reviewTimeInput = screen.getByDisplayValue('19:00');
+      expect(reviewTimeInput).toHaveAttribute('type', 'time');
+
+      const bigrockSelect = screen.getByDisplayValue('周二');
+      expect(bigrockSelect).toBeInTheDocument();
+
+      const bigrockTimeInput = screen.getByDisplayValue('10:00');
+      expect(bigrockTimeInput).toHaveAttribute('type', 'time');
+    });
+
+    it('修改周复盘星期时调用 updateSchedule', async () => {
+      vi.mocked(scheduleService.updateSchedule).mockResolvedValue({
+        briefingTime: '08:00',
+        reviewDay: '1',
+        reviewTime: '20:00',
+        bigrockReminderDay: '1',
+        bigrockReminderTime: '09:00',
+      });
+
+      render(<ButlerSettingsContent />);
+
+      const reviewSelect = await screen.findByDisplayValue('周日');
+      fireEvent.change(reviewSelect, { target: { value: '1' } });
+
+      await waitFor(() => {
+        expect(scheduleService.updateSchedule).toHaveBeenCalledWith({ reviewDay: '1' });
+      });
+    });
+
+    it('修改大石头规划提醒时间时调用 updateSchedule', async () => {
+      vi.mocked(scheduleService.updateSchedule).mockResolvedValue({
+        briefingTime: '08:00',
+        reviewDay: '7',
+        reviewTime: '20:00',
+        bigrockReminderDay: '1',
+        bigrockReminderTime: '10:30',
+      });
+
+      render(<ButlerSettingsContent />);
+
+      const bigrockTimeInput = await screen.findByDisplayValue('09:00');
+      fireEvent.change(bigrockTimeInput, { target: { value: '10:30' } });
+
+      await waitFor(() => {
+        expect(scheduleService.updateSchedule).toHaveBeenCalledWith({ bigrockReminderTime: '10:30' });
+      });
+    });
+
+    it('修改晨间简报时间时调用 updateSchedule 而非 appService.setSetting', async () => {
+      vi.mocked(scheduleService.updateSchedule).mockResolvedValue({
+        briefingTime: '06:00',
+        reviewDay: '7',
+        reviewTime: '20:00',
+        bigrockReminderDay: '1',
+        bigrockReminderTime: '09:00',
+      });
+
+      render(<ButlerSettingsContent />);
+
+      const briefingInput = await screen.findByDisplayValue('08:00');
+      fireEvent.change(briefingInput, { target: { value: '06:00' } });
+
+      await waitFor(() => {
+        expect(scheduleService.updateSchedule).toHaveBeenCalledWith({ briefingTime: '06:00' });
+      });
     });
   });
 });

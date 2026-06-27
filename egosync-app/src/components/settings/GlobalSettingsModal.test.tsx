@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { GlobalSettingsModal } from './GlobalSettingsModal';
 import { llmConfigService } from '../../services/llmConfigService';
@@ -302,7 +302,7 @@ describe('GlobalSettingsModal archived roles', () => {
 
       expect(await screen.findByText('选择导出格式（可多选）')).toBeInTheDocument();
       expect(screen.getByLabelText(/SQLite 备份/)).toBeInTheDocument();
-      expect(screen.getByLabelText(/JSON 数据/)).toBeInTheDocument();
+      expect(screen.getByLabelText(/JSON 格式/)).toBeInTheDocument();
       expect(screen.getByLabelText(/Markdown 报告/)).toBeInTheDocument();
     });
 
@@ -330,7 +330,7 @@ describe('GlobalSettingsModal archived roles', () => {
       fireEvent.click(screen.getByRole('button', { name: '数据与主权' }));
       fireEvent.click(await screen.findByRole('button', { name: /导出存档/ }));
 
-      const jsonCheckbox = await screen.findByLabelText(/JSON 数据/);
+      const jsonCheckbox = await screen.findByLabelText(/JSON 格式/);
       fireEvent.click(jsonCheckbox);
 
       const confirmBtn = screen.getByRole('button', { name: '确认导出' });
@@ -378,7 +378,7 @@ describe('GlobalSettingsModal archived roles', () => {
       fireEvent.click(screen.getByRole('button', { name: '数据与主权' }));
       fireEvent.click(await screen.findByRole('button', { name: /导出存档/ }));
 
-      const jsonCheckbox = await screen.findByLabelText(/JSON 数据/);
+      const jsonCheckbox = await screen.findByLabelText(/JSON 格式/);
       fireEvent.click(jsonCheckbox);
       fireEvent.click(screen.getByRole('button', { name: '确认导出' }));
 
@@ -402,6 +402,71 @@ describe('GlobalSettingsModal archived roles', () => {
 
       expect(screen.queryByText('选择导出格式（可多选）')).not.toBeInTheDocument();
       expect(screen.getByRole('button', { name: /导出存档/ })).toBeInTheDocument();
+    });
+
+    it('数据 Tab 同时显示导出区域和危险区域', async () => {
+      render(<GlobalSettingsModal onClose={vi.fn()} />);
+
+      fireEvent.click(screen.getByRole('button', { name: '数据与主权' }));
+
+      expect(await screen.findByText('导出数据')).toBeInTheDocument();
+      expect(screen.getByText('危险区域')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /导出存档/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /销毁所有数据/ })).toBeInTheDocument();
+    });
+
+    it('导出执行中显示 loading 状态（spinner + 导出中...）', async () => {
+      let resolveExport: (value: any) => void = () => {};
+      vi.mocked(dataService.dataExport).mockImplementation(
+        () => new Promise(resolve => { resolveExport = resolve; })
+      );
+
+      render(<GlobalSettingsModal onClose={vi.fn()} />);
+
+      fireEvent.click(screen.getByRole('button', { name: '数据与主权' }));
+      fireEvent.click(await screen.findByRole('button', { name: /导出存档/ }));
+
+      const jsonCheckbox = await screen.findByLabelText(/JSON 格式/);
+      fireEvent.click(jsonCheckbox);
+      fireEvent.click(screen.getByRole('button', { name: '确认导出' }));
+
+      await waitFor(() => {
+        expect(screen.getByText('导出中...')).toBeInTheDocument();
+      });
+
+      await act(async () => {
+        resolveExport({ files: [], sqlitePath: null, jsonPath: null, markdownPath: null });
+      });
+    });
+
+    it('多格式导出成功后显示所有文件路径', async () => {
+      vi.mocked(dataService.dataExport).mockResolvedValue({
+        files: ['/tmp/egosync-export.sqlite', '/tmp/egosync-export.json', '/tmp/egosync-export.md'],
+        sqlitePath: '/tmp/egosync-export.sqlite',
+        jsonPath: '/tmp/egosync-export.json',
+        markdownPath: '/tmp/egosync-export.md',
+      });
+
+      render(<GlobalSettingsModal onClose={vi.fn()} />);
+
+      fireEvent.click(screen.getByRole('button', { name: '数据与主权' }));
+      fireEvent.click(await screen.findByRole('button', { name: /导出存档/ }));
+
+      const sqliteCheckbox = await screen.findByLabelText(/SQLite 备份/);
+      fireEvent.click(sqliteCheckbox);
+      fireEvent.click(screen.getByLabelText(/JSON 格式/));
+      fireEvent.click(screen.getByLabelText(/Markdown 报告/));
+
+      fireEvent.click(screen.getByRole('button', { name: '确认导出' }));
+
+      await waitFor(() => {
+        expect(dataService.dataExport).toHaveBeenCalledWith(['sqlite', 'json', 'markdown']);
+      });
+
+      expect(await screen.findByText('导出完成')).toBeInTheDocument();
+      expect(screen.getByText('/tmp/egosync-export.sqlite')).toBeInTheDocument();
+      expect(screen.getByText('/tmp/egosync-export.json')).toBeInTheDocument();
+      expect(screen.getByText('/tmp/egosync-export.md')).toBeInTheDocument();
     });
   });
 
@@ -507,6 +572,31 @@ describe('GlobalSettingsModal archived roles', () => {
 
       expect(screen.queryByText('此操作将永久删除所有角色、记忆、任务和对话数据，且不可恢复。')).not.toBeInTheDocument();
       expect(screen.getByRole('button', { name: /销毁所有数据/ })).toBeInTheDocument();
+    });
+
+    it('销毁执行中显示 loading 状态（spinner + 销毁中...）', async () => {
+      let resolveDestroy: (value: any) => void = () => {};
+      vi.mocked(dataService.dataDestroy).mockImplementation(
+        () => new Promise(resolve => { resolveDestroy = resolve; })
+      );
+
+      render(<GlobalSettingsModal onClose={vi.fn()} onDataDestroyed={vi.fn()} />);
+
+      fireEvent.click(screen.getByRole('button', { name: '数据与主权' }));
+      fireEvent.click(await screen.findByRole('button', { name: /销毁所有数据/ }));
+
+      fireEvent.change(await screen.findByPlaceholderText(/输入"确认销毁"以继续/), {
+        target: { value: '确认销毁' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: '确认销毁' }));
+
+      await waitFor(() => {
+        expect(screen.getByText('销毁中...')).toBeInTheDocument();
+      });
+
+      await act(async () => {
+        resolveDestroy(undefined);
+      });
     });
   });
 });

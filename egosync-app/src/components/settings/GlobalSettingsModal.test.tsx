@@ -44,6 +44,7 @@ vi.mock('../../services/mcpService', () => ({
 vi.mock('../../services/dataService', () => ({
   dataService: {
     dataExport: vi.fn(),
+    dataDestroy: vi.fn(),
   },
 }));
 
@@ -401,6 +402,111 @@ describe('GlobalSettingsModal archived roles', () => {
 
       expect(screen.queryByText('选择导出格式（可多选）')).not.toBeInTheDocument();
       expect(screen.getByRole('button', { name: /导出存档/ })).toBeInTheDocument();
+    });
+  });
+
+  describe('数据销毁', () => {
+    beforeEach(() => {
+      vi.mocked(llmConfigService.list).mockResolvedValue([]);
+      vi.mocked(roleService.listArchived).mockResolvedValue([]);
+      vi.mocked(mcpService.list).mockResolvedValue([]);
+    });
+
+    it('点击销毁按钮后显示确认区域和警告文字', async () => {
+      render(<GlobalSettingsModal onClose={vi.fn()} />);
+
+      fireEvent.click(screen.getByRole('button', { name: '数据与主权' }));
+      fireEvent.click(await screen.findByRole('button', { name: /销毁所有数据/ }));
+
+      expect(await screen.findByText('此操作将永久删除所有角色、记忆、任务和对话数据，且不可恢复。')).toBeInTheDocument();
+      expect(screen.getByPlaceholderText(/输入"确认销毁"以继续/)).toBeInTheDocument();
+    });
+
+    it('确认按钮在输入正确文字前禁用', async () => {
+      render(<GlobalSettingsModal onClose={vi.fn()} />);
+
+      fireEvent.click(screen.getByRole('button', { name: '数据与主权' }));
+      fireEvent.click(await screen.findByRole('button', { name: /销毁所有数据/ }));
+
+      const confirmBtn = await screen.findByRole('button', { name: '确认销毁' });
+      expect(confirmBtn).toBeDisabled();
+
+      fireEvent.change(screen.getByPlaceholderText(/输入"确认销毁"以继续/), {
+        target: { value: '错误文字' },
+      });
+      expect(confirmBtn).toBeDisabled();
+
+      fireEvent.change(screen.getByPlaceholderText(/输入"确认销毁"以继续/), {
+        target: { value: '确认销毁' },
+      });
+      expect(confirmBtn).not.toBeDisabled();
+    });
+
+    it('输入"确认销毁"后点击确认调用 dataDestroy', async () => {
+      vi.mocked(dataService.dataDestroy).mockResolvedValue(undefined);
+
+      render(<GlobalSettingsModal onClose={vi.fn()} onDataDestroyed={vi.fn()} />);
+
+      fireEvent.click(screen.getByRole('button', { name: '数据与主权' }));
+      fireEvent.click(await screen.findByRole('button', { name: /销毁所有数据/ }));
+
+      fireEvent.change(await screen.findByPlaceholderText(/输入"确认销毁"以继续/), {
+        target: { value: '确认销毁' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: '确认销毁' }));
+
+      await waitFor(() => {
+        expect(dataService.dataDestroy).toHaveBeenCalled();
+      });
+    });
+
+    it('销毁成功后调用 onDataDestroyed 回调', async () => {
+      vi.mocked(dataService.dataDestroy).mockResolvedValue(undefined);
+      const onDataDestroyed = vi.fn();
+
+      render(<GlobalSettingsModal onClose={vi.fn()} onDataDestroyed={onDataDestroyed} />);
+
+      fireEvent.click(screen.getByRole('button', { name: '数据与主权' }));
+      fireEvent.click(await screen.findByRole('button', { name: /销毁所有数据/ }));
+
+      fireEvent.change(await screen.findByPlaceholderText(/输入"确认销毁"以继续/), {
+        target: { value: '确认销毁' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: '确认销毁' }));
+
+      await waitFor(() => {
+        expect(onDataDestroyed).toHaveBeenCalled();
+      });
+    });
+
+    it('销毁失败时显示错误消息', async () => {
+      vi.mocked(dataService.dataDestroy).mockRejectedValue({ DbError: '数据库删除失败' });
+
+      render(<GlobalSettingsModal onClose={vi.fn()} />);
+
+      fireEvent.click(screen.getByRole('button', { name: '数据与主权' }));
+      fireEvent.click(await screen.findByRole('button', { name: /销毁所有数据/ }));
+
+      fireEvent.change(await screen.findByPlaceholderText(/输入"确认销毁"以继续/), {
+        target: { value: '确认销毁' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: '确认销毁' }));
+
+      expect(await screen.findByText('数据库删除失败')).toBeInTheDocument();
+    });
+
+    it('取消确认后返回销毁按钮', async () => {
+      render(<GlobalSettingsModal onClose={vi.fn()} />);
+
+      fireEvent.click(screen.getByRole('button', { name: '数据与主权' }));
+      fireEvent.click(await screen.findByRole('button', { name: /销毁所有数据/ }));
+
+      expect(await screen.findByText('此操作将永久删除所有角色、记忆、任务和对话数据，且不可恢复。')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: '取消' }));
+
+      expect(screen.queryByText('此操作将永久删除所有角色、记忆、任务和对话数据，且不可恢复。')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /销毁所有数据/ })).toBeInTheDocument();
     });
   });
 });

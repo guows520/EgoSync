@@ -38,3 +38,4 @@ indexmap = { version = "1", features = ["std"] }
 
 [dev-dependencies]
 tempfile = "3"
+filetime = "0.2"

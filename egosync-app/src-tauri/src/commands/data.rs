@@ -4,7 +4,7 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::db::pool::{ConversationsPool, DbPool};
 use crate::error::AppError;
-use crate::services::data_export::{export_all, ExportFormat, ExportResult};
+use crate::services::data_export::{destroy_all_data, export_all, ExportFormat, ExportResult};
 
 #[tauri::command]
 pub async fn data_export(
@@ -59,4 +59,18 @@ pub async fn data_export(
         parsed_formats,
     )
     .await
+}
+
+#[tauri::command]
+pub async fn data_destroy(
+    app_handle: AppHandle,
+    pool: State<'_, DbPool>,
+    conv_pool: State<'_, ConversationsPool>,
+) -> Result<(), AppError> {
+    let app_data_dir = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| AppError::ValidationError(format!("获取应用数据目录失败: {}", e)))?;
+
+    destroy_all_data(&pool, &conv_pool, &app_data_dir).await
 }

@@ -50,6 +50,8 @@ pub struct ExportData {
     pub skill_bindings: Vec<serde_json::Value>,
     pub q2_reminders: Vec<serde_json::Value>,
     pub big_rock_protection_reminders: Vec<serde_json::Value>,
+    pub forgotten_memory_sources: Vec<serde_json::Value>,
+    pub role_mcp_server_bindings: Vec<serde_json::Value>,
     pub conversations: Vec<Conversation>,
     pub messages: Vec<Message>,
     pub exported_at: String,
@@ -223,6 +225,52 @@ async fn query_big_rock_protection_reminders(
         .collect())
 }
 
+async fn query_forgotten_memory_sources(pool: &DbPool) -> Result<Vec<serde_json::Value>, AppError> {
+    let rows = sqlx::query(
+        "SELECT id, role_id, category, content, normalized_content, source_conversation_id, source_message_ids, forgotten_at
+         FROM forgotten_memory_sources ORDER BY forgotten_at ASC",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| AppError::DbError(format!("查询已遗忘记忆来源失败: {}", e)))?;
+
+    Ok(rows
+        .iter()
+        .map(|row| {
+            serde_json::json!({
+                "id": row.get::<String, _>("id"),
+                "roleId": row.get::<Option<String>, _>("role_id"),
+                "category": row.get::<String, _>("category"),
+                "content": row.get::<String, _>("content"),
+                "normalizedContent": row.get::<String, _>("normalized_content"),
+                "sourceConversationId": row.get::<String, _>("source_conversation_id"),
+                "sourceMessageIds": row.get::<String, _>("source_message_ids"),
+                "forgottenAt": row.get::<String, _>("forgotten_at"),
+            })
+        })
+        .collect())
+}
+
+async fn query_role_mcp_server_bindings(pool: &DbPool) -> Result<Vec<serde_json::Value>, AppError> {
+    let rows = sqlx::query(
+        "SELECT server_id, role_id, created_at FROM role_mcp_server_bindings ORDER BY server_id ASC",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| AppError::DbError(format!("查询角色 MCP 绑定失败: {}", e)))?;
+
+    Ok(rows
+        .iter()
+        .map(|row| {
+            serde_json::json!({
+                "serverId": row.get::<String, _>("server_id"),
+                "roleId": row.get::<String, _>("role_id"),
+                "createdAt": row.get::<String, _>("created_at"),
+            })
+        })
+        .collect())
+}
+
 pub async fn gather_export_data(
     pool: &DbPool,
     conv_pool: &ConversationsPool,
@@ -243,6 +291,8 @@ pub async fn gather_export_data(
     let skill_bindings = query_skill_bindings(pool).await?;
     let q2_reminders = query_q2_reminders(pool).await?;
     let big_rock_protection_reminders = query_big_rock_protection_reminders(pool).await?;
+    let forgotten_memory_sources = query_forgotten_memory_sources(pool).await?;
+    let role_mcp_server_bindings = query_role_mcp_server_bindings(pool).await?;
     let conversations = conversations::list_all_conversations(conv_pool).await?;
     let messages = conversations::list_all_messages(conv_pool).await?;
 
@@ -263,6 +313,8 @@ pub async fn gather_export_data(
         skill_bindings,
         q2_reminders,
         big_rock_protection_reminders,
+        forgotten_memory_sources,
+        role_mcp_server_bindings,
         conversations,
         messages,
         exported_at: crate::db::settings::chrono_now_pub(),
@@ -643,6 +695,163 @@ pub async fn export_all(
     })
 }
 
+/// 主库中需要清空的数据表（硬编码，保留 _sqlx_migrations）
+const MAIN_DB_TABLES: &[&str] = &[
+    "roles",
+    "tasks",
+    "memories",
+    "forgotten_memory_sources",
+    "suggestions",
+    "notifications",
+    "q2_reminders",
+    "big_rock_protection_reminders",
+    "mission",
+    "conflicts",
+    "briefings",
+    "weekly_reviews",
+    "llm_configs",
+    "app_settings",
+    "mcp_servers",
+    "role_mcp_server_bindings",
+    "skills",
+    "skill_role_bindings",
+];
+
+/// 销毁所有数据 — 事务内清空所有数据表，保留 schema 和 _sqlx_migrations
+pub async fn destroy_all_data(
+    pool: &DbPool,
+    conv_pool: &ConversationsPool,
+    _app_data_dir: &Path,
+) -> Result<(), AppError> {
+    // 1. 创建隐藏备份（失败则中止销毁）
+    if let Err(e) = create_backup(pool, conv_pool).await {
+        return Err(AppError::ValidationError(format!(
+            "销毁前备份失败，已中止销毁: {}",
+            e
+        )));
+    }
+
+    // 2. 清理过期备份（7天前），失败只记 warn 不阻塞
+    if let Err(e) = cleanup_old_backups() {
+        tracing::warn!("清理过期备份文件失败: {}", e);
+    }
+
+    // 3. 读取 LLM 配置的 api_key_ref（必须在 DELETE FROM llm_configs 之前读取）。
+    //    keyring 删除推迟到 DB 事务全部提交成功之后，避免销毁失败却已误删 API Key。
+    let api_key_refs: Vec<String> = settings::list_llm_configs(pool)
+        .await?
+        .into_iter()
+        .map(|config| config.api_key_ref)
+        .collect();
+
+    // 4. 主库事务：DELETE FROM 所有数据表
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| AppError::DbError(format!("开启主库事务失败: {}", e)))?;
+    for table in MAIN_DB_TABLES {
+        sqlx::query(&format!("DELETE FROM {}", table))
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| AppError::DbError(format!("清空表 {} 失败: {}", table, e)))?;
+    }
+    tx.commit()
+        .await
+        .map_err(|e| AppError::DbError(format!("提交主库事务失败: {}", e)))?;
+
+    // 5. 对话库事务：DELETE FROM messages, conversations
+    let mut conv_tx = conv_pool
+        .begin()
+        .await
+        .map_err(|e| AppError::DbError(format!("开启对话库事务失败: {}", e)))?;
+    sqlx::query("DELETE FROM messages")
+        .execute(&mut *conv_tx)
+        .await
+        .map_err(|e| AppError::DbError(format!("清空 messages 表失败: {}", e)))?;
+    sqlx::query("DELETE FROM conversations")
+        .execute(&mut *conv_tx)
+        .await
+        .map_err(|e| AppError::DbError(format!("清空 conversations 表失败: {}", e)))?;
+    conv_tx
+        .commit()
+        .await
+        .map_err(|e| AppError::DbError(format!("提交对话库事务失败: {}", e)))?;
+
+    // 6. 删除 Keyring 密钥（DB 事务全部提交成功后才执行，失败只记 warn 不阻塞）
+    for key_ref in &api_key_refs {
+        if let Err(e) = crate::services::secret_store::delete_secret(key_ref) {
+            tracing::warn!(key = %key_ref, "删除 keyring 密钥失败: {}", e);
+        }
+    }
+
+    // 7. WAL checkpoint — 截断 WAL 文件，确保已删除数据不可从 WAL 恢复
+    if let Err(e) = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+        .execute(pool)
+        .await
+    {
+        tracing::warn!("主数据库 WAL checkpoint 失败: {}", e);
+    }
+    if let Err(e) = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+        .execute(&**conv_pool)
+        .await
+    {
+        tracing::warn!("对话数据库 WAL checkpoint 失败: {}", e);
+    }
+
+    tracing::info!("所有数据已销毁，数据库已回到初始状态");
+    Ok(())
+}
+
+/// 创建隐藏备份到临时目录
+async fn create_backup(pool: &DbPool, conv_pool: &ConversationsPool) -> Result<(), AppError> {
+    let data = gather_export_data(pool, conv_pool).await?;
+    let json = serde_json::to_string_pretty(&data)
+        .map_err(|e| AppError::ValidationError(format!("备份 JSON 序列化失败: {}", e)))?;
+    let backup_path = std::env::temp_dir().join(format!(
+        "egosync-backup-{}.json",
+        chrono::Local::now().format("%Y%m%dT%H%M%S")
+    ));
+    std::fs::write(&backup_path, json).map_err(|e| io_error("写入备份文件失败", e))?;
+    tracing::info!(path = %backup_path.display(), "销毁前备份已创建");
+    Ok(())
+}
+
+/// 清理过期备份文件（超过7天）
+pub fn cleanup_old_backups() -> Result<(), AppError> {
+    let temp_dir = std::env::temp_dir();
+    let entries =
+        std::fs::read_dir(&temp_dir).map_err(|e| io_error("读取临时目录失败", e))?;
+
+    let now = std::time::SystemTime::now();
+    let seven_days = std::time::Duration::from_secs(7 * 24 * 60 * 60);
+
+    for entry in entries {
+        let entry = entry.map_err(|e| io_error("读取目录条目失败", e))?;
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if name_str.starts_with("egosync-backup-") && name_str.ends_with(".json") {
+            if let Ok(metadata) = entry.metadata() {
+                if let Ok(modified) = metadata.modified() {
+                    if now
+                        .duration_since(modified)
+                        .map(|d| d > seven_days)
+                        .unwrap_or(false)
+                    {
+                        if let Err(e) = std::fs::remove_file(entry.path()) {
+                            tracing::warn!(
+                                path = %entry.path().display(),
+                                "删除过期备份文件失败: {}",
+                                e
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -666,6 +875,8 @@ mod tests {
             skill_bindings: vec![],
             q2_reminders: vec![],
             big_rock_protection_reminders: vec![],
+            forgotten_memory_sources: vec![],
+            role_mcp_server_bindings: vec![],
             conversations: vec![],
             messages: vec![],
             exported_at: "2026-01-01T00:00:00Z".to_string(),
@@ -747,6 +958,8 @@ mod tests {
             skill_bindings: vec![],
             q2_reminders: vec![],
             big_rock_protection_reminders: vec![],
+            forgotten_memory_sources: vec![],
+            role_mcp_server_bindings: vec![],
             conversations: vec![],
             messages: vec![],
             exported_at: "2026-01-01T00:00:00Z".to_string(),
@@ -836,6 +1049,8 @@ mod tests {
             skill_bindings: vec![],
             q2_reminders: vec![],
             big_rock_protection_reminders: vec![],
+            forgotten_memory_sources: vec![],
+            role_mcp_server_bindings: vec![],
             conversations: vec![conv],
             messages: vec![msg1, msg2],
             exported_at: "2026-01-01T00:00:00Z".to_string(),
@@ -869,6 +1084,8 @@ mod tests {
             skill_bindings: vec![],
             q2_reminders: vec![],
             big_rock_protection_reminders: vec![],
+            forgotten_memory_sources: vec![],
+            role_mcp_server_bindings: vec![],
             conversations: vec![],
             messages: vec![],
             exported_at: "2026-01-01T00:00:00Z".to_string(),
@@ -958,5 +1175,255 @@ mod tests {
 
         let result = export_sqlite(&app_data_dir, &export_dir);
         assert!(result.is_err());
+    }
+
+    async fn setup_destroy_test_db() -> (tempfile::TempDir, crate::db::pool::DbPool, crate::db::pool::ConversationsPool) {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let main_db_path = dir.path().join("egosync.db");
+        let conv_db_path = dir.path().join("conversations.db");
+
+        let pool = crate::db::pool::init_db(&main_db_path)
+            .await
+            .expect("init main db");
+        let conv_pool = crate::db::pool::init_conversations_db(&conv_db_path)
+            .await
+            .expect("init conversations db");
+
+        // 插入测试数据到多张表
+        sqlx::query("INSERT INTO roles (id, name, icon, color, goal, personality_prompt, status, energy, skills_config, proactivity_level, created_at, updated_at) VALUES ('r1', '测试角色', '🎯', '#FF0000', '测试', '', 'active', 80, '{}', 'moderate', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
+            .execute(&pool)
+            .await
+            .expect("insert role");
+
+        sqlx::query("INSERT INTO app_settings (key, value) VALUES ('onboarding_completed', 'true')")
+            .execute(&pool)
+            .await
+            .expect("insert app_setting");
+
+        sqlx::query("INSERT INTO llm_configs (id, name, provider, base_url, model, api_key_ref, is_default, created_at, updated_at) VALUES ('cfg1', '测试配置', 'openai_compatible', 'https://api.openai.com/v1', 'gpt-4o', 'test_key_ref_1', 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
+            .execute(&pool)
+            .await
+            .expect("insert llm_config");
+
+        sqlx::query("INSERT INTO conversations (id, role_id, title, started_at, updated_at) VALUES ('c1', NULL, '测试对话', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
+            .execute(&*conv_pool)
+            .await
+            .expect("insert conversation");
+
+        sqlx::query("INSERT INTO messages (id, conversation_id, role, content, thinking_content, is_complete, created_at) VALUES ('m1', 'c1', 'user', '你好', '', 1, '2026-01-01T00:00:00Z')")
+            .execute(&*conv_pool)
+            .await
+            .expect("insert message");
+
+        // 插入引用 r1 的子表行，验证父表先删时的 ON DELETE CASCADE 级联清空路径。
+        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_big_rock, sort_order, created_at, updated_at) VALUES ('t1', 'role', 'r1', '测试任务', 'Q1', 1, 0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
+            .execute(&pool)
+            .await
+            .expect("insert task");
+
+        sqlx::query("INSERT INTO memories (id, role_id, category, content, source_conversation_id, source_message_ids, created_at) VALUES ('mem1', 'r1', 'fact', '测试记忆', 'c1', '[\"m1\"]', '2026-01-01T00:00:00Z')")
+            .execute(&pool)
+            .await
+            .expect("insert memory");
+
+        sqlx::query("INSERT INTO suggestions (id, role_id, title, content, priority, status, created_at) VALUES ('s1', 'r1', '测试建议', '内容', 'medium', 'pending', '2026-01-01T00:00:00Z')")
+            .execute(&pool)
+            .await
+            .expect("insert suggestion");
+
+        sqlx::query("INSERT INTO notifications (id, role_id, level, content, is_read, created_at) VALUES ('n1', 'r1', 'whisper', '测试通知', 0, '2026-01-01T00:00:00Z')")
+            .execute(&pool)
+            .await
+            .expect("insert notification");
+
+        sqlx::query("INSERT INTO q2_reminders (id, task_id, reminded_count, last_reminded_at, created_at) VALUES ('q2_1', 't1', 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
+            .execute(&pool)
+            .await
+            .expect("insert q2_reminder");
+
+        sqlx::query("INSERT INTO big_rock_protection_reminders (id, task_id, reminded_count, last_reminded_at, created_at) VALUES ('br1', 't1', 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
+            .execute(&pool)
+            .await
+            .expect("insert big_rock_protection_reminder");
+
+        sqlx::query("INSERT INTO forgotten_memory_sources (id, role_id, category, content, normalized_content, source_conversation_id, source_message_ids, forgotten_at) VALUES ('f1', 'r1', 'fact', '已遗忘', '已遗忘', 'c1', '[\"m1\"]', '2026-01-01T00:00:00Z')")
+            .execute(&pool)
+            .await
+            .expect("insert forgotten_memory_source");
+
+        (dir, pool, conv_pool)
+    }
+
+    #[tokio::test]
+    async fn destroy_all_data_clears_all_tables() {
+        let (dir, pool, conv_pool) = setup_destroy_test_db().await;
+        let app_data_dir = dir.path().join("app_data");
+        std::fs::create_dir_all(&app_data_dir).expect("create app_data dir");
+
+        destroy_all_data(&pool, &conv_pool, &app_data_dir)
+            .await
+            .expect("destroy should succeed");
+
+        // 验证主库表为空
+        let role_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM roles")
+            .fetch_one(&pool)
+            .await
+            .expect("count roles");
+        assert_eq!(role_count, 0);
+
+        let setting_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM app_settings")
+            .fetch_one(&pool)
+            .await
+            .expect("count app_settings");
+        assert_eq!(setting_count, 0);
+
+        let llm_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM llm_configs")
+            .fetch_one(&pool)
+            .await
+            .expect("count llm_configs");
+        assert_eq!(llm_count, 0);
+
+        // 验证引用 role/task 的子表也被清空（父表先删 + ON DELETE CASCADE 路径）
+        for table in [
+            "tasks",
+            "memories",
+            "suggestions",
+            "notifications",
+            "q2_reminders",
+            "big_rock_protection_reminders",
+            "forgotten_memory_sources",
+        ] {
+            let count: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {}", table))
+                .fetch_one(&pool)
+                .await
+                .unwrap_or_else(|e| panic!("count {}: {}", table, e));
+            assert_eq!(count, 0, "表 {} 应被清空", table);
+        }
+
+        // 验证对话库表为空
+        let conv_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM conversations")
+            .fetch_one(&*conv_pool)
+            .await
+            .expect("count conversations");
+        assert_eq!(conv_count, 0);
+
+        let msg_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM messages")
+            .fetch_one(&*conv_pool)
+            .await
+            .expect("count messages");
+        assert_eq!(msg_count, 0);
+    }
+
+    #[tokio::test]
+    async fn destroy_all_data_preserves_migrations_table() {
+        let (dir, pool, conv_pool) = setup_destroy_test_db().await;
+        let app_data_dir = dir.path().join("app_data");
+        std::fs::create_dir_all(&app_data_dir).expect("create app_data dir");
+
+        // 记录销毁前的 migration 数量
+        let migration_count_before: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations")
+                .fetch_one(&pool)
+                .await
+                .expect("count migrations before");
+
+        destroy_all_data(&pool, &conv_pool, &app_data_dir)
+            .await
+            .expect("destroy should succeed");
+
+        // 验证 _sqlx_migrations 数据未被删除
+        let migration_count_after: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations")
+                .fetch_one(&pool)
+                .await
+                .expect("count migrations after");
+        assert_eq!(migration_count_before, migration_count_after);
+        assert!(migration_count_after > 0);
+    }
+
+    #[tokio::test]
+    async fn destroy_all_data_creates_backup_json() {
+        let (dir, pool, conv_pool) = setup_destroy_test_db().await;
+        let app_data_dir = dir.path().join("app_data");
+        std::fs::create_dir_all(&app_data_dir).expect("create app_data dir");
+
+        destroy_all_data(&pool, &conv_pool, &app_data_dir)
+            .await
+            .expect("destroy should succeed");
+
+        // 验证 temp_dir 中生成了备份文件
+        let temp_dir = std::env::temp_dir();
+        let entries = std::fs::read_dir(&temp_dir).expect("read temp dir");
+        let mut found_backup = false;
+        for entry in entries {
+            let entry = entry.expect("read entry");
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.starts_with("egosync-backup-") && name_str.ends_with(".json") {
+                // 验证文件内容是有效 JSON
+                let content = std::fs::read_to_string(entry.path()).expect("read backup file");
+                assert!(serde_json::from_str::<serde_json::Value>(&content).is_ok());
+                found_backup = true;
+                // 清理测试产生的备份文件
+                let _ = std::fs::remove_file(entry.path());
+                break;
+            }
+        }
+        assert!(found_backup, "应在临时目录中生成 egosync-backup-*.json 备份文件");
+    }
+
+    #[tokio::test]
+    async fn destroy_all_data_preserves_db_schema() {
+        let (dir, pool, conv_pool) = setup_destroy_test_db().await;
+        let app_data_dir = dir.path().join("app_data");
+        std::fs::create_dir_all(&app_data_dir).expect("create app_data dir");
+
+        destroy_all_data(&pool, &conv_pool, &app_data_dir)
+            .await
+            .expect("destroy should succeed");
+
+        // 验证表结构仍然存在（可以查询，只是数据为空）
+        let table_exists: Option<String> =
+            sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'roles'")
+                .fetch_optional(&pool)
+                .await
+                .expect("query roles table");
+        assert_eq!(table_exists.as_deref(), Some("roles"));
+    }
+
+    #[test]
+    fn cleanup_old_backups_removes_expired_files() {
+        let temp_dir = std::env::temp_dir();
+        let backup_path = temp_dir.join("egosync-backup-test-expired.json");
+        std::fs::write(&backup_path, "{}").expect("write test backup file");
+
+        // 将文件修改时间设置为 8 天前
+        let eight_days_ago = filetime::FileTime::from_system_time(
+            std::time::SystemTime::now() - std::time::Duration::from_secs(8 * 24 * 60 * 60),
+        );
+        filetime::set_file_mtime(&backup_path, eight_days_ago).expect("set file mtime");
+
+        assert!(backup_path.exists(), "备份文件应存在");
+
+        cleanup_old_backups().expect("cleanup should succeed");
+
+        assert!(!backup_path.exists(), "8天前的备份文件应被删除");
+    }
+
+    #[test]
+    fn cleanup_old_backups_preserves_recent_files() {
+        let temp_dir = std::env::temp_dir();
+        let backup_path = temp_dir.join("egosync-backup-test-recent.json");
+        std::fs::write(&backup_path, "{}").expect("write test backup file");
+
+        // 文件修改时间为当前时间（刚创建），不应被删除
+        assert!(backup_path.exists(), "备份文件应存在");
+
+        cleanup_old_backups().expect("cleanup should succeed");
+
+        assert!(backup_path.exists(), "刚创建的备份文件不应被删除");
+
+        // 清理测试文件
+        let _ = std::fs::remove_file(&backup_path);
     }
 }

@@ -223,6 +223,12 @@ export default function App() {
     setCurrentView('butler');
   };
 
+  const handleDataDestroyed = async () => {
+    setIsSettingsOpen(false);
+    await refreshAllRoles();
+    setCurrentView('onboard');
+  };
+
   const handleArchiveRole = async (id: string) => {
     await roleService.archive(id);
     await refreshAllRoles();
@@ -384,6 +390,7 @@ export default function App() {
           archivedRoles={archivedRoles}
           onRestoreRole={handleRestoreRole}
           onRefreshRoles={refreshAllRoles}
+          onDataDestroyed={handleDataDestroyed}
         />
       )}
       {isReviewOpen && <WeeklyReviewModal roles={roles} onClose={() => { setIsReviewOpen(false); setReviewInitialPhase('review'); }} initialPhase={reviewInitialPhase} />}

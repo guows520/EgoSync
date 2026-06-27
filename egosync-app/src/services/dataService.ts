@@ -12,4 +12,5 @@ export interface ExportResult {
 export const dataService = {
   dataExport: (formats: ExportFormat[]) =>
     invoke<ExportResult>('data_export', { formats }),
+  dataDestroy: () => invoke<void>('data_destroy'),
 };

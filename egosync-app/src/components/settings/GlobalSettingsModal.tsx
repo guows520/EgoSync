@@ -33,7 +33,7 @@ const EMPTY_MCP_FORM: McpForm = {
   enabled: true,
 };
 
-export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRoles = [], onRestoreRole, onRefreshRoles }: any) {
+export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRoles = [], onRestoreRole, onRefreshRoles, onDataDestroyed }: any) {
   const [tab, setTab] = useState('llm');
   const [configs, setConfigs] = useState<LlmConfig[]>([]);
   const [isEditing, setIsEditing] = useState(false);
@@ -69,6 +69,10 @@ export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRol
   const [isExporting, setIsExporting] = useState(false);
   const [exportResult, setExportResult] = useState<ExportResult | null>(null);
   const [exportError, setExportError] = useState('');
+  const [showDestroyConfirm, setShowDestroyConfirm] = useState(false);
+  const [destroyConfirmText, setDestroyConfirmText] = useState('');
+  const [isDestroying, setIsDestroying] = useState(false);
+  const [destroyError, setDestroyError] = useState('');
 
   const loadConfigs = useCallback(async () => {
     try {
@@ -312,6 +316,22 @@ export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRol
       setExportError(typeof msg === 'string' ? msg : '导出失败');
     } finally {
       setIsExporting(false);
+    }
+  };
+
+  const handleDestroy = async () => {
+    setIsDestroying(true);
+    setDestroyError('');
+    try {
+      await dataService.dataDestroy();
+      onDataDestroyed?.();
+    } catch (e: any) {
+      const msg = typeof e === 'object' && e !== null
+        ? (e.ValidationError || e.DbError || Object.values(e)[0] || '销毁失败')
+        : String(e);
+      setDestroyError(typeof msg === 'string' ? msg : '销毁失败');
+    } finally {
+      setIsDestroying(false);
     }
   };
 
@@ -929,9 +949,57 @@ export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRol
               <div className="pt-6 border-t border-slate-200">
                 <h4 className="text-[15px] font-medium text-red-600 mb-2 flex items-center gap-2">危险区域</h4>
                 <p className="text-[13px] text-slate-500 mb-4">永久销毁本地数据库中的所有数据。此操作不可逆！</p>
-                <button className="flex items-center gap-2 px-5 py-2.5 bg-red-50 border border-red-200 rounded-lg text-[14px] font-medium text-red-600 hover:bg-red-100 transition-colors">
-                  <Trash2 size={16}/> 销毁所有数据
-                </button>
+
+                {destroyError && (
+                  <div className="mb-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-[13px] text-red-600 flex items-center gap-2">
+                    <AlertCircle size={14} /> {destroyError}
+                  </div>
+                )}
+
+                {!showDestroyConfirm && !isDestroying && (
+                  <button
+                    onClick={() => { setShowDestroyConfirm(true); setDestroyError(''); setDestroyConfirmText(''); }}
+                    className="flex items-center gap-2 px-5 py-2.5 bg-red-50 border border-red-200 rounded-lg text-[14px] font-medium text-red-600 hover:bg-red-100 transition-colors"
+                  >
+                    <Trash2 size={16}/> 销毁所有数据
+                  </button>
+                )}
+
+                {showDestroyConfirm && !isDestroying && (
+                  <div className="rounded-xl border border-red-200 bg-red-50/50 p-4 space-y-3">
+                    <p className="text-[13px] text-red-700 leading-relaxed">此操作将永久删除所有角色、记忆、任务和对话数据，且不可恢复。</p>
+                    <div>
+                      <input
+                        type="text"
+                        value={destroyConfirmText}
+                        onChange={e => setDestroyConfirmText(e.target.value)}
+                        placeholder='输入"确认销毁"以继续'
+                        className="w-full bg-white border border-red-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-red-500/20 focus:border-red-500 outline-none"
+                      />
+                    </div>
+                    <div className="flex items-center gap-2 pt-1">
+                      <button
+                        onClick={handleDestroy}
+                        disabled={destroyConfirmText !== '确认销毁'}
+                        className="px-4 py-2 rounded-lg text-[13px] font-medium text-white bg-red-600 hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        确认销毁
+                      </button>
+                      <button
+                        onClick={() => { setShowDestroyConfirm(false); setDestroyConfirmText(''); setDestroyError(''); }}
+                        className="px-4 py-2 rounded-lg text-[13px] font-medium text-slate-600 hover:bg-slate-100 transition-colors"
+                      >
+                        取消
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {isDestroying && (
+                  <div className="flex items-center gap-2 px-5 py-2.5 text-[14px] text-red-600">
+                    <Loader2 size={16} className="animate-loading-spin" /> 销毁中...
+                  </div>
+                )}
               </div>
             </div>
           )}

@@ -371,6 +371,7 @@ pub fn run() {
             commands::settings::settings_get_schedule,
             commands::settings::settings_update_schedule,
             commands::data::data_export,
+            commands::data::data_destroy,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

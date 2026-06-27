@@ -334,6 +334,9 @@ pub fn spawn_scheduler(pool: SqlitePool, conv_pool: crate::db::pool::Conversatio
         // Story 6.3: 大石头提醒去重 — 记录上次触发的 ISO 周，每周只触发一次
         let mut last_bigrock_trigger_week: Option<String> = None;
 
+        // Story 6.4: 周复盘去重 — 记录上次触发的 ISO 周，每周只触发一次
+        let mut last_review_trigger_week: Option<String> = None;
+
         // Story 6.2 (AC7): 启动时读取节奏化时间配置（review/bigrock 为预留读取，
         // 实际触发逻辑在 Story 6.3/6.4 实现）
         match get_review_schedule(&pool).await {
@@ -499,6 +502,7 @@ pub fn spawn_scheduler(pool: SqlitePool, conv_pool: crate::db::pool::Conversatio
                     let pool_clone = pool.clone();
                     let conv_pool_clone = conv_pool.clone();
                     let handle_clone = app_handle.clone();
+                    let week_clone = current_week.clone();
                     tokio::spawn(async move {
                         match crate::services::bigrock_reminder::check_and_remind_if_needed(
                             &pool_clone,
@@ -508,13 +512,52 @@ pub fn spawn_scheduler(pool: SqlitePool, conv_pool: crate::db::pool::Conversatio
                         .await
                         {
                             Ok(true) => {
-                                tracing::info!(week = %current_week, "调度器触发大石头规划提醒完成");
+                                tracing::info!(week = %week_clone, "调度器触发大石头规划提醒完成");
                             }
                             Ok(false) => {
-                                tracing::info!(week = %current_week, "本周已有大石头，跳过提醒");
+                                tracing::info!(week = %week_clone, "本周已有大石头，跳过提醒");
                             }
                             Err(e) => {
-                                tracing::warn!(error = %e, week = %current_week, "调度器触发大石头规划提醒失败");
+                                tracing::warn!(error = %e, week = %week_clone, "调度器触发大石头规划提醒失败");
+                            }
+                        }
+                    });
+                }
+            }
+
+            // Story 6.4: 周复盘触发检查
+            // 读取 review_day/time 配置，匹配星期 + HH:MM 时触发，每周只触发一次
+            if last_review_trigger_week.as_deref() != Some(&current_week) {
+                let (review_day, review_time) = match get_review_schedule(&pool).await {
+                    Ok((d, t)) => (d, t),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "读取周复盘时间配置失败（降级跳过）");
+                        (String::new(), String::new())
+                    }
+                };
+                let current_day = (now_local.weekday().num_days_from_monday() + 1).to_string();
+                if current_day == review_day && current_hhmm == review_time {
+                    last_review_trigger_week = Some(current_week.clone());
+                    let pool_clone = pool.clone();
+                    let conv_pool_clone = conv_pool.clone();
+                    let handle_clone = app_handle.clone();
+                    let week_clone = current_week.clone();
+                    tokio::spawn(async move {
+                        match crate::services::review_generator::generate_review_if_needed(
+                            &pool_clone,
+                            &conv_pool_clone,
+                            Some(&handle_clone),
+                        )
+                        .await
+                        {
+                            Ok(true) => {
+                                tracing::info!(week = %week_clone, "调度器触发周复盘生成完成");
+                            }
+                            Ok(false) => {
+                                tracing::info!(week = %week_clone, "本周复盘已存在或被跳过");
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = %e, week = %week_clone, "调度器触发周复盘生成失败");
                             }
                         }
                     });

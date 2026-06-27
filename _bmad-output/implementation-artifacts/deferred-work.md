@@ -1,5 +1,11 @@
 # Deferred Work
 
+## Deferred from: code review of 6-4-weekly-review-scorecard (2026-06-27)
+
+- **单点触发时刻无重试窗口**：周复盘在精确 HH:MM 触发，且 `last_review_trigger_week` 在 spawn 前置位（scheduler.rs:530-540）；该分钟若错过（休眠/时钟跳变）或生成降级失败（`Ok(false)`），本周不再重试。系 briefing/bigrock 共有设计，非本故事引入；V2 若做"启动补检测"应统一三处触发逻辑。
+- **`collect_new_skill_names` N+1 查询**：对每个 skill_id 逐条调用 `get_skill`（review_generator.rs:289-300）。Dev Notes 已说明 `skill_role_bindings` 表数据量小，可接受；若未来 Skill 量大可改为单次 JOIN 查询。
+- **故事文件元信息未更新**：`6-4-weekly-review-scorecard.md` Status 仍为 `ready-for-dev`、File List/Dev Agent Record 仍为占位（line 7, 337）。属 dev-story 收尾流程职责，非代码缺陷。
+
 ## Deferred from: code review of 6-3-big-rock-planning-reminder (2026-06-26)
 
 - **错过精确触发分钟则当周不再提醒**：大石头提醒触发条件为 `current_hhmm == bigrock_time` 精确匹配（scheduler.rs:492-493），若 App 在配置分钟未运行（关闭/休眠/tick 错过该分钟），本周不会补提醒。此为轮询调度器固有限制，且与 Story 6.1 简报触发（scheduler.rs:445）同模式，非本次改动引入。若 V2 需要"启动时补检测错过的提醒"，应统一改造简报与大石头两处触发逻辑。

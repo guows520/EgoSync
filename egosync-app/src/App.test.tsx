@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import App from './App'
 import { appService } from './services/appService'
 import { roleService } from './services/roleService'
@@ -34,10 +34,11 @@ vi.mock('./components/layout/Sidebar', () => ({
 }))
 
 vi.mock('./components/butler/ButlerView', () => ({
-  ButlerView: ({ sourceNavigationTarget, onSourceNavigationHandled, onRoleSourceNavigation }: any) => (
+  ButlerView: ({ sourceNavigationTarget, onSourceNavigationHandled, onRoleSourceNavigation, chatRefreshTrigger }: any) => (
     <div>
       <div>管家视图</div>
       <div data-testid="app-butler-source-target">{sourceNavigationTarget?.messageId ?? 'none'}</div>
+      <div data-testid="app-butler-chat-refresh">{chatRefreshTrigger}</div>
       <button type="button" onClick={() => onSourceNavigationHandled?.()}>管家来源处理完成</button>
       <button
         type="button"
@@ -115,6 +116,7 @@ interface RoleProposedPayload {
 
 let roleProposedHandler: ((payload: RoleProposedPayload) => void) | undefined
 let bigrockReminderHandler: ((payload: { message: string; notificationId: string }) => void) | undefined
+let reviewGeneratedHandler: ((payload: { reviewId: string; weekStart: string; weekEnd: string }) => void) | undefined
 
 function mockNormalLaunch() {
   vi.mocked(appService.isFirstLaunch).mockResolvedValue(false)
@@ -128,6 +130,9 @@ function mockNormalLaunch() {
     if (eventName === 'bigrock:reminder') {
       bigrockReminderHandler = handler as (payload: { message: string; notificationId: string }) => void
     }
+    if (eventName === 'review:generated') {
+      reviewGeneratedHandler = handler as (payload: { reviewId: string; weekStart: string; weekEnd: string }) => void
+    }
   })
 }
 
@@ -135,6 +140,7 @@ describe('App', () => {
   beforeEach(() => {
     roleProposedHandler = undefined
     bigrockReminderHandler = undefined
+    reviewGeneratedHandler = undefined
     vi.clearAllMocks()
     mockNormalLaunch()
   })
@@ -218,5 +224,23 @@ describe('App', () => {
 
     expect(await screen.findByTestId('weekly-review')).toBeInTheDocument()
     expect(screen.getByTestId('weekly-review')).toHaveAttribute('data-phase', 'plan')
+  })
+
+  it('review:generated 事件到达时递增 butlerChatRefreshTrigger 触发管家对话刷新', async () => {
+    render(<App />)
+
+    await waitFor(() => expect(roleService.list).toHaveBeenCalledTimes(1))
+    expect(reviewGeneratedHandler).toBeDefined()
+
+    const before = Number(screen.getByTestId('app-butler-chat-refresh').textContent)
+
+    act(() => {
+      reviewGeneratedHandler?.({ reviewId: 'rev-1', weekStart: '2026-06-22', weekEnd: '2026-06-28' })
+    })
+
+    await waitFor(() => {
+      const after = Number(screen.getByTestId('app-butler-chat-refresh').textContent)
+      expect(after).toBe(before + 1)
+    })
   })
 })

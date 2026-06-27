@@ -7,6 +7,7 @@ pub mod memory;
 pub mod mcp;
 pub mod mission;
 pub mod notification;
+pub mod review;
 pub mod role;
 pub mod scheduler;
 pub mod secret;

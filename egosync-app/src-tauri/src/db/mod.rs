@@ -13,3 +13,4 @@ pub mod notifications;
 pub mod q2_reminders;
 pub mod suggestions;
 pub mod tasks;
+pub mod weekly_reviews;

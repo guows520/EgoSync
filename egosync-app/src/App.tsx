@@ -23,6 +23,7 @@ import type { NotificationNewPayload } from './types/notification';
 import type { Q2ReminderPayload } from './types/q2Reminder';
 import type { BriefingGeneratedPayload } from './types/briefing';
 import type { BigrockReminderPayload } from './types/bigrockReminder';
+import type { ReviewGeneratedPayload } from './types/review';
 import type { SourceNavigationTarget } from './types/chat';
 import type { CreateTaskInput, Task, TaskActions, UpdateTaskInput } from './types/task';
 import type { TaskScope } from './hooks/useTasks';
@@ -107,6 +108,15 @@ export default function App() {
     useCallback((_payload: BigrockReminderPayload) => {
       setReviewInitialPhase('plan');
       setIsReviewOpen(true);
+      setButlerChatRefreshTrigger(t => t + 1);
+    }, []),
+    []
+  );
+
+  // Story 6.4: 周复盘生成事件到达时，递增 refreshTrigger 触发管家对话刷新
+  useTauriEvent<ReviewGeneratedPayload>(
+    'review:generated',
+    useCallback((_payload: ReviewGeneratedPayload) => {
       setButlerChatRefreshTrigger(t => t + 1);
     }, []),
     []

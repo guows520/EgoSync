@@ -1,5 +1,10 @@
 # Deferred Work
 
+## Deferred from: code review of 6-6-big-rock-daily-protection (2026-06-27)
+
+- **周五去重为内存变量，应用重启会重复**：`last_bigrock_friday_check_date`（scheduler.rs:1088）在内存中，周五当天重启调度器会重置 → 可能重复发送周五汇总提醒。与既有周复盘去重模式一致，非本故事独创；V2 若做"启动补检测/去重持久化"应统一三处触发逻辑。
+- **周五对陈旧大石头双重提醒**：周五时同一陈旧大石头既收到 AC1 逐任务"还没动"提醒，又被计入 AC4 汇总"还有 N 个未完成"。spec 将两者定义为不同职责，属设计取舍；若 UX 反馈过于打扰，可在周五抑制逐任务提醒只发汇总。
+
 ## Deferred from: code review of 6-4-weekly-review-scorecard (2026-06-27)
 
 - **单点触发时刻无重试窗口**：周复盘在精确 HH:MM 触发，且 `last_review_trigger_week` 在 spawn 前置位（scheduler.rs:530-540）；该分钟若错过（休眠/时钟跳变）或生成降级失败（`Ok(false)`），本周不再重试。系 briefing/bigrock 共有设计，非本故事引入；V2 若做"启动补检测"应统一三处触发逻辑。

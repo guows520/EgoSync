@@ -161,6 +161,8 @@ pub async fn update_task(
 
     // Story 4.6: 用户编辑任务即处理，清除 Q2 提醒记录
     let _ = crate::db::q2_reminders::delete_reminder_for_task(pool, id).await;
+    // Story 6.6: 用户编辑任务即处理，清除大石头保护提醒记录
+    let _ = crate::db::big_rock_protection_reminders::delete_reminder_for_task(pool, id).await;
 
     get_active_task(pool, id).await
 }
@@ -291,6 +293,8 @@ pub async fn set_task_completion(
 
     // Story 4.6: 用户完成任务即处理，清除 Q2 提醒记录
     let _ = crate::db::q2_reminders::delete_reminder_for_task(pool, id).await;
+    // Story 6.6: 用户完成任务即处理，清除大石头保护提醒记录
+    let _ = crate::db::big_rock_protection_reminders::delete_reminder_for_task(pool, id).await;
 
     get_active_task(pool, id).await
 }

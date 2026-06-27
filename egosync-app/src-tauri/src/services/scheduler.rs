@@ -337,6 +337,9 @@ pub fn spawn_scheduler(pool: SqlitePool, conv_pool: crate::db::pool::Conversatio
         // Story 6.4: 周复盘去重 — 记录上次触发的 ISO 周，每周只触发一次
         let mut last_review_trigger_week: Option<String> = None;
 
+        // Story 6.6: 周五大石头未完成检查去重 — 记录上次触发日期，每天只触发一次
+        let mut last_bigrock_friday_check_date: Option<String> = None;
+
         // Story 6.2 (AC7): 启动时读取节奏化时间配置（review/bigrock 为预留读取，
         // 实际触发逻辑在 Story 6.3/6.4 实现）
         match get_review_schedule(&pool).await {
@@ -484,6 +487,17 @@ pub fn spawn_scheduler(pool: SqlitePool, conv_pool: crate::db::pool::Conversatio
                 tracing::warn!(error = %e, "Q2 保护提醒检查失败（降级继续）");
             }
 
+            // Story 6.6: 大石头保护提醒检查（每次 tick 都检查，频率由 DB 记录控制）
+            if let Err(e) = crate::services::bigrock_protection::check_and_generate_protection_reminders(
+                &pool,
+                &conv_pool,
+                Some(&app_handle),
+            )
+            .await
+            {
+                tracing::warn!(error = %e, "大石头保护提醒检查失败（降级继续）");
+            }
+
             // Story 6.3: 大石头规划提醒触发检查
             // 读取 bigrock_reminder_day/time 配置，匹配星期 + HH:MM 时触发，每周只触发一次
             let current_week = iso_week_key(&now_local);
@@ -559,6 +573,31 @@ pub fn spawn_scheduler(pool: SqlitePool, conv_pool: crate::db::pool::Conversatio
                             Err(e) => {
                                 tracing::warn!(error = %e, week = %week_clone, "调度器触发周复盘生成失败");
                             }
+                        }
+                    });
+                }
+            }
+
+            // Story 6.6: 周五大石头未完成检查
+            let today_date = now_local.date_naive().format("%Y-%m-%d").to_string();
+            if last_bigrock_friday_check_date.as_deref() != Some(&today_date) {
+                let current_day = (now_local.weekday().num_days_from_monday() + 1).to_string();
+                if current_day == "5" {
+                    last_bigrock_friday_check_date = Some(today_date.clone());
+                    let pool_clone = pool.clone();
+                    let conv_pool_clone = conv_pool.clone();
+                    let handle_clone = app_handle.clone();
+                    tokio::spawn(async move {
+                        match crate::services::bigrock_protection::check_friday_bigrock_status(
+                            &pool_clone,
+                            &conv_pool_clone,
+                            Some(&handle_clone),
+                        )
+                        .await
+                        {
+                            Ok(true) => tracing::info!(date = %today_date, "周五大石头未完成检查已触发"),
+                            Ok(false) => tracing::info!(date = %today_date, "周五大石头检查跳过（无未完成或非周五）"),
+                            Err(e) => tracing::warn!(error = %e, date = %today_date, "周五大石头未完成检查失败"),
                         }
                     });
                 }

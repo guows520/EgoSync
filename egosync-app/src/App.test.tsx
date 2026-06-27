@@ -117,6 +117,7 @@ interface RoleProposedPayload {
 let roleProposedHandler: ((payload: RoleProposedPayload) => void) | undefined
 let bigrockReminderHandler: ((payload: { message: string; notificationId: string }) => void) | undefined
 let reviewGeneratedHandler: ((payload: { reviewId: string; weekStart: string; weekEnd: string }) => void) | undefined
+let bigrockProtectionHandler: ((payload: { taskId: string; taskTitle: string; message: string; notificationId: string }) => void) | undefined
 
 function mockNormalLaunch() {
   vi.mocked(appService.isFirstLaunch).mockResolvedValue(false)
@@ -133,6 +134,9 @@ function mockNormalLaunch() {
     if (eventName === 'review:generated') {
       reviewGeneratedHandler = handler as (payload: { reviewId: string; weekStart: string; weekEnd: string }) => void
     }
+    if (eventName === 'bigrock:protection') {
+      bigrockProtectionHandler = handler as (payload: { taskId: string; taskTitle: string; message: string; notificationId: string }) => void
+    }
   })
 }
 
@@ -141,6 +145,7 @@ describe('App', () => {
     roleProposedHandler = undefined
     bigrockReminderHandler = undefined
     reviewGeneratedHandler = undefined
+    bigrockProtectionHandler = undefined
     vi.clearAllMocks()
     mockNormalLaunch()
   })
@@ -236,6 +241,24 @@ describe('App', () => {
 
     act(() => {
       reviewGeneratedHandler?.({ reviewId: 'rev-1', weekStart: '2026-06-22', weekEnd: '2026-06-28' })
+    })
+
+    await waitFor(() => {
+      const after = Number(screen.getByTestId('app-butler-chat-refresh').textContent)
+      expect(after).toBe(before + 1)
+    })
+  })
+
+  it('bigrock:protection 事件到达时递增 butlerChatRefreshTrigger 触发管家对话刷新', async () => {
+    render(<App />)
+
+    await waitFor(() => expect(roleService.list).toHaveBeenCalledTimes(1))
+    expect(bigrockProtectionHandler).toBeDefined()
+
+    const before = Number(screen.getByTestId('app-butler-chat-refresh').textContent)
+
+    act(() => {
+      bigrockProtectionHandler?.({ taskId: 'task-1', taskTitle: '竞品分析', message: '你的大石头竞品分析这周还没动', notificationId: 'notif-1' })
     })
 
     await waitFor(() => {

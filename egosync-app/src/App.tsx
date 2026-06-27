@@ -113,6 +113,15 @@ export default function App() {
     []
   );
 
+  // Story 6.6: 大石头保护提醒事件到达时，递增 refreshTrigger 触发管家对话刷新
+  useTauriEvent<{ taskId: string; taskTitle: string; message: string; notificationId: string }>(
+    'bigrock:protection',
+    useCallback((_payload) => {
+      setButlerChatRefreshTrigger(t => t + 1);
+    }, []),
+    []
+  );
+
   // Story 6.4: 周复盘生成事件到达时，递增 refreshTrigger 触发管家对话刷新
   useTauriEvent<ReviewGeneratedPayload>(
     'review:generated',

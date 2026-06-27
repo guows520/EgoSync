@@ -1,4 +1,5 @@
 pub mod app_settings;
+pub mod big_rock_protection_reminders;
 pub mod briefings;
 pub mod conversations;
 pub mod memories;

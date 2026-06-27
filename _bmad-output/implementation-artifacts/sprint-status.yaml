@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-21
-last_updated: 2026-06-27T10:31:00+08:00
+last_updated: 2026-06-27T13:45:00+08:00
 project: "探索 (EgoSync)"
 project_key: NOKEY
 tracking_system: file-system
@@ -121,13 +121,13 @@ development_status:
   # ============================================================
   # Epic 6: 节奏化简报与复盘 (Daily Briefing & Weekly Review Rhythm)
   # ============================================================
-  epic-6: in-progress
+  epic-6: done
   6-1-daily-morning-briefing: done
   6-2-schedule-config-briefing-review: done
   6-3-big-rock-planning-reminder: done
   6-4-weekly-review-scorecard: done
   6-5-weekly-review-modal-real-data: done
-  6-6-big-rock-daily-protection: backlog
+  6-6-big-rock-daily-protection: done
   epic-6-retrospective: optional
 
   # ============================================================

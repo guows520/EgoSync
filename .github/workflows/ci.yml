@@ -68,6 +68,27 @@ jobs:
         working-directory: egosync-app/src-tauri
         run: cargo test
 
-      - name: Build check (Rust)
-        working-directory: egosync-app/src-tauri
-        run: cargo build
+      - name: Build Tauri app
+        working-directory: egosync-app
+        run: npm run tauri build
+
+      - name: Upload artifact (Windows)
+        if: matrix.platform.os == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: egosync-0.1.0-windows
+          path: egosync-app/src-tauri/target/release/bundle/msi/*.msi
+
+      - name: Upload artifact (macOS)
+        if: matrix.platform.os == 'macos-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: egosync-0.1.0-macos
+          path: egosync-app/src-tauri/target/release/bundle/dmg/*.dmg
+
+      - name: Upload artifact (Linux)
+        if: matrix.platform.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: egosync-0.1.0-linux
+          path: egosync-app/src-tauri/target/release/bundle/appimage/*.AppImage

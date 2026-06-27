@@ -564,6 +564,167 @@ async fn create_review_notification(pool: &SqlitePool) {
     }
 }
 
+/// Story 6.5: AI 大石头建议返回结构
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoleBigRockSuggestions {
+    pub role_id: String,
+    pub role_name: String,
+    pub suggestions: Vec<String>,
+}
+
+/// Story 6.5: 为每个活跃角色生成 1-2 个大石头建议。
+/// LLM 失败/超时/解析失败 → 返回空列表（前端降级为手动输入）
+pub async fn generate_bigrock_suggestions(
+    pool: &SqlitePool,
+) -> Result<Vec<RoleBigRockSuggestions>, AppError> {
+    let roles = db::roles::list_active_roles(pool)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "查询活跃角色失败（降级空列表）");
+            Vec::new()
+        });
+
+    if roles.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let bigrock_tasks = db::tasks::list_all_tasks(pool, None, Some(true))
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "查询大石头任务失败（降级空列表）");
+            Vec::new()
+        });
+    let incomplete_bigrocks: Vec<&CrossRoleTask> =
+        bigrock_tasks.iter().filter(|t| !t.is_completed).collect();
+
+    let prompt = build_suggestion_prompt(&roles, &incomplete_bigrocks);
+
+    let provider = match agent_engine::resolve_default_provider(pool).await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(error = %e, "解析 LLM provider 失败（大石头建议降级为空列表）");
+            return Ok(Vec::new());
+        }
+    };
+
+    let content = match call_llm(provider, prompt).await {
+        Ok(text) => text,
+        Err(e) => {
+            tracing::warn!(error = %e, "大石头建议 LLM 调用失败（降级为空列表）");
+            return Ok(Vec::new());
+        }
+    };
+
+    parse_suggestions(&content, &roles)
+}
+
+/// Story 6.5: 构造大石头建议 prompt
+pub fn build_suggestion_prompt(
+    roles: &[Role],
+    incomplete_bigrocks: &[&CrossRoleTask],
+) -> Vec<ChatCompletionMessage> {
+    let system = "你是 EgoSync 的管家，负责为用户下周的大石头规划提供建议。\
+请根据每个角色的目标、当前能量值和本周未完成的大石头，为每个角色建议 1-2 个下周大石头。\
+\
+【输出格式规则 — 必须严格遵守】\
+必须返回合法 JSON 数组，格式如下：\
+[{\"roleId\": \"角色ID\", \"suggestions\": [\"建议1\", \"建议2\"]}]\
+\
+【建议规则】\
+1. 每个角色建议 1-2 个大石头\
+2. 建议应基于角色目标，是具体可执行的任务\
+3. 考虑角色当前能量值 — 能量低时建议聚焦核心目标\
+4. 考虑本周未完成的大石头 — 可建议继续推进\
+5. 建议用中文，简洁明了，每个不超过 20 字\
+6. 只返回 JSON，不要附加任何其他文字";
+
+    let mut user = String::new();
+
+    user.push_str("[角色列表]\n");
+    for role in roles {
+        user.push_str(&format!(
+            "- ID: {} | 名称: {} | 目标: {} | 能量值: {}\n",
+            role.id, role.name, role.goal, role.energy
+        ));
+    }
+
+    if !incomplete_bigrocks.is_empty() {
+        user.push_str("\n[本周未完成大石头]\n");
+        for task in incomplete_bigrocks {
+            let role_tag = task
+                .role_name
+                .as_ref()
+                .map(|n| format!("（{}）", n))
+                .unwrap_or_default();
+            user.push_str(&format!("- {}{}\n", task.title, role_tag));
+        }
+    }
+
+    user.push_str("\n请为以上每个角色生成下周大石头建议，返回 JSON 数组。");
+
+    vec![
+        ChatCompletionMessage {
+            role: "system".to_string(),
+            content: system.to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+        },
+        ChatCompletionMessage {
+            role: "user".to_string(),
+            content: user,
+            tool_calls: None,
+            tool_call_id: None,
+        },
+    ]
+}
+
+/// Story 6.5: 解析 LLM 返回的大石头建议 JSON
+fn parse_suggestions(
+    content: &str,
+    roles: &[Role],
+) -> Result<Vec<RoleBigRockSuggestions>, AppError> {
+    let trimmed = content.trim();
+    let parsed: Vec<serde_json::Value> = match serde_json::from_str(trimmed) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(error = %e, "大石头建议 JSON 解析失败（降级为空列表）");
+            return Ok(Vec::new());
+        }
+    };
+
+    let role_map: std::collections::HashMap<String, &Role> =
+        roles.iter().map(|r| (r.id.clone(), r)).collect();
+
+    let mut result = Vec::new();
+    for item in &parsed {
+        let role_id = match item.get("roleId").and_then(|v| v.as_str()) {
+            Some(id) => id.to_string(),
+            None => continue,
+        };
+        let role = match role_map.get(&role_id) {
+            Some(r) => *r,
+            None => continue,
+        };
+        let suggestions: Vec<String> = item
+            .get("suggestions")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|s| s.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        result.push(RoleBigRockSuggestions {
+            role_id: role.id.clone(),
+            role_name: role.name.clone(),
+            suggestions,
+        });
+    }
+
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -794,5 +955,70 @@ mod tests {
             completed_tasks: 0,
         };
         assert_eq!(stats.completion_rate(), 0.0);
+    }
+
+    // ===== Story 6.5 tests =====
+
+    #[test]
+    fn build_suggestion_prompt_contains_role_name_goal_energy() {
+        let roles = vec![make_role("r1", 85, None)];
+        let prompt = build_suggestion_prompt(&roles, &[]);
+        assert!(prompt[1].content.contains("role-r1"));
+        assert!(prompt[1].content.contains("85"));
+        assert!(prompt[0].content.contains("JSON"));
+    }
+
+    #[test]
+    fn build_suggestion_prompt_contains_incomplete_bigrocks() {
+        let roles = vec![make_role("r1", 80, None)];
+        let task = make_cross_role_task("t1", "竞品分析", false, Some("产品经理"));
+        let task_ref: &CrossRoleTask = &task;
+        let prompt = build_suggestion_prompt(&roles, &[task_ref]);
+        assert!(prompt[1].content.contains("竞品分析"));
+        assert!(prompt[1].content.contains("未完成"));
+    }
+
+    #[test]
+    fn parse_suggestions_valid_json() {
+        let roles = vec![
+            make_role("r1", 80, None),
+            make_role("r2", 60, None),
+        ];
+        let content = r#"[{"roleId":"r1","suggestions":["Q3路线图定稿","竞品分析"]},{"roleId":"r2","suggestions":["周末陪孩子"]}]"#;
+        let result = parse_suggestions(content, &roles).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].role_id, "r1");
+        assert_eq!(result[0].suggestions.len(), 2);
+        assert_eq!(result[0].suggestions[0], "Q3路线图定稿");
+        assert_eq!(result[1].role_id, "r2");
+        assert_eq!(result[1].suggestions[0], "周末陪孩子");
+    }
+
+    #[test]
+    fn parse_suggestions_invalid_json_returns_empty() {
+        let roles = vec![make_role("r1", 80, None)];
+        let result = parse_suggestions("not valid json", &roles).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn parse_suggestions_unknown_role_id_skipped() {
+        let roles = vec![make_role("r1", 80, None)];
+        let content = r#"[{"roleId":"unknown-id","suggestions":["test"]}]"#;
+        let result = parse_suggestions(content, &roles).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn role_bigrock_suggestions_serializes_camel_case() {
+        let s = RoleBigRockSuggestions {
+            role_id: "r1".to_string(),
+            role_name: "产品经理".to_string(),
+            suggestions: vec!["建议1".to_string()],
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains("roleId"));
+        assert!(json.contains("roleName"));
+        assert!(json.contains("suggestions"));
     }
 }

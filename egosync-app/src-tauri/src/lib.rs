@@ -366,6 +366,8 @@ pub fn run() {
             commands::review::review_get_latest,
             commands::review::review_get_by_week,
             commands::review::review_generate_now,
+            commands::review::review_plan_bigrocks,
+            commands::review::review_get_bigrock_suggestions,
             commands::settings::settings_get_schedule,
             commands::settings::settings_update_schedule,
         ])

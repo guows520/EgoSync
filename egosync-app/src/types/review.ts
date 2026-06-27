@@ -14,3 +14,14 @@ export interface WeeklyReview {
   newMemoriesCount: number;
   createdAt: string;
 }
+
+export interface BigRockPlanItem {
+  roleId: string;
+  title: string;
+}
+
+export interface RoleBigRockSuggestions {
+  roleId: string;
+  roleName: string;
+  suggestions: string[];
+}

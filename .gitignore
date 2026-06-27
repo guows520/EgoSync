@@ -27,3 +27,20 @@ dist-ssr/
 
 # Cursor IDE 本地配置（命令快捷方式等）
 .cursor/
+
+# 临时文件与构建产物
+.tmp/
+test-results/
+$mainDb
+*.tsbuildinfo
+.codegraph/
+
+# Cargo 本地隔离目录与构建缓存
+egosync-app/.cargo-home-local/
+egosync-app/.cargo-test-home/
+egosync-app/.cargo-target-*/
+egosync-app/.egosync-tauri-target/
+egosync-app/src-tauri/target-claude-execution-trace/
+
+# Tauri dev 重启标记文件
+egosync-app/tauri-dev-*.txt

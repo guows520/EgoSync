@@ -9,8 +9,19 @@ export interface ExportResult {
   markdownPath: string | null;
 }
 
+export interface ImportResult {
+  rolesCount: number;
+  tasksCount: number;
+  memoriesCount: number;
+  conversationsCount: number;
+  messagesCount: number;
+}
+
 export const dataService = {
   dataExport: (formats: ExportFormat[]) =>
     invoke<ExportResult>('data_export', { formats }),
   dataDestroy: () => invoke<void>('data_destroy'),
+  pickImportFile: () => invoke<string | null>('pick_import_file'),
+  dataImport: (filePath: string) =>
+    invoke<ImportResult>('data_import', { filePath }),
 };

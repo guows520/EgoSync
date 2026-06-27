@@ -4,10 +4,8 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { GlobalSettingsModal } from './GlobalSettingsModal';
 import { llmConfigService } from '../../services/llmConfigService';
-import { roleService } from '../../services/roleService';
 import { mcpService } from '../../services/mcpService';
 import { dataService } from '../../services/dataService';
-import type { Role } from '../../types/role';
 
 vi.mock('../../services/llmConfigService', () => ({
   llmConfigService: {
@@ -17,13 +15,6 @@ vi.mock('../../services/llmConfigService', () => ({
     delete: vi.fn(),
     setDefault: vi.fn(),
     testConnection: vi.fn(),
-  },
-}));
-
-vi.mock('../../services/roleService', () => ({
-  roleService: {
-    listArchived: vi.fn(),
-    restore: vi.fn(),
   },
 }));
 
@@ -45,24 +36,10 @@ vi.mock('../../services/dataService', () => ({
   dataService: {
     dataExport: vi.fn(),
     dataDestroy: vi.fn(),
+    pickImportFile: vi.fn(),
+    dataImport: vi.fn(),
   },
 }));
-
-const archivedRole: Role = {
-  id: 'role-archived',
-  name: '学习者',
-  icon: 'book-open',
-  color: '#10B981',
-  goal: '保持学习节奏',
-  personalityPrompt: '',
-  status: 'archived',
-  energy: 70,
-  skillsConfig: '{}',
-  proactivityLevel: 'moderate',
-  archivedAt: '2026-01-02T00:00:00Z',
-  createdAt: '2026-01-01T00:00:00Z',
-  updatedAt: '2026-01-02T00:00:00Z',
-};
 
 const enabledMcpServer = {
   id: 'mcp-weather',
@@ -76,45 +53,11 @@ const enabledMcpServer = {
   updatedAt: '2026-01-02T00:00:00Z',
 };
 
-describe('GlobalSettingsModal archived roles', () => {
+describe('GlobalSettingsModal', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(llmConfigService.list).mockResolvedValue([]);
-    vi.mocked(roleService.listArchived).mockResolvedValue([archivedRole]);
     vi.mocked(mcpService.list).mockResolvedValue([]);
-  });
-
-  it('打开设置时加载归档角色并可恢复', async () => {
-    const onRestoreRole = vi.fn().mockResolvedValue(undefined);
-
-    render(
-      <GlobalSettingsModal
-        onClose={vi.fn()}
-        onRestoreRole={onRestoreRole}
-      />
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: '数据与主权' }));
-
-    expect(await screen.findByText('学习者')).toBeInTheDocument();
-    expect(screen.getByText('保持学习节奏')).toBeInTheDocument();
-    expect(screen.getByText(/归档时间：/)).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: /恢复/ }));
-
-    await waitFor(() => {
-      expect(onRestoreRole).toHaveBeenCalledWith('role-archived');
-      expect(roleService.listArchived).toHaveBeenCalledTimes(2);
-    });
-  });
-
-  it('没有归档角色时显示空态', async () => {
-    vi.mocked(roleService.listArchived).mockResolvedValue([]);
-
-    render(<GlobalSettingsModal onClose={vi.fn()} />);
-    fireEvent.click(screen.getByRole('button', { name: '数据与主权' }));
-
-    expect(await screen.findByText('暂无归档角色')).toBeInTheDocument();
   });
 
   it('展示 MCP 工具标签入口并预留全局管理区块', async () => {
@@ -290,14 +233,13 @@ describe('GlobalSettingsModal archived roles', () => {
   describe('数据导出', () => {
     beforeEach(() => {
       vi.mocked(llmConfigService.list).mockResolvedValue([]);
-      vi.mocked(roleService.listArchived).mockResolvedValue([]);
       vi.mocked(mcpService.list).mockResolvedValue([]);
     });
 
     it('点击导出存档按钮后显示格式选择 UI', async () => {
       render(<GlobalSettingsModal onClose={vi.fn()} />);
 
-      fireEvent.click(screen.getByRole('button', { name: '数据与主权' }));
+      fireEvent.click(screen.getByRole('button', { name: '数据与隐私' }));
       fireEvent.click(await screen.findByRole('button', { name: /导出存档/ }));
 
       expect(await screen.findByText('选择导出格式（可多选）')).toBeInTheDocument();
@@ -309,7 +251,7 @@ describe('GlobalSettingsModal archived roles', () => {
     it('未选择格式时确认导出按钮被禁用', async () => {
       render(<GlobalSettingsModal onClose={vi.fn()} />);
 
-      fireEvent.click(screen.getByRole('button', { name: '数据与主权' }));
+      fireEvent.click(screen.getByRole('button', { name: '数据与隐私' }));
       fireEvent.click(await screen.findByRole('button', { name: /导出存档/ }));
 
       const confirmBtn = await screen.findByRole('button', { name: '确认导出' });
@@ -327,7 +269,7 @@ describe('GlobalSettingsModal archived roles', () => {
 
       render(<GlobalSettingsModal onClose={vi.fn()} />);
 
-      fireEvent.click(screen.getByRole('button', { name: '数据与主权' }));
+      fireEvent.click(screen.getByRole('button', { name: '数据与隐私' }));
       fireEvent.click(await screen.findByRole('button', { name: /导出存档/ }));
 
       const jsonCheckbox = await screen.findByLabelText(/JSON 格式/);
@@ -349,7 +291,7 @@ describe('GlobalSettingsModal archived roles', () => {
 
       render(<GlobalSettingsModal onClose={vi.fn()} />);
 
-      fireEvent.click(screen.getByRole('button', { name: '数据与主权' }));
+      fireEvent.click(screen.getByRole('button', { name: '数据与隐私' }));
       fireEvent.click(await screen.findByRole('button', { name: /导出存档/ }));
 
       const mdCheckbox = await screen.findByLabelText(/Markdown 报告/);
@@ -375,7 +317,7 @@ describe('GlobalSettingsModal archived roles', () => {
 
       render(<GlobalSettingsModal onClose={vi.fn()} />);
 
-      fireEvent.click(screen.getByRole('button', { name: '数据与主权' }));
+      fireEvent.click(screen.getByRole('button', { name: '数据与隐私' }));
       fireEvent.click(await screen.findByRole('button', { name: /导出存档/ }));
 
       const jsonCheckbox = await screen.findByLabelText(/JSON 格式/);
@@ -393,7 +335,7 @@ describe('GlobalSettingsModal archived roles', () => {
     it('取消格式选择后返回导出按钮', async () => {
       render(<GlobalSettingsModal onClose={vi.fn()} />);
 
-      fireEvent.click(screen.getByRole('button', { name: '数据与主权' }));
+      fireEvent.click(screen.getByRole('button', { name: '数据与隐私' }));
       fireEvent.click(await screen.findByRole('button', { name: /导出存档/ }));
 
       expect(await screen.findByText('选择导出格式（可多选）')).toBeInTheDocument();
@@ -407,7 +349,7 @@ describe('GlobalSettingsModal archived roles', () => {
     it('数据 Tab 同时显示导出区域和危险区域', async () => {
       render(<GlobalSettingsModal onClose={vi.fn()} />);
 
-      fireEvent.click(screen.getByRole('button', { name: '数据与主权' }));
+      fireEvent.click(screen.getByRole('button', { name: '数据与隐私' }));
 
       expect(await screen.findByText('导出数据')).toBeInTheDocument();
       expect(screen.getByText('危险区域')).toBeInTheDocument();
@@ -423,7 +365,7 @@ describe('GlobalSettingsModal archived roles', () => {
 
       render(<GlobalSettingsModal onClose={vi.fn()} />);
 
-      fireEvent.click(screen.getByRole('button', { name: '数据与主权' }));
+      fireEvent.click(screen.getByRole('button', { name: '数据与隐私' }));
       fireEvent.click(await screen.findByRole('button', { name: /导出存档/ }));
 
       const jsonCheckbox = await screen.findByLabelText(/JSON 格式/);
@@ -449,7 +391,7 @@ describe('GlobalSettingsModal archived roles', () => {
 
       render(<GlobalSettingsModal onClose={vi.fn()} />);
 
-      fireEvent.click(screen.getByRole('button', { name: '数据与主权' }));
+      fireEvent.click(screen.getByRole('button', { name: '数据与隐私' }));
       fireEvent.click(await screen.findByRole('button', { name: /导出存档/ }));
 
       const sqliteCheckbox = await screen.findByLabelText(/SQLite 备份/);
@@ -473,14 +415,13 @@ describe('GlobalSettingsModal archived roles', () => {
   describe('数据销毁', () => {
     beforeEach(() => {
       vi.mocked(llmConfigService.list).mockResolvedValue([]);
-      vi.mocked(roleService.listArchived).mockResolvedValue([]);
       vi.mocked(mcpService.list).mockResolvedValue([]);
     });
 
     it('点击销毁按钮后显示确认区域和警告文字', async () => {
       render(<GlobalSettingsModal onClose={vi.fn()} />);
 
-      fireEvent.click(screen.getByRole('button', { name: '数据与主权' }));
+      fireEvent.click(screen.getByRole('button', { name: '数据与隐私' }));
       fireEvent.click(await screen.findByRole('button', { name: /销毁所有数据/ }));
 
       expect(await screen.findByText('此操作将永久删除所有角色、记忆、任务和对话数据，且不可恢复。')).toBeInTheDocument();
@@ -490,7 +431,7 @@ describe('GlobalSettingsModal archived roles', () => {
     it('确认按钮在输入正确文字前禁用', async () => {
       render(<GlobalSettingsModal onClose={vi.fn()} />);
 
-      fireEvent.click(screen.getByRole('button', { name: '数据与主权' }));
+      fireEvent.click(screen.getByRole('button', { name: '数据与隐私' }));
       fireEvent.click(await screen.findByRole('button', { name: /销毁所有数据/ }));
 
       const confirmBtn = await screen.findByRole('button', { name: '确认销毁' });
@@ -512,7 +453,7 @@ describe('GlobalSettingsModal archived roles', () => {
 
       render(<GlobalSettingsModal onClose={vi.fn()} onDataDestroyed={vi.fn()} />);
 
-      fireEvent.click(screen.getByRole('button', { name: '数据与主权' }));
+      fireEvent.click(screen.getByRole('button', { name: '数据与隐私' }));
       fireEvent.click(await screen.findByRole('button', { name: /销毁所有数据/ }));
 
       fireEvent.change(await screen.findByPlaceholderText(/输入"确认销毁"以继续/), {
@@ -531,7 +472,7 @@ describe('GlobalSettingsModal archived roles', () => {
 
       render(<GlobalSettingsModal onClose={vi.fn()} onDataDestroyed={onDataDestroyed} />);
 
-      fireEvent.click(screen.getByRole('button', { name: '数据与主权' }));
+      fireEvent.click(screen.getByRole('button', { name: '数据与隐私' }));
       fireEvent.click(await screen.findByRole('button', { name: /销毁所有数据/ }));
 
       fireEvent.change(await screen.findByPlaceholderText(/输入"确认销毁"以继续/), {
@@ -549,7 +490,7 @@ describe('GlobalSettingsModal archived roles', () => {
 
       render(<GlobalSettingsModal onClose={vi.fn()} />);
 
-      fireEvent.click(screen.getByRole('button', { name: '数据与主权' }));
+      fireEvent.click(screen.getByRole('button', { name: '数据与隐私' }));
       fireEvent.click(await screen.findByRole('button', { name: /销毁所有数据/ }));
 
       fireEvent.change(await screen.findByPlaceholderText(/输入"确认销毁"以继续/), {
@@ -563,7 +504,7 @@ describe('GlobalSettingsModal archived roles', () => {
     it('取消确认后返回销毁按钮', async () => {
       render(<GlobalSettingsModal onClose={vi.fn()} />);
 
-      fireEvent.click(screen.getByRole('button', { name: '数据与主权' }));
+      fireEvent.click(screen.getByRole('button', { name: '数据与隐私' }));
       fireEvent.click(await screen.findByRole('button', { name: /销毁所有数据/ }));
 
       expect(await screen.findByText('此操作将永久删除所有角色、记忆、任务和对话数据，且不可恢复。')).toBeInTheDocument();
@@ -582,7 +523,7 @@ describe('GlobalSettingsModal archived roles', () => {
 
       render(<GlobalSettingsModal onClose={vi.fn()} onDataDestroyed={vi.fn()} />);
 
-      fireEvent.click(screen.getByRole('button', { name: '数据与主权' }));
+      fireEvent.click(screen.getByRole('button', { name: '数据与隐私' }));
       fireEvent.click(await screen.findByRole('button', { name: /销毁所有数据/ }));
 
       fireEvent.change(await screen.findByPlaceholderText(/输入"确认销毁"以继续/), {
@@ -597,6 +538,119 @@ describe('GlobalSettingsModal archived roles', () => {
       await act(async () => {
         resolveDestroy(undefined);
       });
+    });
+  });
+
+  describe('数据导入', () => {
+    beforeEach(() => {
+      vi.mocked(dataService.pickImportFile).mockReset();
+      vi.mocked(dataService.dataImport).mockReset();
+    });
+
+    it('点击导入存档后调用文件选择并显示确认弹窗', async () => {
+      vi.mocked(dataService.pickImportFile).mockResolvedValue('/tmp/archive.json');
+
+      render(<GlobalSettingsModal onClose={vi.fn()} />);
+      fireEvent.click(screen.getByRole('button', { name: '数据与隐私' }));
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /导入存档/ })).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByRole('button', { name: /导入存档/ }));
+
+      await waitFor(() => {
+        expect(dataService.pickImportFile).toHaveBeenCalled();
+        expect(screen.getByText('导入将覆盖当前所有数据（导入前已自动备份）。确认要继续吗？')).toBeInTheDocument();
+      });
+    });
+
+    it('确认导入调用 dataImport 并显示统计信息', async () => {
+      vi.mocked(dataService.pickImportFile).mockResolvedValue('/tmp/archive.json');
+      vi.mocked(dataService.dataImport).mockResolvedValue({
+        rolesCount: 2, tasksCount: 5, memoriesCount: 3, conversationsCount: 1, messagesCount: 10,
+      });
+      const onDataImported = vi.fn();
+
+      render(<GlobalSettingsModal onClose={vi.fn()} onDataImported={onDataImported} />);
+      fireEvent.click(screen.getByRole('button', { name: '数据与隐私' }));
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /导入存档/ })).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByRole('button', { name: /导入存档/ }));
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: '确认导入' })).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByRole('button', { name: '确认导入' }));
+
+      await waitFor(() => {
+        expect(dataService.dataImport).toHaveBeenCalledWith('/tmp/archive.json');
+        expect(screen.getByText(/已恢复 2 个角色/)).toBeInTheDocument();
+        expect(onDataImported).toHaveBeenCalled();
+      });
+    });
+
+    it('导入失败显示错误消息', async () => {
+      vi.mocked(dataService.pickImportFile).mockResolvedValue('/tmp/archive.json');
+      vi.mocked(dataService.dataImport).mockRejectedValue({ ValidationError: '文件格式不兼容' });
+
+      render(<GlobalSettingsModal onClose={vi.fn()} />);
+      fireEvent.click(screen.getByRole('button', { name: '数据与隐私' }));
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /导入存档/ })).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByRole('button', { name: /导入存档/ }));
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: '确认导入' })).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByRole('button', { name: '确认导入' }));
+
+      await waitFor(() => {
+        expect(screen.getByText('文件格式不兼容')).toBeInTheDocument();
+      });
+    });
+
+    it('取消确认无副作用', async () => {
+      vi.mocked(dataService.pickImportFile).mockResolvedValue('/tmp/archive.json');
+
+      render(<GlobalSettingsModal onClose={vi.fn()} />);
+      fireEvent.click(screen.getByRole('button', { name: '数据与隐私' }));
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /导入存档/ })).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByRole('button', { name: /导入存档/ }));
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: '取消' })).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByRole('button', { name: '取消' }));
+
+      await waitFor(() => {
+        expect(dataService.dataImport).not.toHaveBeenCalled();
+        expect(screen.getByRole('button', { name: /导入存档/ })).toBeInTheDocument();
+      });
+    });
+
+    it('文件选择取消时不显示确认弹窗', async () => {
+      vi.mocked(dataService.pickImportFile).mockResolvedValue(null);
+
+      render(<GlobalSettingsModal onClose={vi.fn()} />);
+      fireEvent.click(screen.getByRole('button', { name: '数据与隐私' }));
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /导入存档/ })).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByRole('button', { name: /导入存档/ }));
+
+      await waitFor(() => {
+        expect(dataService.pickImportFile).toHaveBeenCalled();
+      });
+
+      expect(screen.queryByText('导入将覆盖当前所有数据')).not.toBeInTheDocument();
     });
   });
 });

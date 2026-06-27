@@ -717,6 +717,563 @@ const MAIN_DB_TABLES: &[&str] = &[
     "skill_role_bindings",
 ];
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportResult {
+    pub roles_count: usize,
+    pub tasks_count: usize,
+    pub memories_count: usize,
+    pub conversations_count: usize,
+    pub messages_count: usize,
+}
+
+/// 对话库表列表
+const CONV_DB_TABLES: &[&str] = &["conversations", "messages"];
+
+/// 从导出 JSON 的对象字段中提取必填字符串，缺失则返回 ValidationError（避免静默写入空串）
+fn json_req_str<'a>(v: &'a serde_json::Value, key: &str, table: &str) -> Result<&'a str, AppError> {
+    v.get(key)
+        .and_then(|x| x.as_str())
+        .ok_or_else(|| AppError::ValidationError(format!("{} 记录缺少必填字段 {}", table, key)))
+}
+
+/// 从导出 JSON 的对象字段中提取必填整数，缺失则返回 ValidationError
+fn json_req_i64(v: &serde_json::Value, key: &str, table: &str) -> Result<i64, AppError> {
+    v.get(key)
+        .and_then(|x| x.as_i64())
+        .ok_or_else(|| AppError::ValidationError(format!("{} 记录缺少必填字段 {}", table, key)))
+}
+
+/// 导入 JSON 数据：反序列化 → 版本校验 → 事务内清空+写入所有表
+pub async fn import_json_data(
+    pool: &DbPool,
+    conv_pool: &ConversationsPool,
+    file_path: &Path,
+) -> Result<ImportResult, AppError> {
+    let content = std::fs::read_to_string(file_path)
+        .map_err(|e| AppError::ValidationError(format!("读取导入文件失败: {}", e)))?;
+    let data: ExportData = serde_json::from_str(&content)
+        .map_err(|e| AppError::ValidationError(format!("JSON 解析失败: {}", e)))?;
+
+    if data.export_version != EXPORT_VERSION {
+        return Err(AppError::ValidationError(format!(
+            "不兼容的导出版本: {}，当前支持: {}",
+            data.export_version, EXPORT_VERSION
+        )));
+    }
+
+    // 主库事务：清空 → 逐表写入
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| AppError::DbError(format!("开启主库事务失败: {}", e)))?;
+
+    for table in MAIN_DB_TABLES {
+        sqlx::query(&format!("DELETE FROM {}", table))
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| AppError::DbError(format!("清空表 {} 失败: {}", table, e)))?;
+    }
+
+    // roles
+    for r in &data.roles {
+        sqlx::query(
+            "INSERT INTO roles (id, name, icon, color, goal, personality_prompt, status, energy, energy_updated_at, skills_config, proactivity_level, archived_at, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+        )
+        .bind(&r.id).bind(&r.name).bind(&r.icon).bind(&r.color).bind(&r.goal)
+        .bind(&r.personality_prompt).bind(&r.status).bind(r.energy)
+        .bind(&r.energy_updated_at).bind(&r.skills_config).bind(&r.proactivity_level)
+        .bind(&r.archived_at).bind(&r.created_at).bind(&r.updated_at)
+        .execute(&mut *tx).await
+        .map_err(|e| AppError::DbError(format!("插入 roles 失败: {}", e)))?;
+    }
+
+    // tasks
+    for t in &data.tasks {
+        sqlx::query(
+            "INSERT INTO tasks (id, owner_type, role_id, title, deadline, quadrant, is_big_rock, is_completed, completed_at, sort_order, protection_status, confidence, manual_override, classification_reason, created_at, updated_at, deleted_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+        )
+        .bind(&t.id).bind(&t.owner_type).bind(&t.role_id).bind(&t.title)
+        .bind(&t.deadline).bind(&t.quadrant).bind(t.is_big_rock).bind(t.is_completed)
+        .bind(&t.completed_at).bind(t.sort_order).bind(&t.protection_status)
+        .bind(t.confidence).bind(t.manual_override).bind(&t.classification_reason)
+        .bind(&t.created_at).bind(&t.updated_at).bind(&t.deleted_at)
+        .execute(&mut *tx).await
+        .map_err(|e| AppError::DbError(format!("插入 tasks 失败: {}", e)))?;
+    }
+
+    // memories
+    for m in &data.memories {
+        sqlx::query(
+            "INSERT INTO memories (id, role_id, category, content, source_conversation_id, source_message_ids, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        )
+        .bind(&m.id).bind(&m.role_id).bind(&m.category).bind(&m.content)
+        .bind(&m.source_conversation_id).bind(&m.source_message_ids).bind(&m.created_at)
+        .execute(&mut *tx).await
+        .map_err(|e| AppError::DbError(format!("插入 memories 失败: {}", e)))?;
+    }
+
+    // suggestions
+    for s in &data.suggestions {
+        sqlx::query(
+            "INSERT INTO suggestions (id, role_id, title, content, priority, status, rejection_reason, converted_task_id, conversation_id, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        )
+        .bind(&s.id).bind(&s.role_id).bind(&s.title).bind(&s.content)
+        .bind(&s.priority).bind(&s.status).bind(&s.rejection_reason)
+        .bind(&s.converted_task_id).bind(&s.conversation_id).bind(&s.created_at)
+        .execute(&mut *tx).await
+        .map_err(|e| AppError::DbError(format!("插入 suggestions 失败: {}", e)))?;
+    }
+
+    // notifications
+    for n in &data.notifications {
+        sqlx::query(
+            "INSERT INTO notifications (id, role_id, level, content, is_read, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        )
+        .bind(&n.id).bind(&n.role_id).bind(&n.level).bind(&n.content)
+        .bind(n.is_read).bind(&n.created_at)
+        .execute(&mut *tx).await
+        .map_err(|e| AppError::DbError(format!("插入 notifications 失败: {}", e)))?;
+    }
+
+    // mission
+    if let Some(mission) = &data.mission {
+        sqlx::query(
+            "INSERT INTO mission (id, content, format, updated_at) VALUES (?1, ?2, ?3, ?4)",
+        )
+        .bind(&mission.id).bind(&mission.content).bind(&mission.format).bind(&mission.updated_at)
+        .execute(&mut *tx).await
+        .map_err(|e| AppError::DbError(format!("插入 mission 失败: {}", e)))?;
+    }
+
+    // conflicts (serde_json::Value)
+    for c in &data.conflicts {
+        let id = json_req_str(c, "id", "conflicts")?;
+        let task_id_a = json_req_str(c, "taskIdA", "conflicts")?;
+        let task_id_b = json_req_str(c, "taskIdB", "conflicts")?;
+        let role_id_a = json_req_str(c, "roleIdA", "conflicts")?;
+        let role_id_b = json_req_str(c, "roleIdB", "conflicts")?;
+        let conflict_time = json_req_str(c, "conflictTime", "conflicts")?;
+        let status = json_req_str(c, "status", "conflicts")?;
+        let resolution = c["resolution"].as_str();
+        let created_at = json_req_str(c, "createdAt", "conflicts")?;
+        sqlx::query(
+            "INSERT INTO conflicts (id, task_id_a, task_id_b, role_id_a, role_id_b, conflict_time, status, resolution, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        )
+        .bind(id).bind(task_id_a).bind(task_id_b).bind(role_id_a).bind(role_id_b)
+        .bind(conflict_time).bind(status).bind(resolution).bind(created_at)
+        .execute(&mut *tx).await
+        .map_err(|e| AppError::DbError(format!("插入 conflicts 失败: {}", e)))?;
+    }
+
+    // briefings
+    for b in &data.briefings {
+        sqlx::query(
+            "INSERT INTO briefings (id, content, date, created_at) VALUES (?1, ?2, ?3, ?4)",
+        )
+        .bind(&b.id).bind(&b.content).bind(&b.date).bind(&b.created_at)
+        .execute(&mut *tx).await
+        .map_err(|e| AppError::DbError(format!("插入 briefings 失败: {}", e)))?;
+    }
+
+    // weekly_reviews
+    for wr in &data.weekly_reviews {
+        sqlx::query(
+            "INSERT INTO weekly_reviews (id, week_start, week_end, summary, energy_trends, bigrock_status, new_memories_count, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        )
+        .bind(&wr.id).bind(&wr.week_start).bind(&wr.week_end).bind(&wr.summary)
+        .bind(&wr.energy_trends).bind(&wr.bigrock_status).bind(wr.new_memories_count)
+        .bind(&wr.created_at)
+        .execute(&mut *tx).await
+        .map_err(|e| AppError::DbError(format!("插入 weekly_reviews 失败: {}", e)))?;
+    }
+
+    // llm_configs
+    for cfg in &data.llm_configs {
+        sqlx::query(
+            "INSERT INTO llm_configs (id, name, provider, base_url, model, api_key_ref, is_default, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        )
+        .bind(&cfg.id).bind(&cfg.name).bind(&cfg.provider).bind(&cfg.base_url)
+        .bind(&cfg.model).bind(&cfg.api_key_ref).bind(cfg.is_default)
+        .bind(&cfg.created_at).bind(&cfg.updated_at)
+        .execute(&mut *tx).await
+        .map_err(|e| AppError::DbError(format!("插入 llm_configs 失败: {}", e)))?;
+    }
+
+    // app_settings
+    for (key, value) in &data.app_settings {
+        sqlx::query("INSERT INTO app_settings (key, value) VALUES (?1, ?2)")
+            .bind(key).bind(value)
+            .execute(&mut *tx).await
+            .map_err(|e| AppError::DbError(format!("插入 app_settings 失败: {}", e)))?;
+    }
+
+    // mcp_servers
+    for srv in &data.mcp_servers {
+        sqlx::query(
+            "INSERT INTO mcp_servers (id, name, server_type, command_or_url, env_refs, description, enabled, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        )
+        .bind(&srv.id).bind(&srv.name).bind(&srv.server_type).bind(&srv.command_or_url)
+        .bind(&srv.env_refs).bind(&srv.description).bind(srv.enabled)
+        .bind(&srv.created_at).bind(&srv.updated_at)
+        .execute(&mut *tx).await
+        .map_err(|e| AppError::DbError(format!("插入 mcp_servers 失败: {}", e)))?;
+    }
+
+    // role_mcp_server_bindings
+    for b in &data.role_mcp_server_bindings {
+        let server_id = json_req_str(b, "serverId", "role_mcp_server_bindings")?;
+        let role_id = json_req_str(b, "roleId", "role_mcp_server_bindings")?;
+        let created_at = json_req_str(b, "createdAt", "role_mcp_server_bindings")?;
+        sqlx::query(
+            "INSERT INTO role_mcp_server_bindings (server_id, role_id, created_at) VALUES (?1, ?2, ?3)",
+        )
+        .bind(server_id).bind(role_id).bind(created_at)
+        .execute(&mut *tx).await
+        .map_err(|e| AppError::DbError(format!("插入 role_mcp_server_bindings 失败: {}", e)))?;
+    }
+
+    // skills
+    for s in &data.skills {
+        let id = json_req_str(s, "id", "skills")?;
+        let name = json_req_str(s, "name", "skills")?;
+        let description = json_req_str(s, "description", "skills")?;
+        let source_type = json_req_str(s, "sourceType", "skills")?;
+        let managed_path = json_req_str(s, "managedPath", "skills")?;
+        let content_hash = json_req_str(s, "contentHash", "skills")?;
+        let created_at = json_req_str(s, "createdAt", "skills")?;
+        let updated_at = json_req_str(s, "updatedAt", "skills")?;
+        sqlx::query(
+            "INSERT INTO skills (id, name, description, source_type, managed_path, content_hash, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        )
+        .bind(id).bind(name).bind(description).bind(source_type)
+        .bind(managed_path).bind(content_hash).bind(created_at).bind(updated_at)
+        .execute(&mut *tx).await
+        .map_err(|e| AppError::DbError(format!("插入 skills 失败: {}", e)))?;
+    }
+
+    // skill_role_bindings
+    for b in &data.skill_bindings {
+        let skill_id = json_req_str(b, "skillId", "skill_role_bindings")?;
+        let role_id = json_req_str(b, "roleId", "skill_role_bindings")?;
+        let created_at = json_req_str(b, "createdAt", "skill_role_bindings")?;
+        sqlx::query(
+            "INSERT INTO skill_role_bindings (skill_id, role_id, created_at) VALUES (?1, ?2, ?3)",
+        )
+        .bind(skill_id).bind(role_id).bind(created_at)
+        .execute(&mut *tx).await
+        .map_err(|e| AppError::DbError(format!("插入 skill_role_bindings 失败: {}", e)))?;
+    }
+
+    // q2_reminders
+    for r in &data.q2_reminders {
+        let id = json_req_str(r, "id", "q2_reminders")?;
+        let task_id = json_req_str(r, "taskId", "q2_reminders")?;
+        let reminded_count = json_req_i64(r, "remindedCount", "q2_reminders")?;
+        let last_reminded_at = json_req_str(r, "lastRemindedAt", "q2_reminders")?;
+        let created_at = json_req_str(r, "createdAt", "q2_reminders")?;
+        sqlx::query(
+            "INSERT INTO q2_reminders (id, task_id, reminded_count, last_reminded_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+        )
+        .bind(id).bind(task_id).bind(reminded_count).bind(last_reminded_at).bind(created_at)
+        .execute(&mut *tx).await
+        .map_err(|e| AppError::DbError(format!("插入 q2_reminders 失败: {}", e)))?;
+    }
+
+    // big_rock_protection_reminders
+    for r in &data.big_rock_protection_reminders {
+        let id = json_req_str(r, "id", "big_rock_protection_reminders")?;
+        let task_id = json_req_str(r, "taskId", "big_rock_protection_reminders")?;
+        let reminded_count = json_req_i64(r, "remindedCount", "big_rock_protection_reminders")?;
+        let last_reminded_at = json_req_str(r, "lastRemindedAt", "big_rock_protection_reminders")?;
+        let created_at = json_req_str(r, "createdAt", "big_rock_protection_reminders")?;
+        sqlx::query(
+            "INSERT INTO big_rock_protection_reminders (id, task_id, reminded_count, last_reminded_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+        )
+        .bind(id).bind(task_id).bind(reminded_count).bind(last_reminded_at).bind(created_at)
+        .execute(&mut *tx).await
+        .map_err(|e| AppError::DbError(format!("插入 big_rock_protection_reminders 失败: {}", e)))?;
+    }
+
+    // forgotten_memory_sources
+    for f in &data.forgotten_memory_sources {
+        let id = json_req_str(f, "id", "forgotten_memory_sources")?;
+        let role_id = f["roleId"].as_str();
+        let category = json_req_str(f, "category", "forgotten_memory_sources")?;
+        let content = json_req_str(f, "content", "forgotten_memory_sources")?;
+        let normalized_content = json_req_str(f, "normalizedContent", "forgotten_memory_sources")?;
+        let source_conversation_id = json_req_str(f, "sourceConversationId", "forgotten_memory_sources")?;
+        let source_message_ids = json_req_str(f, "sourceMessageIds", "forgotten_memory_sources")?;
+        let forgotten_at = json_req_str(f, "forgottenAt", "forgotten_memory_sources")?;
+        sqlx::query(
+            "INSERT INTO forgotten_memory_sources (id, role_id, category, content, normalized_content, source_conversation_id, source_message_ids, forgotten_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        )
+        .bind(id).bind(role_id).bind(category).bind(content)
+        .bind(normalized_content).bind(source_conversation_id)
+        .bind(source_message_ids).bind(forgotten_at)
+        .execute(&mut *tx).await
+        .map_err(|e| AppError::DbError(format!("插入 forgotten_memory_sources 失败: {}", e)))?;
+    }
+
+    tx.commit()
+        .await
+        .map_err(|e| AppError::DbError(format!("提交主库事务失败: {}", e)))?;
+
+    // 对话库事务
+    let mut conv_tx = conv_pool
+        .begin()
+        .await
+        .map_err(|e| AppError::DbError(format!("开启对话库事务失败: {}", e)))?;
+
+    sqlx::query("DELETE FROM messages")
+        .execute(&mut *conv_tx).await
+        .map_err(|e| AppError::DbError(format!("清空 messages 失败: {}", e)))?;
+    sqlx::query("DELETE FROM conversations")
+        .execute(&mut *conv_tx).await
+        .map_err(|e| AppError::DbError(format!("清空 conversations 失败: {}", e)))?;
+
+    for c in &data.conversations {
+        sqlx::query(
+            "INSERT INTO conversations (id, role_id, title, started_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+        )
+        .bind(&c.id).bind(&c.role_id).bind(&c.title)
+        .bind(&c.started_at).bind(&c.updated_at)
+        .execute(&mut *conv_tx).await
+        .map_err(|e| AppError::DbError(format!("插入 conversations 失败: {}", e)))?;
+    }
+
+    for msg in &data.messages {
+        sqlx::query(
+            "INSERT INTO messages (id, conversation_id, role, content, thinking_content, is_complete, created_at, routing_metadata) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        )
+        .bind(&msg.id).bind(&msg.conversation_id).bind(&msg.role)
+        .bind(&msg.content).bind(&msg.thinking_content).bind(msg.is_complete)
+        .bind(&msg.created_at).bind(&msg.routing_metadata)
+        .execute(&mut *conv_tx).await
+        .map_err(|e| AppError::DbError(format!("插入 messages 失败: {}", e)))?;
+    }
+
+    conv_tx.commit()
+        .await
+        .map_err(|e| AppError::DbError(format!("提交对话库事务失败: {}", e)))?;
+
+    let result = ImportResult {
+        roles_count: data.roles.len(),
+        tasks_count: data.tasks.len(),
+        memories_count: data.memories.len(),
+        conversations_count: data.conversations.len(),
+        messages_count: data.messages.len(),
+    };
+    tracing::info!(?result, "JSON 导入完成");
+    Ok(result)
+}
+
+/// 导入 SQLite 备份：在单一连接上 ATTACH → 校验结构 → 事务内逐表复制 → DETACH
+///
+/// 连接池可能持有多条连接，而 `ATTACH DATABASE` 仅作用于执行它的那一条连接，
+/// 因此必须 `acquire()` 取出单一连接，让 ATTACH/复制/DETACH 全部落在同一连接上；
+/// 复制阶段包裹在事务中，任何失败都会回滚，保证导入失败时当前数据不变。
+pub async fn import_sqlite_data(
+    pool: &DbPool,
+    conv_pool: &ConversationsPool,
+    file_path: &Path,
+) -> Result<ImportResult, AppError> {
+    // ---- 自动识别主库/对话库文件 ----
+    // 导出时产生两个文件：egosync-export-{date}.db 和 egosync-export-{date}-conversations.db
+    // 用户可能选择其中任意一个，这里根据文件名自动推导另一个的路径。
+    let (main_file, conv_file) = {
+        let parent = file_path.parent().unwrap_or_else(|| Path::new("."));
+        let file_name = file_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        if file_name.ends_with("-conversations.db") {
+            // 用户选择的是对话库文件，主库路径去掉 "-conversations" 后缀
+            let stem = file_name.strip_suffix("-conversations.db").unwrap_or(file_name);
+            (parent.join(format!("{}.db", stem)), file_path.to_path_buf())
+        } else {
+            // 用户选择的是主库文件，对话库路径加 "-conversations" 后缀
+            let stem = file_path
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy();
+            (file_path.to_path_buf(), parent.join(format!("{}-conversations.db", stem)))
+        }
+    };
+
+    // ---- 主库：单一连接上 ATTACH → 校验 → 事务复制 → DETACH ----
+    let mut conn = pool
+        .acquire()
+        .await
+        .map_err(|e| AppError::DbError(format!("获取主库连接失败: {}", e)))?;
+
+    sqlx::query("ATTACH DATABASE ?1 AS imported")
+        .bind(main_file.to_string_lossy().to_string())
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| AppError::DbError(format!("ATTACH 主库失败: {}", e)))?;
+
+    let copy_result: Result<(i64, i64, i64), AppError> = async {
+        // 结构校验：导入库必须包含所有目标表，否则视为不兼容存档
+        for table in MAIN_DB_TABLES {
+            let exists: Option<String> = sqlx::query_scalar(
+                "SELECT name FROM imported.sqlite_master WHERE type = 'table' AND name = ?1",
+            )
+            .bind(table)
+            .fetch_optional(&mut *conn)
+            .await
+            .map_err(|e| AppError::DbError(format!("校验导入表 {} 失败: {}", table, e)))?;
+            if exists.is_none() {
+                return Err(AppError::ValidationError(format!(
+                    "存档文件结构不兼容：缺少数据表 {}",
+                    table
+                )));
+            }
+        }
+
+        sqlx::query("BEGIN")
+            .execute(&mut *conn)
+            .await
+            .map_err(|e| AppError::DbError(format!("开启主库事务失败: {}", e)))?;
+        for table in MAIN_DB_TABLES {
+            sqlx::query(&format!("DELETE FROM {}", table))
+                .execute(&mut *conn)
+                .await
+                .map_err(|e| AppError::DbError(format!("清空表 {} 失败: {}", table, e)))?;
+            sqlx::query(&format!("INSERT INTO {} SELECT * FROM imported.{}", table, table))
+                .execute(&mut *conn)
+                .await
+                .map_err(|e| AppError::DbError(format!("复制表 {} 失败: {}", table, e)))?;
+        }
+        sqlx::query("COMMIT")
+            .execute(&mut *conn)
+            .await
+            .map_err(|e| AppError::DbError(format!("提交主库事务失败: {}", e)))?;
+
+        let roles_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM roles")
+            .fetch_one(&mut *conn).await.unwrap_or(0);
+        let tasks_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tasks")
+            .fetch_one(&mut *conn).await.unwrap_or(0);
+        let memories_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM memories")
+            .fetch_one(&mut *conn).await.unwrap_or(0);
+        Ok((roles_count, tasks_count, memories_count))
+    }
+    .await;
+
+    // 无论成功失败，都必须回滚未提交事务并 DETACH，否则连接归还连接池时仍挂载 imported
+    if copy_result.is_err() {
+        let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+    }
+    let _ = sqlx::query("DETACH DATABASE imported").execute(&mut *conn).await;
+    drop(conn);
+
+    let (roles_count, tasks_count, memories_count) = copy_result?;
+
+    let (conversations_count, messages_count) = if conv_file.exists() {
+        let mut conv_conn = conv_pool
+            .acquire()
+            .await
+            .map_err(|e| AppError::DbError(format!("获取对话库连接失败: {}", e)))?;
+
+        sqlx::query("ATTACH DATABASE ?1 AS imported_conv")
+            .bind(conv_file.to_string_lossy().to_string())
+            .execute(&mut *conv_conn)
+            .await
+            .map_err(|e| AppError::DbError(format!("ATTACH 对话库失败: {}", e)))?;
+
+        let conv_copy: Result<(i64, i64), AppError> = async {
+            for table in CONV_DB_TABLES {
+                let exists: Option<String> = sqlx::query_scalar(
+                    "SELECT name FROM imported_conv.sqlite_master WHERE type = 'table' AND name = ?1",
+                )
+                .bind(table)
+                .fetch_optional(&mut *conv_conn)
+                .await
+                .map_err(|e| AppError::DbError(format!("校验导入对话表 {} 失败: {}", table, e)))?;
+                if exists.is_none() {
+                    return Err(AppError::ValidationError(format!(
+                        "对话存档文件结构不兼容：缺少数据表 {}",
+                        table
+                    )));
+                }
+            }
+
+            sqlx::query("BEGIN")
+                .execute(&mut *conv_conn)
+                .await
+                .map_err(|e| AppError::DbError(format!("开启对话库事务失败: {}", e)))?;
+            for table in CONV_DB_TABLES {
+                sqlx::query(&format!("DELETE FROM {}", table))
+                    .execute(&mut *conv_conn)
+                    .await
+                    .map_err(|e| AppError::DbError(format!("清空对话表 {} 失败: {}", table, e)))?;
+                sqlx::query(&format!("INSERT INTO {} SELECT * FROM imported_conv.{}", table, table))
+                    .execute(&mut *conv_conn)
+                    .await
+                    .map_err(|e| AppError::DbError(format!("复制对话表 {} 失败: {}", table, e)))?;
+            }
+            sqlx::query("COMMIT")
+                .execute(&mut *conv_conn)
+                .await
+                .map_err(|e| AppError::DbError(format!("提交对话库事务失败: {}", e)))?;
+
+            let conv_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM conversations")
+                .fetch_one(&mut *conv_conn).await.unwrap_or(0);
+            let msg_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM messages")
+                .fetch_one(&mut *conv_conn).await.unwrap_or(0);
+            Ok((conv_count, msg_count))
+        }
+        .await;
+
+        if conv_copy.is_err() {
+            let _ = sqlx::query("ROLLBACK").execute(&mut *conv_conn).await;
+        }
+        let _ = sqlx::query("DETACH DATABASE imported_conv").execute(&mut *conv_conn).await;
+        drop(conv_conn);
+
+        conv_copy?
+    } else {
+        tracing::info!("对话库文件不存在，仅导入主库数据");
+        (0i64, 0i64)
+    };
+
+    let result = ImportResult {
+        roles_count: roles_count as usize,
+        tasks_count: tasks_count as usize,
+        memories_count: memories_count as usize,
+        conversations_count: conversations_count as usize,
+        messages_count: messages_count as usize,
+    };
+    tracing::info!(?result, "SQLite 导入完成");
+    Ok(result)
+}
+
+/// 统一导入入口：备份 → 清理过期备份 → 识别格式 → 分发
+pub async fn import_all(
+    pool: &DbPool,
+    conv_pool: &ConversationsPool,
+    file_path: &Path,
+) -> Result<ImportResult, AppError> {
+    // 导入前备份当前数据
+    if let Err(e) = create_backup(pool, conv_pool).await {
+        return Err(AppError::ValidationError(format!(
+            "导入前备份失败，已中止导入: {}", e
+        )));
+    }
+
+    // 清理过期备份
+    if let Err(e) = cleanup_old_backups() {
+        tracing::warn!("清理过期备份文件失败: {}", e);
+    }
+
+    let ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    match ext.to_lowercase().as_str() {
+        "db" => import_sqlite_data(pool, conv_pool, file_path).await,
+        "json" => import_json_data(pool, conv_pool, file_path).await,
+        _ => Err(AppError::ValidationError("不支持的文件格式".to_string())),
+    }
+}
+
 /// 销毁所有数据 — 事务内清空所有数据表，保留 schema 和 _sqlx_migrations
 pub async fn destroy_all_data(
     pool: &DbPool,
@@ -1425,5 +1982,228 @@ mod tests {
 
         // 清理测试文件
         let _ = std::fs::remove_file(&backup_path);
+    }
+
+    #[tokio::test]
+    async fn import_json_data_restores_all_tables() {
+        let (dir, pool, conv_pool) = setup_destroy_test_db().await;
+
+        // 导出当前数据为 JSON
+        let export_data = gather_export_data(&pool, &conv_pool).await.expect("gather export data");
+        let json = serde_json::to_string_pretty(&export_data).expect("serialize to json");
+        let json_path = dir.path().join("export.json");
+        std::fs::write(&json_path, json).expect("write json file");
+
+        // 销毁所有数据
+        let app_data_dir = dir.path().join("app_data");
+        std::fs::create_dir_all(&app_data_dir).expect("create app_data dir");
+        destroy_all_data(&pool, &conv_pool, &app_data_dir).await.expect("destroy data");
+
+        // 验证数据已清空
+        let role_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM roles")
+            .fetch_one(&pool).await.expect("count");
+        assert_eq!(role_count, 0);
+
+        // 导入 JSON
+        let result = import_json_data(&pool, &conv_pool, &json_path).await.expect("import json");
+
+        // 验证数据恢复
+        assert_eq!(result.roles_count, 1);
+        assert_eq!(result.tasks_count, 1);
+        assert_eq!(result.memories_count, 1);
+        assert_eq!(result.conversations_count, 1);
+        assert_eq!(result.messages_count, 1);
+
+        let restored_role_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM roles")
+            .fetch_one(&pool).await.expect("count roles after import");
+        assert_eq!(restored_role_count, 1);
+
+        let restored_task_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tasks")
+            .fetch_one(&pool).await.expect("count tasks after import");
+        assert_eq!(restored_task_count, 1);
+
+        let restored_conv_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM conversations")
+            .fetch_one(&*conv_pool).await.expect("count conversations after import");
+        assert_eq!(restored_conv_count, 1);
+
+        let restored_msg_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM messages")
+            .fetch_one(&*conv_pool).await.expect("count messages after import");
+        assert_eq!(restored_msg_count, 1);
+    }
+
+    #[tokio::test]
+    async fn import_json_data_rejects_incompatible_version() {
+        let (dir, pool, conv_pool) = setup_destroy_test_db().await;
+
+        let bad_data = ExportData {
+            roles: vec![], tasks: vec![], memories: vec![], suggestions: vec![],
+            notifications: vec![], mission: None, conflicts: vec![], briefings: vec![],
+            weekly_reviews: vec![], llm_configs: vec![], app_settings: vec![],
+            mcp_servers: vec![], skills: vec![], skill_bindings: vec![],
+            q2_reminders: vec![], big_rock_protection_reminders: vec![],
+            forgotten_memory_sources: vec![], role_mcp_server_bindings: vec![],
+            conversations: vec![], messages: vec![],
+            exported_at: "2026-01-01T00:00:00Z".to_string(),
+            export_version: "99.0".to_string(),
+        };
+        let json = serde_json::to_string(&bad_data).expect("serialize");
+        let json_path = dir.path().join("bad_export.json");
+        std::fs::write(&json_path, json).expect("write json file");
+
+        let result = import_json_data(&pool, &conv_pool, &json_path).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        match err {
+            AppError::ValidationError(msg) => assert!(msg.contains("99.0")),
+            other => panic!("expected ValidationError, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn import_json_data_rejects_corrupt_file() {
+        let (dir, pool, conv_pool) = setup_destroy_test_db().await;
+
+        // 损坏 JSON 在反序列化阶段即失败（事务尚未开启）
+        let json_path = dir.path().join("corrupt.json");
+        std::fs::write(&json_path, "not valid json").expect("write corrupt file");
+
+        let result = import_json_data(&pool, &conv_pool, &json_path).await;
+        assert!(result.is_err());
+
+        // 验证原数据不受影响
+        let role_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM roles")
+            .fetch_one(&pool).await.expect("count roles");
+        assert_eq!(role_count, 1, "原数据应不受解析失败影响");
+    }
+
+    #[tokio::test]
+    async fn import_json_data_rolls_back_on_failure() {
+        let (dir, pool, conv_pool) = setup_destroy_test_db().await;
+
+        // 构造合法但含重复主键的导出数据：清空后第二次插入同一 role 触发约束冲突，
+        // 从而在事务中途（DELETE 已执行）失败，验证事务回滚保留原数据。
+        let mut export_data = gather_export_data(&pool, &conv_pool).await.expect("gather export data");
+        let dup_role = export_data.roles[0].clone();
+        export_data.roles.push(dup_role);
+        let json = serde_json::to_string(&export_data).expect("serialize");
+        let json_path = dir.path().join("dup.json");
+        std::fs::write(&json_path, json).expect("write json file");
+
+        let result = import_json_data(&pool, &conv_pool, &json_path).await;
+        assert!(result.is_err(), "重复主键应导致导入失败");
+
+        // 验证事务回滚：DELETE 已执行但应整体回滚，原数据完整保留
+        let role_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM roles")
+            .fetch_one(&pool).await.expect("count roles");
+        assert_eq!(role_count, 1, "事务回滚后原角色数据应完整保留");
+
+        let task_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tasks")
+            .fetch_one(&pool).await.expect("count tasks");
+        assert_eq!(task_count, 1, "事务回滚后任务数据应完整保留");
+    }
+
+    #[tokio::test]
+    async fn import_sqlite_data_restores_all_tables() {
+        let (dir, pool, conv_pool) = setup_destroy_test_db().await;
+
+        // 用 VACUUM INTO 生成主库与对话库 .db 快照
+        // （命名遵循导出约定：{stem}.db + {stem}-conversations.db）
+        let backup_main = dir.path().join("backup.db");
+        let backup_conv = dir.path().join("backup-conversations.db");
+        sqlx::query(&format!("VACUUM INTO '{}'", backup_main.to_string_lossy()))
+            .execute(&pool).await.expect("vacuum main db");
+        sqlx::query(&format!("VACUUM INTO '{}'", backup_conv.to_string_lossy()))
+            .execute(&*conv_pool).await.expect("vacuum conv db");
+
+        // 销毁现有数据
+        let app_data_dir = dir.path().join("app_data");
+        std::fs::create_dir_all(&app_data_dir).expect("create app_data dir");
+        destroy_all_data(&pool, &conv_pool, &app_data_dir).await.expect("destroy data");
+        let role_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM roles")
+            .fetch_one(&pool).await.expect("count");
+        assert_eq!(role_count, 0);
+
+        // 从 .db 快照导入
+        let result = import_sqlite_data(&pool, &conv_pool, &backup_main)
+            .await.expect("import sqlite");
+
+        assert_eq!(result.roles_count, 1);
+        assert_eq!(result.tasks_count, 1);
+        assert_eq!(result.memories_count, 1);
+        assert_eq!(result.conversations_count, 1);
+        assert_eq!(result.messages_count, 1);
+
+        let restored_roles: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM roles")
+            .fetch_one(&pool).await.expect("count roles after import");
+        assert_eq!(restored_roles, 1);
+
+        let restored_tasks: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tasks")
+            .fetch_one(&pool).await.expect("count tasks after import");
+        assert_eq!(restored_tasks, 1);
+
+        let restored_msgs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM messages")
+            .fetch_one(&*conv_pool).await.expect("count messages after import");
+        assert_eq!(restored_msgs, 1);
+    }
+
+    #[tokio::test]
+    async fn import_sqlite_data_rejects_incompatible_schema() {
+        let (dir, pool, conv_pool) = setup_destroy_test_db().await;
+
+        // 构造一个缺少目标表的 .db（仅含无关表），应被结构校验拒绝
+        let bad_db = dir.path().join("incompatible.db");
+        let bad_url = format!("sqlite:{}?mode=rwc", bad_db.display());
+        let bad_pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect(&bad_url)
+            .await
+            .expect("create incompatible db");
+        sqlx::query("CREATE TABLE unrelated (id TEXT PRIMARY KEY)")
+            .execute(&bad_pool).await.expect("create unrelated table");
+        bad_pool.close().await;
+
+        let result = import_sqlite_data(&pool, &conv_pool, &bad_db).await;
+        assert!(result.is_err(), "结构不兼容的 .db 应被拒绝");
+        match result.unwrap_err() {
+            AppError::ValidationError(msg) => assert!(msg.contains("结构不兼容")),
+            other => panic!("expected ValidationError, got {:?}", other),
+        }
+
+        // 校验在事务外完成，原数据不受影响
+        let role_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM roles")
+            .fetch_one(&pool).await.expect("count roles");
+        assert_eq!(role_count, 1, "结构校验失败时原数据应保留");
+    }
+
+    #[tokio::test]
+    async fn import_all_rejects_unsupported_format() {
+        let (dir, pool, conv_pool) = setup_destroy_test_db().await;
+
+        let txt_path = dir.path().join("archive.txt");
+        std::fs::write(&txt_path, "some content").expect("write txt file");
+
+        let result = import_all(&pool, &conv_pool, &txt_path).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            AppError::ValidationError(msg) => assert!(msg.contains("不支持的文件格式")),
+            other => panic!("expected ValidationError, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn import_result_serializes_with_camel_case() {
+        let result = ImportResult {
+            roles_count: 1,
+            tasks_count: 2,
+            memories_count: 3,
+            conversations_count: 4,
+            messages_count: 5,
+        };
+        let json = serde_json::to_string(&result).expect("serialize");
+        assert!(json.contains("\"rolesCount\""));
+        assert!(json.contains("\"tasksCount\""));
+        assert!(json.contains("\"memoriesCount\""));
+        assert!(json.contains("\"conversationsCount\""));
+        assert!(json.contains("\"messagesCount\""));
     }
 }

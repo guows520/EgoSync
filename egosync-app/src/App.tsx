@@ -229,6 +229,12 @@ export default function App() {
     setCurrentView('onboard');
   };
 
+  const handleDataImported = async () => {
+    setIsSettingsOpen(false);
+    await refreshAllRoles();
+    setCurrentView('butler');
+  };
+
   const handleArchiveRole = async (id: string) => {
     await roleService.archive(id);
     await refreshAllRoles();
@@ -387,10 +393,8 @@ export default function App() {
       {isSettingsOpen && (
         <GlobalSettingsModal
           onClose={() => setIsSettingsOpen(false)}
-          archivedRoles={archivedRoles}
-          onRestoreRole={handleRestoreRole}
-          onRefreshRoles={refreshAllRoles}
           onDataDestroyed={handleDataDestroyed}
+          onDataImported={handleDataImported}
         />
       )}
       {isReviewOpen && <WeeklyReviewModal roles={roles} onClose={() => { setIsReviewOpen(false); setReviewInitialPhase('review'); }} initialPhase={reviewInitialPhase} />}

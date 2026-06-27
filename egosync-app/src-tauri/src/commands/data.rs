@@ -4,7 +4,9 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::db::pool::{ConversationsPool, DbPool};
 use crate::error::AppError;
-use crate::services::data_export::{destroy_all_data, export_all, ExportFormat, ExportResult};
+use crate::services::data_export::{
+    destroy_all_data, export_all, ExportFormat, ExportResult, ImportResult, import_all,
+};
 
 #[tauri::command]
 pub async fn data_export(
@@ -73,4 +75,27 @@ pub async fn data_destroy(
         .map_err(|e| AppError::ValidationError(format!("获取应用数据目录失败: {}", e)))?;
 
     destroy_all_data(&pool, &conv_pool, &app_data_dir).await
+}
+
+#[tauri::command]
+pub async fn pick_import_file() -> Result<Option<String>, AppError> {
+    let selected =
+        tauri::async_runtime::spawn_blocking(|| {
+            rfd::FileDialog::new()
+                .add_filter("EgoSync 存档", &["db", "json"])
+                .pick_file()
+        })
+        .await
+        .map_err(|e| AppError::ValidationError(format!("选择导入文件失败: {}", e)))?;
+
+    Ok(selected.map(|p| p.to_string_lossy().to_string()))
+}
+
+#[tauri::command]
+pub async fn data_import(
+    file_path: String,
+    pool: State<'_, DbPool>,
+    conv_pool: State<'_, ConversationsPool>,
+) -> Result<ImportResult, AppError> {
+    import_all(&pool, &conv_pool, Path::new(&file_path)).await
 }

@@ -1,18 +1,15 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Plus, X, Download, Trash2, Loader2, Check, AlertCircle, ArchiveRestore, Clock, Bell } from 'lucide-react';
+import { Plus, X, Download, Trash2, Loader2, Check, AlertCircle, Clock, Bell, Upload } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { Modal } from '../layout/Modal';
 import { llmConfigService } from '../../services/llmConfigService';
-import { roleService } from '../../services/roleService';
 import { mcpService } from '../../services/mcpService';
 import { schedulerService } from '../../services/schedulerService';
 import { appService } from '../../services/appService';
 import { dataService } from '../../services/dataService';
-import type { ExportFormat, ExportResult } from '../../services/dataService';
+import type { ExportFormat, ExportResult, ImportResult } from '../../services/dataService';
 import type { LlmConfig, CreateLlmConfigInput, UpdateLlmConfigInput } from '../../types/settings';
 import type { McpServer, McpServerType } from '../../types/mcp';
-import type { Role } from '../../types/role';
-import { getRoleIconComponent } from '../../lib/roleIcons';
 
 type TestStatus = 'idle' | 'testing' | 'success' | 'error';
 type McpForm = {
@@ -33,7 +30,7 @@ const EMPTY_MCP_FORM: McpForm = {
   enabled: true,
 };
 
-export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRoles = [], onRestoreRole, onRefreshRoles, onDataDestroyed }: any) {
+export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }: any) {
   const [tab, setTab] = useState('llm');
   const [configs, setConfigs] = useState<LlmConfig[]>([]);
   const [isEditing, setIsEditing] = useState(false);
@@ -44,9 +41,6 @@ export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRol
   const [testError, setTestError] = useState('');
   const [testingConfigId, setTestingConfigId] = useState<string | null>(null);
   const [lastTestedConfigId, setLastTestedConfigId] = useState<string | null>(null);
-  const [archivedRoles, setArchivedRoles] = useState<Role[]>(initialArchivedRoles);
-  const [archiveError, setArchiveError] = useState('');
-  const [restoringRoleId, setRestoringRoleId] = useState<string | null>(null);
   const [mcpServers, setMcpServers] = useState<McpServer[]>([]);
   const [mcpForm, setMcpForm] = useState<McpForm>(EMPTY_MCP_FORM);
   const [editingMcpId, setEditingMcpId] = useState<string | null>(null);
@@ -73,6 +67,11 @@ export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRol
   const [destroyConfirmText, setDestroyConfirmText] = useState('');
   const [isDestroying, setIsDestroying] = useState(false);
   const [destroyError, setDestroyError] = useState('');
+  const [showImportConfirm, setShowImportConfirm] = useState(false);
+  const [pendingImportPath, setPendingImportPath] = useState<string | null>(null);
+  const [isImporting, setIsImporting] = useState(false);
+  const [importResult, setImportResult] = useState<ImportResult | null>(null);
+  const [importError, setImportError] = useState('');
 
   const loadConfigs = useCallback(async () => {
     try {
@@ -80,17 +79,6 @@ export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRol
       setConfigs(data);
     } catch (e) {
       console.error('加载 LLM 配置失败:', e);
-    }
-  }, []);
-
-  const loadArchivedRoles = useCallback(async () => {
-    setArchiveError('');
-    try {
-      const archived = await roleService.listArchived();
-      setArchivedRoles(archived);
-    } catch (e) {
-      console.error('加载归档角色失败:', e);
-      setArchiveError('归档角色加载失败，请稍后重试');
     }
   }, []);
 
@@ -141,11 +129,10 @@ export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRol
 
   useEffect(() => {
     loadConfigs();
-    loadArchivedRoles();
     loadMcpServers();
     loadSchedulerTimes();
     loadKnockSound();
-  }, [loadArchivedRoles, loadConfigs, loadMcpServers, loadSchedulerTimes, loadKnockSound]);
+  }, [loadConfigs, loadMcpServers, loadSchedulerTimes, loadKnockSound]);
 
   const handleAddSchedulerTime = (level: 'moderate' | 'proactive') => {
     setSchedulerSaved(false);
@@ -271,25 +258,6 @@ export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRol
     }
   };
 
-  const handleRestoreArchivedRole = async (id: string) => {
-    setRestoringRoleId(id);
-    setArchiveError('');
-    try {
-      if (onRestoreRole) {
-        await onRestoreRole(id);
-      } else {
-        await roleService.restore(id);
-        await onRefreshRoles?.();
-      }
-      await loadArchivedRoles();
-    } catch (e) {
-      console.error('恢复归档角色失败:', e);
-      setArchiveError('恢复失败，请稍后重试');
-    } finally {
-      setRestoringRoleId(null);
-    }
-  };
-
   const toggleFormat = (fmt: ExportFormat) => {
     setSelectedFormats(prev =>
       prev.includes(fmt) ? prev.filter(f => f !== fmt) : [...prev, fmt]
@@ -332,6 +300,41 @@ export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRol
       setDestroyError(typeof msg === 'string' ? msg : '销毁失败');
     } finally {
       setIsDestroying(false);
+    }
+  };
+
+  const handleImportSelect = async () => {
+    setImportError('');
+    setImportResult(null);
+    try {
+      const filePath = await dataService.pickImportFile();
+      if (!filePath) return;
+      setPendingImportPath(filePath);
+      setShowImportConfirm(true);
+    } catch (e: any) {
+      const msg = typeof e === 'object' && e !== null
+        ? (e.ValidationError || Object.values(e)[0] || '文件选择失败')
+        : String(e);
+      setImportError(typeof msg === 'string' ? msg : '文件选择失败');
+    }
+  };
+
+  const handleImport = async () => {
+    if (!pendingImportPath) return;
+    setIsImporting(true);
+    setImportError('');
+    try {
+      const result = await dataService.dataImport(pendingImportPath);
+      setImportResult(result);
+      setShowImportConfirm(false);
+      onDataImported?.();
+    } catch (e: any) {
+      const msg = typeof e === 'object' && e !== null
+        ? (e.ValidationError || e.DbError || Object.values(e)[0] || '导入失败')
+        : String(e);
+      setImportError(typeof msg === 'string' ? msg : '导入失败');
+    } finally {
+      setIsImporting(false);
     }
   };
 
@@ -462,7 +465,7 @@ export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRol
           <button onClick={() => { setTab('llm'); setIsEditing(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'llm' ? "bg-white text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 hover:bg-slate-200/50")}>模型配置 (BYOK)</button>
           <button onClick={() => { setTab('mcp'); setIsEditing(false); setIsEditingMcp(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'mcp' ? "bg-white text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 hover:bg-slate-200/50")}>MCP 工具</button>
           <button onClick={() => { setTab('scheduler'); setIsEditing(false); setIsEditingMcp(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'scheduler' ? "bg-white text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 hover:bg-slate-200/50")}>调度时间</button>
-          <button onClick={() => { setTab('data'); setIsEditing(false); setIsEditingMcp(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'data' ? "bg-white text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 hover:bg-slate-200/50")}>数据与主权</button>
+          <button onClick={() => { setTab('data'); setIsEditing(false); setIsEditingMcp(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'data' ? "bg-white text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 hover:bg-slate-200/50")}>数据与隐私</button>
         </div>
         <div className="flex-1 p-10 overflow-y-auto">
           <div className="flex justify-between items-center mb-8">
@@ -908,42 +911,68 @@ export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRol
                   </div>
                 )}
               </div>
+
               <div>
-                <h4 className="text-[15px] font-medium text-slate-800 mb-2">归档角色</h4>
-                <p className="text-[13px] text-slate-500 mb-4">恢复后角色会重新出现在侧边栏，历史数据保持不变。</p>
-                {archiveError && (
+                <h4 className="text-[15px] font-medium text-slate-800 mb-2">导入数据</h4>
+                <p className="text-[13px] text-slate-500 mb-4">导入 存档文件（.db 或 .json）恢复数据。导入前会自动备份当前数据。</p>
+
+                {importError && (
                   <div className="mb-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-[13px] text-red-600 flex items-center gap-2">
-                    <AlertCircle size={14} /> {archiveError}
+                    <AlertCircle size={14} /> {importError}
                   </div>
                 )}
-                <div className="space-y-2.5">
-                  {archivedRoles.length === 0 ? (
-                    <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center text-[13px] text-slate-400">暂无归档角色</div>
-                  ) : archivedRoles.map(role => {
-                    const Icon = getRoleIconComponent(role.icon);
-                    return (
-                      <div key={role.id} className="bg-white border border-slate-200 rounded-xl p-4 flex items-center justify-between shadow-sm">
-                        <div className="flex items-center gap-3 min-w-0">
-                          <div className="w-10 h-10 rounded-lg flex items-center justify-center text-white shrink-0" style={{ backgroundColor: role.color }}>
-                            <Icon size={18} strokeWidth={2} />
-                          </div>
-                          <div className="min-w-0">
-                            <p className="text-[14px] font-medium text-slate-700 truncate">{role.name}</p>
-                            <p className="text-[12px] text-slate-400 truncate">{role.goal || '无目标描述'}</p>
-                            <p className="text-[11px] text-slate-400 mt-0.5">归档时间：{formatDateTime(role.archivedAt)}</p>
-                          </div>
-                        </div>
-                        <button
-                          onClick={() => handleRestoreArchivedRole(role.id)}
-                          disabled={restoringRoleId === role.id}
-                          className="px-4 py-2 rounded-lg text-[13px] font-medium text-indigo-600 hover:bg-indigo-50 border border-indigo-200 transition-colors disabled:opacity-60 flex items-center gap-1.5"
-                        >
-                          <ArchiveRestore size={14} /> {restoringRoleId === role.id ? '恢复中...' : '恢复'}
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
+
+                {importResult && (
+                  <div className="mb-3 rounded-lg border border-green-100 bg-green-50 px-3 py-2 text-[13px] text-green-700">
+                    <div className="flex items-center gap-2 mb-1">
+                      <Check size={14} /> 导入完成
+                    </div>
+                    <p className="ml-6 text-[12px] text-green-600">
+                      已恢复 {importResult.rolesCount} 个角色、{importResult.tasksCount} 个任务、{importResult.memoriesCount} 条记忆、{importResult.conversationsCount} 个对话、{importResult.messagesCount} 条消息
+                    </p>
+                  </div>
+                )}
+
+                {showImportConfirm && !isImporting && (
+                  <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50/50 p-4 space-y-3">
+                    <p className="text-[13px] text-amber-700 leading-relaxed">
+                      导入将覆盖当前所有数据（导入前已自动备份）。确认要继续吗？
+                    </p>
+                    <p className="text-[12px] text-slate-500 break-all">文件：{pendingImportPath}</p>
+                    <div className="flex items-center gap-2 pt-1">
+                      <button
+                        onClick={handleImport}
+                        className="px-4 py-2 rounded-lg text-[13px] font-medium text-white bg-indigo-600 hover:bg-indigo-700 transition-colors"
+                      >
+                        确认导入
+                      </button>
+                      <button
+                        onClick={() => { setShowImportConfirm(false); setPendingImportPath(null); setImportError(''); }}
+                        className="px-4 py-2 rounded-lg text-[13px] font-medium text-slate-600 hover:bg-slate-100 transition-colors"
+                      >
+                        取消
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {!showImportConfirm && !isImporting && (
+                  <div className="space-y-2">
+                    <p className="text-[12px] text-slate-400">支持 JSON 或 SQLite 存档文件；SQLite 导出含两个 .db 文件，选择其中任一即可自动导入全部数据。</p>
+                    <button
+                      onClick={handleImportSelect}
+                      className="flex items-center gap-2 px-5 py-2.5 border border-slate-300 rounded-lg text-[14px] font-medium text-slate-700 hover:bg-slate-50 transition-colors"
+                    >
+                      <Upload size={16}/> 导入存档
+                    </button>
+                  </div>
+                )}
+
+                {isImporting && (
+                  <div className="flex items-center gap-2 px-5 py-2.5 text-[14px] text-slate-600">
+                    <Loader2 size={16} className="animate-loading-spin" /> 导入中...
+                  </div>
+                )}
               </div>
 
               <div className="pt-6 border-t border-slate-200">
@@ -1077,19 +1106,6 @@ function formatImportedEnvRefs(value: unknown) {
     return JSON.stringify(value, null, 2);
   }
   return '{}';
-}
-
-function formatDateTime(value: string | null) {
-  if (!value) return '未知';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
 }
 
 function toFriendlyMcpError(error: unknown, fallback: string) {

@@ -58,6 +58,16 @@ pub async fn list_recent_suggestions(
     .map_err(|e| AppError::DbError(format!("查询近期建议失败: {}", e)))
 }
 
+pub async fn list_all_suggestions(pool: &SqlitePool) -> Result<Vec<Suggestion>, AppError> {
+    sqlx::query_as::<_, Suggestion>(&format!(
+        "SELECT {} FROM suggestions ORDER BY created_at DESC",
+        SUGGESTION_SELECT_COLUMNS
+    ))
+    .fetch_all(pool)
+    .await
+    .map_err(|e| AppError::DbError(format!("查询全部建议失败: {}", e)))
+}
+
 pub async fn list_pending_suggestions(pool: &SqlitePool, conversation_id: &str) -> Result<Vec<SuggestionWithRole>, AppError> {
     sqlx::query_as::<_, SuggestionWithRole>(
         "SELECT s.id, s.role_id, s.title, s.content, s.priority, s.status,

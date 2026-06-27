@@ -1,5 +1,10 @@
 # Deferred Work
 
+## Deferred from: code review of 7-1-data-export-json-markdown (2026-06-27)
+
+- **复制活动数据库一致性**：`export_sqlite` 用 `std::fs::copy`（data_export.rs:531）复制存在打开连接的 `egosync.db`/`conversations.db`，导出前已执行 `wal_checkpoint(TRUNCATE)` 降低风险。单用户桌面场景导出瞬间并发写概率极低，可接受；若 V2 需更强保证可改用 `VACUUM INTO`（SQLite 3.27+）。
+- **通知 JOIN 反规范化导出**：`gather_export_data` 用 `list_notifications` 返回 `NotificationWithRole`（含冗余 role_name/icon/color 字段，data_export.rs:234），JSON 导出含重复字段。未来 Story 7-4 数据导入需处理此结构；非本 story 范围。
+
 ## Deferred from: code review of 6-6-big-rock-daily-protection (2026-06-27)
 
 - **周五去重为内存变量，应用重启会重复**：`last_bigrock_friday_check_date`（scheduler.rs:1088）在内存中，周五当天重启调度器会重置 → 可能重复发送周五汇总提醒。与既有周复盘去重模式一致，非本故事独创；V2 若做"启动补检测/去重持久化"应统一三处触发逻辑。

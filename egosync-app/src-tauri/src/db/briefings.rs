@@ -43,6 +43,15 @@ pub async fn get_briefing_by_date(
     .map_err(|e| AppError::DbError(format!("按日期查询简报失败: {}", e)))
 }
 
+pub async fn list_all_briefings(pool: &SqlitePool) -> Result<Vec<Briefing>, AppError> {
+    sqlx::query_as::<_, Briefing>(
+        "SELECT id, content, date, created_at FROM briefings ORDER BY date ASC",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| AppError::DbError(format!("查询全部简报失败: {}", e)))
+}
+
 pub async fn get_latest_briefing(pool: &SqlitePool) -> Result<Option<Briefing>, AppError> {
     sqlx::query_as::<_, Briefing>(
         "SELECT id, content, date, created_at FROM briefings ORDER BY date DESC LIMIT 1",

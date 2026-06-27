@@ -2321,7 +2321,7 @@ So that 大石头不会被琐事淹没。
 
 用户随时可一键导出全部数据为 JSON/Markdown，或一键销毁全部数据回到初始状态。完成后用户对自己的数据拥有完全控制。
 
-### Story 7.1: 用户能一键导出全部数据为 JSON 和 Markdown
+### Story 7.1: 用户能一键导出全部数据
 
 As a 用户,
 I want 随时将我的所有数据导出为标准格式,
@@ -2330,29 +2330,41 @@ So that 我拥有数据的完全控制权且可迁移。
 **Acceptance Criteria:**
 
 **Given** 用户在 GlobalSettingsModal 数据 Tab 点击"导出存档"
-**When** Tauri 文件保存对话框弹出，用户选择保存目录
-**Then** 生成两个文件：
-- `egosync-export-{date}.json`：完整 schema 的 JSON（含所有表数据）
-- `egosync-export-{date}.md`：人类可读的 Markdown 版本
+**When** 弹出格式选择（可多选）：
+- ☐ SQLite 备份（推荐）— 完整数据库文件副本，恢复最快、数据 100% 保真
+- ☐ JSON 数据 — 跨版本迁移用，含所有表的完整数据
+- ☐ Markdown 报告 — 人类可读版，按角色分章节
+**Then** 用户勾选格式后，Tauri 文件保存对话框弹出，用户选择保存目录
+**And** 根据勾选的格式生成对应文件：
+- SQLite：复制 `egosync.db` + `conversations.db` 到目标目录（重命名为 `egosync-export-{date}.db` + `egosync-export-{date}-conversations.db`）
+- JSON：`egosync-export-{date}.json`（完整 schema 的 JSON，含所有表数据）
+- Markdown：`egosync-export-{date}.md`（人类可读的 Markdown 版本）
+
+**Given** SQLite 备份导出
+**Then** 直接复制数据库文件到目标目录，不经过查询/序列化
+**And** 速度 <1 秒，数据 100% 保真（含所有索引、外键、触发器）
 
 **Given** JSON 导出内容
 **Then** 包含：角色定义、任务、记忆、对话历史、使命宣言、建议、通知、冲突仲裁记录、周复盘、app_settings
 **And** 每个实体保留完整字段和关联关系
+**And** 含 `export_version` 字段用于版本兼容性校验
 
 **Given** Markdown 导出内容
 **Then** 按角色分章节，每章包含：角色信息 → 任务列表 → 记忆条目 → 对话摘要
 **And** 可读性优先（无 UUID，使用角色名/任务标题）
 
 **Given** 导出性能
-**Then** 30 秒内完成（含 1000+ 条记忆和 500+ 条对话）
-**And** 导出期间显示进度条
+**Then** SQLite 备份 <1 秒；JSON + Markdown 30 秒内完成（含 1000+ 条记忆和 500+ 条对话）
+**And** 导出期间显示 loading 状态
 
 **Given** 导出成功
-**Then** 显示成功提示 + 文件路径链接
+**Then** 显示成功提示 + 生成的文件路径列表
 
 **Given** Rust 后端
-**Then** Tauri command: `data::export { dir_path }` → 查询所有表 → 序列化 JSON + 生成 Markdown → 写入文件
-**And** 使用 Tauri `dialog::save_file` API 选择保存位置
+**Then** Tauri command: `data_export { dir_path, formats }` → 根据格式执行对应导出逻辑 → 返回文件路径列表
+**And** SQLite 格式：直接复制 .db 文件
+**And** JSON 格式：查询所有表 → 序列化 → 写入
+**And** Markdown 格式：查询所有表 → 生成 Markdown → 写入
 
 ---
 
@@ -2420,6 +2432,52 @@ So that 导出和销毁操作简单直观。
 
 **Given** Rust 后端
 **Then** 复用 Story 7.1 / 7.2 的 Tauri commands
+
+---
+
+### Story 7.4: 用户能从导出的存档恢复/导入数据
+
+As a 用户,
+I want 从之前导出的存档文件恢复全部数据,
+So that 换设备或销毁后能一键回到完整工作状态。
+
+**Acceptance Criteria:**
+
+**Given** 用户在 GlobalSettingsModal 数据 Tab 点击"导入存档"
+**When** Tauri 文件选择对话框弹出，用户选择存档文件
+**Then** 自动识别格式：
+- `.db` 文件 → SQLite 备份恢复（优先推荐，速度最快）
+- `.json` 文件 → JSON 数据恢复（跨版本兼容）
+**And** 校验通过后弹出确认弹窗："导入将完全替换当前所有数据，当前数据会被覆盖。是否继续？"
+
+**Given** 用户确认导入 SQLite 备份
+**When** 导入执行
+**Then** 自动备份当前 .db 文件到临时目录（7 天后自动清理）
+**And** 关闭当前数据库连接 → 替换 .db 文件 → 重新初始化连接
+**And** 导入完成后应用自动刷新
+**And** 速度 <1 秒，数据 100% 保真
+
+**Given** 用户确认导入 JSON
+**When** 导入执行
+**Then** 自动备份当前数据为 .db 文件到临时目录（7 天后自动清理）
+**And** 在事务内：清空当前所有数据表 → 逐表写入 JSON 中的数据 → 保留 `_sqlx_migrations` schema 元数据
+**And** 若导入失败则回滚事务，当前数据不受影响
+**And** 导入完成后应用自动刷新
+
+**Given** 导入成功
+**Then** 显示成功提示"已恢复 N 个角色、N 个任务、N 条记忆"
+**And** 应用界面自动刷新到导入后的状态
+
+**Given** 导入失败（格式错误 / 文件损坏 / 版本不兼容）
+**Then** 显示错误提示，当前数据保持不变
+
+**Given** 用户取消操作
+**Then** 无任何副作用
+
+**Given** Rust 后端
+**Then** Tauri command: `data_import { file_path }` → 识别格式 → 执行对应恢复逻辑 → 返回导入统计
+**And** SQLite 备份：备份当前 .db → 替换文件 → 重新初始化连接
+**And** JSON：读取 → 校验 → 事务内清空+写入所有表
 
 ---
 

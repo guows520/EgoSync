@@ -6,6 +6,7 @@ import { GlobalSettingsModal } from './GlobalSettingsModal';
 import { llmConfigService } from '../../services/llmConfigService';
 import { roleService } from '../../services/roleService';
 import { mcpService } from '../../services/mcpService';
+import { dataService } from '../../services/dataService';
 import type { Role } from '../../types/role';
 
 vi.mock('../../services/llmConfigService', () => ({
@@ -37,6 +38,12 @@ vi.mock('../../services/mcpService', () => ({
     test: vi.fn(),
     addToRole: vi.fn(),
     removeFromRole: vi.fn(),
+  },
+}));
+
+vi.mock('../../services/dataService', () => ({
+  dataService: {
+    dataExport: vi.fn(),
   },
 }));
 
@@ -277,5 +284,123 @@ describe('GlobalSettingsModal archived roles', () => {
     expect(css).toContain('@keyframes loading-spin');
     expect(css).toMatch(/\.animate-loading-spin\s*\{[^}]*animation:\s*loading-spin 1s linear infinite !important;/s);
     expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*\.animate-loading-spin\s*\{[^}]*animation:\s*loading-spin 1s linear infinite !important;/);
+  });
+
+  describe('数据导出', () => {
+    beforeEach(() => {
+      vi.mocked(llmConfigService.list).mockResolvedValue([]);
+      vi.mocked(roleService.listArchived).mockResolvedValue([]);
+      vi.mocked(mcpService.list).mockResolvedValue([]);
+    });
+
+    it('点击导出存档按钮后显示格式选择 UI', async () => {
+      render(<GlobalSettingsModal onClose={vi.fn()} />);
+
+      fireEvent.click(screen.getByRole('button', { name: '数据与主权' }));
+      fireEvent.click(await screen.findByRole('button', { name: /导出存档/ }));
+
+      expect(await screen.findByText('选择导出格式（可多选）')).toBeInTheDocument();
+      expect(screen.getByLabelText(/SQLite 备份/)).toBeInTheDocument();
+      expect(screen.getByLabelText(/JSON 数据/)).toBeInTheDocument();
+      expect(screen.getByLabelText(/Markdown 报告/)).toBeInTheDocument();
+    });
+
+    it('未选择格式时确认导出按钮被禁用', async () => {
+      render(<GlobalSettingsModal onClose={vi.fn()} />);
+
+      fireEvent.click(screen.getByRole('button', { name: '数据与主权' }));
+      fireEvent.click(await screen.findByRole('button', { name: /导出存档/ }));
+
+      const confirmBtn = await screen.findByRole('button', { name: '确认导出' });
+      expect(confirmBtn).toBeDisabled();
+    });
+
+    it('选择格式后点击确认导出调用 dataService', async () => {
+      const mockResult = {
+        files: ['/tmp/egosync-export-2026-06-27.json'],
+        sqlitePath: null,
+        jsonPath: '/tmp/egosync-export-2026-06-27.json',
+        markdownPath: null,
+      };
+      vi.mocked(dataService.dataExport).mockResolvedValue(mockResult);
+
+      render(<GlobalSettingsModal onClose={vi.fn()} />);
+
+      fireEvent.click(screen.getByRole('button', { name: '数据与主权' }));
+      fireEvent.click(await screen.findByRole('button', { name: /导出存档/ }));
+
+      const jsonCheckbox = await screen.findByLabelText(/JSON 数据/);
+      fireEvent.click(jsonCheckbox);
+
+      const confirmBtn = screen.getByRole('button', { name: '确认导出' });
+      fireEvent.click(confirmBtn);
+
+      await waitFor(() => {
+        expect(dataService.dataExport).toHaveBeenCalledWith(['json']);
+      });
+
+      expect(await screen.findByText('导出完成')).toBeInTheDocument();
+      expect(screen.getByText('/tmp/egosync-export-2026-06-27.json')).toBeInTheDocument();
+    });
+
+    it('导出失败时显示错误消息', async () => {
+      vi.mocked(dataService.dataExport).mockRejectedValue({ DbError: '数据库读取失败' });
+
+      render(<GlobalSettingsModal onClose={vi.fn()} />);
+
+      fireEvent.click(screen.getByRole('button', { name: '数据与主权' }));
+      fireEvent.click(await screen.findByRole('button', { name: /导出存档/ }));
+
+      const mdCheckbox = await screen.findByLabelText(/Markdown 报告/);
+      fireEvent.click(mdCheckbox);
+
+      fireEvent.click(screen.getByRole('button', { name: '确认导出' }));
+
+      await waitFor(() => {
+        expect(dataService.dataExport).toHaveBeenCalledWith(['markdown']);
+      });
+
+      expect(await screen.findByText('数据库读取失败')).toBeInTheDocument();
+    });
+
+    it('用户取消目录选择（返回空结果）时不显示成功或错误提示', async () => {
+      // 取消目录选择是正常操作，后端返回 files 为空的结果，前端应静默处理。
+      vi.mocked(dataService.dataExport).mockResolvedValue({
+        files: [],
+        sqlitePath: null,
+        jsonPath: null,
+        markdownPath: null,
+      });
+
+      render(<GlobalSettingsModal onClose={vi.fn()} />);
+
+      fireEvent.click(screen.getByRole('button', { name: '数据与主权' }));
+      fireEvent.click(await screen.findByRole('button', { name: /导出存档/ }));
+
+      const jsonCheckbox = await screen.findByLabelText(/JSON 数据/);
+      fireEvent.click(jsonCheckbox);
+      fireEvent.click(screen.getByRole('button', { name: '确认导出' }));
+
+      await waitFor(() => {
+        expect(dataService.dataExport).toHaveBeenCalledWith(['json']);
+      });
+
+      expect(screen.queryByText('导出完成')).not.toBeInTheDocument();
+      expect(screen.queryByText(/导出失败/)).not.toBeInTheDocument();
+    });
+
+    it('取消格式选择后返回导出按钮', async () => {
+      render(<GlobalSettingsModal onClose={vi.fn()} />);
+
+      fireEvent.click(screen.getByRole('button', { name: '数据与主权' }));
+      fireEvent.click(await screen.findByRole('button', { name: /导出存档/ }));
+
+      expect(await screen.findByText('选择导出格式（可多选）')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: '取消' }));
+
+      expect(screen.queryByText('选择导出格式（可多选）')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /导出存档/ })).toBeInTheDocument();
+    });
   });
 });

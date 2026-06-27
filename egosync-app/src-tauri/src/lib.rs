@@ -370,6 +370,7 @@ pub fn run() {
             commands::review::review_get_bigrock_suggestions,
             commands::settings::settings_get_schedule,
             commands::settings::settings_update_schedule,
+            commands::data::data_export,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

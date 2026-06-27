@@ -262,6 +262,18 @@ pub async fn list_all_conversations(
     Ok(rows)
 }
 
+pub async fn list_all_messages(
+    pool: &ConversationsPool,
+) -> Result<Vec<Message>, AppError> {
+    let rows = sqlx::query_as::<_, Message>(
+        "SELECT id, conversation_id, role, content, thinking_content, is_complete, created_at, routing_metadata FROM messages ORDER BY created_at ASC, rowid ASC",
+    )
+    .fetch_all(&**pool)
+    .await
+    .map_err(|e| AppError::DbError(format!("查询全部消息失败: {}", e)))?;
+    Ok(rows)
+}
+
 pub async fn update_message_thinking(
     pool: &ConversationsPool,
     id: &str,

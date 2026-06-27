@@ -1,4 +1,5 @@
 pub mod app;
+pub mod data;
 pub mod briefing;
 pub mod chat;
 pub mod dashboard;

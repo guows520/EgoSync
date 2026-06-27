@@ -57,6 +57,16 @@ pub async fn get_weekly_review_by_week_start(
     .map_err(|e| AppError::DbError(format!("按 week_start 查询周复盘失败: {}", e)))
 }
 
+pub async fn list_all_weekly_reviews(pool: &SqlitePool) -> Result<Vec<WeeklyReview>, AppError> {
+    sqlx::query_as::<_, WeeklyReview>(
+        "SELECT id, week_start, week_end, summary, energy_trends, bigrock_status, new_memories_count, created_at
+         FROM weekly_reviews ORDER BY week_start ASC",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| AppError::DbError(format!("查询全部周复盘失败: {}", e)))
+}
+
 pub async fn get_latest_weekly_review(pool: &SqlitePool) -> Result<Option<WeeklyReview>, AppError> {
     sqlx::query_as::<_, WeeklyReview>(
         "SELECT id, week_start, week_end, summary, energy_trends, bigrock_status, new_memories_count, created_at

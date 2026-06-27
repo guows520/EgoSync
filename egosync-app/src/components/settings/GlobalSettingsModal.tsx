@@ -7,6 +7,8 @@ import { roleService } from '../../services/roleService';
 import { mcpService } from '../../services/mcpService';
 import { schedulerService } from '../../services/schedulerService';
 import { appService } from '../../services/appService';
+import { dataService } from '../../services/dataService';
+import type { ExportFormat, ExportResult } from '../../services/dataService';
 import type { LlmConfig, CreateLlmConfigInput, UpdateLlmConfigInput } from '../../types/settings';
 import type { McpServer, McpServerType } from '../../types/mcp';
 import type { Role } from '../../types/role';
@@ -62,6 +64,11 @@ export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRol
   const [knockSoundEnabled, setKnockSoundEnabled] = useState(false);
   const [isSavingSound, setIsSavingSound] = useState(false);
   const [saveError, setSaveError] = useState('');
+  const [showFormatSelect, setShowFormatSelect] = useState(false);
+  const [selectedFormats, setSelectedFormats] = useState<ExportFormat[]>([]);
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportResult, setExportResult] = useState<ExportResult | null>(null);
+  const [exportError, setExportError] = useState('');
 
   const loadConfigs = useCallback(async () => {
     try {
@@ -276,6 +283,35 @@ export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRol
       setArchiveError('恢复失败，请稍后重试');
     } finally {
       setRestoringRoleId(null);
+    }
+  };
+
+  const toggleFormat = (fmt: ExportFormat) => {
+    setSelectedFormats(prev =>
+      prev.includes(fmt) ? prev.filter(f => f !== fmt) : [...prev, fmt]
+    );
+  };
+
+  const handleExport = async () => {
+    if (selectedFormats.length === 0) return;
+    setIsExporting(true);
+    setExportError('');
+    setExportResult(null);
+    try {
+      const result = await dataService.dataExport(selectedFormats);
+      // files 为空表示用户取消了目录选择，属正常操作，不显示成功或错误。
+      if (result.files.length === 0) {
+        return;
+      }
+      setExportResult(result);
+      setShowFormatSelect(false);
+    } catch (e: any) {
+      const msg = typeof e === 'object' && e !== null
+        ? (e.ValidationError || e.DbError || Object.values(e)[0] || '导出失败')
+        : String(e);
+      setExportError(typeof msg === 'string' ? msg : '导出失败');
+    } finally {
+      setIsExporting(false);
     }
   };
 
@@ -765,11 +801,92 @@ export function GlobalSettingsModal({ onClose, archivedRoles: initialArchivedRol
           {tab === 'data' && (
             <div className="space-y-8">
               <div>
-                <h4 className="text-[15px] font-medium text-slate-800 mb-2">导出完整数据</h4>
-                <p className="text-[13px] text-slate-500 mb-4">将所有角色的记忆、任务和对话记录导出为标准的 JSON/Markdown 格式。</p>
-                <button className="flex items-center gap-2 px-5 py-2.5 border border-slate-300 rounded-lg text-[14px] font-medium text-slate-700 hover:bg-slate-50 transition-colors">
-                  <Download size={16}/> 导出存档
-                </button>
+                <h4 className="text-[15px] font-medium text-slate-800 mb-2">导出数据</h4>
+                <p className="text-[13px] text-slate-500 mb-4">将所有角色的记忆、任务和对话记录导出为标准格式。选择需要的格式后点击确认，系统会弹出文件夹选择对话框。</p>
+
+                {exportError && (
+                  <div className="mb-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-[13px] text-red-600 flex items-center gap-2">
+                    <AlertCircle size={14} /> {exportError}
+                  </div>
+                )}
+
+                {exportResult && (
+                  <div className="mb-3 rounded-lg border border-green-100 bg-green-50 px-3 py-2 text-[13px] text-green-700">
+                    <div className="flex items-center gap-2 mb-1">
+                      <Check size={14} /> 导出完成
+                    </div>
+                    <ul className="ml-6 list-disc space-y-0.5">
+                      {exportResult.files.map((f, i) => (
+                        <li key={i} className="text-[12px] text-green-600 break-all">{f}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {!showFormatSelect && !isExporting && (
+                  <button
+                    onClick={() => { setShowFormatSelect(true); setExportResult(null); setExportError(''); }}
+                    className="flex items-center gap-2 px-5 py-2.5 border border-slate-300 rounded-lg text-[14px] font-medium text-slate-700 hover:bg-slate-50 transition-colors"
+                  >
+                    <Download size={16}/> 导出存档
+                  </button>
+                )}
+
+                {showFormatSelect && !isExporting && (
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-3">
+                    <p className="text-[13px] font-medium text-slate-700">选择导出格式（可多选）</p>
+                    <div className="space-y-2">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={selectedFormats.includes('sqlite')}
+                          onChange={() => toggleFormat('sqlite')}
+                          className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                        />
+                        <span className="text-[14px] text-slate-700">SQLite 备份 <span className="text-slate-400 text-[12px]">（推荐，可用于数据恢复）</span></span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={selectedFormats.includes('json')}
+                          onChange={() => toggleFormat('json')}
+                          className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                        />
+                        <span className="text-[14px] text-slate-700">JSON 格式 <span className="text-slate-400 text-[12px]">（更适合跨版本数据迁移）</span></span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={selectedFormats.includes('markdown')}
+                          onChange={() => toggleFormat('markdown')}
+                          className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                        />
+                        <span className="text-[14px] text-slate-700">Markdown 报告 <span className="text-slate-400 text-[12px]">（可读性高，不可用于数据恢复）</span></span>
+                      </label>
+                    </div>
+                    <div className="flex items-center gap-2 pt-1">
+                      <button
+                        onClick={handleExport}
+                        disabled={selectedFormats.length === 0}
+                        className="px-4 py-2 rounded-lg text-[13px] font-medium text-white bg-indigo-600 hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        确认导出
+                      </button>
+                      <button
+                        onClick={() => { setShowFormatSelect(false); setSelectedFormats([]); }}
+                        className="px-4 py-2 rounded-lg text-[13px] font-medium text-slate-600 hover:bg-slate-100 transition-colors"
+                      >
+                        取消
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {isExporting && (
+                  <div className="flex items-center gap-2 px-5 py-2.5 text-[14px] text-slate-600">
+                    <Loader2 size={16} className="animate-loading-spin" /> 导出中...
+                  </div>
+                )}
               </div>
               <div>
                 <h4 className="text-[15px] font-medium text-slate-800 mb-2">归档角色</h4>

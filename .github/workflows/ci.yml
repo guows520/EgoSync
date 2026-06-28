@@ -116,6 +116,13 @@ jobs:
           name: e2e-screenshots-${{ matrix.platform.os }}
           path: egosync-app/tests/e2e/screenshots/
 
+      - name: Upload E2E logs on failure
+        if: failure() && matrix.platform.os != 'macos-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs-${{ matrix.platform.os }}
+          path: egosync-app/tests/e2e/logs/
+
       - name: Upload artifact (Windows)
         if: matrix.platform.os == 'windows-latest'
         uses: actions/upload-artifact@v4

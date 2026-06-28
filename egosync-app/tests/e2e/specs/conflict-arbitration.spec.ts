@@ -2,7 +2,11 @@ import { describe, it, before } from 'mocha';
 import { $, browser, expect } from '@wdio/globals';
 import { waitForAppReady, navigateToButler, seedCompleteOnboarding, seedRole, seedTask } from '../helpers/app-helper.js';
 
-describe('冲突仲裁旅程', () => {
+// ⚠️ 限制说明（AC2.6）：冲突仲裁特性（Stories 5-3~5-6：时间冲突检测/三步仲裁/仲裁 Modal）
+// 已在 sprint-status 中标记为 deferred-v2，应用当前未实现仲裁 Modal 及三步展示。
+// 因此本 spec 无法验证「打开仲裁 Modal → 三步展示」，仅验证：预置冲突任务数据后
+// 应用不崩溃、核心导航（管家/通知）仍可用。仲裁旅程的真实验证待 V2 仲裁特性落地后补齐。
+describe('冲突仲裁旅程（仲裁特性 deferred-v2：仅验证健壮性）', () => {
   before(async () => {
     await waitForAppReady();
     await seedCompleteOnboarding();

@@ -108,18 +108,8 @@ export async function seedTask(
       title,
       quadrant,
       isBigRock,
-      isCompleted: false,
       deadline,
     },
   });
   return task.id;
-}
-
-export async function seedButlerConversation(): Promise<string> {
-  const conv = await invoke<{ id: string }>('chat_get_butler_conversation');
-  return conv.id;
-}
-
-export async function getRoles(): Promise<Array<{ id: string; name: string }>> {
-  return await invoke<Array<{ id: string; name: string }>>('role_list');
 }

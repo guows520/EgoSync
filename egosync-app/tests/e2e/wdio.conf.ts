@@ -1,5 +1,5 @@
 import { spawn, execSync, ChildProcess } from 'child_process';
-import { existsSync, mkdirSync, rmSync } from 'fs';
+import { existsSync, mkdirSync, rmSync, openSync } from 'fs';
 import { join, resolve, dirname } from 'path';
 import { homedir } from 'os';
 import { fileURLToPath } from 'url';
@@ -14,12 +14,15 @@ const binaryName = isWindows ? 'egosync.exe' : 'egosync';
 const binaryPath = resolve(__dirname, '..', '..', 'src-tauri', 'target', 'release', binaryName);
 
 const screenshotsDir = resolve(__dirname, 'screenshots');
+const logsDir = resolve(__dirname, 'logs');
 
+// 应用数据目录由 tauri.conf.json 的 identifier 决定（com.egosync.desktop），
+// Tauri 2.x 的 app_data_dir() 据此解析，应用 DB 实际写入此目录（见 src-tauri/src/lib.rs）。
 function getAppDataDir(): string {
   if (isWindows) {
-    return join(process.env.APPDATA || join(homedir(), 'AppData', 'Roaming'), 'com.egosync.app');
+    return join(process.env.APPDATA || join(homedir(), 'AppData', 'Roaming'), 'com.egosync.desktop');
   }
-  return join(homedir(), '.config', 'com.egosync.app');
+  return join(homedir(), '.config', 'com.egosync.desktop');
 }
 
 let tauriDriverProcess: ChildProcess | null = null;
@@ -52,6 +55,10 @@ export const config: WebdriverIO.Config = {
       rmSync(screenshotsDir, { recursive: true, force: true });
     }
     mkdirSync(screenshotsDir, { recursive: true });
+    if (existsSync(logsDir)) {
+      rmSync(logsDir, { recursive: true, force: true });
+    }
+    mkdirSync(logsDir, { recursive: true });
   },
 
   beforeSession: () => {
@@ -75,9 +82,11 @@ export const config: WebdriverIO.Config = {
       }
     }
 
+    // tauri-driver 输出落盘为日志文件，供 CI 失败时上传（满足 AC3「截图+日志」）
+    const driverLogFd = openSync(join(logsDir, 'tauri-driver.log'), 'a');
     if (isLinux) {
       tauriDriverProcess = spawn('tauri-driver', [], {
-        stdio: 'ignore',
+        stdio: ['ignore', driverLogFd, driverLogFd],
         detached: true,
       });
     } else if (isWindows) {
@@ -86,7 +95,7 @@ export const config: WebdriverIO.Config = {
         ? ['--native-driver', msedgedriverPath]
         : [];
       tauriDriverProcess = spawn('tauri-driver.exe', driverArgs, {
-        stdio: 'ignore',
+        stdio: ['ignore', driverLogFd, driverLogFd],
         detached: true,
         shell: true,
       });
@@ -114,12 +123,12 @@ export const config: WebdriverIO.Config = {
     }
   },
 
-  afterTest: function (_test, _context, result) {
+  afterTest: async function (_test, _context, result) {
     if (result.error) {
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
       const screenshotPath = join(screenshotsDir, `fail-${timestamp}.png`);
       try {
-        browser.saveScreenshot(screenshotPath);
+        await browser.saveScreenshot(screenshotPath);
         console.log(`Screenshot saved: ${screenshotPath}`);
       } catch (e) {
         console.log(`Failed to save screenshot: ${e}`);

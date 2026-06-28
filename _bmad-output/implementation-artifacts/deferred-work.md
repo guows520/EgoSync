@@ -1,5 +1,9 @@
 # Deferred Work
 
+## Deferred from: code review of 8-2-e2e-test-core-journeys (2026-06-28)
+
+- **Windows msedgedriver 路径假设未验证**：`wdio.conf.ts:829` 假定 `msedgedriver.exe` 位于 `%LOCALAPPDATA%\msedgedriver\`，但 CI 中 `cargo install msedgedriver-tool` + 运行该工具的实际输出位置未经验证。若不一致，`driverArgs` 为空、tauri-driver 找不到原生 driver，Windows E2E 步骤将失败。需 CI 首次运行（或本地 Windows）验证 msedgedriver-tool 的落盘路径后，确认或修正该路径推断逻辑。
+
 ## Deferred from: code review of 7-2-data-destroy-initial-state (2026-06-27)
 
 - **跨库+Keyring 非原子，部分失败留下不一致状态且前端无提示**：`destroy_all_data`（data_export.rs:695-744）主库与对话库分别独立事务（SQLite 不支持跨库事务，Dev Notes 已声明）。主库提交后若对话库事务失败，会出现"角色已清空但对话仍在"的不一致状态；前端仅显示通用错误，未告知"部分销毁"。属架构固有限制，本 story 范围外；V2 可考虑销毁前停掉后台调度并提供"部分销毁"明确提示。

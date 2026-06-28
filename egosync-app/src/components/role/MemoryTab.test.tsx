@@ -314,7 +314,7 @@ describe('MemoryTab', () => {
       render(
         <MemoryTab
           roleId={null}
-          targetMemoryId="2026/05/30 20:03"
+          targetMemoryId="2026/05/30 12:03"
           onTargetMemoryHandled={onTargetMemoryHandled}
         />,
       );
@@ -354,7 +354,7 @@ describe('MemoryTab', () => {
       render(
         <MemoryTab
           roleId={null}
-          targetMemoryId="2026/06/02 11:15"
+          targetMemoryId="2026/06/02 03:15"
           onTargetMemoryHandled={onTargetMemoryHandled}
         />,
       );

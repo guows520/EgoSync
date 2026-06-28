@@ -61,16 +61,16 @@ export function Sidebar({ roles, currentView, onViewChange, isSettingsOpen, onOp
       role="navigation"
       aria-label="角色导航"
     >
-      <div className="flex-1 flex flex-col items-center gap-4 w-full">
+      <div className="flex-1 flex flex-col items-center gap-4 w-full min-h-0">
         <button
           onClick={() => handleNav('butler')}
           title="管家"
-          className={cn("w-11 h-11 rounded-xl flex items-center justify-center transition-all duration-200", !isSettingsOpen && currentView === 'butler' ? "bg-indigo-600 text-white shadow-lg shadow-indigo-200 scale-105" : "text-slate-500 hover:bg-slate-200")}
+          className={cn("w-11 h-11 rounded-xl flex items-center justify-center transition-all duration-200 shrink-0", !isSettingsOpen && currentView === 'butler' ? "bg-indigo-600 text-white shadow-lg shadow-indigo-200 scale-105" : "text-slate-500 hover:bg-slate-200")}
         >
           <Home size={22} strokeWidth={2.5} />
         </button>
-        <div className="w-6 border-b border-slate-300 my-2"></div>
-        <div ref={roleListRef} onKeyDown={handleRoleListKeyDown} className="flex flex-col items-center gap-4">
+        <div className="w-6 border-b border-slate-300 my-2 shrink-0"></div>
+        <div ref={roleListRef} onKeyDown={handleRoleListKeyDown} className="flex flex-col items-center gap-4 flex-[0_1_auto] overflow-y-auto min-h-0 w-full">
           {roles.map((role: any) => (
             <div key={role.id} data-role-icon>
               <RoleSidebarIcon
@@ -85,13 +85,13 @@ export function Sidebar({ roles, currentView, onViewChange, isSettingsOpen, onOp
         <button
           onClick={onAddRole}
           title="添加角色"
-          className="w-11 h-11 rounded-xl flex items-center justify-center text-slate-400 border-2 border-dashed border-slate-300 dark:border-slate-600 hover:border-indigo-400 hover:text-indigo-500 hover:bg-indigo-50/50 dark:hover:bg-indigo-900/30 transition-all duration-200"
+          className="w-11 h-11 rounded-xl flex items-center justify-center text-slate-400 border-2 border-dashed border-slate-300 dark:border-slate-600 hover:border-indigo-400 hover:text-indigo-500 hover:bg-indigo-50/50 dark:hover:bg-indigo-900/30 transition-all duration-200 shrink-0"
         >
           <Plus size={20} strokeWidth={2.5} />
         </button>
       </div>
 
-      <div className="flex flex-col items-center gap-3 mt-auto">
+      <div className="flex flex-col items-center gap-3 mt-auto pt-4 pb-2">
         <button onClick={onToggleNotif} title="通知" aria-label={unreadCount > 0 ? '有新通知' : (whisperUnread > 0 ? '有耳语通知' : '通知')} className={cn("relative w-11 h-11 rounded-xl flex items-center justify-center transition-colors", isNotifOpen ? "bg-indigo-600 text-white shadow-lg shadow-indigo-200" : "text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 hover:text-slate-700 dark:hover:text-slate-200")}>
           <Bell size={20} />
           {unreadCount > 0 ? (

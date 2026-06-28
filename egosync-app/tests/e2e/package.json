@@ -1,0 +1,19 @@
+{
+  "name": "egosync-e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "wdio run wdio.conf.ts",
+    "test:ci": "wdio run wdio.conf.ts --suite ci"
+  },
+  "devDependencies": {
+    "@wdio/cli": "^9.0.0",
+    "@wdio/globals": "^9.0.0",
+    "@wdio/local-runner": "^9.0.0",
+    "@wdio/mocha-framework": "^9.0.0",
+    "@wdio/spec-reporter": "^9.0.0",
+    "webdriverio": "^9.0.0",
+    "ts-node": "^10.9.0",
+    "typescript": "^5.2.2"
+  }
+}

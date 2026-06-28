@@ -72,6 +72,50 @@ jobs:
         working-directory: egosync-app
         run: npm run tauri build
 
+      # ── E2E Tests (Windows + Linux only, macOS skipped) ──
+      - name: Install tauri-driver
+        if: matrix.platform.os != 'macos-latest'
+        run: cargo install tauri-driver --locked
+
+      - name: Install MS Edge Driver (Windows)
+        if: matrix.platform.os == 'windows-latest'
+        run: |
+          cargo install --git https://github.com/chippers/msedgedriver-tool
+          & "$HOME/.cargo/bin/msedgedriver-tool.exe"
+        shell: powershell
+
+      - name: Install Linux E2E dependencies
+        if: matrix.platform.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get install -y webkit2gtk-driver xvfb
+
+      - name: Build release binary for E2E
+        if: matrix.platform.os != 'macos-latest'
+        working-directory: egosync-app
+        run: npm run tauri build -- --no-bundle
+
+      - name: Install E2E dependencies
+        if: matrix.platform.os != 'macos-latest'
+        working-directory: egosync-app/tests/e2e
+        run: npm ci
+
+      - name: Run E2E tests (Linux)
+        if: matrix.platform.os == 'ubuntu-latest'
+        working-directory: egosync-app/tests/e2e
+        run: xvfb-run --auto-servernum npm test
+
+      - name: Run E2E tests (Windows)
+        if: matrix.platform.os == 'windows-latest'
+        working-directory: egosync-app/tests/e2e
+        run: npm test
+
+      - name: Upload E2E screenshots on failure
+        if: failure() && matrix.platform.os != 'macos-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-screenshots-${{ matrix.platform.os }}
+          path: egosync-app/tests/e2e/screenshots/
+
       - name: Upload artifact (Windows)
         if: matrix.platform.os == 'windows-latest'
         uses: actions/upload-artifact@v4

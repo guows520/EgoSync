@@ -78,7 +78,6 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
   const [error, setError] = useState('');
   const [inferredValues, setInferredValues] = useState<InferredValues | null>(null);
   const [isInferring, setIsInferring] = useState(false);
-  const [inferenceDismissed, setInferenceDismissed] = useState(false);
   const [inferenceEligibility, setInferenceEligibility] = useState<InferenceEligibility | null>(null);
   const [isInferenceModalOpen, setIsInferenceModalOpen] = useState(false);
   const [editableSummary, setEditableSummary] = useState('');
@@ -207,7 +206,6 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
     setIsInferring(true);
     setError('');
     setInferredValues(null);
-    setInferenceDismissed(false);
     try {
       const result = await missionService.inferValues();
       if (result) {
@@ -246,7 +244,6 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
   };
 
   const handleDismissInferred = () => {
-    setInferenceDismissed(true);
     setInferredValues(null);
     setIsInferenceModalOpen(false);
   };

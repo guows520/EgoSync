@@ -494,19 +494,25 @@ mod tests {
 
     #[test]
     fn test_sidecar_manager_isolates_opencode_global_paths_from_working_dir() {
-        let mgr = SidecarManager::new(None, Some(5000)).with_working_dir("C:\\egosync-workspace");
+        let working_dir = std::path::Path::new("C:\\egosync-workspace");
+        let mgr = SidecarManager::new(None, Some(5000)).with_working_dir(working_dir);
+
+        let global_dir = working_dir
+            .parent()
+            .map(|parent| parent.join("opencode-global"))
+            .unwrap_or_else(|| working_dir.join("opencode-global"));
 
         assert_eq!(
             mgr.extra_env.get("XDG_CONFIG_HOME").map(String::as_str),
-            Some("C:\\opencode-global\\config")
+            Some(global_dir.join("config").to_string_lossy().to_string()).as_deref()
         );
         assert_eq!(
             mgr.extra_env.get("XDG_DATA_HOME").map(String::as_str),
-            Some("C:\\opencode-global\\data")
+            Some(global_dir.join("data").to_string_lossy().to_string()).as_deref()
         );
         assert_eq!(
             mgr.extra_env.get("XDG_CACHE_HOME").map(String::as_str),
-            Some("C:\\opencode-global\\cache")
+            Some(global_dir.join("cache").to_string_lossy().to_string()).as_deref()
         );
     }
 

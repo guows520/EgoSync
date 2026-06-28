@@ -31,7 +31,7 @@ so that 确保跨平台兼容性且随时可发布。
 **Tauri 配置（不修改，已完整）：**
 - `egosync-app/src-tauri/tauri.conf.json:31-44` — bundle 配置完整：`active: true`, `targets: "all"`, icons（icns/ico/png）, resources（opencode sidecar）
 - `egosync-app/src-tauri/tauri.conf.json:4` — `version: "0.1.0"`
-- `egosync-app/src-tauri/tauri.conf.json:5` — `identifier: "com.egosync.app"`
+- `egosync-app/src-tauri/tauri.conf.json:5` — `identifier: "com.egosync.desktop"`（原 `com.egosync.app`，避免 `.app` 后缀在 macOS/Windows 上的冲突）
 - `egosync-app/src-tauri/tauri.conf.json:6-11` — `build` 配置：`frontendDist: "../dist"`, `beforeBuildCommand: "npm run build"`（tauri build 自动调用前端构建）
 
 **opencode sidecar 占位符（重要约束）：**
@@ -113,7 +113,7 @@ so that 确保跨平台兼容性且随时可发布。
   - [x] 3.4 在本地用 Python yaml.safe_load 验证 YAML 语法正确 — 通过
 
 - [x] **Task 4: 验证 Tauri bundle 配置完整性** (AC: #5)
-  - [x] 4.1 确认 `tauri.conf.json` 已包含：`identifier: "com.egosync.app"`、`version: "0.1.0"`、icons 列表、`bundle.active: true`、`bundle.targets: "all"` — **已满足**
+  - [x] 4.1 确认 `tauri.conf.json` 已包含：`identifier: "com.egosync.desktop"`、`version: "0.1.0"`、icons 列表、`bundle.active: true`、`bundle.targets: "all"` — **已满足**（identifier 从 `com.egosync.app` 改为 `com.egosync.desktop`，避免 `.app` 后缀冲突）
   - [x] 4.2 确认 icons 文件存在于 `egosync-app/src-tauri/icons/` 目录 — 已验证全部图标文件存在
 
 - [x] **Task 5: 推送验证** (AC: #1, #2, #3)
@@ -235,6 +235,8 @@ Claude Sonnet 4 (Windsurf Cascade)
 - 修复前端测试时区依赖：`formatMemoryTime` 改用 UTC 方法，测试数据改为 UTC 格式化值
 - 修复 tsc 类型错误：`ActionCard.test.tsx` 添加 `conversationId` 默认值；`ButlerSettingsContent.tsx` 删除未使用的 `inferenceDismissed`
 - 修复 Rust 跨平台测试：`secret_store` 改用 `Entry::new` 并在 keyring 不可用时跳过测试；`sidecar` 测试用 `PathBuf` 构建期望值
+- 修复 bundle identifier 从 `com.egosync.app` 改为 `com.egosync.desktop`，避免 Windows MSI Warning 1946 和 macOS 应用包扩展名冲突
+- 修复 Windows 启动 sidecar 时弹出终端窗口问题，添加 `CREATE_NO_WINDOW` 标志
 - 附加修复：vite 升级到 6.x，@vitejs/plugin-react 升级到 4.6.0，解决 vitest 4.1.7 依赖冲突
 
 ### File List
@@ -245,6 +247,7 @@ Claude Sonnet 4 (Windsurf Cascade)
 - `egosync-app/src/components/butler/ActionCard.test.tsx` — 添加 conversationId 默认值
 - `egosync-app/src/components/butler/ButlerSettingsContent.tsx` — 删除未使用的 inferenceDismissed
 - `egosync-app/src-tauri/src/services/secret_store.rs` — Entry::new + 测试跳过逻辑
-- `egosync-app/src-tauri/src/services/sidecar.rs` — PathBuf 构建期望值
+- `egosync-app/src-tauri/src/services/sidecar.rs` — PathBuf 构建期望值 + Windows CREATE_NO_WINDOW 标志
+- `egosync-app/src-tauri/tauri.conf.json` — identifier 改为 com.egosync.desktop
 - `egosync-app/package.json` — vite 6.x + @vitejs/plugin-react 4.6.0
 - `egosync-app/package-lock.json` — 重新生成

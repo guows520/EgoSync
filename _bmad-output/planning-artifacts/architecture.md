@@ -721,7 +721,7 @@ EgoSync/探索/
 ├── .gitignore
 ├── .github/
 │   └── workflows/
-│       ├── ci.yml                    # Lint + Test (三平台)
+│       ├── ci.yml                    # Test + Tauri Build + Artifacts (三平台)
 │       └── release.yml               # 构建安装包 + 发布
 │
 ├── egosync-app/                              # 前端 + Tauri 桌面壳

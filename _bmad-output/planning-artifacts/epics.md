@@ -2509,7 +2509,7 @@ So that 确保跨平台兼容性且随时可发布。
 **And** 失败日志清晰标注平台和错误位置
 
 **Given** CI 流水线
-**Then** 步骤：checkout → setup Rust → setup Node → install deps → `cargo test` → `npm run build` → `tauri build`
+**Then** 步骤：checkout → setup Rust → setup Node → npm ci → `npm run test:frontend` → `cargo test` → `tauri build`（含 `npm run build`）→ upload artifacts
 **And** 使用缓存加速（Rust target + node_modules）
 
 **Given** Tauri 配置

@@ -53,23 +53,29 @@ describe('任务管理旅程', () => {
 
   it('创建新任务应出现在列表中', async () => {
     const addButtons = await $$('button');
+    let addButton: WebdriverIO.Element | undefined;
     for (const btn of addButtons) {
       const text = await btn.getText();
       if (text.includes('新建') || text.includes('添加')) {
-        await btn.click();
-        await browser.pause(500);
+        addButton = btn;
         break;
       }
     }
-    const taskTitleInput = await $('#task-title');
-    if (await taskTitleInput.isExisting()) {
-      await taskTitleInput.setValue('E2E新建任务');
-      const saveButton = await $('button=保存任务');
-      await saveButton.click();
-      await browser.pause(2000);
-      const bodyText = await $('body').getText();
-      expect(bodyText).toContain('E2E新建任务');
+    expect(addButton).toBeDefined();
+    if (!addButton) {
+      throw new Error('未找到「新建/添加」按钮');
     }
+    await addButton.click();
+    await browser.pause(500);
+
+    const taskTitleInput = await $('#task-title');
+    expect(await taskTitleInput.isExisting()).toBe(true);
+    await taskTitleInput.setValue('E2E新建任务');
+    const saveButton = await $('button=保存任务');
+    await saveButton.click();
+    await browser.pause(2000);
+    const bodyText = await $('body').getText();
+    expect(bodyText).toContain('E2E新建任务');
   });
 
   it('标记任务完成应显示勾选状态', async () => {

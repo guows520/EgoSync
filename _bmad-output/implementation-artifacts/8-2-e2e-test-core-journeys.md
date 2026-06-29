@@ -506,3 +506,20 @@ _代码审查日期：2026-06-28 | 审查目标：commit `aa93922` | 模式：fu
 - [x] [Review][Patch] [已修复] `seedTask` 传入 `isCompleted` 字段，但 `CreateTaskInput` 无此字段（`models/task.rs:74-82`），serde 默认静默丢弃 → 移除误导性字段 [egosync-app/tests/e2e/helpers/app-helper.ts:243]
 - [x] [Review][Patch] [已修复] `seedButlerConversation` 与 `getRoles` 为未被任何 spec 使用的死导出 → 删除 [egosync-app/tests/e2e/helpers/app-helper.ts:251-258]
 - [x] [Review][Defer] Windows `msedgedriver` 路径假设 `%LOCALAPPDATA%\msedgedriver\msedgedriver.exe` 与 CI `msedgedriver-tool` 实际输出位置未经验证，若不一致则 `driverArgs` 为空、tauri-driver 找不到原生 driver → Windows E2E 失败 [egosync-app/tests/e2e/wdio.conf.ts:829] — deferred, 需 CI 首次运行验证后再定
+
+_代码审查日期：2026-06-29 | 审查目标：commit range `77d329b..e90c910`（8-2 完整改动）| 模式：full（含 spec + project-context）| 三层对抗审查（Blind Hunter / Edge Case Hunter / Acceptance Auditor）| 21 项误报已丢弃_
+
+- [x] [Review][Patch] 任务管理测试假阴性：`task-management.spec.ts:54-73` 已改为显式断言「新建/添加」按钮找到并点击、输入框存在后再设置值和保存，避免输入框不存在时整个测试静默通过无断言 [egosync-app/tests/e2e/specs/task-management.spec.ts:54-77]
+- [x] [Review][Patch] README 构建命令与 CI 实际不一致：README 已更新为 release 构建（`--no-bundle`），并添加说明提醒若使用 debug 需同步修改 `wdio.conf.ts` 路径 [egosync-app/tests/e2e/README.md:9-20]
+- [x] [Review][Defer] tauri-driver 进程清理不彻底 + 文件描述符未关闭：`detached: true` 进程在 Windows `shell: true` 下 kill() 可能只杀 shell 不杀 tauri-driver.exe；`driverLogFd` 从未 closeSync — deferred, 测试基础设施改进 [egosync-app/tests/e2e/wdio.conf.ts:100-116] — deferred, CI 全新环境不受影响，本地多次运行可能受影响
+- [x] [Review][Defer] 归档恢复测试假阳性：`role-crud.spec.ts:99-116` 仅验证图标数量 +1，未验证恢复的就是之前归档的角色 — deferred, 测试健壮性改进 [egosync-app/tests/e2e/specs/role-crud.spec.ts:114-115]
+- [x] [Review][Defer] 角色定位逻辑竞态条件：`enterRoleByName` 用固定 500ms pause 等待 UI 更新，渲染慢时可能失败 — deferred, 测试稳定性改进 [egosync-app/tests/e2e/specs/role-crud.spec.ts:18-27]
+- [x] [Review][Defer] 硬编码超时缺乏配置化：wdio.conf.ts 和各 spec 中大量硬编码 timeout，CI vs 本地可能需要不同值 — deferred, 配置化改进 [egosync-app/tests/e2e/wdio.conf.ts:51-55]
+- [x] [Review][Defer] 构建模式偏离 debug→release：spec 原计划 `--debug --no-bundle`，实际用 release（Dev Notes 偏离 #4 已记录）— deferred, 已记录偏离 [egosync-app/tests/e2e/wdio.conf.ts:14, .github/workflows/ci.yml:95]
+- [x] [Review][Defer] AC2.1/2.2 降级：冷启动未验证消息气泡、管家对话未预置历史消息（Dev Notes 偏离 #2 已记录 LLM 限制）— deferred, CI 无 LLM API Key 限制 [egosync-app/tests/e2e/specs/cold-start-onboarding.spec.ts:33-40, butler-conversation.spec.ts]
+- [x] [Review][Defer] AC2.4 LLM 流式降级：仅验证静态 UI 契约，未验证流式光标/禁用/停止按钮（Dev Notes 偏离 #5 已记录）— deferred, CI 无 LLM 限制 [egosync-app/tests/e2e/specs/llm-streaming.spec.ts:5-9]
+- [x] [Review][Defer] AC2.6 冲突仲裁未实现：仲裁特性 5-3~5-6 已 deferred-v2，仅验证健壮性 — deferred, 待 V2 仲裁特性落地 [egosync-app/tests/e2e/specs/conflict-arbitration.spec.ts:5-8]
+- [x] [Review][Defer] AC2.7 简报复盘 Modal 无 UI 入口：周复盘 Modal 仅由后台调度触发，E2E 无法点击打开（Dev Notes 已记录）— deferred, 应用架构限制 [egosync-app/tests/e2e/specs/briefing-review.spec.ts:5-10]
+- [x] [Review][Defer] AC4 性能验证未完成：Task 5.3 标记 [ ]，7 条旅程总耗时 ≤ 5 分钟未测量 — deferred, 待 CI 首次运行验证 [8-2-e2e-test-core-journeys.md:228]
+- [x] [Review][Defer] opencode-workspace 目录未清理：beforeSession 仅清理 DB 文件，opencode-workspace 配置可能残留 — deferred, sidecar 占位失败降级不影响 E2E [egosync-app/tests/e2e/wdio.conf.ts:91-97]
+- [x] [Review][Defer] Task 6.1/6.2 本地验证未完成：需 tauri-driver 安装才能本地运行 — deferred, 待本地环境准备 [8-2-e2e-test-core-journeys.md:231-232]

@@ -17,6 +17,21 @@
 
 - **Windows msedgedriver 路径假设未验证**：`wdio.conf.ts:829` 假定 `msedgedriver.exe` 位于 `%LOCALAPPDATA%\msedgedriver\`，但 CI 中 `cargo install msedgedriver-tool` + 运行该工具的实际输出位置未经验证。若不一致，`driverArgs` 为空、tauri-driver 找不到原生 driver，Windows E2E 步骤将失败。需 CI 首次运行（或本地 Windows）验证 msedgedriver-tool 的落盘路径后，确认或修正该路径推断逻辑。
 
+## Deferred from: code review of 8-2-e2e-test-core-journeys (2026-06-29)
+
+- **tauri-driver 进程清理不彻底 + 文件描述符未关闭**：`wdio.conf.ts:100-116` 用 `detached: true` 启动 tauri-driver，Windows `shell: true` 下 `kill()` 可能只杀 shell 不杀 tauri-driver.exe；`driverLogFd` 从未 `closeSync`。CI 全新环境不受影响，本地多次运行可能端口 4444 占用。改进项，非阻塞。
+- **归档恢复测试假阳性**：`role-crud.spec.ts:114-115` 仅验证图标数量 +1，未验证恢复的就是之前归档的角色。测试健壮性改进。
+- **角色定位逻辑竞态条件**：`role-crud.spec.ts:18-27` `enterRoleByName` 用固定 500ms pause 等待 UI 更新，渲染慢时可能失败。测试稳定性改进。
+- **硬编码超时缺乏配置化**：`wdio.conf.ts:51-55` 和各 spec 中大量硬编码 timeout，CI vs 本地可能需要不同值。配置化改进。
+- **构建模式偏离 debug→release**：spec 原计划 `--debug --no-bundle`，实际用 release（Dev Notes 偏离 #4 已记录）。已记录偏离，release 与现有 `tauri build` 产物路径一致。
+- **AC2.1/2.2 降级**：冷启动未验证消息气泡、管家对话未预置历史消息（Dev Notes 偏离 #2 已记录 LLM 限制）。CI 无 LLM API Key 限制。
+- **AC2.4 LLM 流式降级**：仅验证静态 UI 契约，未验证流式光标/禁用/停止按钮（Dev Notes 偏离 #5 已记录）。CI 无 LLM 限制。
+- **AC2.6 冲突仲裁未实现**：仲裁特性 5-3~5-6 已 deferred-v2，仅验证健壮性。待 V2 仲裁特性落地。
+- **AC2.7 简报复盘 Modal 无 UI 入口**：周复盘 Modal 仅由后台调度触发，E2E 无法点击打开（Dev Notes 已记录）。应用架构限制。
+- **AC4 性能验证未完成**：Task 5.3 标记 [ ]，7 条旅程总耗时 ≤ 5 分钟未测量。待 CI 首次运行验证。
+- **opencode-workspace 目录未清理**：`wdio.conf.ts:91-97` beforeSession 仅清理 DB 文件，opencode-workspace 配置可能残留。sidecar 占位失败降级不影响 E2E。
+- **Task 6.1/6.2 本地验证未完成**：需 tauri-driver 安装才能本地运行。待本地环境准备。
+
 ## Deferred from: code review of 7-2-data-destroy-initial-state (2026-06-27)
 
 - **跨库+Keyring 非原子，部分失败留下不一致状态且前端无提示**：`destroy_all_data`（data_export.rs:695-744）主库与对话库分别独立事务（SQLite 不支持跨库事务，Dev Notes 已声明）。主库提交后若对话库事务失败，会出现"角色已清空但对话仍在"的不一致状态；前端仅显示通用错误，未告知"部分销毁"。属架构固有限制，本 story 范围外；V2 可考虑销毁前停掉后台调度并提供"部分销毁"明确提示。

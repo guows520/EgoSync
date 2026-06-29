@@ -6,16 +6,18 @@
 
 ## 前置条件
 
-### 1. 构建 Debug 二进制
+### 1. 构建 Release 二进制（用于 E2E）
 
 ```bash
 cd egosync-app
-npm run tauri build -- --debug --no-bundle
+npm run tauri build -- --no-bundle
 ```
 
 生成的二进制路径：
-- Windows: `src-tauri/target/debug/egosync.exe`
-- Linux: `src-tauri/target/debug/egosync`
+- Windows: `src-tauri/target/release/egosync.exe`
+- Linux: `src-tauri/target/release/egosync`
+
+> 注意：CI 使用 release 构建（`--no-bundle`）并保持与 `wdio.conf.ts` 中 `target/release/` 路径一致。本地若使用 `--debug` 构建，需同步将 `wdio.conf.ts` 中的 `target/release` 改为 `target/debug`。
 
 ### 2. 安装 tauri-driver
 

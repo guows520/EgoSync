@@ -86,6 +86,7 @@ export function AddRoleModal({ onClose, onAdd }: AddRoleModalProps) {
                   key={option.hex}
                   type="button"
                   title={option.label}
+                  aria-label={option.label}
                   onClick={() => setColorHex(option.hex)}
                   className={cn("w-10 h-10 rounded-full transition-all", colorHex === option.hex ? "ring-4 ring-offset-2 ring-slate-400 scale-110" : "opacity-70 hover:opacity-100")}
                   style={{ backgroundColor: option.hex }}

@@ -32,9 +32,22 @@ export async function runAxeScan(pageName: string): Promise<void> {
   }
 
   const AxeBuilder = (await import('@axe-core/webdriverio')).default;
-  const results = await new AxeBuilder({ client: browser })
-    .disableRules(['color-contrast'])
-    .analyze() as unknown as AxeResults;
+  // axe-core 源码需通过 browser.execute 注入页面，WebDriver 连接建立初期可能不稳定
+  // （ECONNREFUSED 重试阶段），导致首次注入失败报 "Unable to find axe-core source"。
+  // 增加一次重试：首次失败后等待 3 秒再试。
+  let results: AxeResults;
+  try {
+    results = await new AxeBuilder({ client: browser })
+      .disableRules(['color-contrast'])
+      .analyze() as unknown as AxeResults;
+  } catch (e) {
+    const msg = String(e);
+    if (!msg.includes('axe-core source')) throw e;
+    await new Promise(r => setTimeout(r, 3000));
+    results = await new AxeBuilder({ client: browser })
+      .disableRules(['color-contrast'])
+      .analyze() as unknown as AxeResults;
+  }
 
   const criticalSerious = results.violations.filter(
     v => v.impact === 'critical' || v.impact === 'serious',

@@ -1,6 +1,6 @@
 import { describe, it, before } from 'mocha';
 import { $, $$, browser, expect } from '@wdio/globals';
-import { waitForAppReady, openAddRoleModal, openSettings, seedCompleteOnboarding, seedRole } from '../helpers/app-helper.js';
+import { waitForAppReady, openAddRoleModal, seedCompleteOnboarding, seedRole } from '../helpers/app-helper.js';
 
 // 当前激活的角色名（创建→改名后会变化），用于定位与断言
 const ORIGINAL_NAME = 'E2E测试角色';
@@ -98,16 +98,22 @@ describe('角色 CRUD 旅程', () => {
 
   it('AC2.3-恢复：在设置「已归档角色」中重新启用，角色重新出现', async () => {
     const before = await (await $$('[data-role-icon]')).length;
-    await openSettings();
-    await browser.pause(800);
+    // "已归档角色"分区在管家视图的设置 Tab（ButlerSettingsContent），不是 GlobalSettingsModal。
+    // 先确保在管家视图，再点击 header 的"设置" Tab。
+    const butlerButton = await $('button[title="管家"]');
+    await butlerButton.click();
+    await browser.pause(500);
+    const settingsTab = await $('button=设置');
+    await settingsTab.waitForDisplayed({ timeout: 5000 });
+    await settingsTab.click();
+    await browser.pause(1000);
 
     const restoreButton = await $('button=重新启用');
     await restoreButton.waitForDisplayed({ timeout: 5000 });
     await restoreButton.click();
     await browser.pause(2000);
 
-    // 关闭设置回到主界面（再次点击侧边栏管家）
-    const butlerButton = await $('button[title="管家"]');
+    // 关闭设置 Tab 回到主界面（再次点击侧边栏管家）
     await butlerButton.click();
     await browser.pause(800);
 

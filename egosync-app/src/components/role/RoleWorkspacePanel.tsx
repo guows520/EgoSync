@@ -125,7 +125,7 @@ export function RoleWorkspacePanel({
             设置
           </button>
         </div>
-        <button onClick={() => setTab(null)} className="pb-3.5 text-slate-400 hover:text-slate-700 transition-colors">
+        <button onClick={() => setTab(null)} aria-label="关闭" className="pb-3.5 text-slate-400 hover:text-slate-700 transition-colors">
           <X size={18} />
         </button>
       </div>

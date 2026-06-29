@@ -92,6 +92,7 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
     vi.resetAllMocks();
     vi.mocked(chatService.getHistory).mockResolvedValue([]);
     vi.mocked(chatService.listConversations).mockResolvedValue([]);
+    vi.mocked(chatService.getMessageProcessEvents).mockResolvedValue([]);
   });
 
   /// AC-2: 没有 role 时必须走管家会话；如果回退成角色会话或抛错，

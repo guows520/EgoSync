@@ -31,8 +31,12 @@ describe('LLM 流式响应旅程（CI 无 LLM：仅验证静态 UI 契约）', (
     await chatInput.setValue('测试流式消息');
     const sendButton = await $('button[aria-label="发送"]');
     await sendButton.click();
-    await browser.pause(2000);
     // 发送失败复位后输入框应恢复可输入（disabled 复位），验证不卡死
+    // CI 无 LLM 时后端 spawn task 需要走完失败链路才 emit done，用 waitUntil 替代固定 pause
+    await browser.waitUntil(async () => await chatInput.isEnabled(), {
+      timeout: 10000,
+      timeoutMsg: '发送后输入框未在 10 秒内恢复可用',
+    });
     expect(await chatInput.isEnabled()).toBe(true);
   });
 });

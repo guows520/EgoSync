@@ -47,7 +47,7 @@ export function AddRoleModal({ onClose, onAdd }: AddRoleModalProps) {
       <div className="p-6">
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-[18px] font-semibold text-slate-800">添加新角色</h2>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X size={20}/></button>
+          <button onClick={onClose} aria-label="关闭" className="text-slate-400 hover:text-slate-600"><X size={20}/></button>
         </div>
         
         <div className="space-y-5">

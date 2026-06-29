@@ -56,7 +56,7 @@ describe('任务管理旅程', () => {
     let addButton: WebdriverIO.Element | undefined;
     for (const btn of addButtons) {
       const text = await btn.getText();
-      if (text.includes('新建') || text.includes('添加')) {
+      if (text.includes('新增') || text.includes('新建') || text.includes('添加')) {
         addButton = btn;
         break;
       }

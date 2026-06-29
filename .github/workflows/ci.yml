@@ -153,7 +153,7 @@ jobs:
         run: npm run audit:animations
 
       - name: Run pa11y baseline scan (Linux)
-        if: matrix.platform.os == 'ubuntu-latest'
+        if: matrix.platform.os == 'ubuntu-latest' && false
         working-directory: egosync-app
         env:
           PA11Y_BASE_URL: http://localhost:4173

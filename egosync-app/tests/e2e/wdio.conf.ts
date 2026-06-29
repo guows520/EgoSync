@@ -140,6 +140,7 @@ export const config: WebdriverIO.Config = {
       tauriDriverProcess = spawn('tauri-driver', [], {
         stdio: ['ignore', driverLogFd, driverLogFd],
         detached: true,
+        shell: true,
       });
     } else if (isWindows) {
       const msedgedriverPath = join(process.env.LOCALAPPDATA || '', 'msedgedriver', 'msedgedriver.exe');

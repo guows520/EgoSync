@@ -284,6 +284,7 @@ Kimi K2.7
 - DashboardTab 增加能量边界校验（clampEnergy）与 progressbar aria 属性；色盲友好文字+图标辅助已按用户决策还原。
 - RoleSidebarIcon 增加能量边界校验（clampEnergy）；色盲友好形状区分已按用户决策还原。
 - Sidebar 角色列表容器增加 pt-2 pb-2，修复选中角色 scale-105 与焦点环被 overflow-y-auto 裁切的问题。
+- TaskOverviewTab 筛选第一行间距收紧（gap-1.5→gap-1、px-2.5→px-2、px-2→px-1.5），避免"只看大石头"在常见窗口宽度下溢出到第二行。
 - ChatInput 统一 aria-label 回退逻辑。
 - 更新 DashboardTab 测试断言改回纯百分比文本（色盲友好已还原）。
 - 删除 RoleSidebarIcon.a11y.test.tsx（色盲形状测试已失效）。

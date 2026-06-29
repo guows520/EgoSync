@@ -347,6 +347,11 @@ pub fn run() {
             commands::app::app_sidecar_status,
             commands::app::app_get_setting,
             commands::app::app_set_setting,
+            commands::app::app_performance_snapshot,
+            #[cfg(feature = "perf-test")]
+            commands::app::app_emit_test_stream,
+            #[cfg(feature = "perf-test")]
+            commands::app::app_seed_perf_data,
             commands::scheduler::scheduler_get_times,
             commands::scheduler::scheduler_set_times,
             commands::suggestion::suggestion_list_pending,
@@ -361,6 +366,19 @@ pub fn run() {
             commands::mission::mission_update,
             commands::mission::mission_infer,
             commands::mission::mission_infer_eligibility,
+            commands::briefing::briefing_get_latest,
+            commands::briefing::briefing_generate_now,
+            commands::review::review_get_latest,
+            commands::review::review_get_by_week,
+            commands::review::review_generate_now,
+            commands::review::review_plan_bigrocks,
+            commands::review::review_get_bigrock_suggestions,
+            commands::settings::settings_get_schedule,
+            commands::settings::settings_update_schedule,
+            commands::data::data_export,
+            commands::data::data_destroy,
+            commands::data::pick_import_file,
+            commands::data::data_import,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

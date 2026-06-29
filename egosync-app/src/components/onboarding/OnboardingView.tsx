@@ -335,7 +335,7 @@ export function OnboardingView({ onComplete, onOpenSettings }: OnboardingViewPro
             onKeyDown={e => e.key === 'Enter' && handleSend()}
             disabled={isStreaming}
             placeholder={placeholders[Math.min(step, placeholders.length - 1)]}
-            className="w-full bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl pl-5 pr-14 py-3.5 text-[14px] dark:text-slate-100 dark:placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-500/20 focus:border-slate-500 transition-all shadow-sm disabled:opacity-50"
+            className="w-full bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl pl-5 pr-14 py-3.5 text-[14px] dark:text-slate-100 dark:placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-500/20 transition-colors shadow-sm disabled:opacity-50"
           />
           <button
             onClick={handleSend}

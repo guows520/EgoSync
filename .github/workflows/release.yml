@@ -1,0 +1,291 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # ── Task 3: CHANGELOG 自动生成（基于 conventional commits）──
+  changelog:
+    runs-on: ubuntu-latest
+    outputs:
+      changelog: ${{ steps.build_changelog.outputs.changelog }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build Changelog
+        id: build_changelog
+        uses: mikepenz/release-changelog-builder-action@v5
+        with:
+          mode: "COMMIT"
+          configuration: ".github/changelog-configuration.json"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── Task 1, 2, 5, 6, 7: 三平台构建 + E2E + 版本校验 + opencode binary + 签名 ──
+  release:
+    needs: changelog
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - os: ubuntu-latest
+            rust_target: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            rust_target: aarch64-apple-darwin
+          - os: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.platform.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: matrix.platform.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform.rust_target }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: egosync-app/src-tauri -> target
+
+      - name: Remove local cargo config (rsproxy mirror)
+        shell: bash
+        run: rm -f egosync-app/src-tauri/.cargo/config.toml
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 25
+          cache: npm
+          cache-dependency-path: egosync-app/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: egosync-app
+        run: npm ci
+
+      # ── Task 5: 版本号一致性校验 ──
+      - name: Verify version consistency
+        shell: bash
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if ! echo "$TAG_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "ERROR: Tag version '$TAG_VERSION' is not valid semver (MAJOR.MINOR.PATCH)"
+            exit 1
+          fi
+          TAURI_VERSION=$(jq -r '.version' egosync-app/src-tauri/tauri.conf.json)
+          CARGO_VERSION=$(grep '^version' egosync-app/src-tauri/Cargo.toml | head -1 | cut -d'"' -f2)
+          PACKAGE_VERSION=$(jq -r '.version' egosync-app/package.json)
+          echo "Tag version:      $TAG_VERSION"
+          echo "tauri.conf.json:  $TAURI_VERSION"
+          echo "Cargo.toml:       $CARGO_VERSION"
+          echo "package.json:     $PACKAGE_VERSION"
+          if [ "$TAG_VERSION" != "$TAURI_VERSION" ]; then
+            echo "ERROR: tauri.conf.json version ($TAURI_VERSION) != tag ($TAG_VERSION)"
+            exit 1
+          fi
+          if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
+            echo "ERROR: Cargo.toml version ($CARGO_VERSION) != tag ($TAG_VERSION)"
+            exit 1
+          fi
+          if [ "$TAG_VERSION" != "$PACKAGE_VERSION" ]; then
+            echo "ERROR: package.json version ($PACKAGE_VERSION) != tag ($TAG_VERSION)"
+            exit 1
+          fi
+          echo "All versions match tag: $TAG_VERSION"
+
+      # ── Task 6: 下载真实 opencode binary（sst/opencode v1.15.10）──
+      - name: Download opencode binary (Windows)
+        if: matrix.platform.os == 'windows-latest'
+        shell: bash
+        run: |
+          OPENCODE_VERSION="v1.15.10"
+          ASSET="opencode-windows-x64.zip"
+          URL="https://github.com/sst/opencode/releases/download/${OPENCODE_VERSION}/${ASSET}"
+          echo "Downloading $URL"
+          curl -L --fail -o opencode.zip "$URL"
+          unzip -o opencode.zip -d opencode-tmp
+          BINARY=$(find opencode-tmp -name "opencode*.exe" -type f | head -1)
+          if [ -z "$BINARY" ]; then
+            echo "ERROR: opencode.exe not found in archive"
+            ls -R opencode-tmp
+            exit 1
+          fi
+          cp "$BINARY" egosync-app/src-tauri/resources/opencode.exe
+          rm -f egosync-app/src-tauri/resources/opencode.placeholder
+          rm -rf opencode.zip opencode-tmp
+          ls -la egosync-app/src-tauri/resources/
+          ./egosync-app/src-tauri/resources/opencode.exe --version
+
+      - name: Download opencode binary (macOS)
+        if: matrix.platform.os == 'macos-latest'
+        run: |
+          OPENCODE_VERSION="v1.15.10"
+          ASSET="opencode-darwin-arm64.zip"
+          URL="https://github.com/sst/opencode/releases/download/${OPENCODE_VERSION}/${ASSET}"
+          echo "Downloading $URL"
+          curl -L --fail -o opencode.zip "$URL"
+          unzip -o opencode.zip -d opencode-tmp
+          BINARY=$(find opencode-tmp -name "opencode*" -type f ! -name "*.exe" | head -1)
+          if [ -z "$BINARY" ]; then
+            echo "ERROR: opencode binary not found in archive"
+            ls -R opencode-tmp
+            exit 1
+          fi
+          cp "$BINARY" egosync-app/src-tauri/resources/opencode
+          chmod +x egosync-app/src-tauri/resources/opencode
+          rm -f egosync-app/src-tauri/resources/opencode.placeholder
+          rm -rf opencode.zip opencode-tmp
+          ls -la egosync-app/src-tauri/resources/
+          ./egosync-app/src-tauri/resources/opencode --version
+
+      - name: Download opencode binary (Linux)
+        if: matrix.platform.os == 'ubuntu-latest'
+        run: |
+          OPENCODE_VERSION="v1.15.10"
+          ASSET="opencode-linux-x64.tar.gz"
+          URL="https://github.com/sst/opencode/releases/download/${OPENCODE_VERSION}/${ASSET}"
+          echo "Downloading $URL"
+          curl -L --fail -o opencode.tar.gz "$URL"
+          mkdir -p opencode-tmp
+          tar -xzf opencode.tar.gz -C opencode-tmp
+          BINARY=$(find opencode-tmp -name "opencode*" -type f ! -name "*.exe" | head -1)
+          if [ -z "$BINARY" ]; then
+            echo "ERROR: opencode binary not found in archive"
+            ls -R opencode-tmp
+            exit 1
+          fi
+          cp "$BINARY" egosync-app/src-tauri/resources/opencode
+          chmod +x egosync-app/src-tauri/resources/opencode
+          rm -f egosync-app/src-tauri/resources/opencode.placeholder
+          rm -rf opencode.tar.gz opencode-tmp
+          ls -la egosync-app/src-tauri/resources/
+          ./egosync-app/src-tauri/resources/opencode --version
+
+      # ── Task 2: E2E 测试 (Windows/Linux only, 不用 continue-on-error) ──
+      - name: Install tauri-driver
+        if: matrix.platform.os != 'macos-latest'
+        run: cargo install tauri-driver --locked
+
+      - name: Install MS Edge Driver (Windows)
+        if: matrix.platform.os == 'windows-latest'
+        run: |
+          cargo install --git https://github.com/chippers/msedgedriver-tool
+          & "$HOME/.cargo/bin/msedgedriver-tool.exe"
+        shell: powershell
+
+      - name: Install Linux E2E dependencies
+        if: matrix.platform.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get install -y webkit2gtk-driver xvfb
+
+      - name: Build release binary for E2E
+        if: matrix.platform.os != 'macos-latest'
+        working-directory: egosync-app
+        run: npm run tauri build -- --no-bundle -- --features perf-test
+
+      - name: Install E2E dependencies
+        if: matrix.platform.os != 'macos-latest'
+        working-directory: egosync-app/tests/e2e
+        run: npm ci
+
+      - name: Run E2E tests (Linux)
+        if: matrix.platform.os == 'ubuntu-latest'
+        working-directory: egosync-app/tests/e2e
+        run: xvfb-run --auto-servernum npm test
+
+      - name: Run E2E tests (Windows)
+        if: matrix.platform.os == 'windows-latest'
+        working-directory: egosync-app/tests/e2e
+        run: npm test
+
+      - name: Upload E2E screenshots on failure
+        if: failure() && matrix.platform.os != 'macos-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-screenshots-release-${{ matrix.platform.os }}
+          path: egosync-app/tests/e2e/screenshots/
+
+      - name: Upload E2E logs on failure
+        if: failure() && matrix.platform.os != 'macos-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs-release-${{ matrix.platform.os }}
+          path: egosync-app/tests/e2e/logs/
+
+      # ── Task 1, 7: tauri-action 构建 + 上传 Release + 签名（可选）──
+      - name: Set build args
+        id: build_args
+        shell: bash
+        run: |
+          if [ "${{ matrix.platform.os }}" = "macos-latest" ]; then
+            echo "args=--target aarch64-apple-darwin" >> $GITHUB_OUTPUT
+          else
+            echo "args=" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build and publish
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # macOS signing (optional — Tauri skips signing if secrets are empty)
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Windows signing (optional — Tauri skips signing if secrets are empty)
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'EgoSync ${{ github.ref_name }}'
+          releaseBody: ${{ needs.changelog.outputs.changelog }}
+          releaseDraft: false
+          prerelease: false
+          args: ${{ steps.build_args.outputs.args }}
+
+  # ── Task 4: SHA256 发布后验证 ──
+  verify-release:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Release Assets and verify SHA256
+        shell: bash
+        run: |
+          mkdir -p ./assets
+          gh release download "${{ github.ref_name }}" --repo "${{ github.repository }}" --dir ./assets --clobber
+          echo "=== Downloaded assets ==="
+          ls -la ./assets/
+          echo "=== SHA256 checksums ==="
+          cd ./assets
+          sha256sum * | tee sha256sums.txt
+          for f in *; do
+            if [ ! -s "$f" ]; then
+              echo "ERROR: $f is empty or missing"
+              exit 1
+            fi
+          done
+          echo "=== All assets verified (non-empty, SHA256 computed) ==="
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

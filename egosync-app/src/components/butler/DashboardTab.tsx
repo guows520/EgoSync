@@ -4,6 +4,11 @@ import { getRoleIconComponent, normalizeColorHex } from '../../lib/roleIcons';
 import { useDashboard } from '../../hooks/useDashboard';
 import type { DashboardStatus } from '../../types/dashboard';
 
+function clampEnergy(value: number): number {
+  if (typeof value !== 'number' || Number.isNaN(value)) return 0;
+  return Math.max(0, Math.min(100, value));
+}
+
 function formatRelativeTime(iso: string | null): string {
   if (!iso) return '暂无活动';
   const then = new Date(iso).getTime();
@@ -43,7 +48,8 @@ export function DashboardTab({ onViewChange }: { onViewChange?: (view: string) =
         <h3 className="text-[12px] font-bold tracking-widest text-slate-400 uppercase">角色状态总览</h3>
       </div>
       {statuses.map((role: DashboardStatus) => {
-        const isLow = role.energy < 40;
+        const energy = clampEnergy(role.energy);
+        const isLow = energy < 40;
         const isUrgent = role.hasUrgent;
         const Icon = getRoleIconComponent(role.roleIcon);
         const roleColor = normalizeColorHex(role.roleColor);
@@ -63,12 +69,19 @@ export function DashboardTab({ onViewChange }: { onViewChange?: (view: string) =
               <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between mb-1.5">
                   <span className="text-[14.5px] font-semibold text-slate-800 truncate">{role.roleName}</span>
-                  <span className={cn("text-[12px] font-bold", role.energy >= 70 ? "text-emerald-600" : role.energy >= 40 ? "text-amber-600" : "text-red-500")}>{role.energy}%</span>
+                  <span className={cn("text-[12px] font-bold", energy >= 70 ? "text-emerald-600" : energy >= 40 ? "text-amber-600" : "text-red-500")}>{energy}%</span>
                 </div>
-                <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                <div
+                  className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden"
+                  role="progressbar"
+                  aria-valuenow={energy}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-label={`${role.roleName} 能量值 ${energy}%`}
+                >
                   <div
-                    className={cn("h-full rounded-full transition-all duration-500", role.energy >= 70 ? "bg-emerald-500" : role.energy >= 40 ? "bg-amber-500" : "bg-red-500")}
-                    style={{ width: `${role.energy}%` }}
+                    className={cn("h-full rounded-full transition-all duration-500", energy >= 70 ? "bg-emerald-500" : energy >= 40 ? "bg-amber-500" : "bg-red-500")}
+                    style={{ width: `${energy}%` }}
                   />
                 </div>
                 <div className="flex items-center gap-3 mt-2.5 text-[12px] text-slate-500">

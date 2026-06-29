@@ -1,0 +1,26 @@
+{
+  "name": "egosync-e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "wdio run wdio.conf.ts",
+    "test:ci": "wdio run wdio.conf.ts --suite ci",
+    "test:perf": "wdio run wdio.conf.ts --suite perf",
+    "test:perf:local": "wdio run wdio.conf.ts --suite perf",
+    "pa11y": "node scripts/pa11y-scan.mjs",
+    "audit:animations": "node scripts/audit-animations.mjs"
+  },
+  "devDependencies": {
+    "@axe-core/webdriverio": "^4.11.0",
+    "@wdio/cli": "^9.0.0",
+    "@wdio/globals": "^9.0.0",
+    "@wdio/local-runner": "^9.0.0",
+    "@wdio/mocha-framework": "^9.0.0",
+    "@wdio/spec-reporter": "^9.0.0",
+    "axe-core": "^4.11.0",
+    "pa11y": "^9.1.0",
+    "webdriverio": "^9.0.0",
+    "ts-node": "^10.9.0",
+    "typescript": "^5.2.2"
+  }
+}

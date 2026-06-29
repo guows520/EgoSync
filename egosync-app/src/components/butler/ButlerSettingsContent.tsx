@@ -3,6 +3,7 @@ import { AlertCircle, Check, ChevronDown, ChevronUp, Loader2, Pencil, Plus, Tras
 import { getRoleIconComponent, normalizeColorHex } from '../../lib/roleIcons';
 import { cn } from '../../lib/utils';
 import { appService } from '../../services/appService';
+import { scheduleService } from '../../services/scheduleService';
 import { missionService } from '../../services/missionService';
 import { roleService } from '../../services/roleService';
 import { skillService } from '../../services/skillService';
@@ -69,13 +70,32 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
   const [isPickingDirectory, setIsPickingDirectory] = useState(false);
   const [isImportingSkill, setIsImportingSkill] = useState(false);
   const [settingsSavedMessage, setSettingsSavedMessage] = useState('');
+  const [briefingTime, setBriefingTime] = useState('08:00');
+  const [reviewDay, setReviewDay] = useState('7');
+  const [reviewTime, setReviewTime] = useState('20:00');
+  const [bigrockReminderDay, setBigrockReminderDay] = useState('1');
+  const [bigrockReminderTime, setBigrockReminderTime] = useState('09:00');
   const [error, setError] = useState('');
   const [inferredValues, setInferredValues] = useState<InferredValues | null>(null);
   const [isInferring, setIsInferring] = useState(false);
-  const [inferenceDismissed, setInferenceDismissed] = useState(false);
   const [inferenceEligibility, setInferenceEligibility] = useState<InferenceEligibility | null>(null);
   const [isInferenceModalOpen, setIsInferenceModalOpen] = useState(false);
   const [editableSummary, setEditableSummary] = useState('');
+
+  // Escape 关闭内联 Modal
+  useEffect(() => {
+    if (!isMissionModalOpen && !isInferenceModalOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        if (isMissionModalOpen) setIsMissionModalOpen(false);
+        if (isInferenceModalOpen) setIsInferenceModalOpen(false);
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [isMissionModalOpen, isInferenceModalOpen]);
+
   const templates = [
     '我的使命是成为一个以原则为中心的人，在生活的各个维度保持平衡与成长。\n\n生活：保持身心健康，经济上勤勉节俭，为家人提供安稳的生活基础。\n关爱：把家人放在第一位——每周至少两个晚上专属陪伴，在重要决策中先问"这对家庭意味着什么"。对朋友真诚相待，值得信任。\n学习：保持终身学习者的心态，每月至少读完一本书或掌握一项新技能，用成长带动身边的人。\n遗产：通过专业能力创造真实价值，每年至少完成一个有长期影响力的项目，让世界因我的存在而更好一点。',
     '我的使命是以家庭为根基，以事业为翅膀，在两者之间找到动态平衡。\n\n作为伴侣和父母：我是家人可以依靠的人。无论工作多忙，家人的健康与快乐始终是第一优先级。每周保留专属家庭时间，重要家庭事件不因工作让步。\n作为职业人：在工作中追求卓越和影响力，但绝不以牺牲家庭为代价。优先做有长期价值的事，而非短期回报的事。\n作为学习者：每季度审视一次生活平衡状态，及时调整。保持开放心态，从每次挫折中学习。\n作为社区成员：力所能及地回馈社会，每年参与至少一次公益或志愿服务。',
@@ -150,6 +170,18 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
   };
 
   useEffect(() => {
+    scheduleService.getSchedule()
+      .then(config => {
+        setBriefingTime(config.briefingTime);
+        setReviewDay(config.reviewDay);
+        setReviewTime(config.reviewTime);
+        setBigrockReminderDay(config.bigrockReminderDay);
+        setBigrockReminderTime(config.bigrockReminderTime);
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
     setIsLoadingButlerSkills(true);
     appService.getButlerSkills()
@@ -189,7 +221,6 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
     setIsInferring(true);
     setError('');
     setInferredValues(null);
-    setInferenceDismissed(false);
     try {
       const result = await missionService.inferValues();
       if (result) {
@@ -228,7 +259,6 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
   };
 
   const handleDismissInferred = () => {
-    setInferenceDismissed(true);
     setInferredValues(null);
     setIsInferenceModalOpen(false);
   };
@@ -869,20 +899,96 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
       </div>
       <div className="pt-6 border-t border-slate-200/80">
         <label className="text-[14px] font-semibold text-slate-800 block mb-3">晨间简报时间</label>
-        <input type="time" defaultValue="08:00" className="bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none" />
+        <input
+          type="time"
+          value={briefingTime}
+          onChange={async (e) => {
+            const value = e.target.value;
+            setBriefingTime(value);
+            setSettingsSavedMessage('');
+            setError('');
+            try {
+              await scheduleService.updateSchedule({ briefingTime: value });
+              setSettingsSavedMessage('晨间简报时间已保存');
+              setTimeout(() => setSettingsSavedMessage(''), MESSAGE_TIMEOUT_MS);
+            } catch {
+              setError('晨间简报时间保存失败，请稍后重试');
+            }
+          }}
+          className="bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none"
+        />
         <p className="text-[12px] text-slate-400 mt-2 leading-relaxed">每天推送晨间简报的时间。</p>
       </div>
       <div className="pt-6 border-t border-slate-200/80">
         <label className="text-[14px] font-semibold text-slate-800 block mb-3">周复盘时间</label>
         <div className="flex gap-3">
-          <select defaultValue="7" className="bg-white border border-slate-200 rounded-lg px-3 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 outline-none">
+          <select value={reviewDay} onChange={async (e) => {
+            const value = e.target.value;
+            setReviewDay(value);
+            setSettingsSavedMessage('');
+            setError('');
+            try {
+              await scheduleService.updateSchedule({ reviewDay: value });
+              setSettingsSavedMessage('周复盘时间已保存');
+              setTimeout(() => setSettingsSavedMessage(''), MESSAGE_TIMEOUT_MS);
+            } catch {
+              setError('周复盘时间保存失败，请稍后重试');
+            }
+          }} className="bg-white border border-slate-200 rounded-lg px-3 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 outline-none">
             <option value="1">周一</option><option value="2">周二</option><option value="3">周三</option>
             <option value="4">周四</option><option value="5">周五</option><option value="6">周六</option>
             <option value="7">周日</option>
           </select>
-          <input type="time" defaultValue="20:00" className="bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none" />
+          <input type="time" value={reviewTime} onChange={async (e) => {
+            const value = e.target.value;
+            setReviewTime(value);
+            setSettingsSavedMessage('');
+            setError('');
+            try {
+              await scheduleService.updateSchedule({ reviewTime: value });
+              setSettingsSavedMessage('周复盘时间已保存');
+              setTimeout(() => setSettingsSavedMessage(''), MESSAGE_TIMEOUT_MS);
+            } catch {
+              setError('周复盘时间保存失败，请稍后重试');
+            }
+          }} className="bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none" />
         </div>
         <p className="text-[12px] text-slate-400 mt-2 leading-relaxed">每周触发周复盘的时间。</p>
+      </div>
+      <div className="pt-6 border-t border-slate-200/80">
+        <label className="text-[14px] font-semibold text-slate-800 block mb-3">大石头规划提醒时间</label>
+        <div className="flex gap-3">
+          <select value={bigrockReminderDay} onChange={async (e) => {
+            const value = e.target.value;
+            setBigrockReminderDay(value);
+            setSettingsSavedMessage('');
+            setError('');
+            try {
+              await scheduleService.updateSchedule({ bigrockReminderDay: value });
+              setSettingsSavedMessage('大石头规划提醒时间已保存');
+              setTimeout(() => setSettingsSavedMessage(''), MESSAGE_TIMEOUT_MS);
+            } catch {
+              setError('大石头规划提醒时间保存失败，请稍后重试');
+            }
+          }} className="bg-white border border-slate-200 rounded-lg px-3 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 outline-none">
+            <option value="1">周一</option>
+            <option value="2">周二</option>
+          </select>
+          <input type="time" value={bigrockReminderTime} onChange={async (e) => {
+            const value = e.target.value;
+            setBigrockReminderTime(value);
+            setSettingsSavedMessage('');
+            setError('');
+            try {
+              await scheduleService.updateSchedule({ bigrockReminderTime: value });
+              setSettingsSavedMessage('大石头规划提醒时间已保存');
+              setTimeout(() => setSettingsSavedMessage(''), MESSAGE_TIMEOUT_MS);
+            } catch {
+              setError('大石头规划提醒时间保存失败，请稍后重试');
+            }
+          }} className="bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none" />
+        </div>
+        <p className="text-[12px] text-slate-400 mt-2 leading-relaxed">每周初提醒规划本周大石头的时间。</p>
       </div>
 
       {archivedRoles.length > 0 && (

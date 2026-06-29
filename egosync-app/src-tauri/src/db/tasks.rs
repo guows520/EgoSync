@@ -161,6 +161,8 @@ pub async fn update_task(
 
     // Story 4.6: 用户编辑任务即处理，清除 Q2 提醒记录
     let _ = crate::db::q2_reminders::delete_reminder_for_task(pool, id).await;
+    // Story 6.6: 用户编辑任务即处理，清除大石头保护提醒记录
+    let _ = crate::db::big_rock_protection_reminders::delete_reminder_for_task(pool, id).await;
 
     get_active_task(pool, id).await
 }
@@ -291,6 +293,8 @@ pub async fn set_task_completion(
 
     // Story 4.6: 用户完成任务即处理，清除 Q2 提醒记录
     let _ = crate::db::q2_reminders::delete_reminder_for_task(pool, id).await;
+    // Story 6.6: 用户完成任务即处理，清除大石头保护提醒记录
+    let _ = crate::db::big_rock_protection_reminders::delete_reminder_for_task(pool, id).await;
 
     get_active_task(pool, id).await
 }
@@ -486,6 +490,26 @@ pub async fn list_imminent_tasks_for_escalation(
     .fetch_all(pool)
     .await
     .map_err(|e| AppError::DbError(format!("查询临期任务失败: {}", e)))
+}
+
+/// Story 6.1：查询今日截止的未完成任务（deadline = today, is_completed = 0, deleted_at IS NULL）。
+/// `today_date` 为 `YYYY-MM-DD` 格式，与 `deadline` 列存储格式一致。
+pub async fn list_tasks_due_today(
+    pool: &SqlitePool,
+    today_date: &str,
+) -> Result<Vec<Task>, AppError> {
+    sqlx::query_as::<_, Task>(&format!(
+        "SELECT {} FROM tasks
+         WHERE deadline = ?1
+           AND is_completed = 0
+           AND deleted_at IS NULL
+         ORDER BY quadrant ASC",
+        TASK_SELECT_COLUMNS
+    ))
+    .bind(today_date)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| AppError::DbError(format!("查询今日截止任务失败: {}", e)))
 }
 
 /// Story 4.6：查询所有 `protection_status = 'at_risk'` AND `quadrant = 'Q2'` AND `is_completed = 0`

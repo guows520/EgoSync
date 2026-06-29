@@ -6,6 +6,17 @@ use crate::error::AppError;
 
 const EMERGENCE_COOLDOWN_PREFIX: &str = "emergence_cooldown:";
 
+pub async fn get_all_settings(
+    pool: &SqlitePool,
+) -> Result<Vec<(String, Option<String>)>, AppError> {
+    let rows: Vec<(String, Option<String>)> =
+        sqlx::query_as("SELECT key, value FROM app_settings ORDER BY key ASC")
+            .fetch_all(pool)
+            .await
+            .map_err(|e| AppError::DbError(format!("查询全部设置失败: {}", e)))?;
+    Ok(rows)
+}
+
 pub async fn get_setting(pool: &SqlitePool, key: &str) -> Result<Option<String>, AppError> {
     let row: Option<(Option<String>,)> =
         sqlx::query_as("SELECT value FROM app_settings WHERE key = ?1")

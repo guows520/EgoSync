@@ -1,5 +1,61 @@
 # Deferred Work
 
+## Deferred from: code review of 8-4-performance-benchmark (2026-06-29)
+
+- **硬编码魔法字符串**：`app.rs` 中 `"perf-test"`、`"fact"`、`"perf-test-conv"` 等硬编码字符串分散多处。属测试代码，可接受；若后续扩展可提取为常量。
+- **app_seed_perf_data 部分失败无回滚**：循环插入记忆时某条失败通过 `?` 立即返回，已插入数据保留。依赖 `wdio.conf.ts` 的 `beforeSession` DB 清理兜底，非生产路径。
+- **measureStreamRenderLatency 轮询效率**：使用 10ms 间隔轮询 DOM 检查 token 出现，最多 500 次。MutationObserver 更优但当前实现可用，精度满足警告不阻断的阈值需求。
+- **auditCssAnimations/auditTsxAnimations 注释/字符串中误报**：静态审计脚本未跳过 CSS/TSX 注释和字符串中的 `requestAnimationFrame`/`setInterval` 匹配，可能误报。属静态审计已知限制，当前 src 中未触发。
+
+## Deferred from: code review of 8-3-wcag-accessibility-audit (2026-06-28)
+
+- **NotificationPanel 未在本次 diff 中修改**：`App.tsx:411` 调用了 NotificationPanel，但该组件未在 diff 中修改，无法确认其是否支持 Escape 关闭与是否有可理解的 aria-label。属 pre-existing 问题，需后续人工检查或纳入回归测试。
+- **其他未修改的 Modal 调用点需人工检查**：本次 diff 仅修改了部分 Modal 调用点，但项目中仍有其他调用点。需确认是否都传递了 `ariaLabel`，避免产生无名称 dialog。属 pre-existing 问题。
+- **RoleSidebarIcon 能量状态仅靠颜色区分**：色盲友好辅助（形状区分、文字+图标）已按用户决策还原，能量小点统一为圆形。AC #2 色盲友好未实现，作为已知限制保留，待 V2 视觉优化时统一处理。
+
+## Deferred from: code review of 8-2-e2e-test-core-journeys (2026-06-28)
+
+- **Windows msedgedriver 路径假设未验证**：`wdio.conf.ts:829` 假定 `msedgedriver.exe` 位于 `%LOCALAPPDATA%\msedgedriver\`，但 CI 中 `cargo install msedgedriver-tool` + 运行该工具的实际输出位置未经验证。若不一致，`driverArgs` 为空、tauri-driver 找不到原生 driver，Windows E2E 步骤将失败。需 CI 首次运行（或本地 Windows）验证 msedgedriver-tool 的落盘路径后，确认或修正该路径推断逻辑。
+
+## Deferred from: code review of 8-2-e2e-test-core-journeys (2026-06-29)
+
+- **tauri-driver 进程清理不彻底 + 文件描述符未关闭**：`wdio.conf.ts:100-116` 用 `detached: true` 启动 tauri-driver，Windows `shell: true` 下 `kill()` 可能只杀 shell 不杀 tauri-driver.exe；`driverLogFd` 从未 `closeSync`。CI 全新环境不受影响，本地多次运行可能端口 4444 占用。改进项，非阻塞。
+- **归档恢复测试假阳性**：`role-crud.spec.ts:114-115` 仅验证图标数量 +1，未验证恢复的就是之前归档的角色。测试健壮性改进。
+- **角色定位逻辑竞态条件**：`role-crud.spec.ts:18-27` `enterRoleByName` 用固定 500ms pause 等待 UI 更新，渲染慢时可能失败。测试稳定性改进。
+- **硬编码超时缺乏配置化**：`wdio.conf.ts:51-55` 和各 spec 中大量硬编码 timeout，CI vs 本地可能需要不同值。配置化改进。
+- **构建模式偏离 debug→release**：spec 原计划 `--debug --no-bundle`，实际用 release（Dev Notes 偏离 #4 已记录）。已记录偏离，release 与现有 `tauri build` 产物路径一致。
+- **AC2.1/2.2 降级**：冷启动未验证消息气泡、管家对话未预置历史消息（Dev Notes 偏离 #2 已记录 LLM 限制）。CI 无 LLM API Key 限制。
+- **AC2.4 LLM 流式降级**：仅验证静态 UI 契约，未验证流式光标/禁用/停止按钮（Dev Notes 偏离 #5 已记录）。CI 无 LLM 限制。
+- **AC2.6 冲突仲裁未实现**：仲裁特性 5-3~5-6 已 deferred-v2，仅验证健壮性。待 V2 仲裁特性落地。
+- **AC2.7 简报复盘 Modal 无 UI 入口**：周复盘 Modal 仅由后台调度触发，E2E 无法点击打开（Dev Notes 已记录）。应用架构限制。
+- **AC4 性能验证未完成**：Task 5.3 标记 [ ]，7 条旅程总耗时 ≤ 5 分钟未测量。待 CI 首次运行验证。
+- **opencode-workspace 目录未清理**：`wdio.conf.ts:91-97` beforeSession 仅清理 DB 文件，opencode-workspace 配置可能残留。sidecar 占位失败降级不影响 E2E。
+- **Task 6.1/6.2 本地验证未完成**：需 tauri-driver 安装才能本地运行。待本地环境准备。
+
+## Deferred from: code review of 7-2-data-destroy-initial-state (2026-06-27)
+
+- **跨库+Keyring 非原子，部分失败留下不一致状态且前端无提示**：`destroy_all_data`（data_export.rs:695-744）主库与对话库分别独立事务（SQLite 不支持跨库事务，Dev Notes 已声明）。主库提交后若对话库事务失败，会出现"角色已清空但对话仍在"的不一致状态；前端仅显示通用错误，未告知"部分销毁"。属架构固有限制，本 story 范围外；V2 可考虑销毁前停掉后台调度并提供"部分销毁"明确提示。
+
+## Deferred from: code review of 7-1-data-export-json-markdown (2026-06-27)
+
+- **复制活动数据库一致性**：`export_sqlite` 用 `std::fs::copy`（data_export.rs:531）复制存在打开连接的 `egosync.db`/`conversations.db`，导出前已执行 `wal_checkpoint(TRUNCATE)` 降低风险。单用户桌面场景导出瞬间并发写概率极低，可接受；若 V2 需更强保证可改用 `VACUUM INTO`（SQLite 3.27+）。
+- **通知 JOIN 反规范化导出**：`gather_export_data` 用 `list_notifications` 返回 `NotificationWithRole`（含冗余 role_name/icon/color 字段，data_export.rs:234），JSON 导出含重复字段。未来 Story 7-4 数据导入需处理此结构；非本 story 范围。
+
+## Deferred from: code review of 6-6-big-rock-daily-protection (2026-06-27)
+
+- **周五去重为内存变量，应用重启会重复**：`last_bigrock_friday_check_date`（scheduler.rs:1088）在内存中，周五当天重启调度器会重置 → 可能重复发送周五汇总提醒。与既有周复盘去重模式一致，非本故事独创；V2 若做"启动补检测/去重持久化"应统一三处触发逻辑。
+- **周五对陈旧大石头双重提醒**：周五时同一陈旧大石头既收到 AC1 逐任务"还没动"提醒，又被计入 AC4 汇总"还有 N 个未完成"。spec 将两者定义为不同职责，属设计取舍；若 UX 反馈过于打扰，可在周五抑制逐任务提醒只发汇总。
+
+## Deferred from: code review of 6-4-weekly-review-scorecard (2026-06-27)
+
+- **单点触发时刻无重试窗口**：周复盘在精确 HH:MM 触发，且 `last_review_trigger_week` 在 spawn 前置位（scheduler.rs:530-540）；该分钟若错过（休眠/时钟跳变）或生成降级失败（`Ok(false)`），本周不再重试。系 briefing/bigrock 共有设计，非本故事引入；V2 若做"启动补检测"应统一三处触发逻辑。
+- **`collect_new_skill_names` N+1 查询**：对每个 skill_id 逐条调用 `get_skill`（review_generator.rs:289-300）。Dev Notes 已说明 `skill_role_bindings` 表数据量小，可接受；若未来 Skill 量大可改为单次 JOIN 查询。
+- **故事文件元信息未更新**：`6-4-weekly-review-scorecard.md` Status 仍为 `ready-for-dev`、File List/Dev Agent Record 仍为占位（line 7, 337）。属 dev-story 收尾流程职责，非代码缺陷。
+
+## Deferred from: code review of 6-3-big-rock-planning-reminder (2026-06-26)
+
+- **错过精确触发分钟则当周不再提醒**：大石头提醒触发条件为 `current_hhmm == bigrock_time` 精确匹配（scheduler.rs:492-493），若 App 在配置分钟未运行（关闭/休眠/tick 错过该分钟），本周不会补提醒。此为轮询调度器固有限制，且与 Story 6.1 简报触发（scheduler.rs:445）同模式，非本次改动引入。若 V2 需要"启动时补检测错过的提醒"，应统一改造简报与大石头两处触发逻辑。
+
 ## Deferred from: Epic 5 产品决策 — 冲突仲裁三 Story 延迟至 V2 (2026-06-25)
 
 **涉及 Story**：5-4-three-step-arbitration / 5-5-arbitration-modal-visualization / 5-6-arbitration-auto-execution
@@ -121,3 +177,10 @@ All items resolved in the same session:
 - **历法计算三处重复 (LOW, 整洁度/DRY)**：`days_to_ymd` 与「now±N 天 → ISO 时间戳」逻辑在 `services/task_protection_watch.rs:50-78`、`services/task_deadline_watch.rs:55-79`、`db/settings.rs:145-174` 三处各有一份（含 719468/146097 等魔数）。本 story 新增第三份。建议抽公共时间工具（如 `util::clock`）统一，单测集中。属既有扩散，非本 story 引入。
 - **`spawn_hourly_watch` 无优雅关闭 (LOW, 生命周期)**：`task_protection_watch.rs:88-100` 的后台 `loop { ... interval.tick() }` 无取消/关闭钩子，应用退出时随进程结束。与既有 `task_deadline_watch::spawn_hourly_watch` 完全同模式，属全局后台任务生命周期约定，非本 story 单独承担。
 - **状态字面量硬编码无共享常量 (LOW, 漂移风险)**：`'at_risk'` / `'normal'` 在 `db/tasks.rs:466-509`（mark/clear/update/completion）、`commands`、前端 `TasksTab.tsx` / 类型层多处以裸字符串出现，无 Rust 端共享常量或枚举护栏，拼写漂移不会被编译期捕获。建议后续统一为 `ProtectionStatus` 枚举 + `as_str()`。
+
+## Deferred from: code review of 6-1-daily-morning-briefing (2026-06-25)
+
+- **briefing_time 无格式校验 (LOW)**：`briefing_generator::get_briefing_time` 直接返回 `app_settings` 原始字符串，调度器用 `current_hhmm == briefing_time` 精确匹配。若配置为非 `HH:MM`（如 `8:00`、含空格、`25:00`）则永久不触发。配置入口属 Story 6.2，当前仅走默认值 `08:00`，无实际风险。建议 6.2 写入时校验格式。
+- **内存去重键在 spawn 前置 (LOW)**：`scheduler.rs:431-432` 在 `tokio::spawn` 之前即置 `last_briefing_trigger_date`，瞬时 LLM 失败（返回 Ok(false)）当天不再重试，需重启应用方可恢复。符合 AC10"同一天只触发一次"语义且避免 LLM 故障时每分钟重试，可改为仅在确认写入/已存在时置位作为未来优化。
+- **tick 精确分钟匹配可能跳过触发 (LOW)**：`scheduler.rs:431` 与现有角色调度器同模式，60s tick 若因系统休眠/负载漂移整分钟漏 tick，当天简报不触发（DB 去重不补触发）。属既有调度设计约定。
+- **50 条记忆窗口可能挤掉昨日记忆 (LOW)**：`briefing_generator.rs:186-196` 取最近 50 条记忆后在 Rust 侧过滤昨日，重度用户当日记忆 >50 条时昨日记忆段落可能为空。Dev Notes（story line 301）已知此约束。

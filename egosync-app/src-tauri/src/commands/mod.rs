@@ -1,4 +1,6 @@
 pub mod app;
+pub mod data;
+pub mod briefing;
 pub mod chat;
 pub mod dashboard;
 pub mod llm_config;
@@ -6,9 +8,11 @@ pub mod memory;
 pub mod mcp;
 pub mod mission;
 pub mod notification;
+pub mod review;
 pub mod role;
 pub mod scheduler;
 pub mod secret;
+pub mod settings;
 pub mod skill;
 pub mod suggestion;
 pub mod task;

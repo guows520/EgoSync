@@ -15,7 +15,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use chrono::{Local, Timelike};
+use chrono::{Datelike, Local, Timelike};
 use sqlx::SqlitePool;
 use tauri::{AppHandle, Emitter};
 use tokio::time::Instant;
@@ -42,6 +42,9 @@ pub const PROACTIVE_TIMES_KEY: &str = "scheduler.proactive_times";
 
 /// 调度器基础 tick 间隔：60 秒
 const BASE_TICK_SECS: u64 = 60;
+
+/// Story 6.1: 简报时间读取失败时的降级默认值
+const DEFAULT_BRIEFING_TIME_FALLBACK: &str = "08:00";
 
 /// 每档最多允许的时间点数量
 const MAX_TIMES_PER_LEVEL: usize = 12;
@@ -325,6 +328,29 @@ pub fn spawn_scheduler(pool: SqlitePool, conv_pool: crate::db::pool::Conversatio
         // role_id → "YYYY-MM-DD HH:MM" 去重键
         let mut last_triggered_map: HashMap<String, String> = HashMap::new();
 
+        // Story 6.1: 简报触发去重 — 记录上次触发日期，每天只触发一次
+        let mut last_briefing_trigger_date: Option<String> = None;
+
+        // Story 6.3: 大石头提醒去重 — 记录上次触发的 ISO 周，每周只触发一次
+        let mut last_bigrock_trigger_week: Option<String> = None;
+
+        // Story 6.4: 周复盘去重 — 记录上次触发的 ISO 周，每周只触发一次
+        let mut last_review_trigger_week: Option<String> = None;
+
+        // Story 6.6: 周五大石头未完成检查去重 — 记录上次触发日期，每天只触发一次
+        let mut last_bigrock_friday_check_date: Option<String> = None;
+
+        // Story 6.2 (AC7): 启动时读取节奏化时间配置（review/bigrock 为预留读取，
+        // 实际触发逻辑在 Story 6.3/6.4 实现）
+        match get_review_schedule(&pool).await {
+            Ok((day, time)) => tracing::debug!(review_day = %day, review_time = %time, "调度器启动读取周复盘时间配置"),
+            Err(e) => tracing::warn!(error = %e, "调度器启动读取周复盘时间配置失败（降级继续）"),
+        }
+        match get_bigrock_reminder_schedule(&pool).await {
+            Ok((day, time)) => tracing::debug!(bigrock_reminder_day = %day, bigrock_reminder_time = %time, "调度器启动读取大石头规划提醒时间配置"),
+            Err(e) => tracing::warn!(error = %e, "调度器启动读取大石头规划提醒时间配置失败（降级继续）"),
+        }
+
         loop {
             // 每次 tick 动态读取活跃角色列表（不缓存）
             let roles = match db::roles::list_active_roles(&pool).await {
@@ -411,6 +437,44 @@ pub fn spawn_scheduler(pool: SqlitePool, conv_pool: crate::db::pool::Conversatio
             // 清理已归档/删除角色的状态，避免内存随角色 churn 无界增长
             last_triggered_map.retain(|id, _| active_ids.contains(id.as_str()));
 
+            // Story 6.1: 晨间简报触发 — 读取 app_settings 中的 briefing_time，
+            // 当前 HH:MM 匹配且当天尚未触发时，spawn 异步生成简报
+            let today_date = now_local.date_naive().format("%Y-%m-%d").to_string();
+            if last_briefing_trigger_date.as_deref() != Some(&today_date) {
+                let briefing_time = match crate::services::briefing_generator::get_briefing_time(&pool).await {
+                    Ok(t) => t,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "读取简报时间设置失败（降级跳过）");
+                        DEFAULT_BRIEFING_TIME_FALLBACK.to_string()
+                    }
+                };
+                if current_hhmm == briefing_time {
+                    last_briefing_trigger_date = Some(today_date.clone());
+                    let pool_clone = pool.clone();
+                    let conv_pool_clone = conv_pool.clone();
+                    let handle_clone = app_handle.clone();
+                    tokio::spawn(async move {
+                        match crate::services::briefing_generator::generate_briefing_if_needed(
+                            &pool_clone,
+                            &conv_pool_clone,
+                            Some(&handle_clone),
+                        )
+                        .await
+                        {
+                            Ok(true) => {
+                                tracing::info!(date = %today_date, "调度器触发简报生成完成");
+                            }
+                            Ok(false) => {
+                                tracing::info!(date = %today_date, "简报已存在或被跳过");
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = %e, date = %today_date, "调度器触发简报生成失败");
+                            }
+                        }
+                    });
+                }
+            }
+
             // Story 4.6: 每次 tick 都检查 Q2 保护提醒（不受触发时间点限制）
             // 频率控制由 q2_reminders 表的 last_reminded_at 管理（每日 ≤ 1 次）
             if let Err(e) = crate::services::q2_protection_reminder::check_and_generate_reminders(
@@ -423,9 +487,158 @@ pub fn spawn_scheduler(pool: SqlitePool, conv_pool: crate::db::pool::Conversatio
                 tracing::warn!(error = %e, "Q2 保护提醒检查失败（降级继续）");
             }
 
+            // Story 6.6: 大石头保护提醒检查（每次 tick 都检查，频率由 DB 记录控制）
+            if let Err(e) = crate::services::bigrock_protection::check_and_generate_protection_reminders(
+                &pool,
+                &conv_pool,
+                Some(&app_handle),
+            )
+            .await
+            {
+                tracing::warn!(error = %e, "大石头保护提醒检查失败（降级继续）");
+            }
+
+            // Story 6.3: 大石头规划提醒触发检查
+            // 读取 bigrock_reminder_day/time 配置，匹配星期 + HH:MM 时触发，每周只触发一次
+            let current_week = iso_week_key(&now_local);
+            if last_bigrock_trigger_week.as_deref() != Some(&current_week) {
+                let (bigrock_day, bigrock_time) = match get_bigrock_reminder_schedule(&pool).await {
+                    Ok((d, t)) => (d, t),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "读取大石头提醒时间配置失败（降级跳过）");
+                        (String::new(), String::new())
+                    }
+                };
+                // 当前星期（1=周一 ~ 7=周日）
+                let current_day = (now_local.weekday().num_days_from_monday() + 1).to_string();
+                if current_day == bigrock_day && current_hhmm == bigrock_time {
+                    last_bigrock_trigger_week = Some(current_week.clone());
+                    let pool_clone = pool.clone();
+                    let conv_pool_clone = conv_pool.clone();
+                    let handle_clone = app_handle.clone();
+                    let week_clone = current_week.clone();
+                    tokio::spawn(async move {
+                        match crate::services::bigrock_reminder::check_and_remind_if_needed(
+                            &pool_clone,
+                            &conv_pool_clone,
+                            Some(&handle_clone),
+                        )
+                        .await
+                        {
+                            Ok(true) => {
+                                tracing::info!(week = %week_clone, "调度器触发大石头规划提醒完成");
+                            }
+                            Ok(false) => {
+                                tracing::info!(week = %week_clone, "本周已有大石头，跳过提醒");
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = %e, week = %week_clone, "调度器触发大石头规划提醒失败");
+                            }
+                        }
+                    });
+                }
+            }
+
+            // Story 6.4: 周复盘触发检查
+            // 读取 review_day/time 配置，匹配星期 + HH:MM 时触发，每周只触发一次
+            if last_review_trigger_week.as_deref() != Some(&current_week) {
+                let (review_day, review_time) = match get_review_schedule(&pool).await {
+                    Ok((d, t)) => (d, t),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "读取周复盘时间配置失败（降级跳过）");
+                        (String::new(), String::new())
+                    }
+                };
+                let current_day = (now_local.weekday().num_days_from_monday() + 1).to_string();
+                if current_day == review_day && current_hhmm == review_time {
+                    last_review_trigger_week = Some(current_week.clone());
+                    let pool_clone = pool.clone();
+                    let conv_pool_clone = conv_pool.clone();
+                    let handle_clone = app_handle.clone();
+                    let week_clone = current_week.clone();
+                    tokio::spawn(async move {
+                        match crate::services::review_generator::generate_review_if_needed(
+                            &pool_clone,
+                            &conv_pool_clone,
+                            Some(&handle_clone),
+                        )
+                        .await
+                        {
+                            Ok(true) => {
+                                tracing::info!(week = %week_clone, "调度器触发周复盘生成完成");
+                            }
+                            Ok(false) => {
+                                tracing::info!(week = %week_clone, "本周复盘已存在或被跳过");
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = %e, week = %week_clone, "调度器触发周复盘生成失败");
+                            }
+                        }
+                    });
+                }
+            }
+
+            // Story 6.6: 周五大石头未完成检查
+            let today_date = now_local.date_naive().format("%Y-%m-%d").to_string();
+            if last_bigrock_friday_check_date.as_deref() != Some(&today_date) {
+                let current_day = (now_local.weekday().num_days_from_monday() + 1).to_string();
+                if current_day == "5" {
+                    last_bigrock_friday_check_date = Some(today_date.clone());
+                    let pool_clone = pool.clone();
+                    let conv_pool_clone = conv_pool.clone();
+                    let handle_clone = app_handle.clone();
+                    tokio::spawn(async move {
+                        match crate::services::bigrock_protection::check_friday_bigrock_status(
+                            &pool_clone,
+                            &conv_pool_clone,
+                            Some(&handle_clone),
+                        )
+                        .await
+                        {
+                            Ok(true) => tracing::info!(date = %today_date, "周五大石头未完成检查已触发"),
+                            Ok(false) => tracing::info!(date = %today_date, "周五大石头检查跳过（无未完成或非周五）"),
+                            Err(e) => tracing::warn!(error = %e, date = %today_date, "周五大石头未完成检查失败"),
+                        }
+                    });
+                }
+            }
+
             interval.tick().await;
         }
     });
+}
+
+/// 读取周复盘时间配置（Story 6.4 实现触发逻辑）
+pub async fn get_review_schedule(pool: &SqlitePool) -> Result<(String, String), AppError> {
+    use crate::commands::settings::{DEFAULT_REVIEW_DAY, DEFAULT_REVIEW_TIME, KEY_REVIEW_DAY, KEY_REVIEW_TIME};
+    let day = db::app_settings::get_setting(pool, KEY_REVIEW_DAY)
+        .await?
+        .unwrap_or_else(|| DEFAULT_REVIEW_DAY.to_string());
+    let time = db::app_settings::get_setting(pool, KEY_REVIEW_TIME)
+        .await?
+        .unwrap_or_else(|| DEFAULT_REVIEW_TIME.to_string());
+    Ok((day, time))
+}
+
+/// 读取大石头规划提醒时间配置（Story 6.3 实现触发逻辑）
+pub async fn get_bigrock_reminder_schedule(pool: &SqlitePool) -> Result<(String, String), AppError> {
+    use crate::commands::settings::{
+        DEFAULT_BIGROCK_REMINDER_DAY, DEFAULT_BIGROCK_REMINDER_TIME, KEY_BIGROCK_REMINDER_DAY,
+        KEY_BIGROCK_REMINDER_TIME,
+    };
+    let day = db::app_settings::get_setting(pool, KEY_BIGROCK_REMINDER_DAY)
+        .await?
+        .unwrap_or_else(|| DEFAULT_BIGROCK_REMINDER_DAY.to_string());
+    let time = db::app_settings::get_setting(pool, KEY_BIGROCK_REMINDER_TIME)
+        .await?
+        .unwrap_or_else(|| DEFAULT_BIGROCK_REMINDER_TIME.to_string());
+    Ok((day, time))
+}
+
+/// 生成 ISO 周编号去重键："YYYY-Www"（如 "2026-W23"），确保每周只触发一次。
+fn iso_week_key(now: &chrono::DateTime<Local>) -> String {
+    let iso_week = now.date_naive().iso_week();
+    format!("{}-W{:02}", iso_week.year(), iso_week.week())
 }
 
 #[cfg(test)]
@@ -711,5 +924,76 @@ mod tests {
 
         let result = run_work_loop_for_role(&pool, &conv_pool, &role, None).await;
         assert!(result.is_ok());
+    }
+
+    // Story 6.3: ISO 周去重键和星期匹配测试
+
+    #[test]
+    fn iso_week_key_formats_correctly() {
+        // 2026-06-02 是周一，属于 2026-W23
+        let dt = chrono::NaiveDate::from_ymd_opt(2026, 6, 2)
+            .unwrap()
+            .and_hms_opt(9, 0, 0)
+            .unwrap()
+            .and_local_timezone(chrono::Local)
+            .unwrap();
+        let key = iso_week_key(&dt);
+        assert!(key.starts_with("2026-W"));
+    }
+
+    #[test]
+    fn iso_week_key_distinguishes_different_weeks() {
+        let dt1 = chrono::NaiveDate::from_ymd_opt(2026, 6, 2)
+            .unwrap()
+            .and_hms_opt(9, 0, 0)
+            .unwrap()
+            .and_local_timezone(chrono::Local)
+            .unwrap();
+        let dt2 = chrono::NaiveDate::from_ymd_opt(2026, 6, 9)
+            .unwrap()
+            .and_hms_opt(9, 0, 0)
+            .unwrap()
+            .and_local_timezone(chrono::Local)
+            .unwrap();
+        assert_ne!(iso_week_key(&dt1), iso_week_key(&dt2));
+    }
+
+    #[test]
+    fn iso_week_key_same_week_different_days() {
+        // 2026-06-02 (周二) 和 2026-06-05 (周五) 同属 W23
+        let dt1 = chrono::NaiveDate::from_ymd_opt(2026, 6, 2)
+            .unwrap()
+            .and_hms_opt(9, 0, 0)
+            .unwrap()
+            .and_local_timezone(chrono::Local)
+            .unwrap();
+        let dt2 = chrono::NaiveDate::from_ymd_opt(2026, 6, 5)
+            .unwrap()
+            .and_hms_opt(9, 0, 0)
+            .unwrap()
+            .and_local_timezone(chrono::Local)
+            .unwrap();
+        assert_eq!(iso_week_key(&dt1), iso_week_key(&dt2));
+    }
+
+    #[test]
+    fn weekday_num_days_from_monday_matches_settings_encoding() {
+        // 2026-06-01 是周一 → num_days_from_monday() = 0 → +1 = 1
+        let monday = chrono::NaiveDate::from_ymd_opt(2026, 6, 1)
+            .unwrap()
+            .and_hms_opt(9, 0, 0)
+            .unwrap()
+            .and_local_timezone(chrono::Local)
+            .unwrap();
+        assert_eq!(monday.weekday().num_days_from_monday() + 1, 1);
+
+        // 2026-06-07 是周日 → num_days_from_monday() = 6 → +1 = 7
+        let sunday = chrono::NaiveDate::from_ymd_opt(2026, 6, 7)
+            .unwrap()
+            .and_hms_opt(9, 0, 0)
+            .unwrap()
+            .and_local_timezone(chrono::Local)
+            .unwrap();
+        assert_eq!(sunday.weekday().num_days_from_monday() + 1, 7);
     }
 }

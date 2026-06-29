@@ -1,4 +1,6 @@
 pub mod agent;
+pub mod big_rock_protection_reminder;
+pub mod briefing;
 pub mod chat;
 pub mod dashboard;
 pub mod memory;
@@ -11,3 +13,4 @@ pub mod settings;
 pub mod skill;
 pub mod suggestion;
 pub mod task;
+pub mod weekly_review;

@@ -96,7 +96,7 @@ export function TaskModal({ scope, roles = [], task, onClose, onSave }: TaskModa
   };
 
   return (
-    <Modal onClose={onClose} width="w-[500px]">
+    <Modal onClose={onClose} width="w-[500px]" ariaLabel={task ? '编辑任务' : '新建任务'}>
       <div className="p-6">
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-[18px] font-semibold text-slate-800">{task ? '编辑任务' : '新建任务'}</h2>

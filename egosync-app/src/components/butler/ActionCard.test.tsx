@@ -13,6 +13,7 @@ function makeSuggestion(overrides: Partial<SuggestionWithRole> = {}): Suggestion
     status: 'pending',
     rejectionReason: null,
     convertedTaskId: null,
+    conversationId: null,
     createdAt: new Date(Date.now() - 60_000).toISOString(),
     roleName: '产品经理',
     roleIcon: 'briefcase',

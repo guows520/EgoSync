@@ -283,7 +283,7 @@ export function TaskOverviewTab({ roles, tasks, isLoading, error, classifyingIds
           </div>
 
           <div className="flex flex-col gap-2.5 rounded-xl border border-slate-200 bg-white/70 px-3 py-2.5">
-            <div className="flex items-center gap-1.5 flex-wrap">
+            <div className="flex items-center gap-1 flex-wrap">
               <Filter size={14} className="text-slate-400" />
               {quadrantChips.map(chip => (
                 <button
@@ -292,7 +292,7 @@ export function TaskOverviewTab({ roles, tasks, isLoading, error, classifyingIds
                   onClick={() => onQuadrantFilterChange(chip.value)}
                   aria-pressed={quadrantFilter === chip.value}
                   className={cn(
-                    'px-2.5 py-1 rounded-md text-[12px] font-medium transition-colors motion-reduce:transition-none',
+                    'px-2 py-1 rounded-md text-[12px] font-medium transition-colors motion-reduce:transition-none',
                     quadrantFilter === chip.value ? 'bg-indigo-100 text-indigo-700' : 'text-slate-500 hover:bg-slate-100',
                   )}
                 >
@@ -305,7 +305,7 @@ export function TaskOverviewTab({ roles, tasks, isLoading, error, classifyingIds
                 onClick={onToggleBigRocksOnly}
                 aria-pressed={showBigRocksOnly}
                 className={cn(
-                  'inline-flex items-center gap-1 px-2 py-1 rounded-md text-[12px] font-medium transition-colors motion-reduce:transition-none',
+                  'inline-flex items-center gap-1 px-1.5 py-1 rounded-md text-[12px] font-medium transition-colors motion-reduce:transition-none',
                   showBigRocksOnly ? 'bg-amber-100 text-amber-700' : 'text-slate-500 hover:bg-slate-100',
                 )}
               >
@@ -430,7 +430,7 @@ export function TaskOverviewTab({ roles, tasks, isLoading, error, classifyingIds
       </div>
 
       {pendingDeleteTask && (
-        <Modal onClose={() => !isDeleting && setPendingDeleteTask(null)} width="w-[420px]">
+        <Modal onClose={() => !isDeleting && setPendingDeleteTask(null)} width="w-[420px]" ariaLabel="确认删除任务">
           <div className="p-6">
             <h2 className="text-[18px] font-semibold text-slate-800">确认删除任务？</h2>
             <p className="mt-3 text-[13px] leading-6 text-slate-500">

@@ -1,4 +1,6 @@
 pub mod app_settings;
+pub mod big_rock_protection_reminders;
+pub mod briefings;
 pub mod conversations;
 pub mod memories;
 pub mod mcp_servers;
@@ -12,3 +14,4 @@ pub mod notifications;
 pub mod q2_reminders;
 pub mod suggestions;
 pub mod tasks;
+pub mod weekly_reviews;

@@ -21,6 +21,9 @@ import { playNotificationSound } from './lib/notificationSound';
 import type { Role } from './types/role';
 import type { NotificationNewPayload } from './types/notification';
 import type { Q2ReminderPayload } from './types/q2Reminder';
+import type { BriefingGeneratedPayload } from './types/briefing';
+import type { BigrockReminderPayload } from './types/bigrockReminder';
+import type { ReviewGeneratedPayload } from './types/review';
 import type { SourceNavigationTarget } from './types/chat';
 import type { CreateTaskInput, Task, TaskActions, UpdateTaskInput } from './types/task';
 import type { TaskScope } from './hooks/useTasks';
@@ -36,6 +39,7 @@ export default function App() {
   const [currentView, setCurrentView] = useState('butler');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isReviewOpen, setIsReviewOpen] = useState(false);
+  const [reviewInitialPhase, setReviewInitialPhase] = useState<'review' | 'plan'>('review');
   const [taskModalContext, setTaskModalContext] = useState<TaskModalContext | null>(null);
   const [isAddRoleOpen, setIsAddRoleOpen] = useState(false);
   const [roles, setRoles] = useState<Role[]>([]);
@@ -84,6 +88,44 @@ export default function App() {
   useTauriEvent<Q2ReminderPayload>(
     'q2:reminder',
     useCallback((_payload: Q2ReminderPayload) => {
+      setButlerChatRefreshTrigger(t => t + 1);
+    }, []),
+    []
+  );
+
+  // Story 6.1: 晨间简报生成事件到达时，递增 refreshTrigger 触发管家对话刷新
+  useTauriEvent<BriefingGeneratedPayload>(
+    'briefing:generated',
+    useCallback((_payload: BriefingGeneratedPayload) => {
+      setButlerChatRefreshTrigger(t => t + 1);
+    }, []),
+    []
+  );
+
+  // Story 6.3: 大石头规划提醒事件到达时，打开 WeeklyReviewModal 规划阶段
+  useTauriEvent<BigrockReminderPayload>(
+    'bigrock:reminder',
+    useCallback((_payload: BigrockReminderPayload) => {
+      setReviewInitialPhase('plan');
+      setIsReviewOpen(true);
+      setButlerChatRefreshTrigger(t => t + 1);
+    }, []),
+    []
+  );
+
+  // Story 6.6: 大石头保护提醒事件到达时，递增 refreshTrigger 触发管家对话刷新
+  useTauriEvent<{ taskId: string; taskTitle: string; message: string; notificationId: string }>(
+    'bigrock:protection',
+    useCallback((_payload) => {
+      setButlerChatRefreshTrigger(t => t + 1);
+    }, []),
+    []
+  );
+
+  // Story 6.4: 周复盘生成事件到达时，递增 refreshTrigger 触发管家对话刷新
+  useTauriEvent<ReviewGeneratedPayload>(
+    'review:generated',
+    useCallback((_payload: ReviewGeneratedPayload) => {
       setButlerChatRefreshTrigger(t => t + 1);
     }, []),
     []
@@ -178,6 +220,18 @@ export default function App() {
 
   const handleOnboardingComplete = () => {
     refreshAllRoles().catch(() => {});
+    setCurrentView('butler');
+  };
+
+  const handleDataDestroyed = async () => {
+    setIsSettingsOpen(false);
+    await refreshAllRoles();
+    setCurrentView('onboard');
+  };
+
+  const handleDataImported = async () => {
+    setIsSettingsOpen(false);
+    await refreshAllRoles();
     setCurrentView('butler');
   };
 
@@ -339,12 +393,11 @@ export default function App() {
       {isSettingsOpen && (
         <GlobalSettingsModal
           onClose={() => setIsSettingsOpen(false)}
-          archivedRoles={archivedRoles}
-          onRestoreRole={handleRestoreRole}
-          onRefreshRoles={refreshAllRoles}
+          onDataDestroyed={handleDataDestroyed}
+          onDataImported={handleDataImported}
         />
       )}
-      {isReviewOpen && <WeeklyReviewModal roles={roles} onClose={() => setIsReviewOpen(false)} />}
+      {isReviewOpen && <WeeklyReviewModal roles={roles} onClose={() => { setIsReviewOpen(false); setReviewInitialPhase('review'); }} initialPhase={reviewInitialPhase} />}
       {taskModalContext && (
         <TaskModal
           scope={taskModalContext.scope}

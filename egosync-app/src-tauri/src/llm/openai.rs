@@ -13,6 +13,7 @@ pub struct OpenAiProvider {
     api_key: String,
     model: String,
     client: Client,
+    reasoning_split: bool,
 }
 
 impl OpenAiProvider {
@@ -27,7 +28,18 @@ impl OpenAiProvider {
             api_key,
             model,
             client,
+            reasoning_split: false,
         })
+    }
+
+    pub fn new_with_reasoning_split(
+        base_url: String,
+        api_key: String,
+        model: String,
+    ) -> Result<Self, AppError> {
+        let mut p = Self::new(base_url, api_key, model)?;
+        p.reasoning_split = true;
+        Ok(p)
     }
 
     fn completions_url(&self) -> String {
@@ -84,6 +96,10 @@ impl LlmProvider for OpenAiProvider {
 
         if options.disable_thinking {
             body["enable_thinking"] = json!(false);
+        }
+
+        if self.reasoning_split {
+            body["reasoning_split"] = json!(true);
         }
 
         if let Some(ref tools) = options.tools {
@@ -225,6 +241,16 @@ impl LlmProvider for OpenAiProvider {
                         {
                             if !reasoning.is_empty() {
                                 let _ = tx.send(StreamEvent::Thinking(reasoning.to_string())).await;
+                            }
+                        }
+                        // MiniMax reasoning_split: thinking in reasoning_details array
+                        if let Some(reasoning_details) = delta["reasoning_details"].as_array() {
+                            for detail in reasoning_details {
+                                if let Some(text) = detail["text"].as_str() {
+                                    if !text.is_empty() {
+                                        let _ = tx.send(StreamEvent::Thinking(text.to_string())).await;
+                                    }
+                                }
                             }
                         }
                         if let Some(content) = delta["content"].as_str() {

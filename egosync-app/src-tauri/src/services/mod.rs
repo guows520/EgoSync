@@ -1,6 +1,10 @@
+pub mod data_export;
 pub mod agent_bridge;
 pub mod agent_config;
 pub mod agent_engine;
+pub mod bigrock_protection;
+pub mod bigrock_reminder;
+pub mod briefing_generator;
 pub mod butler_config;
 pub mod dashboard_service;
 pub mod delegate_bridge;
@@ -13,6 +17,7 @@ pub mod memory_query;
 pub mod notification_service;
 pub mod mcp_server;
 pub mod q2_protection_reminder;
+pub mod review_generator;
 pub mod role_config;
 pub mod secret_store;
 pub mod sidecar;

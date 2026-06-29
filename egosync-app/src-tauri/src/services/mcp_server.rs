@@ -918,7 +918,7 @@ mod tests {
         server.server_type = "stdio".to_string();
         #[cfg(target_os = "windows")]
         {
-            server.command_or_url = "powershell -NoProfile -Command \"Start-Sleep -Seconds 5\"".to_string();
+            server.command_or_url = "powershell -NoProfile -Command Start-Sleep -Seconds 5".to_string();
         }
         #[cfg(not(target_os = "windows"))]
         {

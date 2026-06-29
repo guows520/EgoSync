@@ -1058,7 +1058,7 @@ export function ChatStream({
         onSelectConversation={switchToConversation}
         onDeleteConversation={handleDeleteConversation}
       />
-      <div ref={scrollRef} data-testid="chat-scroll-container" className="flex-1 overflow-y-auto p-8 scroll-smooth">
+      <div ref={scrollRef} data-testid="chat-scroll-container" role="log" aria-live="polite" className="flex-1 overflow-y-auto p-8 scroll-smooth">
         <div className="mx-auto max-w-3xl space-y-3">
           {sourceNavigationNotice && (
             <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[13px] text-amber-700">

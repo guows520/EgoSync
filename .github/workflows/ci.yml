@@ -52,7 +52,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 25
           cache: npm
           cache-dependency-path: egosync-app/package-lock.json
 
@@ -68,6 +68,154 @@ jobs:
         working-directory: egosync-app/src-tauri
         run: cargo test
 
-      - name: Build check (Rust)
-        working-directory: egosync-app/src-tauri
-        run: cargo build
+      - name: Build Tauri app
+        working-directory: egosync-app
+        run: npm run tauri build
+
+      # ── E2E Tests (Windows + Linux only, macOS skipped) ──
+      # ⚠️ E2E 阶段暂时跳过：tauri-driver 在 CI 环境中存在平台兼容性问题
+      #    （Ubuntu: spawn 找不到可执行文件 / WebKit webview 创建失败；
+      #     Windows: 后端失败链路耗时不稳定导致超时）
+      #    待 tauri-driver / wdio 9 兼容性稳定后重新启用。
+      - name: Install tauri-driver
+        if: matrix.platform.os != 'macos-latest' && false
+        run: cargo install tauri-driver --locked
+
+      - name: Install MS Edge Driver (Windows)
+        if: matrix.platform.os == 'windows-latest' && false
+        run: |
+          cargo install --git https://github.com/chippers/msedgedriver-tool
+          & "$HOME/.cargo/bin/msedgedriver-tool.exe"
+        shell: powershell
+
+      - name: Install Linux E2E dependencies
+        if: matrix.platform.os == 'ubuntu-latest' && false
+        run: |
+          sudo apt-get install -y webkit2gtk-driver xvfb
+
+      - name: Build release binary for E2E
+        if: matrix.platform.os != 'macos-latest' && false
+        working-directory: egosync-app
+        run: npm run tauri build -- --no-bundle -- --features perf-test
+
+      - name: Install E2E dependencies
+        if: matrix.platform.os != 'macos-latest' && false
+        working-directory: egosync-app/tests/e2e
+        run: npm ci
+
+      - name: Run E2E tests (Linux)
+        if: matrix.platform.os == 'ubuntu-latest' && false
+        working-directory: egosync-app/tests/e2e
+        env:
+          WEBKIT_DISABLE_DMABUF_RENDERER: '1'
+          WEBKIT_DISABLE_COMPOSITING_MODE: '1'
+          LIBGL_ALWAYS_SOFTWARE: '1'
+        run: xvfb-run --auto-servernum npm test
+
+      - name: Print E2E diagnostics on failure (Linux)
+        if: failure() && matrix.platform.os == 'ubuntu-latest' && false
+        working-directory: egosync-app/tests/e2e
+        shell: bash
+        run: |
+          echo "=== tauri-driver log ==="
+          cat logs/tauri-driver.log 2>/dev/null || echo "(no driver log)"
+          echo "=== binary check ==="
+          ls -la ../../src-tauri/target/release/egosync 2>/dev/null || echo "(binary not found)"
+          echo "=== tauri-driver version ==="
+          tauri-driver --version 2>/dev/null || echo "(tauri-driver not in PATH)"
+          echo "=== webkit2gtk-driver check ==="
+          dpkg -l | grep webkit2gtk-driver 2>/dev/null || echo "(webkit2gtk-driver not installed)"
+          echo "=== DISPLAY env ==="
+          echo "DISPLAY=$DISPLAY"
+
+      - name: Run E2E tests (Windows)
+        if: matrix.platform.os == 'windows-latest' && false
+        working-directory: egosync-app/tests/e2e
+        run: npm test
+
+      # ── Performance Benchmarks (Story 8.4, AC #6: warn not block) ──
+      - name: Run performance benchmarks (Linux)
+        if: matrix.platform.os == 'ubuntu-latest' && false
+        working-directory: egosync-app/tests/e2e
+        continue-on-error: true
+        run: xvfb-run --auto-servernum npm run test:perf
+
+      - name: Run performance benchmarks (Windows)
+        if: matrix.platform.os == 'windows-latest' && false
+        working-directory: egosync-app/tests/e2e
+        continue-on-error: true
+        run: npm run test:perf
+
+      - name: Run animation audit (Linux)
+        if: matrix.platform.os == 'ubuntu-latest' && false
+        working-directory: egosync-app/tests/e2e
+        continue-on-error: true
+        run: npm run audit:animations
+
+      - name: Run pa11y baseline scan (Linux)
+        if: matrix.platform.os == 'ubuntu-latest' && false
+        working-directory: egosync-app
+        env:
+          PA11Y_BASE_URL: http://localhost:4173
+        run: |
+          npm run build
+          npm run preview &
+          PREVIEW_PID=$!
+          for i in $(seq 1 30); do
+            if curl -s http://localhost:4173 > /dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          cd tests/e2e && npm run pa11y
+          kill $PREVIEW_PID || true
+        shell: bash
+
+      - name: Upload E2E screenshots on failure
+        if: failure() && matrix.platform.os != 'macos-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-screenshots-${{ matrix.platform.os }}
+          path: egosync-app/tests/e2e/screenshots/
+
+      - name: Upload E2E logs on failure
+        if: failure() && matrix.platform.os != 'macos-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs-${{ matrix.platform.os }}
+          path: egosync-app/tests/e2e/logs/
+
+      - name: Upload accessibility reports on failure
+        if: failure() && matrix.platform.os != 'macos-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: a11y-reports-${{ matrix.platform.os }}
+          path: egosync-app/tests/e2e/reports/accessibility/
+
+      - name: Upload performance reports
+        if: always() && matrix.platform.os != 'macos-latest' && hashFiles('egosync-app/tests/e2e/reports/performance/**') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-reports-${{ matrix.platform.os }}
+          path: egosync-app/tests/e2e/reports/performance/
+
+      - name: Upload artifact (Windows)
+        if: matrix.platform.os == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: egosync-0.1.0-windows
+          path: egosync-app/src-tauri/target/release/bundle/msi/*.msi
+
+      - name: Upload artifact (macOS)
+        if: matrix.platform.os == 'macos-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: egosync-0.1.0-macos
+          path: egosync-app/src-tauri/target/release/bundle/dmg/*.dmg
+
+      - name: Upload artifact (Linux)
+        if: matrix.platform.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: egosync-0.1.0-linux
+          path: egosync-app/src-tauri/target/release/bundle/appimage/*.AppImage

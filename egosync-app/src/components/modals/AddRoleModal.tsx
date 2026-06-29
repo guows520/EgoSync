@@ -43,11 +43,11 @@ export function AddRoleModal({ onClose, onAdd }: AddRoleModalProps) {
   };
 
   return (
-    <Modal onClose={onClose} width="w-[480px]">
+    <Modal onClose={onClose} width="w-[480px]" ariaLabel="添加新角色">
       <div className="p-6">
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-[18px] font-semibold text-slate-800">添加新角色</h2>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X size={20}/></button>
+          <button onClick={onClose} aria-label="关闭" className="text-slate-400 hover:text-slate-600"><X size={20}/></button>
         </div>
         
         <div className="space-y-5">
@@ -86,6 +86,7 @@ export function AddRoleModal({ onClose, onAdd }: AddRoleModalProps) {
                   key={option.hex}
                   type="button"
                   title={option.label}
+                  aria-label={option.label}
                   onClick={() => setColorHex(option.hex)}
                   className={cn("w-10 h-10 rounded-full transition-all", colorHex === option.hex ? "ring-4 ring-offset-2 ring-slate-400 scale-110" : "opacity-70 hover:opacity-100")}
                   style={{ backgroundColor: option.hex }}

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import App from './App'
 import { appService } from './services/appService'
 import { roleService } from './services/roleService'
@@ -34,10 +34,11 @@ vi.mock('./components/layout/Sidebar', () => ({
 }))
 
 vi.mock('./components/butler/ButlerView', () => ({
-  ButlerView: ({ sourceNavigationTarget, onSourceNavigationHandled, onRoleSourceNavigation }: any) => (
+  ButlerView: ({ sourceNavigationTarget, onSourceNavigationHandled, onRoleSourceNavigation, chatRefreshTrigger }: any) => (
     <div>
       <div>管家视图</div>
       <div data-testid="app-butler-source-target">{sourceNavigationTarget?.messageId ?? 'none'}</div>
+      <div data-testid="app-butler-chat-refresh">{chatRefreshTrigger}</div>
       <button type="button" onClick={() => onSourceNavigationHandled?.()}>管家来源处理完成</button>
       <button
         type="button"
@@ -74,7 +75,7 @@ vi.mock('./components/settings/GlobalSettingsModal', () => ({
 }))
 
 vi.mock('./components/modals/WeeklyReviewModal', () => ({
-  WeeklyReviewModal: () => <div>复盘</div>,
+  WeeklyReviewModal: ({ initialPhase }: any) => <div data-testid="weekly-review" data-phase={initialPhase}>复盘</div>,
 }))
 
 vi.mock('./components/modals/TaskModal', () => ({
@@ -114,6 +115,9 @@ interface RoleProposedPayload {
 }
 
 let roleProposedHandler: ((payload: RoleProposedPayload) => void) | undefined
+let bigrockReminderHandler: ((payload: { message: string; notificationId: string }) => void) | undefined
+let reviewGeneratedHandler: ((payload: { reviewId: string; weekStart: string; weekEnd: string }) => void) | undefined
+let bigrockProtectionHandler: ((payload: { taskId: string; taskTitle: string; message: string; notificationId: string }) => void) | undefined
 
 function mockNormalLaunch() {
   vi.mocked(appService.isFirstLaunch).mockResolvedValue(false)
@@ -124,12 +128,24 @@ function mockNormalLaunch() {
     if (eventName === 'role:proposed') {
       roleProposedHandler = handler as (payload: RoleProposedPayload) => void
     }
+    if (eventName === 'bigrock:reminder') {
+      bigrockReminderHandler = handler as (payload: { message: string; notificationId: string }) => void
+    }
+    if (eventName === 'review:generated') {
+      reviewGeneratedHandler = handler as (payload: { reviewId: string; weekStart: string; weekEnd: string }) => void
+    }
+    if (eventName === 'bigrock:protection') {
+      bigrockProtectionHandler = handler as (payload: { taskId: string; taskTitle: string; message: string; notificationId: string }) => void
+    }
   })
 }
 
 describe('App', () => {
   beforeEach(() => {
     roleProposedHandler = undefined
+    bigrockReminderHandler = undefined
+    reviewGeneratedHandler = undefined
+    bigrockProtectionHandler = undefined
     vi.clearAllMocks()
     mockNormalLaunch()
   })
@@ -201,5 +217,53 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: '管家来源处理完成' }))
 
     expect(screen.getByTestId('app-butler-source-target')).toHaveTextContent('none')
+  })
+
+  it('bigrock:reminder 事件到达时打开 WeeklyReviewModal 并设为 plan 阶段', async () => {
+    render(<App />)
+
+    await waitFor(() => expect(roleService.list).toHaveBeenCalledTimes(1))
+    expect(bigrockReminderHandler).toBeDefined()
+
+    bigrockReminderHandler?.({ message: '还没规划本周大石头，要安排一下吗？', notificationId: 'notif-1' })
+
+    expect(await screen.findByTestId('weekly-review')).toBeInTheDocument()
+    expect(screen.getByTestId('weekly-review')).toHaveAttribute('data-phase', 'plan')
+  })
+
+  it('review:generated 事件到达时递增 butlerChatRefreshTrigger 触发管家对话刷新', async () => {
+    render(<App />)
+
+    await waitFor(() => expect(roleService.list).toHaveBeenCalledTimes(1))
+    expect(reviewGeneratedHandler).toBeDefined()
+
+    const before = Number(screen.getByTestId('app-butler-chat-refresh').textContent)
+
+    act(() => {
+      reviewGeneratedHandler?.({ reviewId: 'rev-1', weekStart: '2026-06-22', weekEnd: '2026-06-28' })
+    })
+
+    await waitFor(() => {
+      const after = Number(screen.getByTestId('app-butler-chat-refresh').textContent)
+      expect(after).toBe(before + 1)
+    })
+  })
+
+  it('bigrock:protection 事件到达时递增 butlerChatRefreshTrigger 触发管家对话刷新', async () => {
+    render(<App />)
+
+    await waitFor(() => expect(roleService.list).toHaveBeenCalledTimes(1))
+    expect(bigrockProtectionHandler).toBeDefined()
+
+    const before = Number(screen.getByTestId('app-butler-chat-refresh').textContent)
+
+    act(() => {
+      bigrockProtectionHandler?.({ taskId: 'task-1', taskTitle: '竞品分析', message: '你的大石头竞品分析这周还没动', notificationId: 'notif-1' })
+    })
+
+    await waitFor(() => {
+      const after = Number(screen.getByTestId('app-butler-chat-refresh').textContent)
+      expect(after).toBe(before + 1)
+    })
   })
 })

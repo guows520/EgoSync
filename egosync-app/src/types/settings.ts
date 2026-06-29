@@ -1,7 +1,7 @@
 export interface LlmConfig {
   id: string;
   name: string;
-  provider: 'openai_compatible' | 'anthropic';
+  provider: 'openai_compatible' | 'anthropic' | 'minimax';
   baseUrl: string;
   model: string;
   apiKeyRef: string;
@@ -12,7 +12,7 @@ export interface LlmConfig {
 
 export interface CreateLlmConfigInput {
   name: string;
-  provider: 'openai_compatible' | 'anthropic';
+  provider: 'openai_compatible' | 'anthropic' | 'minimax';
   baseUrl: string;
   model: string;
   apiKey: string;
@@ -20,7 +20,7 @@ export interface CreateLlmConfigInput {
 
 export interface UpdateLlmConfigInput {
   name?: string;
-  provider?: 'openai_compatible' | 'anthropic';
+  provider: 'openai_compatible' | 'anthropic' | 'minimax';
   baseUrl?: string;
   model?: string;
   apiKey?: string;

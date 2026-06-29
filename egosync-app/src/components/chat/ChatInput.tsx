@@ -29,8 +29,9 @@ export function ChatInput({ onSend, onStop, isStreaming, disabled, placeholder, 
         onChange={e => setInput(e.target.value)}
         onKeyDown={e => e.key === 'Enter' && !e.shiftKey && handleSend()}
         placeholder={placeholder ?? "跟管家说点什么，比如：帮我安排一个会议..."}
+        aria-label={placeholder || "跟管家说点什么"}
         disabled={disabled}
-        className="w-full bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl pl-5 pr-14 py-3.5 text-[14px] dark:text-slate-100 dark:placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-500/20 focus:border-slate-500 transition-all shadow-sm disabled:opacity-60 disabled:cursor-not-allowed"
+        className="w-full bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl pl-5 pr-14 py-3.5 text-[14px] dark:text-slate-100 dark:placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-500/20 transition-colors shadow-sm disabled:opacity-60 disabled:cursor-not-allowed"
       />
       {isStreaming ? (
         <button

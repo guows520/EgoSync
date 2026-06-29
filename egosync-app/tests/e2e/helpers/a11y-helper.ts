@@ -31,8 +31,8 @@ export async function runAxeScan(pageName: string): Promise<void> {
     mkdirSync(reportsDir, { recursive: true });
   }
 
-  const axeBuilder = (await import('@axe-core/webdriverio')).default;
-  const results = await axeBuilder({ client: browser })
+  const AxeBuilder = (await import('@axe-core/webdriverio')).default;
+  const results = await new AxeBuilder({ client: browser })
     .disableRules(['color-contrast'])
     .analyze() as unknown as AxeResults;
 

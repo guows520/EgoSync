@@ -143,18 +143,21 @@ export async function measureProcessMemory(): Promise<MemorySnapshot> {
 }
 
 /**
- * 测量 Onboarding 可交互时间：从当前时刻到 input[type="text"] 可见的时间差。
- * 作为首次体验时间（NFR-9）的代理指标。
+ * 测量 Onboarding 可交互时间：从当前时刻到 onboarding 视图可交互元素可见的时间差。
+ * CI 无 LLM 配置时显示"配置 AI 模型"按钮界面（无 input），因此等待 input 或按钮任一可见。
  */
 export async function measureOnboardingInteractive(): Promise<OnboardingInteractiveResult> {
   ensureReportsDir();
   const start = Date.now();
   await browser.waitUntil(
     async () => {
+      // CI 无 LLM 配置时显示"配置 AI 模型"按钮；配置完成后显示 input
       const input = await $('input[type="text"]');
-      return await input.isDisplayed();
+      if (await input.isDisplayed()) return true;
+      const configButton = await $('button=配置 AI 模型');
+      return await configButton.isDisplayed();
     },
-    { timeout: 30000, timeoutMsg: 'Onboarding input not visible within 30s' },
+    { timeout: 30000, timeoutMsg: 'Onboarding interactive element not visible within 30s' },
   );
   const interactiveMs = Date.now() - start;
   const exceeded = checkThreshold(interactiveMs, THRESHOLDS.onboardingInteractiveMs);
@@ -192,6 +195,7 @@ export async function measureStreamRenderLatency(
 
   // 通过 IPC 调用 app_emit_test_stream，在 Rust 端 emit llm:stream 事件
   // 测量从 emit 调用到 DOM 中出现最后一个 token 的时间差
+  // 需要传入当前 conversation id，否则 ChatStream 的 handleStreamEvent 会过滤掉不匹配的事件
   const result = await browser.executeAsync(async (
     tok: string[],
     done: (val: unknown) => void,
@@ -202,8 +206,19 @@ export async function measureStreamRenderLatency(
         done({ __error: '__TAURI_INTERNALS__.invoke not found on window' });
         return;
       }
+      // 获取当前管家 conversation id，使流式事件能被 ChatStream 接收
+      let convId: string | undefined;
+      try {
+        const conv = await tauriInvoke('chat_get_butler_conversation');
+        convId = conv?.id;
+      } catch {
+        // 获取失败时回退到默认 "perf-test"
+      }
       const start = Date.now();
-      await tauriInvoke('app_emit_test_stream', { tokens: tok });
+      await tauriInvoke('app_emit_test_stream', {
+        tokens: tok,
+        conversationId: convId,
+      });
       // 轮询 DOM 直到出现最后一个 sentinel token 文本（最多 5s）
       const lastToken = tok[tok.length - 1];
       const deadline = Date.now() + 5000;

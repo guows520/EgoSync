@@ -1,10 +1,23 @@
 import { $, $$, browser } from '@wdio/globals';
 
 export async function waitForAppReady(): Promise<void> {
+  // 1. 等待 WebView body 渲染
   await browser.waitUntil(
     async () => await $('body').isExisting(),
     { timeout: 30000, timeoutMsg: 'App window did not load within 30s' },
   );
+  // 2. 等待 Tauri JS bridge 注入完成（__TAURI_INTERNALS__.invoke 可用）
+  //    body 出现不代表 bridge 已就绪，IPC 调用过早会报 '__TAURI_INTERNALS__.invoke not found'。
+  await browser.waitUntil(
+    async () => {
+      const ready = await browser.execute(() =>
+        typeof (window as any).__TAURI_INTERNALS__?.invoke === 'function',
+      );
+      return Boolean(ready);
+    },
+    { timeout: 30000, timeoutMsg: 'Tauri JS bridge not ready within 30s' },
+  );
+  // 3. 额外缓冲，等待前端 React 挂载完成
   await browser.pause(1000);
 }
 

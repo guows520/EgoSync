@@ -156,6 +156,7 @@ pub async fn app_performance_snapshot(
 #[tauri::command]
 pub async fn app_emit_test_stream(
     tokens: Vec<String>,
+    conversation_id: Option<String>,
     app_handle: AppHandle,
 ) -> Result<(), AppError> {
     const MAX_PERF_TOKENS: usize = 1_000;
@@ -167,11 +168,13 @@ pub async fn app_emit_test_stream(
         )));
     }
 
+    let conv_id = conversation_id.unwrap_or_else(|| "perf-test".to_string());
+
     for token in &tokens {
         if let Err(e) = app_handle.emit(
             "llm:stream",
             StreamPayload {
-                conversation_id: "perf-test".to_string(),
+                conversation_id: conv_id.clone(),
                 token: token.clone(),
                 done: false,
                 thinking: false,
@@ -191,7 +194,7 @@ pub async fn app_emit_test_stream(
     if let Err(e) = app_handle.emit(
         "llm:stream",
         StreamPayload {
-            conversation_id: "perf-test".to_string(),
+            conversation_id: conv_id,
             token: String::new(),
             done: true,
             thinking: false,

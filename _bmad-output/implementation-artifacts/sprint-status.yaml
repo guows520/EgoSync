@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-21
-last_updated: 2026-06-29T18:00:00+08:00
+last_updated: 2026-06-29T19:30:00+08:00
 project: "探索 (EgoSync)"
 project_key: NOKEY
 tracking_system: file-system
@@ -148,5 +148,5 @@ development_status:
   8-2-e2e-test-core-journeys: in-progress
   8-3-wcag-accessibility-audit: done
   8-4-performance-benchmark: done
-  8-5-release-auto-publish: backlog
+  8-5-release-auto-publish: ready-for-dev
   epic-8-retrospective: optional

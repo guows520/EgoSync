@@ -137,10 +137,13 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
 
     render(<ChatStream role={null} onMemoryReferenceClick={onMemoryReferenceClick} />);
 
-    const reference = await screen.findByRole('button', { name: '打开记忆 memory-1' });
-    fireEvent.click(reference);
-
-    expect(onMemoryReferenceClick).toHaveBeenCalledWith('memory-1');
+    // 历史消息加载后 loadMessageProcessEvents 异步 setState 会触发重渲染，
+    // 可能替换按钮 DOM 节点。用 waitFor 每次重试重新 getByRole 获取最新按钮。
+    await waitFor(() => {
+      const reference = screen.getByRole('button', { name: '打开记忆 memory-1' });
+      fireEvent.click(reference);
+      expect(onMemoryReferenceClick).toHaveBeenCalledWith('memory-1');
+    });
   });
 
   it('streaming 完成后的助手消息记忆引用点击后回传 memoryId', async () => {

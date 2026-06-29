@@ -5,7 +5,10 @@
   "scripts": {
     "test": "wdio run wdio.conf.ts",
     "test:ci": "wdio run wdio.conf.ts --suite ci",
-    "pa11y": "node scripts/pa11y-scan.mjs"
+    "test:perf": "wdio run wdio.conf.ts --suite perf",
+    "test:perf:local": "wdio run wdio.conf.ts --suite perf",
+    "pa11y": "node scripts/pa11y-scan.mjs",
+    "audit:animations": "node scripts/audit-animations.mjs"
   },
   "devDependencies": {
     "@axe-core/webdriverio": "^4.11.0",

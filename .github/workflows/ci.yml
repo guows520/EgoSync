@@ -92,7 +92,7 @@ jobs:
       - name: Build release binary for E2E
         if: matrix.platform.os != 'macos-latest'
         working-directory: egosync-app
-        run: npm run tauri build -- --no-bundle
+        run: npm run tauri build -- --no-bundle -- --features perf-test
 
       - name: Install E2E dependencies
         if: matrix.platform.os != 'macos-latest'
@@ -108,6 +108,25 @@ jobs:
         if: matrix.platform.os == 'windows-latest'
         working-directory: egosync-app/tests/e2e
         run: npm test
+
+      # ── Performance Benchmarks (Story 8.4, AC #6: warn not block) ──
+      - name: Run performance benchmarks (Linux)
+        if: matrix.platform.os == 'ubuntu-latest'
+        working-directory: egosync-app/tests/e2e
+        continue-on-error: true
+        run: xvfb-run --auto-servernum npm run test:perf
+
+      - name: Run performance benchmarks (Windows)
+        if: matrix.platform.os == 'windows-latest'
+        working-directory: egosync-app/tests/e2e
+        continue-on-error: true
+        run: npm run test:perf
+
+      - name: Run animation audit (Linux)
+        if: matrix.platform.os == 'ubuntu-latest'
+        working-directory: egosync-app/tests/e2e
+        continue-on-error: true
+        run: npm run audit:animations
 
       - name: Run pa11y baseline scan (Linux)
         if: matrix.platform.os == 'ubuntu-latest'
@@ -148,6 +167,13 @@ jobs:
         with:
           name: a11y-reports-${{ matrix.platform.os }}
           path: egosync-app/tests/e2e/reports/accessibility/
+
+      - name: Upload performance reports
+        if: always() && matrix.platform.os != 'macos-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-reports-${{ matrix.platform.os }}
+          path: egosync-app/tests/e2e/reports/performance/
 
       - name: Upload artifact (Windows)
         if: matrix.platform.os == 'windows-latest'

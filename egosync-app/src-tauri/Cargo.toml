@@ -39,3 +39,11 @@ indexmap = { version = "1", features = ["std"] }
 [dev-dependencies]
 tempfile = "3"
 filetime = "0.2"
+
+[features]
+perf-test = []
+
+[dependencies.sysinfo]
+version = "0.32"
+default-features = false
+features = ["system"]

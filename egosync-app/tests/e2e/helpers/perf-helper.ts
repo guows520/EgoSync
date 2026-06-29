@@ -1,0 +1,240 @@
+import { $, browser } from '@wdio/globals';
+import { existsSync, mkdirSync, writeFileSync } from 'fs';
+import { join, resolve, dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+const reportsDir = resolve(__dirname, '..', 'reports', 'performance');
+
+// 性能阈值基线（CI runner 宽松，本地 SSD 严格）
+// 超阈值时警告不阻断（AC #6），仅在报告中标记 exceededThreshold。
+const THRESHOLDS = {
+  coldStartMs: 10_000, // CI: ≤ 10s
+  onboardingInteractiveMs: 15_000, // CI: ≤ 15s
+  rssMb: 300, // CI: ≤ 300MB
+  streamRenderMs: 50, // 三平台差异 ≤ 50ms（记录用，不阻断）
+} as const;
+
+interface ColdStartResult {
+  coldStartMs: number;
+  runnerOs: string;
+  timestamp: string;
+  exceededThreshold: boolean;
+  threshold: number;
+}
+
+interface MemorySnapshot {
+  rssMb: number;
+  jsHeapUsedMb: number | null;
+  processUptimeSecs: number;
+  sidecarRssMb: number | null;
+  timestamp: string;
+  exceededThreshold: boolean;
+  threshold: number;
+}
+
+interface OnboardingInteractiveResult {
+  interactiveMs: number;
+  runnerOs: string;
+  timestamp: string;
+  exceededThreshold: boolean;
+  threshold: number;
+}
+
+interface StreamRenderResult {
+  emitToRenderMs: number;
+  tokenCount: number;
+  runnerOs: string;
+  timestamp: string;
+  exceededThreshold: boolean;
+  threshold: number;
+}
+
+function ensureReportsDir(): void {
+  if (!existsSync(reportsDir)) {
+    mkdirSync(reportsDir, { recursive: true });
+  }
+}
+
+function runnerOs(): string {
+  return (browser.capabilities as any)?.platformName
+    || (browser.capabilities as any)?.['platform']
+    || process.platform;
+}
+
+function checkThreshold(value: number, threshold: number): boolean {
+  return value > threshold;
+}
+
+/**
+ * 测量冷启动时间：从 session 创建到 body 可交互的时间差。
+ * 复用 waitForAppReady 的等待逻辑，但在等待前后记录时间戳。
+ */
+export async function measureColdStart(): Promise<ColdStartResult> {
+  ensureReportsDir();
+  const start = Date.now();
+  await browser.waitUntil(
+    async () => await $('body').isExisting(),
+    { timeout: 30000, timeoutMsg: 'App window did not load within 30s' },
+  );
+  await browser.pause(500);
+  const coldStartMs = Date.now() - start;
+  const exceeded = checkThreshold(coldStartMs, THRESHOLDS.coldStartMs);
+  if (exceeded) {
+    console.warn(`[perf] cold start ${coldStartMs}ms exceeds threshold ${THRESHOLDS.coldStartMs}ms (warning only, not blocking)`);
+  }
+  return {
+    coldStartMs,
+    runnerOs: runnerOs(),
+    timestamp: new Date().toISOString(),
+    exceededThreshold: exceeded,
+    threshold: THRESHOLDS.coldStartMs,
+  };
+}
+
+/**
+ * 通过 Tauri IPC 读取进程内存快照（Rust 端 app_performance_snapshot command）。
+ * WebView 无 process.memoryUsage()，必须通过 Rust 端 sysinfo crate 读取 RSS。
+ */
+export async function measureProcessMemory(): Promise<MemorySnapshot> {
+  ensureReportsDir();
+  const snapshot = await browser.executeAsync(async (done: (val: unknown) => void) => {
+    try {
+      const tauriInvoke = (window as any).__TAURI_INTERNALS__?.invoke;
+      if (!tauriInvoke) {
+        done({ __error: '__TAURI_INTERNALS__.invoke not found on window' });
+        return;
+      }
+      const result = await tauriInvoke('app_performance_snapshot');
+      done(result);
+    } catch (e) {
+      done({ __error: String(e) });
+    }
+  }) as {
+    rssMb: number;
+    jsHeapUsedMb: number | null;
+    processUptimeSecs: number;
+    sidecarRssMb: number | null;
+  } & { __error?: string };
+
+  if (snapshot && snapshot.__error) {
+    throw new Error(`app_performance_snapshot failed: ${snapshot.__error}`);
+  }
+
+  const exceeded = checkThreshold(snapshot.rssMb, THRESHOLDS.rssMb);
+  if (exceeded) {
+    console.warn(`[perf] RSS ${snapshot.rssMb}MB exceeds threshold ${THRESHOLDS.rssMb}MB (warning only, not blocking)`);
+  }
+
+  return {
+    rssMb: snapshot.rssMb,
+    jsHeapUsedMb: snapshot.jsHeapUsedMb,
+    processUptimeSecs: snapshot.processUptimeSecs,
+    sidecarRssMb: snapshot.sidecarRssMb,
+    timestamp: new Date().toISOString(),
+    exceededThreshold: exceeded,
+    threshold: THRESHOLDS.rssMb,
+  };
+}
+
+/**
+ * 测量 Onboarding 可交互时间：从当前时刻到 input[type="text"] 可见的时间差。
+ * 作为首次体验时间（NFR-9）的代理指标。
+ */
+export async function measureOnboardingInteractive(): Promise<OnboardingInteractiveResult> {
+  ensureReportsDir();
+  const start = Date.now();
+  await browser.waitUntil(
+    async () => {
+      const input = await $('input[type="text"]');
+      return await input.isDisplayed();
+    },
+    { timeout: 30000, timeoutMsg: 'Onboarding input not visible within 30s' },
+  );
+  const interactiveMs = Date.now() - start;
+  const exceeded = checkThreshold(interactiveMs, THRESHOLDS.onboardingInteractiveMs);
+  if (exceeded) {
+    console.warn(`[perf] onboarding interactive ${interactiveMs}ms exceeds threshold ${THRESHOLDS.onboardingInteractiveMs}ms (warning only, not blocking)`);
+  }
+  return {
+    interactiveMs,
+    runnerOs: runnerOs(),
+    timestamp: new Date().toISOString(),
+    exceededThreshold: exceeded,
+    threshold: THRESHOLDS.onboardingInteractiveMs,
+  };
+}
+
+/**
+ * 测量流式渲染延迟：通过 app_emit_test_stream command（perf-test feature gate）
+ * 注入 mock llm:stream 事件，测量从 emit 到 DOM 中出现 token 文本的时间差。
+ *
+ * 此方案测量「Tauri Event → 前端监听 → React 状态更新 → DOM 渲染」端到端延迟，
+ * 不测量 LLM 网络延迟（Provider 责任，非应用可控）。
+ */
+export async function measureStreamRenderLatency(
+  tokens: string[] = ['你', '好', '，', '测', '试'],
+): Promise<StreamRenderResult> {
+  ensureReportsDir();
+  const tokenCount = tokens.length;
+
+  // 通过 IPC 调用 app_emit_test_stream，在 Rust 端 emit llm:stream 事件
+  // 测量从 emit 调用到 DOM 中出现最后一个 token 的时间差
+  const result = await browser.executeAsync(async (
+    tok: string[],
+    done: (val: unknown) => void,
+  ) => {
+    try {
+      const tauriInvoke = (window as any).__TAURI_INTERNALS__?.invoke;
+      if (!tauriInvoke) {
+        done({ __error: '__TAURI_INTERNALS__.invoke not found on window' });
+        return;
+      }
+      const start = Date.now();
+      await tauriInvoke('app_emit_test_stream', { tokens: tok });
+      // 轮询 DOM 直到出现最后一个 token 文本（最多 5s）
+      const lastToken = tok[tok.length - 1];
+      const deadline = Date.now() + 5000;
+      while (Date.now() < deadline) {
+        const bodyText = document.body.innerText || '';
+        if (bodyText.includes(lastToken)) {
+          done({ emitToRenderMs: Date.now() - start });
+          return;
+        }
+        await new Promise(r => setTimeout(r, 10));
+      }
+      done({ __error: 'token did not appear in DOM within 5s' });
+    } catch (e) {
+      done({ __error: String(e) });
+    }
+  }, tokens) as { emitToRenderMs: number } & { __error?: string };
+
+  if (result && result.__error) {
+    throw new Error(`measureStreamRenderLatency failed: ${result.__error}`);
+  }
+
+  const exceeded = checkThreshold(result.emitToRenderMs, THRESHOLDS.streamRenderMs);
+  if (exceeded) {
+    console.warn(`[perf] stream render ${result.emitToRenderMs}ms exceeds threshold ${THRESHOLDS.streamRenderMs}ms (warning only, not blocking)`);
+  }
+
+  return {
+    emitToRenderMs: result.emitToRenderMs,
+    tokenCount,
+    runnerOs: runnerOs(),
+    timestamp: new Date().toISOString(),
+    exceededThreshold: exceeded,
+    threshold: THRESHOLDS.streamRenderMs,
+  };
+}
+
+/**
+ * 将性能数据 JSON 落盘到 reports/performance/ 目录。
+ */
+export function writePerfReport(name: string, data: unknown): void {
+  ensureReportsDir();
+  const reportPath = join(reportsDir, `${name}.json`);
+  writeFileSync(reportPath, JSON.stringify(data, null, 2));
+  console.log(`[perf] report saved: ${reportPath}`);
+}

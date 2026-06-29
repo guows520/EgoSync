@@ -16,6 +16,7 @@ const binaryPath = resolve(__dirname, '..', '..', 'src-tauri', 'target', 'releas
 const screenshotsDir = resolve(__dirname, 'screenshots');
 const logsDir = resolve(__dirname, 'logs');
 const a11yReportsDir = resolve(__dirname, 'reports', 'accessibility');
+const perfReportsDir = resolve(__dirname, 'reports', 'performance');
 
 // 应用数据目录由 tauri.conf.json 的 identifier 决定（com.egosync.desktop），
 // Tauri 2.x 的 app_data_dir() 据此解析，应用 DB 实际写入此目录（见 src-tauri/src/lib.rs）。
@@ -32,6 +33,10 @@ export const config: WebdriverIO.Config = {
   hostname: '127.0.0.1',
   port: 4444,
   specs: ['./specs/**/*.ts'],
+  suites: {
+    ci: ['./specs/*.spec.ts'],
+    perf: ['./specs/performance.spec.ts'],
+  },
   maxInstances: 1,
   capabilities: [
     {
@@ -64,6 +69,10 @@ export const config: WebdriverIO.Config = {
       rmSync(a11yReportsDir, { recursive: true, force: true });
     }
     mkdirSync(a11yReportsDir, { recursive: true });
+    if (existsSync(perfReportsDir)) {
+      rmSync(perfReportsDir, { recursive: true, force: true });
+    }
+    mkdirSync(perfReportsDir, { recursive: true });
   },
 
   beforeSession: () => {

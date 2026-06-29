@@ -1,6 +1,13 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { ButlerSkillsConfig, UpdateRoleSkillsInput } from '../types/role';
 
+export interface PerformanceSnapshot {
+  rssMb: number;
+  jsHeapUsedMb: number | null;
+  processUptimeSecs: number;
+  sidecarRssMb: number | null;
+}
+
 export const appService = {
   isFirstLaunch: () => invoke<boolean>('app_is_first_launch'),
   completeOnboarding: () => invoke<void>('app_complete_onboarding'),
@@ -9,4 +16,5 @@ export const appService = {
   updateButlerSkills: (input: UpdateRoleSkillsInput) => invoke<ButlerSkillsConfig>('app_update_butler_skills', { input }),
   getSetting: (key: string) => invoke<string | null>('app_get_setting', { key }),
   setSetting: (key: string, value: string) => invoke<void>('app_set_setting', { key, value }),
+  performanceSnapshot: () => invoke<PerformanceSnapshot>('app_performance_snapshot'),
 };

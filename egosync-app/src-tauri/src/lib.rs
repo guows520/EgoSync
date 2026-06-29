@@ -347,6 +347,11 @@ pub fn run() {
             commands::app::app_sidecar_status,
             commands::app::app_get_setting,
             commands::app::app_set_setting,
+            commands::app::app_performance_snapshot,
+            #[cfg(feature = "perf-test")]
+            commands::app::app_emit_test_stream,
+            #[cfg(feature = "perf-test")]
+            commands::app::app_seed_perf_data,
             commands::scheduler::scheduler_get_times,
             commands::scheduler::scheduler_set_times,
             commands::suggestion::suggestion_list_pending,

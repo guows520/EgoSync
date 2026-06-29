@@ -372,6 +372,12 @@ impl SidecarManager {
         self.started_at.map(|s| s.elapsed().as_secs())
     }
 
+    /// Get the child process PID, if running.
+    /// Used by `app_performance_snapshot` to read sidecar RSS via sysinfo.
+    pub fn child_pid(&self) -> Option<u32> {
+        self.child.as_ref().and_then(|c| c.id())
+    }
+
     /// Construct candidate health check URLs (tried in order).
     pub fn health_check_urls(&self) -> Vec<String> {
         vec![

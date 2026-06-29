@@ -430,7 +430,7 @@ export function TaskOverviewTab({ roles, tasks, isLoading, error, classifyingIds
       </div>
 
       {pendingDeleteTask && (
-        <Modal onClose={() => !isDeleting && setPendingDeleteTask(null)} width="w-[420px]">
+        <Modal onClose={() => !isDeleting && setPendingDeleteTask(null)} width="w-[420px]" ariaLabel="确认删除任务">
           <div className="p-6">
             <h2 className="text-[18px] font-semibold text-slate-800">确认删除任务？</h2>
             <p className="mt-3 text-[13px] leading-6 text-slate-500">

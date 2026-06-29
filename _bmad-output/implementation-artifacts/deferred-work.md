@@ -1,5 +1,11 @@
 # Deferred Work
 
+## Deferred from: code review of 8-3-wcag-accessibility-audit (2026-06-28)
+
+- **NotificationPanel 未在本次 diff 中修改**：`App.tsx:411` 调用了 NotificationPanel，但该组件未在 diff 中修改，无法确认其是否支持 Escape 关闭与是否有可理解的 aria-label。属 pre-existing 问题，需后续人工检查或纳入回归测试。
+- **其他未修改的 Modal 调用点需人工检查**：本次 diff 仅修改了部分 Modal 调用点，但项目中仍有其他调用点。需确认是否都传递了 `ariaLabel`，避免产生无名称 dialog。属 pre-existing 问题。
+- **RoleSidebarIcon 能量状态仅靠颜色区分**：色盲友好辅助（形状区分、文字+图标）已按用户决策还原，能量小点统一为圆形。AC #2 色盲友好未实现，作为已知限制保留，待 V2 视觉优化时统一处理。
+
 ## Deferred from: code review of 8-2-e2e-test-core-journeys (2026-06-28)
 
 - **Windows msedgedriver 路径假设未验证**：`wdio.conf.ts:829` 假定 `msedgedriver.exe` 位于 `%LOCALAPPDATA%\msedgedriver\`，但 CI 中 `cargo install msedgedriver-tool` + 运行该工具的实际输出位置未经验证。若不一致，`driverArgs` 为空、tauri-driver 找不到原生 driver，Windows E2E 步骤将失败。需 CI 首次运行（或本地 Windows）验证 msedgedriver-tool 的落盘路径后，确认或修正该路径推断逻辑。

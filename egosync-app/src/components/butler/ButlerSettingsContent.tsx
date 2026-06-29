@@ -81,6 +81,21 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
   const [inferenceEligibility, setInferenceEligibility] = useState<InferenceEligibility | null>(null);
   const [isInferenceModalOpen, setIsInferenceModalOpen] = useState(false);
   const [editableSummary, setEditableSummary] = useState('');
+
+  // Escape 关闭内联 Modal
+  useEffect(() => {
+    if (!isMissionModalOpen && !isInferenceModalOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        if (isMissionModalOpen) setIsMissionModalOpen(false);
+        if (isInferenceModalOpen) setIsInferenceModalOpen(false);
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [isMissionModalOpen, isInferenceModalOpen]);
+
   const templates = [
     '我的使命是成为一个以原则为中心的人，在生活的各个维度保持平衡与成长。\n\n生活：保持身心健康，经济上勤勉节俭，为家人提供安稳的生活基础。\n关爱：把家人放在第一位——每周至少两个晚上专属陪伴，在重要决策中先问"这对家庭意味着什么"。对朋友真诚相待，值得信任。\n学习：保持终身学习者的心态，每月至少读完一本书或掌握一项新技能，用成长带动身边的人。\n遗产：通过专业能力创造真实价值，每年至少完成一个有长期影响力的项目，让世界因我的存在而更好一点。',
     '我的使命是以家庭为根基，以事业为翅膀，在两者之间找到动态平衡。\n\n作为伴侣和父母：我是家人可以依靠的人。无论工作多忙，家人的健康与快乐始终是第一优先级。每周保留专属家庭时间，重要家庭事件不因工作让步。\n作为职业人：在工作中追求卓越和影响力，但绝不以牺牲家庭为代价。优先做有长期价值的事，而非短期回报的事。\n作为学习者：每季度审视一次生活平衡状态，及时调整。保持开放心态，从每次挫折中学习。\n作为社区成员：力所能及地回馈社会，每年参与至少一次公益或志愿服务。',

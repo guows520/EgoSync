@@ -43,7 +43,7 @@ export function AddRoleModal({ onClose, onAdd }: AddRoleModalProps) {
   };
 
   return (
-    <Modal onClose={onClose} width="w-[480px]">
+    <Modal onClose={onClose} width="w-[480px]" ariaLabel="添加新角色">
       <div className="p-6">
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-[18px] font-semibold text-slate-800">添加新角色</h2>

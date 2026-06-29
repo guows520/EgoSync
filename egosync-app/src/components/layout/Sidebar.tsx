@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Home, Plus, Moon, Sun, Settings as SettingsIcon, Pencil, Archive, Trash2, Bell } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { RoleSidebarIcon } from './RoleSidebarIcon';
@@ -65,12 +65,13 @@ export function Sidebar({ roles, currentView, onViewChange, isSettingsOpen, onOp
         <button
           onClick={() => handleNav('butler')}
           title="管家"
+          aria-label="管家"
           className={cn("w-11 h-11 rounded-xl flex items-center justify-center transition-all duration-200 shrink-0", !isSettingsOpen && currentView === 'butler' ? "bg-indigo-600 text-white shadow-lg shadow-indigo-200 scale-105" : "text-slate-500 hover:bg-slate-200")}
         >
           <Home size={22} strokeWidth={2.5} />
         </button>
         <div className="w-6 border-b border-slate-300 my-2 shrink-0"></div>
-        <div ref={roleListRef} onKeyDown={handleRoleListKeyDown} className="flex flex-col items-center gap-4 flex-[0_1_auto] overflow-y-auto min-h-0 w-full">
+        <div ref={roleListRef} onKeyDown={handleRoleListKeyDown} className="flex flex-col items-center gap-4 flex-[0_1_auto] overflow-y-auto min-h-0 w-full pt-2 pb-2">
           {roles.map((role: any) => (
             <div key={role.id} data-role-icon>
               <RoleSidebarIcon
@@ -85,6 +86,7 @@ export function Sidebar({ roles, currentView, onViewChange, isSettingsOpen, onOp
         <button
           onClick={onAddRole}
           title="添加角色"
+          aria-label="添加角色"
           className="w-11 h-11 rounded-xl flex items-center justify-center text-slate-400 border-2 border-dashed border-slate-300 dark:border-slate-600 hover:border-indigo-400 hover:text-indigo-500 hover:bg-indigo-50/50 dark:hover:bg-indigo-900/30 transition-all duration-200 shrink-0"
         >
           <Plus size={20} strokeWidth={2.5} />
@@ -100,10 +102,10 @@ export function Sidebar({ roles, currentView, onViewChange, isSettingsOpen, onOp
             <span className="absolute top-1.5 right-1.5 w-2.5 h-2.5 bg-emerald-500 rounded-full border-2 border-[#F1F3F5] dark:border-slate-800"></span>
           ) : null}
         </button>
-        <button onClick={onToggleTheme} title={theme === 'light' ? '切换深色' : '切换浅色'} className="w-11 h-11 rounded-xl flex items-center justify-center text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 hover:text-slate-700 dark:hover:text-slate-200 transition-colors">
+        <button onClick={onToggleTheme} title={theme === 'light' ? '切换深色' : '切换浅色'} aria-label={theme === 'light' ? '切换深色模式' : '切换浅色模式'} className="w-11 h-11 rounded-xl flex items-center justify-center text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 hover:text-slate-700 dark:hover:text-slate-200 transition-colors">
           {theme === 'light' ? <Moon size={20} /> : <Sun size={20} />}
         </button>
-        <button onClick={onOpenSettings} title="设置" className={cn("w-11 h-11 rounded-xl flex items-center justify-center transition-colors", isSettingsOpen ? "bg-indigo-600 text-white shadow-lg shadow-indigo-200" : "text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 hover:text-slate-700 dark:hover:text-slate-200")}>
+        <button onClick={onOpenSettings} title="设置" aria-label="设置" className={cn("w-11 h-11 rounded-xl flex items-center justify-center transition-colors", isSettingsOpen ? "bg-indigo-600 text-white shadow-lg shadow-indigo-200" : "text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 hover:text-slate-700 dark:hover:text-slate-200")}>
           <SettingsIcon size={22} />
         </button>
       </div>
@@ -128,36 +130,99 @@ export function Sidebar({ roles, currentView, onViewChange, isSettingsOpen, onOp
 
       {/* Confirm Dialog */}
       {confirmAction && (
-        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-900/20 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-6 w-[360px] animate-in zoom-in-95 duration-200">
-            <h3 className="text-[16px] font-semibold text-slate-800 dark:text-slate-100 mb-3">
-              {confirmAction.type === 'archive' ? '确认归档' : '确认删除'}
-            </h3>
-            <p className="text-[14px] text-slate-600 dark:text-slate-300 leading-relaxed mb-4">
-              {confirmAction.type === 'archive' 
-                ? `归档「${confirmAction.roleName}」后，该角色将暂停工作，但保留所有记忆和任务。你可以随时重新启用。` 
-                : `删除「${confirmAction.roleName}」后，该角色的所有数据将被永久移除，且不可恢复。请输入角色名确认。`}
-            </p>
-            {confirmAction.type === 'delete' && (
-              <input
-                value={deleteConfirmName}
-                onChange={e => setDeleteConfirmName(e.target.value)}
-                placeholder={confirmAction.roleName}
-                className="mb-4 w-full rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-700 px-4 py-2.5 text-[14px] text-slate-800 dark:text-slate-100 outline-none focus:border-red-400 focus:ring-2 focus:ring-red-500/10"
-              />
-            )}
-            {confirmError && (
-              <p className="mb-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-[13px] text-red-600">{confirmError}</p>
-            )}
-            <div className="flex justify-end gap-3">
-              <button onClick={() => { setConfirmAction(null); setConfirmError(''); }} className="px-5 py-2.5 border border-slate-200 dark:border-slate-600 text-slate-600 dark:text-slate-300 rounded-lg text-[13px] font-medium hover:bg-slate-50 dark:hover:bg-slate-700">取消</button>
-              <button onClick={handleConfirm} disabled={isConfirming || (confirmAction.type === 'delete' && deleteConfirmName.trim() !== confirmAction.roleName)} className={cn("px-5 py-2.5 rounded-lg text-[13px] font-medium text-white disabled:cursor-not-allowed disabled:opacity-50", confirmAction.type === 'archive' ? "bg-amber-600 hover:bg-amber-700" : "bg-red-600 hover:bg-red-700")}>
-                {isConfirming ? '处理中...' : confirmAction.type === 'archive' ? '确认归档' : '确认删除'}
-              </button>
-            </div>
-          </div>
-        </div>
+        <ConfirmDialog
+          confirmAction={confirmAction}
+          deleteConfirmName={deleteConfirmName}
+          setDeleteConfirmName={setDeleteConfirmName}
+          confirmError={confirmError}
+          isConfirming={isConfirming}
+          onCancel={() => { setConfirmAction(null); setConfirmError(''); }}
+          onConfirm={handleConfirm}
+        />
       )}
     </aside>
+  );
+}
+
+interface ConfirmDialogProps {
+  confirmAction: { type: 'archive' | 'delete'; roleId: string; roleName: string };
+  deleteConfirmName: string;
+  setDeleteConfirmName: (v: string) => void;
+  confirmError: string;
+  isConfirming: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}
+
+function ConfirmDialog({ confirmAction, deleteConfirmName, setDeleteConfirmName, confirmError, isConfirming, onCancel, onConfirm }: ConfirmDialogProps) {
+  const onCancelRef = useRef(onCancel);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const previousFocusRef = useRef<Element | null>(null);
+
+  useEffect(() => {
+    onCancelRef.current = onCancel;
+  }, [onCancel]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        onCancelRef.current();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  useEffect(() => {
+    previousFocusRef.current = document.activeElement;
+    dialogRef.current?.focus();
+    return () => {
+      const previous = previousFocusRef.current;
+      if (previous instanceof HTMLElement && document.body.contains(previous)) {
+        previous.focus();
+      }
+    };
+  }, []);
+
+  return (
+    <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-900/20 backdrop-blur-sm animate-in fade-in duration-200">
+      <div className="absolute inset-0" onClick={onCancel}></div>
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={confirmAction.type === 'archive' ? '确认归档' : '确认删除'}
+        tabIndex={-1}
+        className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-6 w-[360px] animate-in zoom-in-95 duration-200 relative z-10 outline-none"
+      >
+        <h3 className="text-[16px] font-semibold text-slate-800 dark:text-slate-100 mb-3">
+          {confirmAction.type === 'archive' ? '确认归档' : '确认删除'}
+        </h3>
+        <p className="text-[14px] text-slate-600 dark:text-slate-300 leading-relaxed mb-4">
+          {confirmAction.type === 'archive'
+            ? `归档「${confirmAction.roleName}」后，该角色将暂停工作，但保留所有记忆和任务。你可以随时重新启用。`
+            : `删除「${confirmAction.roleName}」后，该角色的所有数据将被永久移除，且不可恢复。请输入角色名确认。`}
+        </p>
+        {confirmAction.type === 'delete' && (
+          <input
+            value={deleteConfirmName}
+            onChange={e => setDeleteConfirmName(e.target.value)}
+            placeholder={confirmAction.roleName}
+            aria-label="输入角色名以确认删除"
+            className="mb-4 w-full rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-700 px-4 py-2.5 text-[14px] text-slate-800 dark:text-slate-100 outline-none focus:border-red-400 focus:ring-2 focus:ring-red-500/10"
+          />
+        )}
+        {confirmError && (
+          <p className="mb-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-[13px] text-red-600">{confirmError}</p>
+        )}
+        <div className="flex justify-end gap-3">
+          <button onClick={onCancel} className="px-5 py-2.5 border border-slate-200 dark:border-slate-600 text-slate-600 dark:text-slate-300 rounded-lg text-[13px] font-medium hover:bg-slate-50 dark:hover:bg-slate-700">取消</button>
+          <button onClick={onConfirm} disabled={isConfirming || (confirmAction.type === 'delete' && deleteConfirmName.trim() !== confirmAction.roleName)} className={cn("px-5 py-2.5 rounded-lg text-[13px] font-medium text-white disabled:cursor-not-allowed disabled:opacity-50", confirmAction.type === 'archive' ? "bg-amber-600 hover:bg-amber-700" : "bg-red-600 hover:bg-red-700")}>
+            {isConfirming ? '处理中...' : confirmAction.type === 'archive' ? '确认归档' : '确认删除'}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

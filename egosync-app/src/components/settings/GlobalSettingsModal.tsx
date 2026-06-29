@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Plus, X, Download, Trash2, Loader2, Check, AlertCircle, Clock, Bell, Upload } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { Modal } from '../layout/Modal';
@@ -38,6 +38,23 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [testStatus, setTestStatus] = useState<TestStatus>('idle');
+  const onCloseRef = useRef(onClose);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        onCloseRef.current();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
   const [testError, setTestError] = useState('');
   const [testingConfigId, setTestingConfigId] = useState<string | null>(null);
   const [lastTestedConfigId, setLastTestedConfigId] = useState<string | null>(null);
@@ -1036,7 +1053,7 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
       </div>
 
       {saveError && (
-        <Modal onClose={() => setSaveError('')} width="w-[420px]">
+        <Modal onClose={() => setSaveError('')} width="w-[420px]" ariaLabel="保存失败">
           <div className="p-6">
             <h2 className="text-[18px] font-semibold text-slate-800 flex items-center gap-2">
               <AlertCircle size={20} className="text-red-500" /> 保存失败

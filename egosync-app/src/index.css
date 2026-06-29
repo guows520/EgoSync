@@ -63,8 +63,13 @@
     background-color: transparent;
   }
 
-  *:focus {
+  *:focus:not(:focus-visible) {
     outline: none !important;
+  }
+
+  *:focus-visible {
+    outline: 2px solid var(--role-accent, #6366F1) !important;
+    outline-offset: 2px !important;
   }
 }
 
@@ -131,16 +136,5 @@
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
-  }
-  .animate-bounce-forever {
-    animation-duration: 1.4s !important;
-    animation-iteration-count: infinite !important;
-  }
-  .breathe {
-    animation-duration: 4s !important;
-    animation-iteration-count: infinite !important;
-  }
-  .animate-loading-spin {
-    animation: loading-spin 1s linear infinite !important;
   }
 }

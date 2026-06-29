@@ -227,7 +227,6 @@ describe('GlobalSettingsModal', () => {
 
     expect(css).toContain('@keyframes loading-spin');
     expect(css).toMatch(/\.animate-loading-spin\s*\{[^}]*animation:\s*loading-spin 1s linear infinite !important;/s);
-    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*\.animate-loading-spin\s*\{[^}]*animation:\s*loading-spin 1s linear infinite !important;/);
   });
 
   describe('数据导出', () => {

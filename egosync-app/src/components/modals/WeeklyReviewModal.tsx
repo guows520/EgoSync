@@ -117,7 +117,7 @@ export function WeeklyReviewModal({ roles, onClose, initialPhase = 'review' }: W
   const hasReviewData = review !== null;
 
   return (
-    <Modal onClose={onClose} width="w-[900px]">
+    <Modal onClose={onClose} width="w-[900px]" ariaLabel="周回顾">
       <div className="p-8 max-h-[80vh] overflow-y-auto">
         <div className="flex justify-between items-start mb-6">
           <div>

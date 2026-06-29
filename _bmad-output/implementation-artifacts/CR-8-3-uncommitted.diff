@@ -1,0 +1,498 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 9bc26e4..d585022 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -109,6 +109,16 @@ jobs:
+         working-directory: egosync-app/tests/e2e
+         run: npm test
+ 
++      - name: Run pa11y baseline scan (Linux)
++        if: matrix.platform.os == 'ubuntu-latest'
++        working-directory: egosync-app
++        run: |
++          npm run build
++          npm run preview &
++          sleep 3
++          cd tests/e2e && npm run pa11y
++        shell: bash
++
+       - name: Upload E2E screenshots on failure
+         if: failure() && matrix.platform.os != 'macos-latest'
+         uses: actions/upload-artifact@v4
+@@ -123,6 +133,13 @@ jobs:
+           name: e2e-logs-${{ matrix.platform.os }}
+           path: egosync-app/tests/e2e/logs/
+ 
++      - name: Upload accessibility reports on failure
++        if: failure() && matrix.platform.os != 'macos-latest'
++        uses: actions/upload-artifact@v4
++        with:
++          name: a11y-reports-${{ matrix.platform.os }}
++          path: egosync-app/tests/e2e/reports/accessibility/
++
+       - name: Upload artifact (Windows)
+         if: matrix.platform.os == 'windows-latest'
+         uses: actions/upload-artifact@v4
+diff --git a/_bmad-output/implementation-artifacts/sprint-status.yaml b/_bmad-output/implementation-artifacts/sprint-status.yaml
+index 71cb987..a7edc44 100644
+--- a/_bmad-output/implementation-artifacts/sprint-status.yaml
++++ b/_bmad-output/implementation-artifacts/sprint-status.yaml
+@@ -35,7 +35,7 @@
+ # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+ 
+ generated: 2026-05-21
+-last_updated: 2026-06-28T17:40:00+08:00
++last_updated: 2026-06-28T22:13:00+08:00
+ project: "探索 (EgoSync)"
+ project_key: NOKEY
+ tracking_system: file-system
+@@ -146,7 +146,7 @@ development_status:
+   epic-8: in-progress
+   8-1-github-actions-ci-build: done
+   8-2-e2e-test-core-journeys: in-progress
+-  8-3-wcag-accessibility-audit: backlog
++  8-3-wcag-accessibility-audit: in-progress
+   8-4-performance-benchmark: backlog
+   8-5-release-auto-publish: backlog
+   epic-8-retrospective: optional
+diff --git a/egosync-app/src/components/butler/DashboardTab.tsx b/egosync-app/src/components/butler/DashboardTab.tsx
+index 7da6b10..9615a95 100644
+--- a/egosync-app/src/components/butler/DashboardTab.tsx
++++ b/egosync-app/src/components/butler/DashboardTab.tsx
+@@ -65,7 +65,14 @@ export function DashboardTab({ onViewChange }: { onViewChange?: (view: string) =
+                   <span className="text-[14.5px] font-semibold text-slate-800 truncate">{role.roleName}</span>
+                   <span className={cn("text-[12px] font-bold", role.energy >= 70 ? "text-emerald-600" : role.energy >= 40 ? "text-amber-600" : "text-red-500")}>{role.energy}%</span>
+                 </div>
+-                <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
++                <div
++                  className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden"
++                  role="progressbar"
++                  aria-valuenow={role.energy}
++                  aria-valuemin={0}
++                  aria-valuemax={100}
++                  aria-label={`${role.roleName} 能量值 ${role.energy}%`}
++                >
+                   <div
+                     className={cn("h-full rounded-full transition-all duration-500", role.energy >= 70 ? "bg-emerald-500" : role.energy >= 40 ? "bg-amber-500" : "bg-red-500")}
+                     style={{ width: `${role.energy}%` }}
+diff --git a/egosync-app/src/components/butler/TaskOverviewTab.tsx b/egosync-app/src/components/butler/TaskOverviewTab.tsx
+index 67e0ae5..2af4cf4 100644
+--- a/egosync-app/src/components/butler/TaskOverviewTab.tsx
++++ b/egosync-app/src/components/butler/TaskOverviewTab.tsx
+@@ -430,7 +430,7 @@ export function TaskOverviewTab({ roles, tasks, isLoading, error, classifyingIds
+       </div>
+ 
+       {pendingDeleteTask && (
+-        <Modal onClose={() => !isDeleting && setPendingDeleteTask(null)} width="w-[420px]">
++        <Modal onClose={() => !isDeleting && setPendingDeleteTask(null)} width="w-[420px]" ariaLabel="确认删除任务">
+           <div className="p-6">
+             <h2 className="text-[18px] font-semibold text-slate-800">确认删除任务？</h2>
+             <p className="mt-3 text-[13px] leading-6 text-slate-500">
+diff --git a/egosync-app/src/components/chat/ChatInput.tsx b/egosync-app/src/components/chat/ChatInput.tsx
+index 17ef02b..426e44e 100644
+--- a/egosync-app/src/components/chat/ChatInput.tsx
++++ b/egosync-app/src/components/chat/ChatInput.tsx
+@@ -29,6 +29,7 @@ export function ChatInput({ onSend, onStop, isStreaming, disabled, placeholder,
+         onChange={e => setInput(e.target.value)}
+         onKeyDown={e => e.key === 'Enter' && !e.shiftKey && handleSend()}
+         placeholder={placeholder ?? "跟管家说点什么，比如：帮我安排一个会议..."}
++        aria-label={placeholder ?? "跟管家说点什么"}
+         disabled={disabled}
+         className="w-full bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl pl-5 pr-14 py-3.5 text-[14px] dark:text-slate-100 dark:placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-500/20 transition-colors shadow-sm disabled:opacity-60 disabled:cursor-not-allowed"
+       />
+diff --git a/egosync-app/src/components/chat/ChatStream.tsx b/egosync-app/src/components/chat/ChatStream.tsx
+index 13168f6..8556e6e 100644
+--- a/egosync-app/src/components/chat/ChatStream.tsx
++++ b/egosync-app/src/components/chat/ChatStream.tsx
+@@ -1058,7 +1058,7 @@ export function ChatStream({
+         onSelectConversation={switchToConversation}
+         onDeleteConversation={handleDeleteConversation}
+       />
+-      <div ref={scrollRef} data-testid="chat-scroll-container" className="flex-1 overflow-y-auto p-8 scroll-smooth">
++      <div ref={scrollRef} data-testid="chat-scroll-container" role="log" aria-live="polite" className="flex-1 overflow-y-auto p-8 scroll-smooth">
+         <div className="mx-auto max-w-3xl space-y-3">
+           {sourceNavigationNotice && (
+             <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[13px] text-amber-700">
+diff --git a/egosync-app/src/components/layout/Modal.tsx b/egosync-app/src/components/layout/Modal.tsx
+index e2e2740..239ff7f 100644
+--- a/egosync-app/src/components/layout/Modal.tsx
++++ b/egosync-app/src/components/layout/Modal.tsx
+@@ -1,10 +1,33 @@
++import { useEffect } from 'react';
+ import { cn } from '../../lib/utils';
+ 
+-export function Modal({ children, onClose, width = "w-[540px]" }: any) {
++interface ModalProps {
++  children: React.ReactNode;
++  onClose: () => void;
++  width?: string;
++  ariaLabel?: string;
++}
++
++export function Modal({ children, onClose, width = "w-[540px]", ariaLabel }: ModalProps) {
++  useEffect(() => {
++    const handleKeyDown = (e: KeyboardEvent) => {
++      if (e.key === 'Escape') {
++        onClose();
++      }
++    };
++    document.addEventListener('keydown', handleKeyDown);
++    return () => document.removeEventListener('keydown', handleKeyDown);
++  }, [onClose]);
++
+   return (
+     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/20 backdrop-blur-sm animate-in fade-in duration-200">
+       <div className="absolute inset-0" onClick={onClose}></div>
+-      <div className={cn("bg-white rounded-2xl shadow-2xl overflow-hidden relative z-10 animate-in zoom-in-95 duration-200", width)}>
++      <div
++        role="dialog"
++        aria-modal="true"
++        aria-label={ariaLabel}
++        className={cn("bg-white rounded-2xl shadow-2xl overflow-hidden relative z-10 animate-in zoom-in-95 duration-200", width)}
++      >
+         {children}
+       </div>
+     </div>
+diff --git a/egosync-app/src/components/layout/RoleSidebarIcon.tsx b/egosync-app/src/components/layout/RoleSidebarIcon.tsx
+index b5b62a8..51ca5d4 100644
+--- a/egosync-app/src/components/layout/RoleSidebarIcon.tsx
++++ b/egosync-app/src/components/layout/RoleSidebarIcon.tsx
+@@ -20,6 +20,12 @@ function getEnergyColor(energy: number): string {
+   return '#EF4444'; // 红色（与仪表盘 red-500 一致）
+ }
+ 
++function getEnergyShapeClass(energy: number): string {
++  if (energy >= 80) return 'rounded-full';
++  if (energy >= 40) return 'rounded-none';
++  return 'rotate-45';
++}
++
+ function renderIcon(icon: string) {
+   // 统一渲染为黑白线框 Lucide 图标；未知 icon id 自动回退到 Target。
+   const IconComponent = getRoleIconComponent(icon);
+@@ -43,6 +49,7 @@ function getActiveClassName(color: string): string {
+ 
+ export function RoleSidebarIcon({ role, isActive, onClick, onContextMenu }: RoleSidebarIconProps) {
+   const energyColor = getEnergyColor(role.energy);
++  const energyShapeClass = getEnergyShapeClass(role.energy);
+ 
+   const handleKeyDown = (e: React.KeyboardEvent) => {
+     if (e.key === 'Enter' || e.key === ' ') {
+@@ -70,7 +77,10 @@ export function RoleSidebarIcon({ role, isActive, onClick, onContextMenu }: Role
+       {renderIcon(role.icon)}
+       {/* 能量状态小点 */}
+       <span
+-        className="absolute -top-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-[#F1F3F5] dark:border-slate-800 shadow-sm"
++        className={cn(
++          "absolute -top-0.5 -right-0.5 w-3 h-3 border-2 border-[#F1F3F5] dark:border-slate-800 shadow-sm",
++          energyShapeClass
++        )}
+         style={{ backgroundColor: energyColor }}
+         aria-hidden="true"
+       />
+diff --git a/egosync-app/src/components/layout/Sidebar.tsx b/egosync-app/src/components/layout/Sidebar.tsx
+index d2c1911..22afd72 100644
+--- a/egosync-app/src/components/layout/Sidebar.tsx
++++ b/egosync-app/src/components/layout/Sidebar.tsx
+@@ -1,4 +1,4 @@
+-import { useState, useRef } from 'react';
++import { useState, useRef, useEffect } from 'react';
+ import { Home, Plus, Moon, Sun, Settings as SettingsIcon, Pencil, Archive, Trash2, Bell } from 'lucide-react';
+ import { cn } from '../../lib/utils';
+ import { RoleSidebarIcon } from './RoleSidebarIcon';
+@@ -65,6 +65,7 @@ export function Sidebar({ roles, currentView, onViewChange, isSettingsOpen, onOp
+         <button
+           onClick={() => handleNav('butler')}
+           title="管家"
++          aria-label="管家"
+           className={cn("w-11 h-11 rounded-xl flex items-center justify-center transition-all duration-200 shrink-0", !isSettingsOpen && currentView === 'butler' ? "bg-indigo-600 text-white shadow-lg shadow-indigo-200 scale-105" : "text-slate-500 hover:bg-slate-200")}
+         >
+           <Home size={22} strokeWidth={2.5} />
+@@ -85,6 +86,7 @@ export function Sidebar({ roles, currentView, onViewChange, isSettingsOpen, onOp
+         <button
+           onClick={onAddRole}
+           title="添加角色"
++          aria-label="添加角色"
+           className="w-11 h-11 rounded-xl flex items-center justify-center text-slate-400 border-2 border-dashed border-slate-300 dark:border-slate-600 hover:border-indigo-400 hover:text-indigo-500 hover:bg-indigo-50/50 dark:hover:bg-indigo-900/30 transition-all duration-200 shrink-0"
+         >
+           <Plus size={20} strokeWidth={2.5} />
+@@ -100,10 +102,10 @@ export function Sidebar({ roles, currentView, onViewChange, isSettingsOpen, onOp
+             <span className="absolute top-1.5 right-1.5 w-2.5 h-2.5 bg-emerald-500 rounded-full border-2 border-[#F1F3F5] dark:border-slate-800"></span>
+           ) : null}
+         </button>
+-        <button onClick={onToggleTheme} title={theme === 'light' ? '切换深色' : '切换浅色'} className="w-11 h-11 rounded-xl flex items-center justify-center text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 hover:text-slate-700 dark:hover:text-slate-200 transition-colors">
++        <button onClick={onToggleTheme} title={theme === 'light' ? '切换深色' : '切换浅色'} aria-label={theme === 'light' ? '切换深色模式' : '切换浅色模式'} className="w-11 h-11 rounded-xl flex items-center justify-center text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 hover:text-slate-700 dark:hover:text-slate-200 transition-colors">
+           {theme === 'light' ? <Moon size={20} /> : <Sun size={20} />}
+         </button>
+-        <button onClick={onOpenSettings} title="设置" className={cn("w-11 h-11 rounded-xl flex items-center justify-center transition-colors", isSettingsOpen ? "bg-indigo-600 text-white shadow-lg shadow-indigo-200" : "text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 hover:text-slate-700 dark:hover:text-slate-200")}>
++        <button onClick={onOpenSettings} title="设置" aria-label="设置" className={cn("w-11 h-11 rounded-xl flex items-center justify-center transition-colors", isSettingsOpen ? "bg-indigo-600 text-white shadow-lg shadow-indigo-200" : "text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 hover:text-slate-700 dark:hover:text-slate-200")}>
+           <SettingsIcon size={22} />
+         </button>
+       </div>
+@@ -128,36 +130,77 @@ export function Sidebar({ roles, currentView, onViewChange, isSettingsOpen, onOp
+ 
+       {/* Confirm Dialog */}
+       {confirmAction && (
+-        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-900/20 backdrop-blur-sm animate-in fade-in duration-200">
+-          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-6 w-[360px] animate-in zoom-in-95 duration-200">
+-            <h3 className="text-[16px] font-semibold text-slate-800 dark:text-slate-100 mb-3">
+-              {confirmAction.type === 'archive' ? '确认归档' : '确认删除'}
+-            </h3>
+-            <p className="text-[14px] text-slate-600 dark:text-slate-300 leading-relaxed mb-4">
+-              {confirmAction.type === 'archive' 
+-                ? `归档「${confirmAction.roleName}」后，该角色将暂停工作，但保留所有记忆和任务。你可以随时重新启用。` 
+-                : `删除「${confirmAction.roleName}」后，该角色的所有数据将被永久移除，且不可恢复。请输入角色名确认。`}
+-            </p>
+-            {confirmAction.type === 'delete' && (
+-              <input
+-                value={deleteConfirmName}
+-                onChange={e => setDeleteConfirmName(e.target.value)}
+-                placeholder={confirmAction.roleName}
+-                className="mb-4 w-full rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-700 px-4 py-2.5 text-[14px] text-slate-800 dark:text-slate-100 outline-none focus:border-red-400 focus:ring-2 focus:ring-red-500/10"
+-              />
+-            )}
+-            {confirmError && (
+-              <p className="mb-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-[13px] text-red-600">{confirmError}</p>
+-            )}
+-            <div className="flex justify-end gap-3">
+-              <button onClick={() => { setConfirmAction(null); setConfirmError(''); }} className="px-5 py-2.5 border border-slate-200 dark:border-slate-600 text-slate-600 dark:text-slate-300 rounded-lg text-[13px] font-medium hover:bg-slate-50 dark:hover:bg-slate-700">取消</button>
+-              <button onClick={handleConfirm} disabled={isConfirming || (confirmAction.type === 'delete' && deleteConfirmName.trim() !== confirmAction.roleName)} className={cn("px-5 py-2.5 rounded-lg text-[13px] font-medium text-white disabled:cursor-not-allowed disabled:opacity-50", confirmAction.type === 'archive' ? "bg-amber-600 hover:bg-amber-700" : "bg-red-600 hover:bg-red-700")}>
+-                {isConfirming ? '处理中...' : confirmAction.type === 'archive' ? '确认归档' : '确认删除'}
+-              </button>
+-            </div>
+-          </div>
+-        </div>
++        <ConfirmDialog
++          confirmAction={confirmAction}
++          deleteConfirmName={deleteConfirmName}
++          setDeleteConfirmName={setDeleteConfirmName}
++          confirmError={confirmError}
++          isConfirming={isConfirming}
++          onCancel={() => { setConfirmAction(null); setConfirmError(''); }}
++          onConfirm={handleConfirm}
++        />
+       )}
+     </aside>
+   );
+ }
++
++interface ConfirmDialogProps {
++  confirmAction: { type: 'archive' | 'delete'; roleId: string; roleName: string };
++  deleteConfirmName: string;
++  setDeleteConfirmName: (v: string) => void;
++  confirmError: string;
++  isConfirming: boolean;
++  onCancel: () => void;
++  onConfirm: () => void;
++}
++
++function ConfirmDialog({ confirmAction, deleteConfirmName, setDeleteConfirmName, confirmError, isConfirming, onCancel, onConfirm }: ConfirmDialogProps) {
++  useEffect(() => {
++    const handleKeyDown = (e: KeyboardEvent) => {
++      if (e.key === 'Escape') {
++        onCancel();
++      }
++    };
++    document.addEventListener('keydown', handleKeyDown);
++    return () => document.removeEventListener('keydown', handleKeyDown);
++  }, [onCancel]);
++
++  return (
++    <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-900/20 backdrop-blur-sm animate-in fade-in duration-200">
++      <div className="absolute inset-0" onClick={onCancel}></div>
++      <div
++        role="dialog"
++        aria-modal="true"
++        aria-label={confirmAction.type === 'archive' ? '确认归档' : '确认删除'}
++        className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-6 w-[360px] animate-in zoom-in-95 duration-200 relative z-10"
++      >
++        <h3 className="text-[16px] font-semibold text-slate-800 dark:text-slate-100 mb-3">
++          {confirmAction.type === 'archive' ? '确认归档' : '确认删除'}
++        </h3>
++        <p className="text-[14px] text-slate-600 dark:text-slate-300 leading-relaxed mb-4">
++          {confirmAction.type === 'archive'
++            ? `归档「${confirmAction.roleName}」后，该角色将暂停工作，但保留所有记忆和任务。你可以随时重新启用。`
++            : `删除「${confirmAction.roleName}」后，该角色的所有数据将被永久移除，且不可恢复。请输入角色名确认。`}
++        </p>
++        {confirmAction.type === 'delete' && (
++          <input
++            value={deleteConfirmName}
++            onChange={e => setDeleteConfirmName(e.target.value)}
++            placeholder={confirmAction.roleName}
++            aria-label="输入角色名以确认删除"
++            className="mb-4 w-full rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-700 px-4 py-2.5 text-[14px] text-slate-800 dark:text-slate-100 outline-none focus:border-red-400 focus:ring-2 focus:ring-red-500/10"
++          />
++        )}
++        {confirmError && (
++          <p className="mb-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-[13px] text-red-600">{confirmError}</p>
++        )}
++        <div className="flex justify-end gap-3">
++          <button onClick={onCancel} className="px-5 py-2.5 border border-slate-200 dark:border-slate-600 text-slate-600 dark:text-slate-300 rounded-lg text-[13px] font-medium hover:bg-slate-50 dark:hover:bg-slate-700">取消</button>
++          <button onClick={onConfirm} disabled={isConfirming || (confirmAction.type === 'delete' && deleteConfirmName.trim() !== confirmAction.roleName)} className={cn("px-5 py-2.5 rounded-lg text-[13px] font-medium text-white disabled:cursor-not-allowed disabled:opacity-50", confirmAction.type === 'archive' ? "bg-amber-600 hover:bg-amber-700" : "bg-red-600 hover:bg-red-700")}>
++            {isConfirming ? '处理中...' : confirmAction.type === 'archive' ? '确认归档' : '确认删除'}
++          </button>
++        </div>
++      </div>
++    </div>
++  );
++}
+diff --git a/egosync-app/src/components/modals/AddRoleModal.tsx b/egosync-app/src/components/modals/AddRoleModal.tsx
+index e78ac5c..845f342 100644
+--- a/egosync-app/src/components/modals/AddRoleModal.tsx
++++ b/egosync-app/src/components/modals/AddRoleModal.tsx
+@@ -43,7 +43,7 @@ export function AddRoleModal({ onClose, onAdd }: AddRoleModalProps) {
+   };
+ 
+   return (
+-    <Modal onClose={onClose} width="w-[480px]">
++    <Modal onClose={onClose} width="w-[480px]" ariaLabel="添加新角色">
+       <div className="p-6">
+         <div className="flex justify-between items-center mb-6">
+           <h2 className="text-[18px] font-semibold text-slate-800">添加新角色</h2>
+diff --git a/egosync-app/src/components/modals/TaskModal.tsx b/egosync-app/src/components/modals/TaskModal.tsx
+index 8766bbc..3264b53 100644
+--- a/egosync-app/src/components/modals/TaskModal.tsx
++++ b/egosync-app/src/components/modals/TaskModal.tsx
+@@ -96,7 +96,7 @@ export function TaskModal({ scope, roles = [], task, onClose, onSave }: TaskModa
+   };
+ 
+   return (
+-    <Modal onClose={onClose} width="w-[500px]">
++    <Modal onClose={onClose} width="w-[500px]" ariaLabel={task ? '编辑任务' : '新建任务'}>
+       <div className="p-6">
+         <div className="flex justify-between items-center mb-6">
+           <h2 className="text-[18px] font-semibold text-slate-800">{task ? '编辑任务' : '新建任务'}</h2>
+diff --git a/egosync-app/src/components/modals/WeeklyReviewModal.tsx b/egosync-app/src/components/modals/WeeklyReviewModal.tsx
+index 2cd5daa..1a26f2f 100644
+--- a/egosync-app/src/components/modals/WeeklyReviewModal.tsx
++++ b/egosync-app/src/components/modals/WeeklyReviewModal.tsx
+@@ -117,7 +117,7 @@ export function WeeklyReviewModal({ roles, onClose, initialPhase = 'review' }: W
+   const hasReviewData = review !== null;
+ 
+   return (
+-    <Modal onClose={onClose} width="w-[900px]">
++    <Modal onClose={onClose} width="w-[900px]" ariaLabel="周回顾">
+       <div className="p-8 max-h-[80vh] overflow-y-auto">
+         <div className="flex justify-between items-start mb-6">
+           <div>
+diff --git a/egosync-app/src/components/role/TasksTab.tsx b/egosync-app/src/components/role/TasksTab.tsx
+index ce8667d..a6b9234 100644
+--- a/egosync-app/src/components/role/TasksTab.tsx
++++ b/egosync-app/src/components/role/TasksTab.tsx
+@@ -465,7 +465,7 @@ export function TasksTab({ role, tasks, isLoading, error, classifyingIds = EMPTY
+       )}
+       </div>
+       {pendingDeleteTask && (
+-        <Modal onClose={() => !isDeleting && setPendingDeleteTask(null)} width="w-[420px]">
++        <Modal onClose={() => !isDeleting && setPendingDeleteTask(null)} width="w-[420px]" ariaLabel="确认删除任务">
+           <div className="p-6">
+             <h2 className="text-[18px] font-semibold text-slate-800">确认删除任务？</h2>
+             <p className="mt-3 text-[13px] leading-6 text-slate-500">
+diff --git a/egosync-app/src/components/settings/GlobalSettingsModal.test.tsx b/egosync-app/src/components/settings/GlobalSettingsModal.test.tsx
+index 3fd94e8..c7f0eaf 100644
+--- a/egosync-app/src/components/settings/GlobalSettingsModal.test.tsx
++++ b/egosync-app/src/components/settings/GlobalSettingsModal.test.tsx
+@@ -227,7 +227,6 @@ describe('GlobalSettingsModal', () => {
+ 
+     expect(css).toContain('@keyframes loading-spin');
+     expect(css).toMatch(/\.animate-loading-spin\s*\{[^}]*animation:\s*loading-spin 1s linear infinite !important;/s);
+-    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*\.animate-loading-spin\s*\{[^}]*animation:\s*loading-spin 1s linear infinite !important;/);
+   });
+ 
+   describe('数据导出', () => {
+diff --git a/egosync-app/src/components/settings/GlobalSettingsModal.tsx b/egosync-app/src/components/settings/GlobalSettingsModal.tsx
+index d8eac89..ba6a4a3 100644
+--- a/egosync-app/src/components/settings/GlobalSettingsModal.tsx
++++ b/egosync-app/src/components/settings/GlobalSettingsModal.tsx
+@@ -1036,7 +1036,7 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
+       </div>
+ 
+       {saveError && (
+-        <Modal onClose={() => setSaveError('')} width="w-[420px]">
++        <Modal onClose={() => setSaveError('')} width="w-[420px]" ariaLabel="保存失败">
+           <div className="p-6">
+             <h2 className="text-[18px] font-semibold text-slate-800 flex items-center gap-2">
+               <AlertCircle size={20} className="text-red-500" /> 保存失败
+diff --git a/egosync-app/src/index.css b/egosync-app/src/index.css
+index 1d6eb41..2f5cc1f 100644
+--- a/egosync-app/src/index.css
++++ b/egosync-app/src/index.css
+@@ -63,9 +63,14 @@
+     background-color: transparent;
+   }
+ 
+-  *:focus {
++  *:focus:not(:focus-visible) {
+     outline: none !important;
+   }
++
++  *:focus-visible {
++    outline: 2px solid var(--role-accent, #6366F1) !important;
++    outline-offset: 2px !important;
++  }
+ }
+ 
+ /* Custom Scrollbar */
+@@ -132,15 +137,4 @@
+     animation-iteration-count: 1 !important;
+     transition-duration: 0.01ms !important;
+   }
+-  .animate-bounce-forever {
+-    animation-duration: 1.4s !important;
+-    animation-iteration-count: infinite !important;
+-  }
+-  .breathe {
+-    animation-duration: 4s !important;
+-    animation-iteration-count: infinite !important;
+-  }
+-  .animate-loading-spin {
+-    animation: loading-spin 1s linear infinite !important;
+-  }
+ }
+diff --git a/egosync-app/tests/e2e/package.json b/egosync-app/tests/e2e/package.json
+index 59fac5f..ef85390 100644
+--- a/egosync-app/tests/e2e/package.json
++++ b/egosync-app/tests/e2e/package.json
+@@ -4,14 +4,18 @@
+   "type": "module",
+   "scripts": {
+     "test": "wdio run wdio.conf.ts",
+-    "test:ci": "wdio run wdio.conf.ts --suite ci"
++    "test:ci": "wdio run wdio.conf.ts --suite ci",
++    "pa11y": "node scripts/pa11y-scan.mjs"
+   },
+   "devDependencies": {
++    "@axe-core/webdriverio": "^4.11.0",
+     "@wdio/cli": "^9.0.0",
+     "@wdio/globals": "^9.0.0",
+     "@wdio/local-runner": "^9.0.0",
+     "@wdio/mocha-framework": "^9.0.0",
+     "@wdio/spec-reporter": "^9.0.0",
++    "axe-core": "^4.11.0",
++    "pa11y": "^9.1.0",
+     "webdriverio": "^9.0.0",
+     "ts-node": "^10.9.0",
+     "typescript": "^5.2.2"
+diff --git a/egosync-app/tests/e2e/wdio.conf.ts b/egosync-app/tests/e2e/wdio.conf.ts
+index 2c2c064..806b738 100644
+--- a/egosync-app/tests/e2e/wdio.conf.ts
++++ b/egosync-app/tests/e2e/wdio.conf.ts
+@@ -15,6 +15,7 @@ const binaryPath = resolve(__dirname, '..', '..', 'src-tauri', 'target', 'releas
+ 
+ const screenshotsDir = resolve(__dirname, 'screenshots');
+ const logsDir = resolve(__dirname, 'logs');
++const a11yReportsDir = resolve(__dirname, 'reports', 'accessibility');
+ 
+ // 应用数据目录由 tauri.conf.json 的 identifier 决定（com.egosync.desktop），
+ // Tauri 2.x 的 app_data_dir() 据此解析，应用 DB 实际写入此目录（见 src-tauri/src/lib.rs）。
+@@ -59,6 +60,10 @@ export const config: WebdriverIO.Config = {
+       rmSync(logsDir, { recursive: true, force: true });
+     }
+     mkdirSync(logsDir, { recursive: true });
++    if (existsSync(a11yReportsDir)) {
++      rmSync(a11yReportsDir, { recursive: true, force: true });
++    }
++    mkdirSync(a11yReportsDir, { recursive: true });
+   },
+ 
+   beforeSession: () => {

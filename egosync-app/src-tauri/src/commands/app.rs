@@ -105,19 +105,26 @@ pub struct PerformanceSnapshot {
 pub async fn app_performance_snapshot(
     sidecar: State<'_, Arc<Mutex<SidecarManager>>>,
 ) -> Result<PerformanceSnapshot, AppError> {
-    let mut sys = sysinfo::System::new();
-    sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
-
     let current_pid = std::process::id();
+    let sidecar_pid = {
+        let mgr = sidecar.lock().await;
+        mgr.child_pid()
+    };
+
+    let pids: Vec<sysinfo::Pid> = [Some(current_pid), sidecar_pid]
+        .into_iter()
+        .flatten()
+        .map(sysinfo::Pid::from_u32)
+        .collect();
+
+    let mut sys = sysinfo::System::new();
+    sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&pids), true);
+
     let rss_mb = sys
         .process(sysinfo::Pid::from_u32(current_pid))
         .map(|p| p.memory() / 1024 / 1024)
         .unwrap_or(0);
 
-    let sidecar_pid = {
-        let mgr = sidecar.lock().await;
-        mgr.child_pid()
-    };
     let sidecar_rss_mb = sidecar_pid.and_then(|pid| {
         sys.process(sysinfo::Pid::from_u32(pid))
             .map(|p| p.memory() / 1024 / 1024)
@@ -151,8 +158,17 @@ pub async fn app_emit_test_stream(
     tokens: Vec<String>,
     app_handle: AppHandle,
 ) -> Result<(), AppError> {
+    const MAX_PERF_TOKENS: usize = 1_000;
+    if tokens.len() > MAX_PERF_TOKENS {
+        return Err(AppError::ValidationError(format!(
+            "tokens count {} exceeds max {}",
+            tokens.len(),
+            MAX_PERF_TOKENS
+        )));
+    }
+
     for token in &tokens {
-        let _ = app_handle.emit(
+        if let Err(e) = app_handle.emit(
             "llm:stream",
             StreamPayload {
                 conversation_id: "perf-test".to_string(),
@@ -165,12 +181,14 @@ pub async fn app_emit_test_stream(
                 tool_name: None,
                 process_event: None,
             },
-        );
+        ) {
+            tracing::warn!("app_emit_test_stream: failed to emit token event: {}", e);
+        }
         // 10ms 间隔模拟真实流式节奏
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
     // 发射 done 信号
-    let _ = app_handle.emit(
+    if let Err(e) = app_handle.emit(
         "llm:stream",
         StreamPayload {
             conversation_id: "perf-test".to_string(),
@@ -183,7 +201,9 @@ pub async fn app_emit_test_stream(
             tool_name: None,
             process_event: None,
         },
-    );
+    ) {
+        tracing::warn!("app_emit_test_stream: failed to emit done event: {}", e);
+    }
     Ok(())
 }
 
@@ -199,6 +219,27 @@ pub async fn app_seed_perf_data(
 ) -> Result<(), AppError> {
     use crate::db::roles;
     use crate::models::role::{CreateRoleInput, Role};
+
+    const MAX_PERF_ROLES: u32 = 1_000;
+    const MAX_PERF_MEMORIES: u32 = 10_000;
+
+    if role_count == 0 {
+        return Err(AppError::ValidationError(
+            "role_count must be > 0".to_string(),
+        ));
+    }
+    if role_count > MAX_PERF_ROLES {
+        return Err(AppError::ValidationError(format!(
+            "role_count {} exceeds max {}",
+            role_count, MAX_PERF_ROLES
+        )));
+    }
+    if memory_count > MAX_PERF_MEMORIES {
+        return Err(AppError::ValidationError(format!(
+            "memory_count {} exceeds max {}",
+            memory_count, MAX_PERF_MEMORIES
+        )));
+    }
 
     // 创建角色
     let mut role_ids: Vec<String> = Vec::new();

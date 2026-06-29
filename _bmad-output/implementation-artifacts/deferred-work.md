@@ -1,5 +1,12 @@
 # Deferred Work
 
+## Deferred from: code review of 8-4-performance-benchmark (2026-06-29)
+
+- **硬编码魔法字符串**：`app.rs` 中 `"perf-test"`、`"fact"`、`"perf-test-conv"` 等硬编码字符串分散多处。属测试代码，可接受；若后续扩展可提取为常量。
+- **app_seed_perf_data 部分失败无回滚**：循环插入记忆时某条失败通过 `?` 立即返回，已插入数据保留。依赖 `wdio.conf.ts` 的 `beforeSession` DB 清理兜底，非生产路径。
+- **measureStreamRenderLatency 轮询效率**：使用 10ms 间隔轮询 DOM 检查 token 出现，最多 500 次。MutationObserver 更优但当前实现可用，精度满足警告不阻断的阈值需求。
+- **auditCssAnimations/auditTsxAnimations 注释/字符串中误报**：静态审计脚本未跳过 CSS/TSX 注释和字符串中的 `requestAnimationFrame`/`setInterval` 匹配，可能误报。属静态审计已知限制，当前 src 中未触发。
+
 ## Deferred from: code review of 8-3-wcag-accessibility-audit (2026-06-28)
 
 - **NotificationPanel 未在本次 diff 中修改**：`App.tsx:411` 调用了 NotificationPanel，但该组件未在 diff 中修改，无法确认其是否支持 Escape 关闭与是否有可理解的 aria-label。属 pre-existing 问题，需后续人工检查或纳入回归测试。

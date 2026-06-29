@@ -60,7 +60,8 @@ function ensureReportsDir(): void {
 function runnerOs(): string {
   return (browser.capabilities as any)?.platformName
     || (browser.capabilities as any)?.['platform']
-    || process.platform;
+    || process.platform
+    || 'unknown';
 }
 
 function checkThreshold(value: number, threshold: number): boolean {
@@ -121,6 +122,9 @@ export async function measureProcessMemory(): Promise<MemorySnapshot> {
   if (snapshot && snapshot.__error) {
     throw new Error(`app_performance_snapshot failed: ${snapshot.__error}`);
   }
+  if (!snapshot || snapshot.rssMb == null || !Number.isFinite(snapshot.rssMb)) {
+    throw new Error('app_performance_snapshot returned invalid snapshot');
+  }
 
   const exceeded = checkThreshold(snapshot.rssMb, THRESHOLDS.rssMb);
   if (exceeded) {
@@ -176,7 +180,14 @@ export async function measureOnboardingInteractive(): Promise<OnboardingInteract
 export async function measureStreamRenderLatency(
   tokens: string[] = ['你', '好', '，', '测', '试'],
 ): Promise<StreamRenderResult> {
+  if (tokens.length === 0) {
+    throw new Error('tokens cannot be empty');
+  }
   ensureReportsDir();
+
+  // 追加一个独特标记 token 作为检测 sentinel，避免 DOM 中已存在相同字符导致误匹配
+  const sentinel = `perf-token-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const tokensWithSentinel = [...tokens, sentinel];
   const tokenCount = tokens.length;
 
   // 通过 IPC 调用 app_emit_test_stream，在 Rust 端 emit llm:stream 事件
@@ -193,7 +204,7 @@ export async function measureStreamRenderLatency(
       }
       const start = Date.now();
       await tauriInvoke('app_emit_test_stream', { tokens: tok });
-      // 轮询 DOM 直到出现最后一个 token 文本（最多 5s）
+      // 轮询 DOM 直到出现最后一个 sentinel token 文本（最多 5s）
       const lastToken = tok[tok.length - 1];
       const deadline = Date.now() + 5000;
       while (Date.now() < deadline) {

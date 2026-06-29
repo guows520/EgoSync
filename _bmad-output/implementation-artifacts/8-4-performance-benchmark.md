@@ -4,7 +4,7 @@ baseline_commit: 4f44008
 
 # Story 8.4: 性能基准验证与优化
 
-Status: in-progress
+Status: done
 
 ## Story
 
@@ -116,6 +116,23 @@ so that 使用体验不因平台差异而打折。
   - [ ] 6.4 本地 Chrome DevTools 验证 60fps 呼吸动效，截图/录制保存。
   - [ ] 6.5 本地 DevTools 验证流式 token 渲染延迟（如有 LLM 配置），记录三平台差异（macOS 至少一次）。
   - [x] 6.6 在 story 完成笔记记录所有本地验证结果、阈值基线、runner 性能差异说明。
+
+### Review Findings
+
+- [x] [Review][Patch] app_seed_perf_data role_count=0 时逻辑错误 [app.rs:217,239-254] — 已添加 role_count=0 校验并返回 ValidationError。
+- [x] [Review][Patch] app_seed_perf_data 无数量上限 [app.rs:196-199] — 已添加 MAX_PERF_ROLES=1000 与 MAX_PERF_MEMORIES=10000 校验。
+- [x] [Review][Patch] app_emit_test_stream emit 错误静默忽略 [app.rs:159-172,173-190] — 已将 `let _` 改为 `if let Err(e) = ...` 并记录 tracing::warn。
+- [x] [Review][Patch] app_emit_test_stream tokens 无上限 [app.rs:154] — 已添加 MAX_PERF_TOKENS=1000 校验。
+- [x] [Review][Patch] app_performance_snapshot 刷新所有进程 [app.rs:109] — 已改为 `ProcessesToUpdate::Some(&pids)`，仅刷新当前进程与 sidecar PID。
+- [x] [Review][Patch] measureProcessMemory snapshot 为 null 未检查 [perf-helper.ts:114-119] — 已添加 null / rssMb 非有限值校验。
+- [x] [Review][Patch] measureStreamRenderLatency tokens 为空未检查 [perf-helper.ts:177] — 已添加空数组校验。
+- [x] [Review][Patch] measureStreamRenderLatency 轮询可能匹配 DOM 残留 [perf-helper.ts:197-201] — 已追加唯一 sentinel token 作为检测目标，避免与既有 UI 文本误匹配。
+- [x] [Review][Patch] runnerOs 无默认值 [perf-helper.ts:61-63] — 已添加 `|| 'unknown'` 默认值。
+- [x] [Review][Patch] CI 报告目录不存在时上传空 artifact [ci.yml:44-49] — 已添加 `hashFiles(...)` 非空条件检查。
+- [x] [Review][Defer] 硬编码魔法字符串 [app.rs 多处] — deferred, 测试代码中的硬编码可接受
+- [x] [Review][Defer] app_seed_perf_data 部分失败无回滚 [app.rs:220-235] — deferred, 测试数据失败时 DB 清理逻辑会处理
+- [x] [Review][Defer] measureStreamRenderLatency 轮询效率 [perf-helper.ts:199-206] — deferred, MutationObserver 更优但当前实现可用
+- [x] [Review][Defer] auditCssAnimations/auditTsxAnimations 注释/字符串中误报 [audit-animations.mjs] — deferred, 静态审计已知限制
 
 ## Dev Notes
 

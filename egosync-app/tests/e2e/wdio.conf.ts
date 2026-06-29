@@ -132,9 +132,11 @@ export const config: WebdriverIO.Config = {
     // tauri-driver 输出落盘为日志文件，供 CI 失败时上传（满足 AC3「截图+日志」）
     const driverLogFd = openSync(join(logsDir, 'tauri-driver.log'), 'a');
     if (isLinux) {
-      // xvfb 无 GPU 环境中 WebKitGTK DMABUF 渲染器无法工作，需禁用
+      // xvfb 无 GPU 环境中 WebKitGTK DMABUF 渲染器和合成模式均无法工作，需全部禁用
       // 见 https://v2.tauri.app/develop/debug/linux-graphics/
       process.env.WEBKIT_DISABLE_DMABUF_RENDERER = '1';
+      process.env.WEBKIT_DISABLE_COMPOSITING_MODE = '1';
+      process.env.LIBGL_ALWAYS_SOFTWARE = '1';
       tauriDriverProcess = spawn('tauri-driver', [], {
         stdio: ['ignore', driverLogFd, driverLogFd],
         detached: true,

@@ -104,7 +104,25 @@ jobs:
         working-directory: egosync-app/tests/e2e
         env:
           WEBKIT_DISABLE_DMABUF_RENDERER: '1'
+          WEBKIT_DISABLE_COMPOSITING_MODE: '1'
+          LIBGL_ALWAYS_SOFTWARE: '1'
         run: xvfb-run --auto-servernum npm test
+
+      - name: Print E2E diagnostics on failure (Linux)
+        if: failure() && matrix.platform.os == 'ubuntu-latest'
+        working-directory: egosync-app/tests/e2e
+        shell: bash
+        run: |
+          echo "=== tauri-driver log ==="
+          cat logs/tauri-driver.log 2>/dev/null || echo "(no driver log)"
+          echo "=== binary check ==="
+          ls -la ../../src-tauri/target/release/egosync 2>/dev/null || echo "(binary not found)"
+          echo "=== tauri-driver version ==="
+          tauri-driver --version 2>/dev/null || echo "(tauri-driver not in PATH)"
+          echo "=== webkit2gtk-driver check ==="
+          dpkg -l | grep webkit2gtk-driver 2>/dev/null || echo "(webkit2gtk-driver not installed)"
+          echo "=== DISPLAY env ==="
+          echo "DISPLAY=$DISPLAY"
 
       - name: Run E2E tests (Windows)
         if: matrix.platform.os == 'windows-latest'

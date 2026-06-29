@@ -102,6 +102,8 @@ jobs:
       - name: Run E2E tests (Linux)
         if: matrix.platform.os == 'ubuntu-latest'
         working-directory: egosync-app/tests/e2e
+        env:
+          WEBKIT_DISABLE_DMABUF_RENDERER: '1'
         run: xvfb-run --auto-servernum npm test
 
       - name: Run E2E tests (Windows)

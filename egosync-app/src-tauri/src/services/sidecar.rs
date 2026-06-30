@@ -74,17 +74,30 @@ impl SidecarManager {
 
     /// Resolve the opencode binary path: resource dir first, then system PATH.
     fn resolve_binary_path(resource_dir: Option<PathBuf>) -> Option<PathBuf> {
-        // Try resource directory first
+        // Try resource directory first.
+        // Tauri 2.x: `tauri.conf.json` 的 `bundle.resources` 配置将文件放到
+        // `resource_dir/resources/` 子目录，而 `resource_dir()` 返回安装根目录。
+        // 因此需要同时搜索 `resources/` 子目录和根目录。
         if let Some(dir) = resource_dir {
-            let exe_path = dir.join("opencode.exe");
-            if exe_path.exists() {
-                tracing::info!("opencode binary found in resources: {}", exe_path.display());
-                return Some(exe_path);
-            }
-            let cmd_path = dir.join("opencode.cmd");
-            if cmd_path.exists() {
-                tracing::info!("opencode cmd found in resources: {}", cmd_path.display());
-                return Some(cmd_path);
+            let resources_subdir = dir.join("resources");
+            let search_dirs = [resources_subdir.as_path(), dir.as_path()];
+            let exe_name = if cfg!(target_os = "windows") {
+                "opencode.exe"
+            } else {
+                "opencode"
+            };
+            let cmd_name = "opencode.cmd";
+            for search_dir in search_dirs {
+                let exe_path = search_dir.join(exe_name);
+                if exe_path.exists() {
+                    tracing::info!("opencode binary found: {}", exe_path.display());
+                    return Some(exe_path);
+                }
+                let cmd_path = search_dir.join(cmd_name);
+                if cmd_path.exists() {
+                    tracing::info!("opencode cmd found: {}", cmd_path.display());
+                    return Some(cmd_path);
+                }
             }
         }
 

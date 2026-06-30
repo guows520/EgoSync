@@ -1,0 +1,3 @@
+# sqlx migrations: checksum 必须与开发环境一致，禁止 git 在 Windows runner 上做 LF→CRLF 转换
+# 否则 sqlx migrate! 宏编译时嵌入的 checksum 与旧数据库记录不匹配，导致升级安装后闪退
+egosync-app/src-tauri/migrations/*.sql text eol=lf

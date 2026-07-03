@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { cn } from './lib/utils';
 import { Sidebar } from './components/layout/Sidebar';
 import { TitleBar } from './components/layout/TitleBar';
@@ -44,7 +45,7 @@ export default function App() {
   const [isAddRoleOpen, setIsAddRoleOpen] = useState(false);
   const [roles, setRoles] = useState<Role[]>([]);
   const [archivedRoles, setArchivedRoles] = useState<Role[]>([]);
-  const [, setIsLoadingRoles] = useState(true);
+  const [isLoadingRoles, setIsLoadingRoles] = useState(true);
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     const stored = localStorage.getItem('egosync-theme');
     if (stored === 'light' || stored === 'dark') return stored;
@@ -218,6 +219,17 @@ export default function App() {
     });
   }, [refreshAllRoles]);
 
+  // 加载完成后移除 splash 并显示窗口
+  useEffect(() => {
+    if (isLoadingRoles) return;
+    const splash = document.getElementById('egosync-splash');
+    if (splash) {
+      splash.classList.add('hidden');
+      setTimeout(() => splash.remove(), 400);
+    }
+    getCurrentWindow().show().catch(() => {});
+  }, [isLoadingRoles]);
+
   const handleOnboardingComplete = () => {
     refreshAllRoles().catch(() => {});
     setCurrentView('butler');
@@ -352,6 +364,8 @@ export default function App() {
             className="flex-1 relative overflow-hidden rounded-tl-2xl border-t border-l border-slate-200/60 dark:border-slate-700/60 bg-[#F8F9FA] dark:bg-slate-900 backdrop-blur-3xl transition-colors duration-300"
             style={mainTint}
           >
+          {isLoadingRoles ? null : (
+          <>
           {currentView === 'onboard' && <OnboardingView onComplete={handleOnboardingComplete} onOpenSettings={() => setIsSettingsOpen(true)} />}
           {currentView === 'butler' && (
             <ButlerView
@@ -386,6 +400,8 @@ export default function App() {
               onRoleSourceNavigation={handleRoleSourceNavigation}
             />
           ))}
+          </>
+          )}
           </main>
         </div>
         </div>

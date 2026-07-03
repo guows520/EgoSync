@@ -1439,40 +1439,41 @@ pub async fn build_butler_system_prompt(
             - 意图模糊或没有合适角色时：不要调用工具，用一句话主动追问用户希望由谁来处理。\n\
             - 收到角色回复（tool result）后：融合成自然回复，不要强调内部流转；只有用户明确问是谁处理时，才说明对应角色。"
         );
-
-        // Story 2.5: 角色涌现行为指令
-        let cooldowns = crate::db::app_settings::get_emergence_cooldowns(main_pool)
-            .await
-            .unwrap_or_default();
-        let now = chrono::Utc::now();
-        let active_cooldowns: Vec<String> = cooldowns
-            .into_iter()
-            .filter(|(_, ts)| {
-                chrono::DateTime::parse_from_rfc3339(ts)
-                    .map(|dt| now.signed_duration_since(dt).num_days() < 7)
-                    .unwrap_or(false)
-            })
-            .map(|(domain, _)| domain)
-            .collect();
-
-        let mut emergence_prompt = String::from(
-            "\n\n[角色涌现行为]\n\
-            - 当你发现用户在最近几轮对话中反复提到某个尚未被任何 active 角色覆盖的领域时，可以用自然对话的方式建议创建一个新角色。\n\
-            - 不要在第一轮就建议，至少观察到用户 2-3 次提及同一领域后再提议。\n\
-            - 建议时用自然口吻，例如：「我注意到你最近经常聊到 X，要不要创建一个专门的角色来帮你？」\n\
-            - 用户同意后：先用一句话说明你会准备角色提议、用户可在弹窗里确认或调整，然后调用 create_role 工具发起角色提议；不要在工具调用后再追加确认话术。\n\
-            - 用户拒绝后：调用 record_emergence_rejection 工具记录被拒领域，然后自然地继续对话。"
-        );
-
-        if !active_cooldowns.is_empty() {
-            emergence_prompt.push_str(&format!(
-                "\n- 最近被拒绝的领域（7天内不要再建议）：{}",
-                active_cooldowns.join("、")
-            ));
-        }
-
-        system_prompt.push_str(&emergence_prompt);
     }
+
+    // Story 2.5: 角色涌现行为指令 — 始终注入，无论是否有 active 角色。
+    // 零角色场景下最需要涌现建议（引导用户创建第一个角色）。
+    let cooldowns = crate::db::app_settings::get_emergence_cooldowns(main_pool)
+        .await
+        .unwrap_or_default();
+    let now = chrono::Utc::now();
+    let active_cooldowns: Vec<String> = cooldowns
+        .into_iter()
+        .filter(|(_, ts)| {
+            chrono::DateTime::parse_from_rfc3339(ts)
+                .map(|dt| now.signed_duration_since(dt).num_days() < 7)
+                .unwrap_or(false)
+        })
+        .map(|(domain, _)| domain)
+        .collect();
+
+    let mut emergence_prompt = String::from(
+        "\n\n[角色涌现行为]\n\
+        - 当你发现用户在最近几轮对话中反复提到某个尚未被任何 active 角色覆盖的领域时，可以用自然对话的方式建议创建一个新角色。\n\
+        - 不要在第一轮就建议，至少观察到用户 2-3 次提及同一领域后再提议。\n\
+        - 建议时用自然口吻，例如：「我注意到你最近经常聊到 X，要不要创建一个专门的角色来帮你？」\n\
+        - 用户同意后：先用一句话说明你会准备角色提议、用户可在弹窗里确认或调整，然后调用 create_role 工具发起角色提议；不要在工具调用后再追加确认话术。\n\
+        - 用户拒绝后：调用 record_emergence_rejection 工具记录被拒领域，然后自然地继续对话。"
+    );
+
+    if !active_cooldowns.is_empty() {
+        emergence_prompt.push_str(&format!(
+            "\n- 最近被拒绝的领域（7天内不要再建议）：{}",
+            active_cooldowns.join("、")
+        ));
+    }
+
+    system_prompt.push_str(&emergence_prompt);
 
     Ok(system_prompt)
 }
@@ -1763,6 +1764,18 @@ pub async fn build_onboarding_messages(
             result.push(ChatCompletionMessage {
                 role: "user".to_string(),
                 content: user_message.to_string(),
+                tool_calls: None,
+                tool_call_id: None,
+            });
+        }
+    } else if user_message == "__onboarding_start__" {
+        // onboarding 启动信号：如果历史为空（首次对话），需要追加一个
+        // 占位 user message，否则消息列表只有 system prompt，LLM 会报错。
+        let has_user_message = result.iter().any(|m| m.role == "user");
+        if !has_user_message {
+            result.push(ChatCompletionMessage {
+                role: "user".to_string(),
+                content: "你好".to_string(),
                 tool_calls: None,
                 tool_call_id: None,
             });
@@ -2697,61 +2710,68 @@ pub async fn run_stream(
     delegate_bridge: crate::services::delegate_bridge::DelegateBridge,
     working_directory: Option<String>,
 ) -> Result<(), AppError> {
-    let mut already_retried_mcp_session = false;
-    loop {
-        let result = try_run_opencode_stream(
-            &app_handle,
-            &conv_pool,
-            &main_pool,
-            &conversation_id,
-            &assistant_message_id,
-            &user_message_id,
-            &user_message,
-            &cancel_token,
-            role_id.as_deref(),
-            working_directory.as_deref(),
-            opencode_sessions.clone(),
-            agent_bridge.clone(),
-            event_router.clone(),
-            delegate_bridge.clone(),
-            already_retried_mcp_session,
-        )
-        .await;
+    // onboarding 直接走 LLM provider，跳过 opencode stream。
+    // opencode stream 用的是管家 agent 配置（butler system prompt），
+    // 不是 onboarding system prompt，会导致引导流程不正确。
+    let skip_opencode = onboarding_step.is_some();
 
-        match result {
-            Ok(()) => return Ok(()),
-            Err(OpencodeStreamAttemptError::InvalidMcpSession) if !already_retried_mcp_session => {
-                already_retried_mcp_session = true;
-                tracing::warn!(
-                    conversation_id,
-                    "MCP session invalid during opencode tool call; refreshing runtime and retrying once"
-                );
-                if let Err(e) = refresh_opencode_runtime_for_mcp_retry(&app_handle, &opencode_sessions).await {
+    let mut already_retried_mcp_session = false;
+    if !skip_opencode {
+        loop {
+            let result = try_run_opencode_stream(
+                &app_handle,
+                &conv_pool,
+                &main_pool,
+                &conversation_id,
+                &assistant_message_id,
+                &user_message_id,
+                &user_message,
+                &cancel_token,
+                role_id.as_deref(),
+                working_directory.as_deref(),
+                opencode_sessions.clone(),
+                agent_bridge.clone(),
+                event_router.clone(),
+                delegate_bridge.clone(),
+                already_retried_mcp_session,
+            )
+            .await;
+
+            match result {
+                Ok(()) => return Ok(()),
+                Err(OpencodeStreamAttemptError::InvalidMcpSession) if !already_retried_mcp_session => {
+                    already_retried_mcp_session = true;
                     tracing::warn!(
                         conversation_id,
-                        error = %e,
-                        "opencode runtime refresh after MCP session invalid failed"
+                        "MCP session invalid during opencode tool call; refreshing runtime and retrying once"
+                    );
+                    if let Err(e) = refresh_opencode_runtime_for_mcp_retry(&app_handle, &opencode_sessions).await {
+                        tracing::warn!(
+                            conversation_id,
+                            error = %e,
+                            "opencode runtime refresh after MCP session invalid failed"
+                        );
+                        break;
+                    }
+                    let _ = conversations::delete_message_process_events(&conv_pool, &assistant_message_id).await;
+                    let _ = conversations::update_message_content(&conv_pool, &assistant_message_id, "").await;
+                    let _ = conversations::update_message_thinking(&conv_pool, &assistant_message_id, "").await;
+                    continue;
+                }
+                Err(OpencodeStreamAttemptError::InvalidMcpSession) => {
+                    tracing::warn!(
+                        conversation_id,
+                        "MCP session invalid after retry; falling back to LlmProvider"
                     );
                     break;
                 }
-                let _ = conversations::delete_message_process_events(&conv_pool, &assistant_message_id).await;
-                let _ = conversations::update_message_content(&conv_pool, &assistant_message_id, "").await;
-                let _ = conversations::update_message_thinking(&conv_pool, &assistant_message_id, "").await;
-                continue;
-            }
-            Err(OpencodeStreamAttemptError::InvalidMcpSession) => {
-                tracing::warn!(
-                    conversation_id,
-                    "MCP session invalid after retry; falling back to LlmProvider"
-                );
-                break;
-            }
-            Err(OpencodeStreamAttemptError::Fatal(e)) => {
-                tracing::warn!(
-                    "opencode stream unavailable, falling back to LlmProvider: {}",
-                    e
-                );
-                break;
+                Err(OpencodeStreamAttemptError::Fatal(e)) => {
+                    tracing::warn!(
+                        "opencode stream unavailable, falling back to LlmProvider: {}",
+                        e
+                    );
+                    break;
+                }
             }
         }
     }
@@ -2803,14 +2823,20 @@ pub async fn run_stream(
         }
     });
 
-    let mut accumulated = OPENCODE_FALLBACK_NOTICE.to_string();
-    emit_stream_token(
-        &app_handle,
-        &conversation_id,
-        None,
-        OPENCODE_FALLBACK_NOTICE,
-        false,
-    );
+    // onboarding 主动跳过 opencode stream，不是 fallback，不显示降级提示。
+    // 其他场景（opencode 失败后 fallback）才显示降级提示。
+    let is_onboarding = onboarding_step.is_some();
+    let prefix = if is_onboarding { "" } else { OPENCODE_FALLBACK_NOTICE };
+    let mut accumulated = prefix.to_string();
+    if !is_onboarding {
+        emit_stream_token(
+            &app_handle,
+            &conversation_id,
+            None,
+            OPENCODE_FALLBACK_NOTICE,
+            false,
+        );
+    }
     let mut accumulated_thinking = String::new();
     let mut pending = String::new();
     let mut saw_thinking = false;

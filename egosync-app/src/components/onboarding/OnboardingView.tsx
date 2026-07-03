@@ -203,6 +203,12 @@ export function OnboardingView({ onComplete, onOpenSettings }: OnboardingViewPro
     setStreamStatus(null);
     setIsThinking(false);
 
+    // 第 5 步是 onboarding 最后一步，无论用户是否创建角色都标记完成，
+    // 避免下次打开应用重复引导。
+    if (nextStep >= 5 && !proposalHandledRef.current) {
+      appService.completeOnboarding().catch(() => {});
+    }
+
     try {
       await chatService.sendMessage({
         conversationId,

@@ -63,3 +63,20 @@ pub async fn llm_config_test_connection(
 ) -> Result<(), AppError> {
     service::test_connection(&pool, id).await
 }
+
+#[tauri::command]
+pub async fn llm_config_list_models(
+    id: String,
+    pool: State<'_, DbPool>,
+) -> Result<Vec<String>, AppError> {
+    service::list_models(&pool, id).await
+}
+
+#[tauri::command]
+pub async fn llm_config_list_models_by_params(
+    provider: String,
+    base_url: String,
+    api_key: String,
+) -> Result<Vec<String>, AppError> {
+    service::list_models_by_params(&provider, &base_url, &api_key).await
+}

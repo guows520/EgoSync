@@ -285,6 +285,8 @@ pub fn run() {
             commands::llm_config::llm_config_delete,
             commands::llm_config::llm_config_set_default,
             commands::llm_config::llm_config_test_connection,
+            commands::llm_config::llm_config_list_models,
+            commands::llm_config::llm_config_list_models_by_params,
             commands::chat::chat_send_message,
             commands::chat::chat_get_history,
             commands::chat::chat_get_message_process_events,

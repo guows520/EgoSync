@@ -137,6 +137,13 @@ export function OnboardingView({ onComplete, onOpenSettings }: OnboardingViewPro
     // 不标记 proposalHandledRef，允许 LLM 后续再次提议
   }, [creating]);
 
+  const handleSkipOnboarding = useCallback(() => {
+    if (isStreaming) return;
+    proposalHandledRef.current = true;
+    appService.completeOnboarding().catch(() => {});
+    onComplete();
+  }, [isStreaming, onComplete]);
+
   // Initialize: check LLM config and start onboarding
   useEffect(() => {
     if (initRef.current) return;
@@ -168,7 +175,7 @@ export function OnboardingView({ onComplete, onOpenSettings }: OnboardingViewPro
         id: `onboard-fallback-${Date.now()}`,
         conversationId: '',
         role: 'assistant',
-        content: '你好，我是你的数字管家。很高兴为你服务！聊聊你最近在忙什么？',
+        content: '你好，我是你的分身管家。很高兴为你服务！聊聊你最近在忙什么？',
         thinkingContent: '',
         isComplete: true,
         createdAt: new Date().toISOString(),
@@ -247,7 +254,7 @@ export function OnboardingView({ onComplete, onOpenSettings }: OnboardingViewPro
           </div>
           <h2 className="text-xl font-semibold text-slate-800 dark:text-slate-100">欢迎使用 EgoSync</h2>
           <p className="text-slate-600 dark:text-slate-300 text-[14px] leading-relaxed">
-            在开始之前，需要先配置一个 AI 模型。点击下方按钮前往设置。
+            在开始之前，需要先配置大模型服务。<br />请点击下方按钮前往设置。
           </p>
           <button
             onClick={() => {
@@ -264,7 +271,7 @@ export function OnboardingView({ onComplete, onOpenSettings }: OnboardingViewPro
             }}
             className="px-6 py-3 bg-slate-800 dark:bg-indigo-600 text-white rounded-xl text-[14px] font-medium shadow-sm hover:opacity-90 transition-opacity"
           >
-            配置 AI 模型
+            配置大模型服务
           </button>
         </div>
       </div>
@@ -296,7 +303,7 @@ export function OnboardingView({ onComplete, onOpenSettings }: OnboardingViewPro
           <div className="w-[46px] h-[46px] rounded-xl bg-slate-800 dark:bg-indigo-600 text-white flex items-center justify-center shadow-sm">
             <Home size={24} strokeWidth={2} />
           </div>
-          <h2 className="font-semibold text-lg leading-tight text-slate-800 dark:text-slate-100">数字管家</h2>
+          <h2 className="font-semibold text-lg leading-tight text-slate-800 dark:text-slate-100">分身管家</h2>
         </div>
       </header>
 
@@ -333,23 +340,36 @@ export function OnboardingView({ onComplete, onOpenSettings }: OnboardingViewPro
 
       {/* Input Area */}
       <div className="p-5 bg-white/70 dark:bg-slate-800/70 backdrop-blur-md border-t border-slate-200/60 dark:border-slate-700/60 shrink-0">
-        <div className="relative max-w-3xl mx-auto">
-          <input
-            type="text"
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && handleSend()}
-            disabled={isStreaming}
-            placeholder={placeholders[Math.min(step, placeholders.length - 1)]}
-            className="w-full bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl pl-5 pr-14 py-3.5 text-[14px] dark:text-slate-100 dark:placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-500/20 transition-colors shadow-sm disabled:opacity-50"
-          />
-          <button
-            onClick={handleSend}
-            disabled={isStreaming || !input.trim()}
-            className="absolute right-2 top-1/2 -translate-y-1/2 w-9 h-9 flex items-center justify-center text-white bg-slate-800 rounded-lg transition-colors shadow-sm hover:bg-slate-700 disabled:opacity-40"
-          >
-            <Play size={16} className="ml-0.5" fill="currentColor" />
-          </button>
+        <div className="max-w-3xl mx-auto">
+          <div className="relative">
+            <input
+              type="text"
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleSend()}
+              disabled={isStreaming}
+              placeholder={placeholders[Math.min(step, placeholders.length - 1)]}
+              className="w-full bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl pl-5 pr-14 py-3.5 text-[14px] dark:text-slate-100 dark:placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-500/20 transition-colors shadow-sm disabled:opacity-50"
+            />
+            <button
+              onClick={handleSend}
+              disabled={isStreaming || !input.trim()}
+              className="absolute right-2 top-1/2 -translate-y-1/2 w-9 h-9 flex items-center justify-center text-white bg-slate-800 rounded-lg transition-colors shadow-sm hover:bg-slate-700 disabled:opacity-40"
+            >
+              <Play size={16} className="ml-0.5" fill="currentColor" />
+            </button>
+          </div>
+          {step >= 2 && (
+            <div className="flex justify-end mt-2">
+              <button
+                onClick={handleSkipOnboarding}
+                disabled={isStreaming}
+                className="text-[12px] text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 transition-colors disabled:opacity-40"
+              >
+                跳过角色引导
+              </button>
+            </div>
+          )}
         </div>
       </div>
 

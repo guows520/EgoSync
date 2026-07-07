@@ -89,7 +89,7 @@ export function ButlerView({ roles, onViewChange, archivedRoles, onRestoreRole, 
           <div className="w-[46px] h-[46px] rounded-xl bg-slate-800 dark:bg-indigo-600 text-white flex items-center justify-center shadow-sm">
             <Home size={24} strokeWidth={2} />
           </div>
-          <h2 className="font-semibold text-lg leading-tight text-slate-800 dark:text-slate-100">数字管家</h2>
+          <h2 className="font-semibold text-lg leading-tight text-slate-800 dark:text-slate-100">分身管家</h2>
         </div>
         <div className="flex items-center gap-2">
           <button onClick={() => toggleTab('dashboard')} className={cn("flex items-center gap-1.5 px-3 py-2 rounded-lg text-[13px] font-medium transition-all", openTab === 'dashboard' ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:bg-white/50")}>

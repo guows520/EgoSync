@@ -100,22 +100,22 @@ export function ButlerWorkspacePanel({
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between border-b border-slate-200/80 px-6 pt-4 bg-white/60 backdrop-blur-md shrink-0">
+      <div className="flex items-center justify-between border-b border-slate-200/80 dark:border-slate-700/80 px-6 pt-4 bg-white/60 dark:bg-slate-800/60 backdrop-blur-md shrink-0">
         <div className="flex gap-6">
-          <button onClick={() => setTab('dashboard')} className={cn("pb-3.5 text-[14px] font-medium transition-colors border-b-[3px]", currentTab === 'dashboard' ? "text-indigo-600 border-current" : "border-transparent text-slate-500 hover:text-slate-800")}>
+          <button onClick={() => setTab('dashboard')} className={cn("pb-3.5 text-[14px] font-medium transition-colors border-b-[3px]", currentTab === 'dashboard' ? "text-indigo-600 border-current" : "border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200")}>
             仪表盘
           </button>
-          <button onClick={() => setTab('tasks')} className={cn("pb-3.5 text-[14px] font-medium transition-colors border-b-[3px]", currentTab === 'tasks' ? "text-indigo-600 border-current" : "border-transparent text-slate-500 hover:text-slate-800")}>
+          <button onClick={() => setTab('tasks')} className={cn("pb-3.5 text-[14px] font-medium transition-colors border-b-[3px]", currentTab === 'tasks' ? "text-indigo-600 border-current" : "border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200")}>
             任务概览
           </button>
-          <button onClick={() => setTab('memory')} className={cn("pb-3.5 text-[14px] font-medium transition-colors border-b-[3px]", currentTab === 'memory' ? "text-indigo-600 border-current" : "border-transparent text-slate-500 hover:text-slate-800")}>
+          <button onClick={() => setTab('memory')} className={cn("pb-3.5 text-[14px] font-medium transition-colors border-b-[3px]", currentTab === 'memory' ? "text-indigo-600 border-current" : "border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200")}>
             {memoryLabel}
           </button>
-          <button onClick={() => setTab('settings')} className={cn("pb-3.5 text-[14px] font-medium transition-colors border-b-[3px]", currentTab === 'settings' ? "text-indigo-600 border-current" : "border-transparent text-slate-500 hover:text-slate-800")}>
+          <button onClick={() => setTab('settings')} className={cn("pb-3.5 text-[14px] font-medium transition-colors border-b-[3px]", currentTab === 'settings' ? "text-indigo-600 border-current" : "border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200")}>
             管家设置
           </button>
         </div>
-        <button onClick={() => setTab(null)} className="pb-3.5 text-slate-400 hover:text-slate-700 transition-colors">
+        <button onClick={() => setTab(null)} className="pb-3.5 text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 transition-colors">
           <X size={18} />
         </button>
       </div>

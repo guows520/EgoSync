@@ -494,18 +494,18 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
   return (
     <div className="space-y-8">
       <div>
-        <label className="text-[14px] font-semibold text-slate-800 block mb-3">如何称呼您</label>
-        <input type="text" defaultValue="boss" className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none" />
-        <p className="text-[12px] text-slate-400 mt-2 leading-relaxed">管家在对话中称呼您的方式。</p>
+        <label className="text-[14px] font-semibold text-slate-800 dark:text-slate-100 block mb-3">如何称呼您</label>
+        <input type="text" defaultValue="boss" className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none" />
+        <p className="text-[12px] text-slate-400 dark:text-slate-500 mt-2 leading-relaxed">管家在对话中称呼您的方式。</p>
       </div>
       <div className="pt-6 border-t border-slate-200/80">
-        <label className="text-[14px] font-semibold text-slate-800 block mb-3">您的个人使命宣言</label>
+        <label className="text-[14px] font-semibold text-slate-800 dark:text-slate-100 block mb-3">您的个人使命宣言</label>
         <div className="flex gap-2 mb-3">
           <button
             type="button"
             onClick={() => setMissionFormat('free')}
             disabled={isLoadingMission}
-            className={cn('px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60', missionFormat === 'free' ? 'bg-indigo-600 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50')}
+            className={cn('px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60', missionFormat === 'free' ? 'bg-indigo-600 text-white' : 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700')}
           >
             自由文本
           </button>
@@ -513,7 +513,7 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
             type="button"
             onClick={() => setMissionFormat('structured')}
             disabled={isLoadingMission}
-            className={cn('px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60', missionFormat === 'structured' ? 'bg-indigo-600 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50')}
+            className={cn('px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60', missionFormat === 'structured' ? 'bg-indigo-600 text-white' : 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700')}
           >
             结构化模板
           </button>
@@ -525,8 +525,8 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
             className={cn(
               'ml-auto px-3 py-1.5 text-[12px] font-medium transition-colors',
               isInferring
-                ? 'pointer-events-none text-slate-400'
-                : 'text-slate-500 hover:text-indigo-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-slate-500',
+                ? 'pointer-events-none text-slate-400 dark:text-slate-500'
+                : 'text-slate-500 dark:text-slate-400 hover:text-indigo-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-slate-500',
             )}
           >
             {isInferring ? (
@@ -538,7 +538,7 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
           </button>
         </div>
         {isLoadingMission ? (
-          <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 text-[13px] text-slate-500">正在加载使命宣言...</div>
+          <div className="rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-4 py-3 text-[13px] text-slate-500 dark:text-slate-400">正在加载使命宣言...</div>
         ) : missionFormat === 'free' ? (
           <>
             <textarea
@@ -546,12 +546,12 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
               onChange={e => setMission(e.target.value)}
               placeholder="个人使命宣言是你人生各角色间的优先级指南。当角色之间发生时间或资源冲突时，管家会依据它来做仲裁建议。"
               rows={6}
-              className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none resize-none placeholder:text-slate-300"
+              className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none resize-none placeholder:text-slate-300"
             />
             <div className="mt-3 space-y-2">
-              <p className="text-[12px] text-slate-400 mb-1.5">参考模板（点击填入）：</p>
+              <p className="text-[12px] text-slate-400 dark:text-slate-500 mb-1.5">参考模板（点击填入）：</p>
               {templates.map((t, i) => (
-                <button key={i} onClick={() => setMission(t)} className="block w-full text-left px-3 py-2 rounded-lg border border-slate-200 text-[13px] text-slate-600 hover:bg-indigo-50 hover:border-indigo-200 hover:text-indigo-700 transition-colors">
+                <button key={i} onClick={() => setMission(t)} className="block w-full text-left px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 text-[13px] text-slate-600 dark:text-slate-300 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 hover:border-indigo-200 hover:text-indigo-700 transition-colors">
                   {t.split('\n')[0]}
                 </button>
               ))}
@@ -559,22 +559,22 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
           </>
         ) : (
           <>
-            <div className="rounded-lg border border-slate-200 bg-white p-4 space-y-3">
+            <div className="rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-4 space-y-3">
               <div>
-                <span className="text-[12px] text-slate-400">使命</span>
-                <p className={cn('text-[14px] mt-0.5', structuredMission ? 'text-slate-700' : 'text-slate-300')}>
+                <span className="text-[12px] text-slate-400 dark:text-slate-500">使命</span>
+                <p className={cn('text-[14px] mt-0.5', structuredMission ? 'text-slate-700 dark:text-slate-300' : 'text-slate-300 dark:text-slate-600')}>
                   {structuredMission || '未设定'}
                 </p>
               </div>
               <div>
-                <span className="text-[12px] text-slate-400">原则</span>
-                <p className={cn('text-[14px] mt-0.5 whitespace-pre-line', structuredPrinciple ? 'text-slate-700' : 'text-slate-300')}>
+                <span className="text-[12px] text-slate-400 dark:text-slate-500">原则</span>
+                <p className={cn('text-[14px] mt-0.5 whitespace-pre-line', structuredPrinciple ? 'text-slate-700 dark:text-slate-300' : 'text-slate-300 dark:text-slate-600')}>
                   {structuredPrinciple || '未设定'}
                 </p>
               </div>
               <div>
-                <span className="text-[12px] text-slate-400">角色</span>
-                <p className={cn('text-[14px] mt-0.5', structuredRoles.some(r => r.name.trim()) ? 'text-slate-700' : 'text-slate-300')}>
+                <span className="text-[12px] text-slate-400 dark:text-slate-500">角色</span>
+                <p className={cn('text-[14px] mt-0.5', structuredRoles.some(r => r.name.trim()) ? 'text-slate-700 dark:text-slate-300' : 'text-slate-300 dark:text-slate-600')}>
                   {structuredRoles.filter(r => r.name.trim()).map(r => r.name).join('、') || '未设定'}
                 </p>
               </div>
@@ -582,7 +582,7 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
             <button
               type="button"
               onClick={() => setIsMissionModalOpen(true)}
-              className="mt-4 inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-4 py-2 text-[13px] font-medium text-slate-600 hover:bg-slate-50 transition-colors"
+              className="mt-4 inline-flex items-center gap-1.5 rounded-lg border border-slate-200 dark:border-slate-700 px-4 py-2 text-[13px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
             >
               <Pencil size={14} /> 编辑使命宣言
             </button>
@@ -608,24 +608,24 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
         </div>
       </div>
       <div className="pt-6 border-t border-slate-200/80">
-        <label className="text-[14px] font-semibold text-slate-800 block mb-3">Skill 配置</label>
+        <label className="text-[14px] font-semibold text-slate-800 dark:text-slate-100 block mb-3">Skill 配置</label>
         {isLoadingButlerSkills ? (
-          <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-[13px] text-slate-500 shadow-sm">正在加载 Skill 配置...</div>
+          <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-4 py-3 text-[13px] text-slate-500 dark:text-slate-400 shadow-sm">正在加载 Skill 配置...</div>
         ) : (
           <>
         <div className="space-y-3">
           {SKILL_OPTIONS.map(option => {
             const enabled = skills[option.key];
             return (
-              <div key={option.key} className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+              <div key={option.key} className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-4 shadow-sm">
                 <div className="flex items-start justify-between gap-4">
                   <div>
                     <div className="flex items-center gap-2.5">
                       <span className={cn('w-2.5 h-2.5 rounded-full', enabled ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.4)]' : 'bg-slate-300')} />
-                      <span className="text-[14.5px] font-medium text-slate-800">{option.title}</span>
-                      <span className="text-[11px] font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full border border-slate-200">{option.source}</span>
+                      <span className="text-[14.5px] font-medium text-slate-800 dark:text-slate-100">{option.title}</span>
+                      <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-700 px-2 py-0.5 rounded-full border border-slate-200 dark:border-slate-700">{option.source}</span>
                     </div>
-                    <p className="mt-2 text-[12.5px] leading-relaxed text-slate-500">{option.description}</p>
+                    <p className="mt-2 text-[12.5px] leading-relaxed text-slate-500 dark:text-slate-400">{option.description}</p>
                   </div>
                   <button
                     type="button"
@@ -638,7 +638,7 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
                       enabled ? 'bg-indigo-600' : 'bg-slate-300',
                     )}
                   >
-                    <span className={cn('absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform', enabled ? 'translate-x-5' : 'translate-x-0')} />
+                    <span className={cn('absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white dark:bg-slate-800 shadow transition-transform', enabled ? 'translate-x-5' : 'translate-x-0')} />
                     <span className="sr-only">{option.title}</span>
                   </button>
                 </div>
@@ -647,11 +647,11 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
           })}
         </div>
 
-        <div className="mt-5 bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+        <div className="mt-5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-4 shadow-sm">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <div className="text-[14.5px] font-medium text-slate-800">opencode 生态 Skill</div>
-              <p className="mt-1 text-[12.5px] leading-relaxed text-slate-500">扫描本机 opencode 项目级与全局 Skill 目录，不下载远程内容。</p>
+              <div className="text-[14.5px] font-medium text-slate-800 dark:text-slate-100">opencode 生态 Skill</div>
+              <p className="mt-1 text-[12.5px] leading-relaxed text-slate-500 dark:text-slate-400">扫描本机 opencode 项目级与全局 Skill 目录，不下载远程内容。</p>
             </div>
             <button
               type="button"
@@ -659,7 +659,7 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
               aria-label="发现 opencode Skill"
               onClick={handleDiscoverOpencode}
               disabled={isDiscoveringOpencode}
-              className="inline-flex min-w-[3.5rem] shrink-0 items-center justify-center whitespace-nowrap rounded-lg border border-slate-200 bg-white px-3 py-2 text-[12px] font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+              className="inline-flex min-w-[3.5rem] shrink-0 items-center justify-center whitespace-nowrap rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-[12px] font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {isDiscoveringOpencode ? '发现中...' : '发现'}
             </button>
@@ -695,7 +695,7 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
               <button
                 type="button"
                 onClick={() => setIsOpencodeExpanded(prev => !prev)}
-                className="flex w-full items-center justify-between rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-[12.5px] font-medium text-slate-600 hover:bg-slate-100"
+                className="flex w-full items-center justify-between rounded-lg border border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-2 text-[12.5px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
               >
                 <span>发现 {opencodeSkills.length} 个 opencode Skill</span>
                 <span className="inline-flex items-center gap-1">
@@ -707,18 +707,18 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
                 const importedSkillId = candidate.duplicate?.existing.id;
                 const isRemoving = importedSkillId === removingOpencodeId;
                 return (
-                  <div key={candidate.sourcePath} className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-3">
+                  <div key={candidate.sourcePath} className="rounded-lg border border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-3">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
-                          <span className="break-words text-[13.5px] font-medium text-slate-800">{candidate.name}</span>
-                          <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-500">opencode</span>
-                          <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-500">{candidate.sourceLocation}</span>
+                          <span className="break-words text-[13.5px] font-medium text-slate-800 dark:text-slate-100">{candidate.name}</span>
+                          <span className="rounded-full border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-0.5 text-[11px] font-medium text-slate-500 dark:text-slate-400">opencode</span>
+                          <span className="rounded-full border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-0.5 text-[11px] font-medium text-slate-500 dark:text-slate-400">{candidate.sourceLocation}</span>
                           {candidate.alreadyImported && <span className="rounded-full border border-emerald-100 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">已导入</span>}
                         </div>
                         <div className="group relative mt-1.5">
-                          <p data-testid={`opencode-skill-description-${candidate.contentHash}`} className="line-clamp-2 break-words text-[12px] leading-relaxed text-slate-500">{candidate.description}</p>
-                          <div data-testid={`opencode-skill-tooltip-${candidate.contentHash}`} className="pointer-events-none absolute left-0 top-full z-20 mt-1 hidden max-w-[min(28rem,calc(100vw-3rem))] rounded-lg border border-slate-200 bg-white px-3 py-2 text-[12px] leading-relaxed text-slate-600 shadow-xl group-hover:block">
+                          <p data-testid={`opencode-skill-description-${candidate.contentHash}`} className="line-clamp-2 break-words text-[12px] leading-relaxed text-slate-500 dark:text-slate-400">{candidate.description}</p>
+                          <div data-testid={`opencode-skill-tooltip-${candidate.contentHash}`} className="pointer-events-none absolute left-0 top-full z-20 mt-1 hidden max-w-[min(28rem,calc(100vw-3rem))] rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-[12px] leading-relaxed text-slate-600 dark:text-slate-300 shadow-xl group-hover:block">
                             {candidate.description}
                           </div>
                         </div>
@@ -728,7 +728,7 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
                           type="button"
                           onClick={() => handleRemoveOpencode(candidate)}
                           disabled={!importedSkillId || removingOpencodeId !== '' || importingOpencodePath !== ''}
-                          className="shrink-0 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                          className="shrink-0 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 text-[12px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
                         >
                           {isRemoving ? '取消中...' : '取消导入'}
                         </button>
@@ -750,34 +750,34 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
           )}
         </div>
 
-        <div className="mt-5 bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+        <div className="mt-5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-4 shadow-sm">
           <div className="mb-4 space-y-3">
             <div className="min-w-0">
-              <div className="text-[14.5px] font-medium text-slate-800">自定义 Skill</div>
-              <p className="mt-1 text-[12.5px] leading-relaxed text-slate-500">选择包含 SKILL.md 的文件夹后，可按应用范围启用。</p>
+              <div className="text-[14.5px] font-medium text-slate-800 dark:text-slate-100">自定义 Skill</div>
+              <p className="mt-1 text-[12.5px] leading-relaxed text-slate-500 dark:text-slate-400">选择包含 SKILL.md 的文件夹后，可按应用范围启用。</p>
             </div>
             <button
               type="button"
               onClick={handleSkillDirectorySelected}
               disabled={isImportingSkill || isPickingDirectory}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-[12px] font-medium text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-indigo-200 dark:border-indigo-700 bg-indigo-50 dark:bg-indigo-900/30 px-3 py-2 text-[12px] font-medium text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
             >
               <Upload size={14} /> {isPickingDirectory ? '选择中...' : '选择skill文件夹'}
             </button>
           </div>
 
           {skillPreview && (
-            <div className="mb-3 rounded-lg border border-indigo-100 bg-indigo-50 px-3 py-3 text-[12.5px] text-slate-600">
-              <div className="font-semibold text-slate-800">预览：{skillPreview.name}</div>
+            <div className="mb-3 rounded-lg border border-indigo-100 dark:border-indigo-700 bg-indigo-50 dark:bg-indigo-900/30 px-3 py-3 text-[12.5px] text-slate-600 dark:text-slate-300">
+              <div className="font-semibold text-slate-800 dark:text-slate-100">预览：{skillPreview.name}</div>
               <div className="mt-1">{skillPreview.description}</div>
               {skillPreview.duplicate && (
                 <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-amber-700">
                   {skillPreview.duplicate.kind === 'contentHash' ? '相同内容的 Skill 已存在。' : '同名 Skill 已存在。'}可取消或覆盖元数据。
                 </div>
               )}
-              <div className="mt-3 rounded-md border border-indigo-100 bg-white/70 px-3 py-2">
-                <div className="mb-2 text-[12px] font-medium text-slate-700">复用到以下角色</div>
-                <label className="flex items-center gap-2 text-[12.5px] text-slate-600">
+              <div className="mt-3 rounded-md border border-indigo-100 dark:border-indigo-700 bg-white/70 dark:bg-slate-800/70 px-3 py-2">
+                <div className="mb-2 text-[12px] font-medium text-slate-700 dark:text-slate-300">复用到以下角色</div>
+                <label className="flex items-center gap-2 text-[12.5px] text-slate-600 dark:text-slate-300">
                   <input
                     type="checkbox"
                     checked={reuseAllRoles}
@@ -785,13 +785,13 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
                       setReuseAllRoles(e.target.checked);
                       setReuseRoleIds([BUTLER_SCOPE_ID]);
                     }}
-                    className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                    className="h-3.5 w-3.5 rounded border-slate-300 dark:border-slate-600 text-indigo-600 dark:text-indigo-400 focus:ring-indigo-500"
                   />
                   全部角色
                 </label>
                 {!reuseAllRoles && (
                   <div className="mt-2 space-y-1.5">
-                    <label className="flex items-center gap-2 text-[12.5px] text-slate-600">
+                    <label className="flex items-center gap-2 text-[12.5px] text-slate-600 dark:text-slate-300">
                       <input
                         type="checkbox"
                         checked={reuseRoleIds.includes(BUTLER_SCOPE_ID)}
@@ -800,12 +800,12 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
                             ? [...prev.filter(id => id !== BUTLER_SCOPE_ID), BUTLER_SCOPE_ID]
                             : prev.filter(id => id !== BUTLER_SCOPE_ID));
                         }}
-                        className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                        className="h-3.5 w-3.5 rounded border-slate-300 dark:border-slate-600 text-indigo-600 dark:text-indigo-400 focus:ring-indigo-500"
                       />
                       管家
                     </label>
                     {activeRoles.map(item => (
-                      <label key={item.id} className="flex items-center gap-2 text-[12.5px] text-slate-600">
+                      <label key={item.id} className="flex items-center gap-2 text-[12.5px] text-slate-600 dark:text-slate-300">
                         <input
                           type="checkbox"
                           checked={reuseRoleIds.includes(item.id)}
@@ -814,7 +814,7 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
                               ? [...prev.filter(id => id !== item.id), item.id]
                               : prev.filter(id => id !== item.id));
                           }}
-                          className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                          className="h-3.5 w-3.5 rounded border-slate-300 dark:border-slate-600 text-indigo-600 dark:text-indigo-400 focus:ring-indigo-500"
                         />
                         {item.name}
                       </label>
@@ -823,7 +823,7 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
                 )}
               </div>
               <div className="mt-3 flex justify-end gap-2">
-                <button type="button" onClick={() => { setSkillPreview(null); setPendingSkillContent(''); }} className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-600 hover:bg-slate-50">取消</button>
+                <button type="button" onClick={() => { setSkillPreview(null); setPendingSkillContent(''); }} className="rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 text-[12px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700">取消</button>
                 <button type="button" onClick={() => handleConfirmImport(false)} disabled={isImportingSkill} className="rounded-lg bg-indigo-600 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60">确认导入</button>
                 {skillPreview.duplicate && (
                   <button type="button" onClick={() => handleConfirmImport(true)} disabled={isImportingSkill} className="rounded-lg bg-amber-600 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-60">覆盖元数据</button>
@@ -833,18 +833,18 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
           )}
 
           <div className="space-y-2">
-            {isLoadingSkills && <div className="text-[12.5px] text-slate-400">正在加载自定义 Skill...</div>}
-            {!isLoadingSkills && registrySkills.length === 0 && <div className="text-[12.5px] text-slate-400">暂无自定义 Skill。</div>}
+            {isLoadingSkills && <div className="text-[12.5px] text-slate-400 dark:text-slate-500">正在加载自定义 Skill...</div>}
+            {!isLoadingSkills && registrySkills.length === 0 && <div className="text-[12.5px] text-slate-400 dark:text-slate-500">暂无自定义 Skill。</div>}
             {registrySkills.map(item => {
               const enabled = skills.enabledSkillIds.includes(item.id);
               return (
-                <div key={item.id} data-testid={`custom-skill-card-${item.id}`} className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-3">
+                <div key={item.id} data-testid={`custom-skill-card-${item.id}`} className="rounded-lg border border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-3">
                   <div className="flex items-start justify-between gap-4">
                     <div className="min-w-0 flex-1">
                       <div className="flex min-w-0 flex-wrap items-center gap-2">
                         <span className={cn('w-2.5 h-2.5 shrink-0 rounded-full', enabled ? 'bg-emerald-500' : 'bg-slate-300')} />
-                        <span className="min-w-0 break-words text-[13.5px] font-medium text-slate-800">{item.name}</span>
-                        <span className="shrink-0 text-[11px] font-medium text-slate-500 bg-white px-2 py-0.5 rounded-full border border-slate-200">自定义</span>
+                        <span className="min-w-0 break-words text-[13.5px] font-medium text-slate-800 dark:text-slate-100">{item.name}</span>
+                        <span className="shrink-0 text-[11px] font-medium text-slate-500 dark:text-slate-400 bg-white dark:bg-slate-800 px-2 py-0.5 rounded-full border border-slate-200 dark:border-slate-700">自定义</span>
                       </div>
                     </div>
                     <div data-testid={`custom-skill-actions-${item.id}`} className="flex shrink-0 items-center gap-2">
@@ -868,14 +868,14 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
                           enabled ? 'bg-indigo-600' : 'bg-slate-300',
                         )}
                       >
-                        <span className={cn('absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform', enabled ? 'translate-x-5' : 'translate-x-0')} />
+                        <span className={cn('absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white dark:bg-slate-800 shadow transition-transform', enabled ? 'translate-x-5' : 'translate-x-0')} />
                         <span className="sr-only">{item.name}</span>
                       </button>
                     </div>
                   </div>
                   <div className="group relative mt-1.5">
-                    <p data-testid={`custom-skill-description-${item.id}`} className="line-clamp-2 break-words text-[12px] leading-relaxed text-slate-500">{item.description}</p>
-                    <div data-testid={`custom-skill-tooltip-${item.id}`} className="pointer-events-none absolute left-0 top-full z-20 mt-1 hidden max-w-[min(28rem,calc(100vw-3rem))] rounded-lg border border-slate-200 bg-white px-3 py-2 text-[12px] leading-relaxed text-slate-600 shadow-xl group-hover:block">
+                    <p data-testid={`custom-skill-description-${item.id}`} className="line-clamp-2 break-words text-[12px] leading-relaxed text-slate-500 dark:text-slate-400">{item.description}</p>
+                    <div data-testid={`custom-skill-tooltip-${item.id}`} className="pointer-events-none absolute left-0 top-full z-20 mt-1 hidden max-w-[min(28rem,calc(100vw-3rem))] rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-[12px] leading-relaxed text-slate-600 dark:text-slate-300 shadow-xl group-hover:block">
                       {item.description}
                     </div>
                   </div>
@@ -898,7 +898,7 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
         )}
       </div>
       <div className="pt-6 border-t border-slate-200/80">
-        <label className="text-[14px] font-semibold text-slate-800 block mb-3">晨间简报时间</label>
+        <label className="text-[14px] font-semibold text-slate-800 dark:text-slate-100 block mb-3">晨间简报时间</label>
         <input
           type="time"
           value={briefingTime}
@@ -915,12 +915,12 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
               setError('晨间简报时间保存失败，请稍后重试');
             }
           }}
-          className="bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none"
+          className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none"
         />
-        <p className="text-[12px] text-slate-400 mt-2 leading-relaxed">每天推送晨间简报的时间。</p>
+        <p className="text-[12px] text-slate-400 dark:text-slate-500 mt-2 leading-relaxed">每天推送晨间简报的时间。</p>
       </div>
       <div className="pt-6 border-t border-slate-200/80">
-        <label className="text-[14px] font-semibold text-slate-800 block mb-3">周复盘时间</label>
+        <label className="text-[14px] font-semibold text-slate-800 dark:text-slate-100 block mb-3">周复盘时间</label>
         <div className="flex gap-3">
           <select value={reviewDay} onChange={async (e) => {
             const value = e.target.value;
@@ -934,7 +934,7 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
             } catch {
               setError('周复盘时间保存失败，请稍后重试');
             }
-          }} className="bg-white border border-slate-200 rounded-lg px-3 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 outline-none">
+          }} className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 outline-none">
             <option value="1">周一</option><option value="2">周二</option><option value="3">周三</option>
             <option value="4">周四</option><option value="5">周五</option><option value="6">周六</option>
             <option value="7">周日</option>
@@ -951,12 +951,12 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
             } catch {
               setError('周复盘时间保存失败，请稍后重试');
             }
-          }} className="bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none" />
+          }} className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none" />
         </div>
-        <p className="text-[12px] text-slate-400 mt-2 leading-relaxed">每周触发周复盘的时间。</p>
+        <p className="text-[12px] text-slate-400 dark:text-slate-500 mt-2 leading-relaxed">每周触发周复盘的时间。</p>
       </div>
       <div className="pt-6 border-t border-slate-200/80">
-        <label className="text-[14px] font-semibold text-slate-800 block mb-3">大石头规划提醒时间</label>
+        <label className="text-[14px] font-semibold text-slate-800 dark:text-slate-100 block mb-3">大石头规划提醒时间</label>
         <div className="flex gap-3">
           <select value={bigrockReminderDay} onChange={async (e) => {
             const value = e.target.value;
@@ -970,7 +970,7 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
             } catch {
               setError('大石头规划提醒时间保存失败，请稍后重试');
             }
-          }} className="bg-white border border-slate-200 rounded-lg px-3 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 outline-none">
+          }} className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 outline-none">
             <option value="1">周一</option>
             <option value="2">周二</option>
           </select>
@@ -986,30 +986,30 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
             } catch {
               setError('大石头规划提醒时间保存失败，请稍后重试');
             }
-          }} className="bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none" />
+          }} className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none" />
         </div>
-        <p className="text-[12px] text-slate-400 mt-2 leading-relaxed">每周初提醒规划本周大石头的时间。</p>
+        <p className="text-[12px] text-slate-400 dark:text-slate-500 mt-2 leading-relaxed">每周初提醒规划本周大石头的时间。</p>
       </div>
 
       {archivedRoles.length > 0 && (
         <div className="pt-6 border-t border-slate-200/80">
-          <label className="text-[14px] font-semibold text-slate-800 block mb-3">已归档角色</label>
+          <label className="text-[14px] font-semibold text-slate-800 dark:text-slate-100 block mb-3">已归档角色</label>
           <div className="space-y-2.5">
             {archivedRoles.map((role: any) => {
               const Icon = getRoleIconComponent(role.icon);
               const roleColor = normalizeColorHex(role.color);
               return (
-              <div key={role.id} className="bg-white border border-slate-200 rounded-xl p-4 flex items-center justify-between shadow-sm">
+              <div key={role.id} className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-4 flex items-center justify-between shadow-sm">
                 <div className="flex items-center gap-3">
                   <div className="w-9 h-9 rounded-lg flex items-center justify-center text-white opacity-60" style={{ backgroundColor: roleColor }}>
                     <Icon size={18} />
                   </div>
                   <div>
-                    <p className="text-[14px] font-medium text-slate-700">{role.name}</p>
-                    <p className="text-[12px] text-slate-400">已归档</p>
+                    <p className="text-[14px] font-medium text-slate-700 dark:text-slate-300">{role.name}</p>
+                    <p className="text-[12px] text-slate-400 dark:text-slate-500">已归档</p>
                   </div>
                 </div>
-                <button onClick={() => onRestoreRole?.(role.id)} className="px-4 py-2 rounded-lg text-[13px] font-medium text-indigo-600 hover:bg-indigo-50 border border-indigo-200 transition-colors">
+                <button onClick={() => onRestoreRole?.(role.id)} className="px-4 py-2 rounded-lg text-[13px] font-medium text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-700 transition-colors">
                   重新启用
                 </button>
               </div>
@@ -1021,13 +1021,13 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
 
       {deleteSkillTarget && (
         <div className="fixed inset-0 z-[220] flex items-center justify-center bg-slate-900/20 backdrop-blur-sm">
-          <div role="dialog" aria-modal="true" aria-label="删除自定义 Skill" className="w-[380px] rounded-2xl bg-white p-6 shadow-2xl">
-            <h3 className="mb-3 text-[16px] font-semibold text-slate-800">删除自定义 Skill</h3>
-            <p className="mb-5 text-[14px] leading-relaxed text-slate-600">
+          <div role="dialog" aria-modal="true" aria-label="删除自定义 Skill" className="w-[380px] rounded-2xl bg-white dark:bg-slate-800 p-6 shadow-2xl">
+            <h3 className="mb-3 text-[16px] font-semibold text-slate-800 dark:text-slate-100">删除自定义 Skill</h3>
+            <p className="mb-5 text-[14px] leading-relaxed text-slate-600 dark:text-slate-300">
               确认删除「{deleteSkillTarget.name}」吗？
             </p>
             <div className="flex justify-end gap-3">
-              <button type="button" onClick={() => setDeleteSkillTarget(null)} disabled={pendingSkill !== null} className="rounded-lg border border-slate-200 px-5 py-2.5 text-[13px] font-medium text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60">取消</button>
+              <button type="button" onClick={() => setDeleteSkillTarget(null)} disabled={pendingSkill !== null} className="rounded-lg border border-slate-200 dark:border-slate-700 px-5 py-2.5 text-[13px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60">取消</button>
               <button
                 type="button"
                 onClick={handleCustomSkillDelete}
@@ -1048,40 +1048,40 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
             aria-modal="true"
             aria-label="编辑使命宣言"
             onClick={e => e.stopPropagation()}
-            className="w-[640px] max-h-[85vh] overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl"
+            className="w-[640px] max-h-[85vh] overflow-y-auto rounded-2xl bg-white dark:bg-slate-800 p-6 shadow-2xl"
           >
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-[16px] font-semibold text-slate-800">编辑使命宣言</h3>
-              <button type="button" onClick={() => setIsMissionModalOpen(false)} className="text-slate-400 hover:text-slate-600 transition-colors">
+              <h3 className="text-[16px] font-semibold text-slate-800 dark:text-slate-100">编辑使命宣言</h3>
+              <button type="button" onClick={() => setIsMissionModalOpen(false)} className="text-slate-400 dark:text-slate-500 hover:text-slate-600 transition-colors">
                 <X size={20} />
               </button>
             </div>
 
             <div className="space-y-4">
               <div>
-                <label className="text-[13px] font-medium text-slate-600 block mb-1.5">使命</label>
+                <label className="text-[13px] font-medium text-slate-600 dark:text-slate-300 block mb-1.5">使命</label>
                 <textarea
                   value={structuredMission}
                   onChange={e => setStructuredMission(e.target.value)}
                   placeholder="一句话概括你的人生使命。例如：堂堂正正地生活，并且对他人有所影响，对社会有所贡献。"
                   rows={2}
-                  className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none resize-none placeholder:text-slate-300"
+                  className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none resize-none placeholder:text-slate-300"
                 />
               </div>
               <div>
-                <label className="text-[13px] font-medium text-slate-600 block mb-1.5">原则</label>
+                <label className="text-[13px] font-medium text-slate-600 dark:text-slate-300 block mb-1.5">原则</label>
                 <textarea
                   value={structuredPrinciple}
                   onChange={e => setStructuredPrinciple(e.target.value)}
                   placeholder={'你信奉的核心原则和行为准则。例如：\n有慈悲心——亲近人群，不分贵贱\n甘愿牺牲——为人生使命奉献时间、才智和金钱\n诚信——在诚信问题上决不妥协'}
                   rows={5}
-                  className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none resize-none placeholder:text-slate-300"
+                  className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none resize-none placeholder:text-slate-300"
                 />
               </div>
               <div>
                 <div className="flex items-center justify-between mb-1.5">
-                  <label className="text-[13px] font-medium text-slate-600">角色与目标</label>
-                  <span className="text-[11px] text-slate-400">{structuredRoles.length}/7</span>
+                  <label className="text-[13px] font-medium text-slate-600 dark:text-slate-300">角色与目标</label>
+                  <span className="text-[11px] text-slate-400 dark:text-slate-500">{structuredRoles.length}/7</span>
                 </div>
                 <div className="space-y-2">
                   {structuredRoles.map((r, i) => (
@@ -1095,7 +1095,7 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
                           setStructuredRoles(next);
                         }}
                         placeholder="角色名称"
-                        className="w-28 shrink-0 bg-white border border-slate-200 rounded-lg px-3 py-2 text-[13px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none placeholder:text-slate-300"
+                        className="w-28 shrink-0 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-[13px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none placeholder:text-slate-300"
                       />
                       <textarea
                         value={r.goal}
@@ -1106,12 +1106,12 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
                         }}
                         placeholder="该角色的目标与承诺"
                         rows={2}
-                        className="flex-1 bg-white border border-slate-200 rounded-lg px-3 py-2 text-[13px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none resize-none placeholder:text-slate-300"
+                        className="flex-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-[13px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none resize-none placeholder:text-slate-300"
                       />
                       <button
                         type="button"
                         onClick={() => setStructuredRoles(structuredRoles.filter((_, idx) => idx !== i))}
-                        className="shrink-0 mt-1.5 text-slate-400 hover:text-red-500 transition-colors"
+                        className="shrink-0 mt-1.5 text-slate-400 dark:text-slate-500 hover:text-red-500 transition-colors"
                       >
                         <Trash2 size={16} />
                       </button>
@@ -1121,7 +1121,7 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
                     <button
                       type="button"
                       onClick={() => setStructuredRoles([...structuredRoles, { name: '', goal: '' }])}
-                      className="inline-flex items-center gap-1.5 text-[12px] text-indigo-600 hover:text-indigo-700 transition-colors"
+                      className="inline-flex items-center gap-1.5 text-[12px] text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 transition-colors"
                     >
                       <Plus size={14} /> 添加角色
                     </button>
@@ -1129,8 +1129,8 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
                 </div>
               </div>
 
-              <div className="pt-2 border-t border-slate-100">
-                <p className="text-[12px] text-slate-400 mb-1.5">柯维四段式示例（点击填入）：</p>
+              <div className="pt-2 border-t border-slate-100 dark:border-slate-700">
+                <p className="text-[12px] text-slate-400 dark:text-slate-500 mb-1.5">柯维四段式示例（点击填入）：</p>
                 <button
                   type="button"
                   onClick={() => {
@@ -1138,7 +1138,7 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
                     setStructuredPrinciple(structuredTemplate.principle);
                     setStructuredRoles(structuredTemplate.roles.map(r => ({ ...r })));
                   }}
-                  className="block w-full text-left px-3 py-2 rounded-lg border border-slate-200 text-[13px] text-slate-600 hover:bg-indigo-50 hover:border-indigo-200 hover:text-indigo-700 transition-colors"
+                  className="block w-full text-left px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 text-[13px] text-slate-600 dark:text-slate-300 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 hover:border-indigo-200 hover:text-indigo-700 transition-colors"
                 >
                   柯维四段式示例：使命 → 原则 → 角色与目标
                 </button>
@@ -1149,7 +1149,7 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
               <button
                 type="button"
                 onClick={() => setIsMissionModalOpen(false)}
-                className="rounded-lg border border-slate-200 px-5 py-2.5 text-[13px] font-medium text-slate-600 hover:bg-slate-50"
+                className="rounded-lg border border-slate-200 dark:border-slate-700 px-5 py-2.5 text-[13px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700"
               >
                 取消
               </button>
@@ -1174,36 +1174,36 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
             aria-modal="true"
             aria-label="推断的使命宣言"
             onClick={e => e.stopPropagation()}
-            className="w-[480px] rounded-2xl bg-white p-6 shadow-2xl"
+            className="w-[480px] rounded-2xl bg-white dark:bg-slate-800 p-6 shadow-2xl"
           >
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-[16px] font-semibold text-slate-800">基于行为推断的使命宣言</h3>
-              <button type="button" onClick={() => setIsInferenceModalOpen(false)} className="text-slate-400 hover:text-slate-600 transition-colors">
+              <h3 className="text-[16px] font-semibold text-slate-800 dark:text-slate-100">基于行为推断的使命宣言</h3>
+              <button type="button" onClick={() => setIsInferenceModalOpen(false)} className="text-slate-400 dark:text-slate-500 hover:text-slate-600 transition-colors">
                 <X size={20} />
               </button>
             </div>
 
             <div className="space-y-3">
               <div>
-                <div className="text-[13px] font-medium text-slate-600 mb-1.5">推断的优先级</div>
+                <div className="text-[13px] font-medium text-slate-600 dark:text-slate-300 mb-1.5">推断的优先级</div>
                 <div className="space-y-1.5">
                   {inferredValues.values.map((v, i) => (
-                    <div key={i} className="text-[13px] text-slate-700 leading-relaxed">
+                    <div key={i} className="text-[13px] text-slate-700 dark:text-slate-300 leading-relaxed">
                       {v}
                     </div>
                   ))}
                 </div>
               </div>
               <div>
-                <div className="text-[13px] font-medium text-slate-600 mb-1">推断的使命宣言</div>
+                <div className="text-[13px] font-medium text-slate-600 dark:text-slate-300 mb-1">推断的使命宣言</div>
                 <textarea
                   value={editableSummary}
                   onChange={e => setEditableSummary(e.target.value)}
                   rows={4}
-                  className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-[14px] text-slate-800 leading-relaxed focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none resize-none"
+                  className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-[14px] text-slate-800 dark:text-slate-100 leading-relaxed focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none resize-none"
                 />
                 {inferredValues.confidence < 0.7 && (
-                  <p className="text-[12px] text-slate-400 mt-1.5">（置信度较低，仅供参考）</p>
+                  <p className="text-[12px] text-slate-400 dark:text-slate-500 mt-1.5">（置信度较低，仅供参考）</p>
                 )}
               </div>
             </div>
@@ -1213,7 +1213,7 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
                 type="button"
                 onClick={handleDismissInferred}
                 disabled={isSavingMission}
-                className="rounded-lg border border-slate-200 px-5 py-2.5 text-[13px] font-medium text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                className="rounded-lg border border-slate-200 dark:border-slate-700 px-5 py-2.5 text-[13px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 不准确
               </button>

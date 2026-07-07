@@ -92,13 +92,13 @@ export function RoleWorkspacePanel({
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between border-b border-slate-200/80 px-6 pt-4 bg-white/60 backdrop-blur-md shrink-0">
+      <div className="flex items-center justify-between border-b border-slate-200/80 dark:border-slate-700/80 px-6 pt-4 bg-white/60 dark:bg-slate-800/60 backdrop-blur-md shrink-0">
         <div className="flex gap-8">
           <button
             onClick={() => setTab('tasks')}
             className={cn(
               'pb-3.5 text-[14px] font-medium transition-colors border-b-[3px]',
-              currentTab === 'tasks' ? 'border-current' : 'border-transparent text-slate-500 hover:text-slate-800',
+              currentTab === 'tasks' ? 'border-current' : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200',
             )}
             style={currentTab === 'tasks' ? { color: role.color } : undefined}
           >
@@ -108,7 +108,7 @@ export function RoleWorkspacePanel({
             onClick={() => setTab('memory')}
             className={cn(
               'pb-3.5 text-[14px] font-medium transition-colors border-b-[3px]',
-              currentTab === 'memory' ? 'border-current' : 'border-transparent text-slate-500 hover:text-slate-800',
+              currentTab === 'memory' ? 'border-current' : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200',
             )}
             style={currentTab === 'memory' ? { color: role.color } : undefined}
           >
@@ -118,14 +118,14 @@ export function RoleWorkspacePanel({
             onClick={() => setTab('settings')}
             className={cn(
               'pb-3.5 text-[14px] font-medium transition-colors border-b-[3px]',
-              currentTab === 'settings' ? 'border-current' : 'border-transparent text-slate-500 hover:text-slate-800',
+              currentTab === 'settings' ? 'border-current' : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200',
             )}
             style={currentTab === 'settings' ? { color: role.color } : undefined}
           >
             设置
           </button>
         </div>
-        <button onClick={() => setTab(null)} aria-label="关闭" className="pb-3.5 text-slate-400 hover:text-slate-700 transition-colors">
+        <button onClick={() => setTab(null)} aria-label="关闭" className="pb-3.5 text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 transition-colors">
           <X size={18} />
         </button>
       </div>

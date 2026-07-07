@@ -8,4 +8,7 @@ export const llmConfigService = {
   delete: (id: string) => invoke<void>('llm_config_delete', { id }),
   setDefault: (id: string) => invoke<void>('llm_config_set_default', { id }),
   testConnection: (id: string) => invoke<void>('llm_config_test_connection', { id }),
+  listModels: (id: string) => invoke<string[]>('llm_config_list_models', { id }),
+  listModelsByParams: (provider: string, baseUrl: string, apiKey: string) =>
+    invoke<string[]>('llm_config_list_models_by_params', { provider, baseUrl, apiKey }),
 };

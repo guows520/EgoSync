@@ -1031,7 +1031,7 @@ fn ensure_non_empty_opencode_result(
 }
 
 const BUTLER_SYSTEM_PROMPT: &str = "\
-你是 EgoSync 的数字管家，用户的私人助理和生活协调者。\
+你是 EgoSync 的分身管家，用户的私人助理和生活协调者。\
 你的语调稳重、可靠、有温度，像一位值得信赖的英式管家。\
 你帮助用户管理角色、任务和日程，但决定权永远在用户手中。\
 用简洁自然的中文回复，不用 emoji。";
@@ -1670,7 +1670,7 @@ pub async fn build_role_messages(
 }
 
 const ONBOARDING_SYSTEM_PROMPT: &str = "\
-你是 EgoSync 的数字管家，正在引导新用户完成首次设置。\n\n\
+你是 EgoSync 的分身管家，正在引导新用户完成首次设置。\n\n\
 【你的唯一任务】\n\
 通过自然对话，帮用户确定一个「角色」并调用 create_role 工具向用户【提议】这个角色。\n\
 角色 = 用户生活/工作中的一个身份维度（如：产品经理、父亲、健身者）。\n\
@@ -1682,10 +1682,12 @@ create_role 工具不会立即创建角色。它只是【向用户发起一个�
 - 你应该说\"我帮你拟了一个，看看怎么样？\"、\"已经为你准备好提议，需要可以在弹窗里调整。\"\n\n\
 【对话流程】严格按以下阶段推进，不要跳步也不要卡步：\n\n\
 第1步 - 问名字：\n\
-  用一句温暖的话自我介绍，问用户怎么称呼。\n\n\
-第2步 - 了解方向：\n\
-  用户回答名字后，热情回应，然后直接问：\n\
-  \"你最近在忙什么？工作还是生活方面有什么特别关注的事情？\"\n\n\
+  用这句固定的话开场：\"你好，我是你的分身管家，很高兴见到你。请问怎么称呼你呢？\"\n\
+  不要自行发挥其他开场白，必须用这句话。\n\n\
+第2步 - 了解方向并引导创建角色：\n\
+  用户回答名字后，热情回应，然后说：\n\
+  \"是否需要我给你创建一个角色分身，你可以用它来管理该角色对应的任务、记忆等？你可以直接说需要创建什么角色，或者你最近有什么任务，我可以给你提供角色建议。\"\n\
+  然后等用户回答。\n\n\
 第3步 - 提议角色（一次性完成）：\n\
   从用户的回答中提炼出一个身份维度，直接调用 create_role 工具发起提议。\n\
   不要先问\"我帮你创建一个 XXX 角色怎么样？\"再等用户回答 —— 直接调用工具，前端会弹窗让用户选择。\n\
@@ -2959,9 +2961,21 @@ pub async fn run_stream(
                                 conversation_id,
                                 assistant_message_id
                             );
-                            if !first_bubble_visible {
-                                emit_stream_done(&app_handle, &conversation_id, None);
+                            // 保存 LLM 在工具调用前输出的文本到数据库，否则切到管家页面后
+                            // 从数据库加载历史会看到空 assistant 消息（"最后一句话消失"）。
+                            if first_bubble_visible {
+                                conversations::update_message_content(
+                                    &conv_pool,
+                                    &assistant_message_id,
+                                    &first_bubble_text,
+                                )
+                                .await
+                                .ok();
                             }
+                            conversations::mark_message_complete(&conv_pool, &assistant_message_id)
+                                .await
+                                .ok();
+                            emit_stream_done(&app_handle, &conversation_id, None);
                             break;
                         }
 
@@ -5368,7 +5382,7 @@ mod tests {
         assert!(system.content.contains("[role_definition]"));
         assert!(system.content.contains("[context_injection]"));
         assert!(
-            !system.content.contains("你是 EgoSync 的数字管家"),
+            !system.content.contains("你是 EgoSync 的分身管家"),
             "角色 prompt 不应含管家身份"
         );
         assert!(
@@ -5438,7 +5452,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(prompt.contains("你是 EgoSync 的数字管家"));
+        assert!(prompt.contains("你是 EgoSync 的分身管家"));
         assert!(!prompt.contains("[元 Skill 配置]"));
         assert!(!prompt.contains("find-skills"));
         assert!(!prompt.contains("skill-creator"));
@@ -6098,7 +6112,7 @@ mod tests {
             .unwrap();
         let system = &msgs.first().unwrap().content;
 
-        assert!(system.contains("数字管家"), "管家身份必须保留");
+        assert!(system.contains("分身管家"), "管家身份必须保留");
         assert!(!system.contains("[可委派角色清单]"));
         assert!(!system.contains("[行为指南]"));
         assert!(!system.contains("delegate_to_role"));

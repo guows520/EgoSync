@@ -68,8 +68,8 @@
   }
 
   *:focus-visible {
-    outline: 2px solid var(--role-accent, #6366F1) !important;
-    outline-offset: 2px !important;
+    outline: 1px solid color-mix(in srgb, var(--role-accent, #6366F1) 50%, transparent) !important;
+    outline-offset: 1px !important;
   }
 }
 

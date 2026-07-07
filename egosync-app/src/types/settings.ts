@@ -1,7 +1,9 @@
+export type LlmProviderType = 'openai_compatible' | 'anthropic' | 'minimax' | 'zhipu' | 'deepseek' | 'kimi' | 'bailian';
+
 export interface LlmConfig {
   id: string;
   name: string;
-  provider: 'openai_compatible' | 'anthropic' | 'minimax';
+  provider: LlmProviderType;
   baseUrl: string;
   model: string;
   apiKeyRef: string;
@@ -12,7 +14,7 @@ export interface LlmConfig {
 
 export interface CreateLlmConfigInput {
   name: string;
-  provider: 'openai_compatible' | 'anthropic' | 'minimax';
+  provider: LlmProviderType;
   baseUrl: string;
   model: string;
   apiKey: string;
@@ -20,7 +22,7 @@ export interface CreateLlmConfigInput {
 
 export interface UpdateLlmConfigInput {
   name?: string;
-  provider: 'openai_compatible' | 'anthropic' | 'minimax';
+  provider: LlmProviderType;
   baseUrl?: string;
   model?: string;
   apiKey?: string;

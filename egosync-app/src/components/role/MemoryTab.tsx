@@ -265,7 +265,7 @@ export function MemoryTab({
               onClick={() => setSelectedCategory(filter.value ?? undefined)}
               className={cn(
                 'px-2.5 py-1 rounded-md text-[12px] font-medium transition-colors',
-                selected ? 'text-slate-700' : 'text-slate-500 hover:bg-slate-100'
+                selected ? 'text-slate-700 dark:text-slate-300' : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700'
               )}
               style={selected ? { backgroundColor: 'color-mix(in srgb, var(--role-accent) 15%, white)', color: 'var(--role-accent)' } : undefined}
             >
@@ -275,7 +275,7 @@ export function MemoryTab({
         })}
       </div>
 
-      {isLoading && <div className="text-[14px] text-slate-500">正在加载记忆...</div>}
+      {isLoading && <div className="text-[14px] text-slate-500 dark:text-slate-400">正在加载记忆...</div>}
       {!isLoading && error && <div className="text-[14px] text-red-500">{error}</div>}
       {!isLoading && !error && targetUnavailable && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[13px] text-amber-700">
@@ -288,7 +288,7 @@ export function MemoryTab({
         </div>
       )}
       {!isLoading && !error && visibleMemories.length === 0 && (
-        <div className="text-[14px] text-slate-500">{emptyCopy}</div>
+        <div className="text-[14px] text-slate-500 dark:text-slate-400">{emptyCopy}</div>
       )}
 
       {!isLoading && !error && visibleMemories.map(memory => {
@@ -307,15 +307,15 @@ export function MemoryTab({
               memoryRefs.current[memory.id] = node;
             }}
             className={cn(
-              'bg-white border border-slate-200 rounded-xl p-5 shadow-sm hover:shadow-md transition-shadow',
+              'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-5 shadow-sm hover:shadow-md transition-shadow',
               highlightedMemoryId === memory.id && 'ring-2 ring-indigo-400 bg-indigo-50/40'
             )}
           >
             <div className="flex justify-between items-start mb-3">
-              <h4 className="text-[15px] font-medium text-slate-800 flex items-center gap-2">
+              <h4 className="text-[15px] font-medium text-slate-800 dark:text-slate-100 flex items-center gap-2">
                 <span className="text-indigo-500">🧠</span> {categoryLabels[memory.category]}
                 {showOwnerLabel && (
-                  <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-500">
+                  <span className="rounded-full border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-2 py-0.5 text-[11px] font-medium text-slate-500 dark:text-slate-400">
                     {ownerLabel}
                   </span>
                 )}
@@ -327,16 +327,16 @@ export function MemoryTab({
                 className={cn(
                   'text-[12px] border px-2.5 py-1 rounded-md transition-colors focus:outline-none focus:ring-2 focus:ring-red-300 focus:ring-offset-1',
                   isDeleting
-                    ? 'text-slate-400 border-slate-200 cursor-not-allowed bg-slate-50'
-                    : 'text-red-600 border-red-200 hover:bg-red-50 hover:border-red-300'
+                    ? 'text-slate-400 dark:text-slate-500 border-slate-200 dark:border-slate-700 cursor-not-allowed bg-slate-50 dark:bg-slate-800'
+                    : 'text-red-600 border-red-200 dark:border-red-800 hover:bg-red-50 hover:border-red-300'
                 )}
               >
                 遗忘
               </button>
             </div>
-            <p className="text-[14px] text-slate-600 leading-relaxed mb-4">{memory.content}</p>
+            <p className="text-[14px] text-slate-600 dark:text-slate-300 leading-relaxed mb-4">{memory.content}</p>
             {isConfirmingForget && (
-              <div className="mb-4 rounded-lg border border-red-100 bg-red-50/70 p-3 text-[13px] text-slate-700">
+              <div className="mb-4 rounded-lg border border-red-100 dark:border-red-900 bg-red-50/70 dark:bg-red-900/30 p-3 text-[13px] text-slate-700 dark:text-slate-300">
                 <p className="leading-relaxed">确定要忘记这条吗？忘了就真忘了哦。原始对话还会留在历史里。</p>
                 {deleteError && <p className="mt-2 text-red-600">{deleteError}</p>}
                 <div className="mt-3 flex flex-wrap gap-2">
@@ -347,8 +347,8 @@ export function MemoryTab({
                     className={cn(
                       'rounded-md border px-3 py-1.5 text-[12px] font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-red-300 focus:ring-offset-1',
                       isDeleting
-                        ? 'cursor-not-allowed border-red-100 bg-red-100 text-red-300'
-                        : 'border-red-200 bg-white text-red-600 hover:bg-red-100'
+                        ? 'cursor-not-allowed border-red-100 dark:border-red-900 bg-red-100 text-red-300'
+                        : 'border-red-200 dark:border-red-800 bg-white dark:bg-slate-800 text-red-600 hover:bg-red-100 dark:hover:bg-red-900/30'
                     )}
                   >
                     确认遗忘
@@ -360,8 +360,8 @@ export function MemoryTab({
                     className={cn(
                       'rounded-md border px-3 py-1.5 text-[12px] font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-slate-300 focus:ring-offset-1',
                       isDeleting
-                        ? 'cursor-not-allowed border-slate-200 bg-slate-50 text-slate-300'
-                        : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                        ? 'cursor-not-allowed border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-300'
+                        : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700'
                     )}
                   >
                     再想想
@@ -375,23 +375,23 @@ export function MemoryTab({
               aria-expanded={expanded}
               aria-controls={`memory-source-${memory.id}`}
               aria-label={`来源对话 ${formatMemoryTime(memory.createdAt)} ${expanded ? '收起' : '查看原文'}`}
-              className="w-full bg-slate-50 border border-slate-100 rounded-md p-2.5 text-[12px] text-slate-500 flex items-start gap-2 hover:bg-slate-100 hover:text-slate-700 transition-colors cursor-pointer text-left focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:ring-offset-1"
+              className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-100 dark:border-slate-700 rounded-md p-2.5 text-[12px] text-slate-500 dark:text-slate-400 flex items-start gap-2 hover:bg-slate-100 dark:hover:bg-slate-700 hover:text-slate-700 dark:hover:text-slate-300 transition-colors cursor-pointer text-left focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:ring-offset-1"
             >
               <Clock size={14} className="mt-0.5 shrink-0" />
               <span className="flex-1 min-w-0">
                 <span className="flex items-center justify-between gap-3">
-                  <span className="font-medium text-slate-600">来源对话</span>
+                  <span className="font-medium text-slate-600 dark:text-slate-300">来源对话</span>
                   <span className="text-indigo-500 text-[11px] shrink-0">{expanded ? '收起' : '查看原文'}</span>
                 </span>
-                <span className="block mt-1 text-[11px] text-slate-400">{formatMemoryTime(memory.createdAt)}</span>
+                <span className="block mt-1 text-[11px] text-slate-400 dark:text-slate-500">{formatMemoryTime(memory.createdAt)}</span>
               </span>
             </button>
             {expanded && (
               <div id={`memory-source-${memory.id}`} className="mt-3 border-l-2 border-indigo-300 pl-4 space-y-2.5 animate-in slide-in-from-top-2 duration-200">
-                {sourceState?.isLoading && <div className="text-[13px] text-slate-500">正在加载来源原文...</div>}
-                {sourceState?.error && <div className="text-[13px] text-slate-500">来源对话已不可用</div>}
+                {sourceState?.isLoading && <div className="text-[13px] text-slate-500 dark:text-slate-400">正在加载来源原文...</div>}
+                {sourceState?.error && <div className="text-[13px] text-slate-500 dark:text-slate-400">来源对话已不可用</div>}
                 {sourceState?.messages?.length === 0 && !sourceState.error && (
-                  <div className="text-[13px] text-slate-500">来源对话已不可用</div>
+                  <div className="text-[13px] text-slate-500 dark:text-slate-400">来源对话已不可用</div>
                 )}
                 {sourceState?.messages?.map(message => (
                   <button
@@ -407,14 +407,14 @@ export function MemoryTab({
                       'w-full rounded-lg border p-3 text-left text-[13px] transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:ring-offset-1',
                       message.isSource
                         ? 'border-indigo-200 bg-indigo-50/70 hover:bg-indigo-100/70'
-                        : 'border-slate-200 bg-white hover:bg-slate-50'
+                        : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700'
                     )}
                   >
-                    <div className="flex items-center justify-between gap-3 mb-1.5 text-[11px] text-slate-400">
-                      <span className="font-medium text-slate-600">{roleLabel(message.role)}</span>
+                    <div className="flex items-center justify-between gap-3 mb-1.5 text-[11px] text-slate-400 dark:text-slate-500">
+                      <span className="font-medium text-slate-600 dark:text-slate-300">{roleLabel(message.role)}</span>
                       <span>{formatMemoryTime(message.createdAt)}</span>
                     </div>
-                    <p className="text-slate-700 leading-relaxed whitespace-pre-wrap">{message.content}</p>
+                    <p className="text-slate-700 dark:text-slate-300 leading-relaxed whitespace-pre-wrap">{message.content}</p>
                   </button>
                 ))}
               </div>

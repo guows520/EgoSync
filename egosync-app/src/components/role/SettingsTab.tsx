@@ -503,20 +503,20 @@ export function SettingsTab({
   return (
     <div className="space-y-8">
       <div>
-        <label className="text-[14px] font-semibold text-slate-800 block mb-3">角色信息</label>
+        <label className="text-[14px] font-semibold text-slate-800 dark:text-slate-100 block mb-3">角色信息</label>
         <div className="space-y-4">
           <div>
-            <label htmlFor="role-name" className="block text-[13px] font-medium text-slate-600 mb-1.5">名称</label>
-            <input id="role-name" type="text" value={roleName} onChange={e => setRoleName(e.target.value)} className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none" />
+            <label htmlFor="role-name" className="block text-[13px] font-medium text-slate-600 dark:text-slate-300 mb-1.5">名称</label>
+            <input id="role-name" type="text" value={roleName} onChange={e => setRoleName(e.target.value)} className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none" />
           </div>
 
           <div>
-            <label className="block text-[13px] font-medium text-slate-600 mb-2">图标</label>
+            <label className="block text-[13px] font-medium text-slate-600 dark:text-slate-300 mb-2">图标</label>
             <div className="flex items-center gap-3 mb-3">
               <div className="w-11 h-11 rounded-xl flex items-center justify-center text-white" style={{ backgroundColor: roleColor }}>
                 <SelectedIcon size={22} strokeWidth={2} />
               </div>
-              <span className="text-[13px] text-slate-500">选择一个稳定的角色标识</span>
+              <span className="text-[13px] text-slate-500 dark:text-slate-400">选择一个稳定的角色标识</span>
             </div>
             <div className="grid grid-cols-6 gap-2">
               {ROLE_ICONS.map(option => {
@@ -529,7 +529,7 @@ export function SettingsTab({
                     onClick={() => setRoleIcon(option.id)}
                     className={cn(
                       'w-10 h-10 rounded-lg border flex items-center justify-center transition-all',
-                      roleIcon === option.id ? 'border-indigo-500 bg-indigo-50 text-indigo-600' : 'border-slate-200 bg-white text-slate-500 hover:border-indigo-200 hover:text-indigo-500'
+                      roleIcon === option.id ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600' : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-500 dark:text-slate-400 hover:border-indigo-200 dark:hover:border-indigo-600 hover:text-indigo-500'
                     )}
                   >
                     <Icon size={18} strokeWidth={2} />
@@ -540,7 +540,7 @@ export function SettingsTab({
           </div>
 
           <div>
-            <label className="block text-[13px] font-medium text-slate-600 mb-2">颜色</label>
+            <label className="block text-[13px] font-medium text-slate-600 dark:text-slate-300 mb-2">颜色</label>
             <div className="grid grid-cols-4 gap-2">
               {ROLE_COLORS.map(option => (
                 <button
@@ -549,7 +549,7 @@ export function SettingsTab({
                   onClick={() => setRoleColor(option.hex)}
                   className={cn(
                     'flex items-center gap-2 rounded-lg border px-3 py-2 text-[12px] font-medium transition-all',
-                    roleColor === option.hex ? 'border-indigo-500 bg-indigo-50 text-indigo-700' : 'border-slate-200 bg-white text-slate-600 hover:border-indigo-200'
+                    roleColor === option.hex ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700' : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:border-indigo-200 dark:hover:border-indigo-600'
                   )}
                 >
                   <span className="w-4 h-4 rounded-full" style={{ backgroundColor: option.hex }} />
@@ -560,21 +560,21 @@ export function SettingsTab({
           </div>
 
           <div>
-            <label htmlFor="role-goal" className="block text-[13px] font-medium text-slate-600 mb-1.5">目标</label>
-            <textarea id="role-goal" value={roleGoal} onChange={e => setRoleGoal(e.target.value)} placeholder="这个角色要达成的核心目标..." rows={2} className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none resize-none" />
+            <label htmlFor="role-goal" className="block text-[13px] font-medium text-slate-600 dark:text-slate-300 mb-1.5">目标</label>
+            <textarea id="role-goal" value={roleGoal} onChange={e => setRoleGoal(e.target.value)} placeholder="这个角色要达成的核心目标..." rows={2} className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none resize-none" />
           </div>
 
           <div>
-            <label htmlFor="role-personality" className="block text-[13px] font-medium text-slate-600 mb-1.5">角色个性描述</label>
+            <label htmlFor="role-personality" className="block text-[13px] font-medium text-slate-600 dark:text-slate-300 mb-1.5">角色个性描述</label>
             <textarea
               id="role-personality"
               value={rolePersonalityPrompt}
               onChange={e => setRolePersonalityPrompt(e.target.value)}
               placeholder="描述这个角色下次回复时应采用的语气、判断方式和表达习惯..."
               rows={4}
-              className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none resize-none"
+              className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none resize-none"
             />
-            <div className="mt-2 rounded-lg bg-slate-50 border border-slate-100 px-3 py-2 text-[12px] leading-relaxed text-slate-500">
+            <div className="mt-2 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-100 dark:border-slate-700 px-3 py-2 text-[12px] leading-relaxed text-slate-500 dark:text-slate-400">
               <div>模板参考：</div>
               <div>产品经理：简洁专业，偏结构化表达，先判断优先级再给建议。</div>
               <div>家庭：温暖关怀，偏情感支持，先回应感受再给建议。</div>
@@ -584,31 +584,31 @@ export function SettingsTab({
         </div>
       </div>
 
-      <div className="pt-6 border-t border-slate-200/80">
-        <label className="text-[14px] font-semibold text-slate-800 block mb-3">主动性级别</label>
+      <div className="pt-6 border-t border-slate-200/80 dark:border-slate-700/80">
+        <label className="text-[14px] font-semibold text-slate-800 dark:text-slate-100 block mb-3">主动性级别</label>
         <ProactivityToggle
           level={proactivityLevel}
           onChange={handleProactivityChange}
           disabled={isSavingProactivity}
         />
-        <p className="text-[12px] text-slate-400 mt-2.5 leading-relaxed">V1 仅保存角色主动性级别；实际主动建议会在后续主动循环中生效。</p>
+        <p className="text-[12px] text-slate-400 dark:text-slate-500 mt-2.5 leading-relaxed">V1 仅保存角色主动性级别；实际主动建议会在后续主动循环中生效。</p>
       </div>
 
-      <div className="pt-6 border-t border-slate-200/80">
-        <label className="text-[14px] font-semibold text-slate-800 block mb-3">Skill 配置</label>
+      <div className="pt-6 border-t border-slate-200/80 dark:border-slate-700/80">
+        <label className="text-[14px] font-semibold text-slate-800 dark:text-slate-100 block mb-3">Skill 配置</label>
         <div className="space-y-3">
           {SKILL_OPTIONS.map(option => {
             const enabled = skills[option.key];
             return (
-              <div key={option.key} className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+              <div key={option.key} className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-4 shadow-sm">
                 <div className="flex items-start justify-between gap-4">
                   <div>
                     <div className="flex items-center gap-2.5">
                       <span className={cn('w-2.5 h-2.5 rounded-full', enabled ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.4)]' : 'bg-slate-300')} />
-                      <span className="text-[14.5px] font-medium text-slate-800">{option.title}</span>
-                      <span className="text-[11px] font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full border border-slate-200">{option.source}</span>
+                      <span className="text-[14.5px] font-medium text-slate-800 dark:text-slate-100">{option.title}</span>
+                      <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-700 px-2 py-0.5 rounded-full border border-slate-200 dark:border-slate-700">{option.source}</span>
                     </div>
-                    <p className="mt-2 text-[12.5px] leading-relaxed text-slate-500">{option.description}</p>
+                    <p className="mt-2 text-[12.5px] leading-relaxed text-slate-500 dark:text-slate-400">{option.description}</p>
                   </div>
                   <button
                     type="button"
@@ -621,7 +621,7 @@ export function SettingsTab({
                       enabled ? 'bg-indigo-600' : 'bg-slate-300',
                     )}
                   >
-                    <span className={cn('absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform', enabled ? 'translate-x-5' : 'translate-x-0')} />
+                    <span className={cn('absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white dark:bg-slate-800 shadow transition-transform', enabled ? 'translate-x-5' : 'translate-x-0')} />
                     <span className="sr-only">{option.title}</span>
                   </button>
                 </div>
@@ -629,11 +629,11 @@ export function SettingsTab({
             );
           })}
 
-          <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+          <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-4 shadow-sm">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <div className="text-[14.5px] font-medium text-slate-800">opencode 生态 Skill</div>
-                <p className="mt-1 text-[12.5px] leading-relaxed text-slate-500">扫描本机 opencode 项目级与全局 Skill 目录，不下载远程内容。</p>
+                <div className="text-[14.5px] font-medium text-slate-800 dark:text-slate-100">opencode 生态 Skill</div>
+                <p className="mt-1 text-[12.5px] leading-relaxed text-slate-500 dark:text-slate-400">扫描本机 opencode 项目级与全局 Skill 目录，不下载远程内容。</p>
               </div>
               <button
                 type="button"
@@ -641,7 +641,7 @@ export function SettingsTab({
                 aria-label="发现 opencode Skill"
                 onClick={handleDiscoverOpencode}
                 disabled={isDiscoveringOpencode}
-                className="inline-flex min-w-[3.5rem] shrink-0 items-center justify-center whitespace-nowrap rounded-lg border border-slate-200 bg-white px-3 py-2 text-[12px] font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                className="inline-flex min-w-[3.5rem] shrink-0 items-center justify-center whitespace-nowrap rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-[12px] font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {isDiscoveringOpencode ? '发现中...' : '发现'}
               </button>
@@ -677,7 +677,7 @@ export function SettingsTab({
                 <button
                   type="button"
                   onClick={() => setIsOpencodeExpanded(prev => !prev)}
-                  className="flex w-full items-center justify-between rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-[12.5px] font-medium text-slate-600 hover:bg-slate-100"
+                  className="flex w-full items-center justify-between rounded-lg border border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-2 text-[12.5px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
                 >
                   <span>发现 {opencodeSkills.length} 个 opencode Skill</span>
                   <span className="inline-flex items-center gap-1">
@@ -689,18 +689,18 @@ export function SettingsTab({
                   const importedSkillId = candidate.duplicate?.existing.id;
                   const isRemoving = importedSkillId === removingOpencodeId;
                   return (
-                    <div key={candidate.sourcePath} className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-3">
+                    <div key={candidate.sourcePath} className="rounded-lg border border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-3">
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0 flex-1">
                           <div className="flex flex-wrap items-center gap-2">
-                            <span className="break-words text-[13.5px] font-medium text-slate-800">{candidate.name}</span>
-                            <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-500">opencode</span>
-                            <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-500">{candidate.sourceLocation}</span>
+                            <span className="break-words text-[13.5px] font-medium text-slate-800 dark:text-slate-100">{candidate.name}</span>
+                            <span className="rounded-full border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-0.5 text-[11px] font-medium text-slate-500 dark:text-slate-400">opencode</span>
+                            <span className="rounded-full border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-0.5 text-[11px] font-medium text-slate-500 dark:text-slate-400">{candidate.sourceLocation}</span>
                             {candidate.alreadyImported && <span className="rounded-full border border-emerald-100 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">已导入</span>}
                           </div>
                           <div className="group relative mt-1.5">
-                            <p data-testid={`opencode-skill-description-${candidate.contentHash}`} className="line-clamp-2 break-words text-[12px] leading-relaxed text-slate-500">{candidate.description}</p>
-                            <div data-testid={`opencode-skill-tooltip-${candidate.contentHash}`} className="pointer-events-none absolute left-0 top-full z-20 mt-1 hidden max-w-[min(28rem,calc(100vw-3rem))] rounded-lg border border-slate-200 bg-white px-3 py-2 text-[12px] leading-relaxed text-slate-600 shadow-xl group-hover:block">
+                            <p data-testid={`opencode-skill-description-${candidate.contentHash}`} className="line-clamp-2 break-words text-[12px] leading-relaxed text-slate-500 dark:text-slate-400">{candidate.description}</p>
+                            <div data-testid={`opencode-skill-tooltip-${candidate.contentHash}`} className="pointer-events-none absolute left-0 top-full z-20 mt-1 hidden max-w-[min(28rem,calc(100vw-3rem))] rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-[12px] leading-relaxed text-slate-600 dark:text-slate-300 shadow-xl group-hover:block">
                               {candidate.description}
                             </div>
                           </div>
@@ -710,7 +710,7 @@ export function SettingsTab({
                             type="button"
                             onClick={() => handleRemoveOpencode(candidate)}
                             disabled={!importedSkillId || removingOpencodeId !== '' || importingOpencodePath !== ''}
-                            className="shrink-0 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                            className="shrink-0 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 text-[12px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
                           >
                             {isRemoving ? '取消中...' : '取消导入'}
                           </button>
@@ -732,45 +732,45 @@ export function SettingsTab({
             )}
           </div>
 
-          <div className="pt-6 border-t border-slate-200/80">
-            <label className="text-[14px] font-semibold text-slate-800 block mb-3">外部 MCP 工具</label>
-            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="pt-6 border-t border-slate-200/80 dark:border-slate-700/80">
+            <label className="text-[14px] font-semibold text-slate-800 dark:text-slate-100 block mb-3">外部 MCP 工具</label>
+            <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-4 shadow-sm">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div>
-                  <div className="text-[14.5px] font-medium text-slate-800">当前角色可用 MCP server</div>
-                  <p className="mt-1 text-[12.5px] leading-relaxed text-slate-500">这里只展示已为当前角色启用的 MCP；全局未绑定的 server 不会出现在角色能力中。</p>
+                  <div className="text-[14.5px] font-medium text-slate-800 dark:text-slate-100">当前角色可用 MCP server</div>
+                  <p className="mt-1 text-[12.5px] leading-relaxed text-slate-500 dark:text-slate-400">这里只展示已为当前角色启用的 MCP；全局未绑定的 server 不会出现在角色能力中。</p>
                 </div>
                 <button
                   type="button"
                   onClick={() => setIsMcpPickerOpen(prev => !prev)}
                   disabled={isLoadingMcpServers}
-                  className="inline-flex shrink-0 items-center justify-center rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-[12px] font-medium text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="inline-flex shrink-0 items-center justify-center rounded-lg border border-indigo-200 bg-indigo-50 dark:bg-indigo-900/30 px-3 py-2 text-[12px] font-medium text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   添加 MCP server
                 </button>
               </div>
 
               <div className="mt-3 space-y-2">
-                {isLoadingMcpServers && <div className="text-[12.5px] text-slate-400">正在加载 MCP server...</div>}
-                {!isLoadingMcpServers && roleMcpServers.length === 0 && <div className="text-[12.5px] text-slate-400">当前角色暂无 MCP server。</div>}
+                {isLoadingMcpServers && <div className="text-[12.5px] text-slate-400 dark:text-slate-500">正在加载 MCP server...</div>}
+                {!isLoadingMcpServers && roleMcpServers.length === 0 && <div className="text-[12.5px] text-slate-400 dark:text-slate-500">当前角色暂无 MCP server。</div>}
                 {roleMcpServers.map(server => (
-                  <div key={server.id} className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-3">
+                  <div key={server.id} className="rounded-lg border border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-3">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
                           <span className={cn('w-2.5 h-2.5 rounded-full', server.enabled ? 'bg-emerald-500' : 'bg-slate-300')} />
-                          <span className="break-words text-[13.5px] font-medium text-slate-800">{server.name}</span>
-                          <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-500">{mcpServerTypeLabel(server.serverType)}</span>
-                          {!server.enabled && <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-500">已停用</span>}
+                          <span className="break-words text-[13.5px] font-medium text-slate-800 dark:text-slate-100">{server.name}</span>
+                          <span className="rounded-full border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-0.5 text-[11px] font-medium text-slate-500 dark:text-slate-400">{mcpServerTypeLabel(server.serverType)}</span>
+                          {!server.enabled && <span className="rounded-full border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-0.5 text-[11px] font-medium text-slate-500 dark:text-slate-400">已停用</span>}
                         </div>
-                        <p className="mt-1.5 break-words text-[12px] leading-relaxed text-slate-500">{server.description || server.commandOrUrl}</p>
+                        <p className="mt-1.5 break-words text-[12px] leading-relaxed text-slate-500 dark:text-slate-400">{server.description || server.commandOrUrl}</p>
                       </div>
                       <button
                         type="button"
                         aria-label={`移除 ${server.name}`}
                         onClick={() => handleRemoveMcpFromRole(server.id)}
                         disabled={pendingMcpId !== null}
-                        className="shrink-0 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                        className="shrink-0 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 text-[12px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         {pendingMcpId === server.id ? '移除中...' : '移除'}
                       </button>
@@ -780,22 +780,22 @@ export function SettingsTab({
               </div>
 
               {isMcpPickerOpen && (
-                <div className="mt-3 rounded-lg border border-indigo-100 bg-indigo-50 px-3 py-3">
+                <div className="mt-3 rounded-lg border border-indigo-100 dark:border-indigo-700 bg-indigo-50 dark:bg-indigo-900/30 px-3 py-3">
                   <input
                     type="text"
                     value={mcpSearch}
                     onChange={e => setMcpSearch(e.target.value)}
                     placeholder="搜索 MCP server"
-                    className="w-full rounded-lg border border-indigo-100 bg-white px-3 py-2 text-[13px] outline-none focus:border-indigo-300 focus:ring-2 focus:ring-indigo-500/20"
+                    className="w-full rounded-lg border border-indigo-100 dark:border-indigo-700 bg-white dark:bg-slate-800 px-3 py-2 text-[13px] outline-none focus:border-indigo-300 focus:ring-2 focus:ring-indigo-500/20"
                   />
                   <div className="mt-2 space-y-2">
                     {filteredAvailableMcpServers.length === 0 ? (
-                      <div className="text-[12.5px] text-slate-500">没有可添加的 MCP server</div>
+                      <div className="text-[12.5px] text-slate-500 dark:text-slate-400">没有可添加的 MCP server</div>
                     ) : filteredAvailableMcpServers.map(server => (
-                      <div key={server.id} className="flex items-start justify-between gap-3 rounded-lg border border-indigo-100 bg-white px-3 py-2">
+                      <div key={server.id} className="flex items-start justify-between gap-3 rounded-lg border border-indigo-100 dark:border-indigo-700 bg-white dark:bg-slate-800 px-3 py-2">
                         <div className="min-w-0">
-                          <div className="break-words text-[13.5px] font-medium text-slate-800">{server.name}</div>
-                          <div className="mt-1 break-words text-[12px] text-slate-500">{server.description || server.commandOrUrl}</div>
+                          <div className="break-words text-[13.5px] font-medium text-slate-800 dark:text-slate-100">{server.name}</div>
+                          <div className="mt-1 break-words text-[12px] text-slate-500 dark:text-slate-400">{server.description || server.commandOrUrl}</div>
                         </div>
                         <button
                           type="button"
@@ -814,46 +814,46 @@ export function SettingsTab({
             </div>
           </div>
 
-          <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+          <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-4 shadow-sm">
             <div className="mb-4 space-y-3">
               <div className="min-w-0">
-                <div className="text-[14.5px] font-medium text-slate-800">自定义 Skill</div>
-                <p className="mt-1 text-[12.5px] leading-relaxed text-slate-500">选择包含 SKILL.md 的文件夹后，可按角色启用。</p>
+                <div className="text-[14.5px] font-medium text-slate-800 dark:text-slate-100">自定义 Skill</div>
+                <p className="mt-1 text-[12.5px] leading-relaxed text-slate-500 dark:text-slate-400">选择包含 SKILL.md 的文件夹后，可按角色启用。</p>
               </div>
               <button
                 type="button"
                 onClick={handleSkillDirectorySelected}
                 disabled={isImportingSkill || isPickingDirectory}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-[12px] font-medium text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+                className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 dark:bg-indigo-900/30 px-3 py-2 text-[12px] font-medium text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
               >
                 <Upload size={14} /> {isPickingDirectory ? '选择中...' : '选择skill文件夹'}
               </button>
             </div>
 
             {skillPreview && (
-              <div className="mb-3 rounded-lg border border-indigo-100 bg-indigo-50 px-3 py-3 text-[12.5px] text-slate-600">
-                <div className="font-semibold text-slate-800">预览：{skillPreview.name}</div>
+              <div className="mb-3 rounded-lg border border-indigo-100 dark:border-indigo-700 bg-indigo-50 dark:bg-indigo-900/30 px-3 py-3 text-[12.5px] text-slate-600 dark:text-slate-300">
+                <div className="font-semibold text-slate-800 dark:text-slate-100">预览：{skillPreview.name}</div>
                 <div className="mt-1">{skillPreview.description}</div>
                 {skillPreview.duplicate && (
                   <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-amber-700">
                     {skillPreview.duplicate.kind === 'contentHash' ? '相同内容的 Skill 已存在。' : '同名 Skill 已存在。'}可取消或覆盖元数据。
                   </div>
                 )}
-                <div className="mt-3 rounded-md border border-indigo-100 bg-white/70 px-3 py-2">
-                  <div className="mb-2 text-[12px] font-medium text-slate-700">复用到以下角色</div>
-                  <label className="flex items-center gap-2 text-[12.5px] text-slate-600">
+                <div className="mt-3 rounded-md border border-indigo-100 dark:border-indigo-700 bg-white/70 dark:bg-slate-800/70 px-3 py-2">
+                  <div className="mb-2 text-[12px] font-medium text-slate-700 dark:text-slate-300">复用到以下角色</div>
+                  <label className="flex items-center gap-2 text-[12.5px] text-slate-600 dark:text-slate-300">
                     <input
                       type="checkbox"
                       checked={reuseAllRoles}
                       onChange={e => setReuseAllRoles(e.target.checked)}
-                      className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                      className="h-3.5 w-3.5 rounded border-slate-300 dark:border-slate-600 text-indigo-600 focus:ring-indigo-500"
                     />
                     全部角色
                   </label>
                   {!reuseAllRoles && (
                     <div className="mt-2 space-y-1.5">
                       {(activeRoles ?? [role]).map(item => (
-                        <label key={item.id} className="flex items-center gap-2 text-[12.5px] text-slate-600">
+                        <label key={item.id} className="flex items-center gap-2 text-[12.5px] text-slate-600 dark:text-slate-300">
                           <input
                             type="checkbox"
                             checked={reuseRoleIds.includes(item.id)}
@@ -862,12 +862,12 @@ export function SettingsTab({
                                 ? [...prev.filter(id => id !== item.id), item.id]
                                 : prev.filter(id => id !== item.id));
                             }}
-                            className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                            className="h-3.5 w-3.5 rounded border-slate-300 dark:border-slate-600 text-indigo-600 focus:ring-indigo-500"
                           />
                           {item.name}
                         </label>
                       ))}
-                      <label className="flex items-center gap-2 text-[12.5px] text-slate-600">
+                      <label className="flex items-center gap-2 text-[12.5px] text-slate-600 dark:text-slate-300">
                         <input
                           type="checkbox"
                           checked={reuseRoleIds.includes(BUTLER_SCOPE_ID)}
@@ -876,7 +876,7 @@ export function SettingsTab({
                               ? [...prev.filter(id => id !== BUTLER_SCOPE_ID), BUTLER_SCOPE_ID]
                               : prev.filter(id => id !== BUTLER_SCOPE_ID));
                           }}
-                          className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                          className="h-3.5 w-3.5 rounded border-slate-300 dark:border-slate-600 text-indigo-600 focus:ring-indigo-500"
                         />
                         管家
                       </label>
@@ -884,7 +884,7 @@ export function SettingsTab({
                   )}
                 </div>
                 <div className="mt-3 flex justify-end gap-2">
-                  <button type="button" onClick={() => { setSkillPreview(null); setPendingSkillContent(''); }} className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-600 hover:bg-slate-50">取消</button>
+                  <button type="button" onClick={() => { setSkillPreview(null); setPendingSkillContent(''); }} className="rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 text-[12px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700">取消</button>
                   <button type="button" onClick={() => handleConfirmImport(false)} disabled={isImportingSkill} className="rounded-lg bg-indigo-600 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60">确认导入</button>
                   {skillPreview.duplicate && (
                     <button type="button" onClick={() => handleConfirmImport(true)} disabled={isImportingSkill} className="rounded-lg bg-amber-600 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-60">覆盖元数据</button>
@@ -894,18 +894,18 @@ export function SettingsTab({
             )}
 
             <div className="space-y-2">
-              {isLoadingSkills && <div className="text-[12.5px] text-slate-400">正在加载自定义 Skill...</div>}
-              {!isLoadingSkills && registrySkills.length === 0 && <div className="text-[12.5px] text-slate-400">暂无自定义 Skill。</div>}
+              {isLoadingSkills && <div className="text-[12.5px] text-slate-400 dark:text-slate-500">正在加载自定义 Skill...</div>}
+              {!isLoadingSkills && registrySkills.length === 0 && <div className="text-[12.5px] text-slate-400 dark:text-slate-500">暂无自定义 Skill。</div>}
               {registrySkills.map(item => {
                 const enabled = skills.enabledSkillIds.includes(item.id);
                 return (
-                  <div key={item.id} data-testid={`custom-skill-card-${item.id}`} className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-3">
+                  <div key={item.id} data-testid={`custom-skill-card-${item.id}`} className="rounded-lg border border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-3">
                     <div className="flex items-start justify-between gap-4">
                       <div className="min-w-0 flex-1">
                         <div className="flex min-w-0 flex-wrap items-center gap-2">
                           <span className={cn('w-2.5 h-2.5 shrink-0 rounded-full', enabled ? 'bg-emerald-500' : 'bg-slate-300')} />
-                          <span className="min-w-0 break-words text-[13.5px] font-medium text-slate-800">{item.name}</span>
-                          <span className="shrink-0 text-[11px] font-medium text-slate-500 bg-white px-2 py-0.5 rounded-full border border-slate-200">自定义</span>
+                          <span className="min-w-0 break-words text-[13.5px] font-medium text-slate-800 dark:text-slate-100">{item.name}</span>
+                          <span className="shrink-0 text-[11px] font-medium text-slate-500 dark:text-slate-400 bg-white dark:bg-slate-800 px-2 py-0.5 rounded-full border border-slate-200 dark:border-slate-700">自定义</span>
                         </div>
                       </div>
                       <div data-testid={`custom-skill-actions-${item.id}`} className="flex shrink-0 items-center gap-2">
@@ -929,14 +929,14 @@ export function SettingsTab({
                             enabled ? 'bg-indigo-600' : 'bg-slate-300',
                           )}
                         >
-                          <span className={cn('absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform', enabled ? 'translate-x-5' : 'translate-x-0')} />
+                          <span className={cn('absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white dark:bg-slate-800 shadow transition-transform', enabled ? 'translate-x-5' : 'translate-x-0')} />
                           <span className="sr-only">{item.name}</span>
                         </button>
                       </div>
                     </div>
                     <div className="group relative mt-1.5">
-                      <p data-testid={`custom-skill-description-${item.id}`} className="line-clamp-2 break-words text-[12px] leading-relaxed text-slate-500">{item.description}</p>
-                      <div data-testid={`custom-skill-tooltip-${item.id}`} className="pointer-events-none absolute left-0 top-full z-20 mt-1 hidden max-w-[min(28rem,calc(100vw-3rem))] rounded-lg border border-slate-200 bg-white px-3 py-2 text-[12px] leading-relaxed text-slate-600 shadow-xl group-hover:block">
+                      <p data-testid={`custom-skill-description-${item.id}`} className="line-clamp-2 break-words text-[12px] leading-relaxed text-slate-500 dark:text-slate-400">{item.description}</p>
+                      <div data-testid={`custom-skill-tooltip-${item.id}`} className="pointer-events-none absolute left-0 top-full z-20 mt-1 hidden max-w-[min(28rem,calc(100vw-3rem))] rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-[12px] leading-relaxed text-slate-600 dark:text-slate-300 shadow-xl group-hover:block">
                         {item.description}
                       </div>
                     </div>
@@ -948,7 +948,7 @@ export function SettingsTab({
         </div>
       </div>
 
-      <div className="pt-6 border-t border-slate-200/80">
+      <div className="pt-6 border-t border-slate-200/80 dark:border-slate-700/80">
         {settingsSavedMessage && (
           <div className="mb-3 rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2 text-[13px] text-emerald-700 flex items-center gap-2">
             <Check size={14} /> {settingsSavedMessage}
@@ -966,13 +966,13 @@ export function SettingsTab({
 
       {deleteSkillTarget && (
         <div className="fixed inset-0 z-[220] flex items-center justify-center bg-slate-900/20 backdrop-blur-sm">
-          <div role="dialog" aria-modal="true" aria-label="删除自定义 Skill" className="w-[380px] rounded-2xl bg-white p-6 shadow-2xl">
-            <h3 className="mb-3 text-[16px] font-semibold text-slate-800">删除自定义 Skill</h3>
-            <p className="mb-5 text-[14px] leading-relaxed text-slate-600">
+          <div role="dialog" aria-modal="true" aria-label="删除自定义 Skill" className="w-[380px] rounded-2xl bg-white dark:bg-slate-800 p-6 shadow-2xl">
+            <h3 className="mb-3 text-[16px] font-semibold text-slate-800 dark:text-slate-100">删除自定义 Skill</h3>
+            <p className="mb-5 text-[14px] leading-relaxed text-slate-600 dark:text-slate-300">
               确认删除「{deleteSkillTarget.name}」吗？
             </p>
             <div className="flex justify-end gap-3">
-              <button type="button" onClick={() => setDeleteSkillTarget(null)} disabled={pendingSkill !== null} className="rounded-lg border border-slate-200 px-5 py-2.5 text-[13px] font-medium text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60">取消</button>
+              <button type="button" onClick={() => setDeleteSkillTarget(null)} disabled={pendingSkill !== null} className="rounded-lg border border-slate-200 dark:border-slate-700 px-5 py-2.5 text-[13px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60">取消</button>
               <button
                 type="button"
                 onClick={handleCustomSkillDelete}

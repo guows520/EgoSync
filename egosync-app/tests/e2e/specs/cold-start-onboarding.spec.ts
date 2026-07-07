@@ -13,7 +13,7 @@ describe('冷启动引导旅程', () => {
       async () => {
         const preparing = await $('div=正在准备...');
         const welcome = await $('h2=欢迎使用 EgoSync');
-        const butlerHeader = await $('h2=数字管家');
+        const butlerHeader = await $('h2=分身管家');
         return (await preparing.isExisting()) || (await welcome.isExisting()) || (await butlerHeader.isExisting());
       },
       { timeout: 20000, timeoutMsg: 'Onboarding view did not load' },

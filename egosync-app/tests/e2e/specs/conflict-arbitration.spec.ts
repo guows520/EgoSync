@@ -26,9 +26,9 @@ describe('冲突仲裁旅程（仲裁特性 deferred-v2：仅验证健壮性）'
   });
 
   it('管家视图应正常加载', async () => {
-    const header = await $('h2=数字管家');
+    const header = await $('h2=分身管家');
     await header.waitForDisplayed({ timeout: 15000 });
-    expect(await header.getText()).toBe('数字管家');
+    expect(await header.getText()).toBe('分身管家');
   });
 
   it('应用应正常运行不因冲突数据崩溃', async () => {

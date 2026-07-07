@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
-import { Minus, Square, X, Copy, Hexagon } from 'lucide-react';
+import { Minus, Square, X, Copy } from 'lucide-react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { Logo } from '../common/Logo';
 
 export function TitleBar() {
   const [isMaximized, setIsMaximized] = useState(false);
@@ -26,7 +27,7 @@ export function TitleBar() {
       className="h-9 shrink-0 flex items-center justify-between px-3 bg-[#F1F3F5] dark:bg-slate-800 select-none"
     >
       <div className="flex items-center gap-1.5 pointer-events-none">
-        <Hexagon size={16} className="text-indigo-500" strokeWidth={2.5} />
+        <Logo size={24} />
         <span className="text-[13px] font-medium text-slate-600 dark:text-slate-300">EgoSync</span>
       </div>
       <div className="flex items-center">

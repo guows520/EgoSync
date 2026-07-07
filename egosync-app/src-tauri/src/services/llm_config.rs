@@ -136,9 +136,10 @@ pub async fn sync_default_to_opencode(pool: &SqlitePool, agent_config: &AgentCon
         })?;
 
         // Map EgoSync provider IDs to opencode-recognized provider IDs.
+        // 所有 OpenAI 兼容的提供商都映射为 "openai"，opencode 通过 baseURL 区分。
         let opencode_provider = match config.provider.as_str() {
-            "openai_compatible" | "openai" | "minimax" => "openai",
-            other => other,
+            "anthropic" => "anthropic",
+            _ => "openai",
         };
 
         let mut options = serde_json::Map::new();
@@ -222,6 +223,105 @@ pub async fn sync_default_to_opencode(pool: &SqlitePool, agent_config: &AgentCon
     if let Err(e) = result {
         tracing::warn!("sync_default_to_opencode failed (degraded): {}", e);
     }
+}
+
+/// 根据已保存配置的 ID 获取模型列表。
+pub async fn list_models(
+    pool: &SqlitePool,
+    id: String,
+) -> Result<Vec<String>, AppError> {
+    let config = db::get_llm_config(pool, &id).await?;
+    let api_key = secret_store::load_secret(&config.api_key_ref)?.ok_or_else(|| {
+        AppError::KeyringError(format!(
+            "未找到配置 '{}' 的 API Key，请重新保存",
+            config.name
+        ))
+    })?;
+
+    fetch_models_by_params(&config.provider, &config.base_url, &api_key).await
+}
+
+/// 直接根据 provider / base_url / api_key 获取模型列表，无需先保存配置。
+pub async fn list_models_by_params(
+    provider: &str,
+    base_url: &str,
+    api_key: &str,
+) -> Result<Vec<String>, AppError> {
+    if api_key.is_empty() {
+        return Err(AppError::SidecarError("请先填写 API Key".to_string()));
+    }
+    fetch_models_by_params(provider, base_url, api_key).await
+}
+
+/// 内部复用：根据提供商类型、API 地址和密钥，调用 /models 端点获取可用模型列表。
+/// 支持 OpenAI 兼容 API（含智谱/Deepseek/Kimi/百炼等）和 Anthropic。
+async fn fetch_models_by_params(
+    provider: &str,
+    base_url: &str,
+    api_key: &str,
+) -> Result<Vec<String>, AppError> {
+    let base_url = base_url.trim_end_matches('/');
+
+    // Anthropic 使用 /v1/models 端点
+    let models_url = if provider == "anthropic" {
+        if base_url.is_empty() {
+            "https://api.anthropic.com/v1/models".to_string()
+        } else {
+            format!("{}/v1/models", base_url)
+        }
+    } else {
+        // OpenAI 兼容 API：base_url + /models
+        if base_url.is_empty() {
+            "https://api.openai.com/v1/models".to_string()
+        } else {
+            format!("{}/models", base_url)
+        }
+    };
+
+    tracing::info!(models_url = %models_url, provider = %provider, "获取模型列表");
+
+    let client = reqwest::Client::new();
+    let mut req = client.get(&models_url);
+
+    // Anthropic 使用 x-api-key 头，OpenAI 兼容使用 Bearer
+    if provider == "anthropic" {
+        req = req
+            .header("x-api-key", api_key)
+            .header("anthropic-version", "2023-06-01");
+    } else {
+        req = req.header("Authorization", format!("Bearer {}", api_key));
+    }
+
+    let resp = req.send().await.map_err(|e| {
+        AppError::SidecarError(format!("请求模型列表失败: {}", e))
+    })?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(AppError::SidecarError(format!(
+            "获取模型列表失败 ({}): {}",
+            status, body
+        )));
+    }
+
+    let body: serde_json::Value = resp.json().await.map_err(|e| {
+        AppError::SidecarError(format!("解析模型列表响应失败: {}", e))
+    })?;
+
+    // OpenAI 兼容格式: { "data": [{ "id": "gpt-4o" }, ...] }
+    // Anthropic 格式: { "data": [{ "id": "claude-..." }, ...] }
+    let models: Vec<String> = body
+        .get("data")
+        .and_then(|d| d.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|item| item.get("id").and_then(|id| id.as_str()).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Ok(models)
 }
 
 fn current_timestamp() -> String {

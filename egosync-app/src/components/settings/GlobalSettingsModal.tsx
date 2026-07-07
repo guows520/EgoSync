@@ -8,8 +8,30 @@ import { schedulerService } from '../../services/schedulerService';
 import { appService } from '../../services/appService';
 import { dataService } from '../../services/dataService';
 import type { ExportFormat, ExportResult, ImportResult } from '../../services/dataService';
-import type { LlmConfig, CreateLlmConfigInput, UpdateLlmConfigInput } from '../../types/settings';
+import type { LlmConfig, CreateLlmConfigInput, UpdateLlmConfigInput, LlmProviderType } from '../../types/settings';
 import type { McpServer, McpServerType } from '../../types/mcp';
+
+// 提供商默认 API 地址映射
+const PROVIDER_DEFAULT_BASE_URL: Record<LlmProviderType, string> = {
+  openai_compatible: 'https://api.openai.com/v1',
+  anthropic: 'https://api.anthropic.com',
+  minimax: 'https://api.minimaxi.com/v1',
+  zhipu: 'https://open.bigmodel.cn/api/paas/v4',
+  deepseek: 'https://api.deepseek.com/v1',
+  kimi: 'https://api.moonshot.cn/v1',
+  bailian: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+};
+
+// 提供商显示名称映射
+const PROVIDER_LABEL: Record<string, string> = {
+  openai_compatible: 'OpenAI兼容',
+  anthropic: 'Anthropic兼容',
+  minimax: 'MiniMax',
+  zhipu: '智谱',
+  deepseek: 'Deepseek',
+  kimi: 'Kimi',
+  bailian: '阿里云百炼',
+};
 
 type TestStatus = 'idle' | 'testing' | 'success' | 'error';
 type McpForm = {
@@ -77,6 +99,10 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
   const [saveError, setSaveError] = useState('');
   const [showFormatSelect, setShowFormatSelect] = useState(false);
   const [selectedFormats, setSelectedFormats] = useState<ExportFormat[]>([]);
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [isLoadingModels, setIsLoadingModels] = useState(false);
+  const [showModelDropdown, setShowModelDropdown] = useState(false);
+  const [modelLoadError, setModelLoadError] = useState('');
   const [isExporting, setIsExporting] = useState(false);
   const [exportResult, setExportResult] = useState<ExportResult | null>(null);
   const [exportError, setExportError] = useState('');
@@ -198,14 +224,60 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
     setIsEditing(true);
     setTestStatus('idle');
     setTestError('');
+    setAvailableModels([]);
+    setShowModelDropdown(false);
+    setModelLoadError('');
   };
 
   const handleNew = () => {
-    setEditForm({ name: '新配置', provider: 'openai_compatible', baseUrl: '', apiKey: '', model: '' });
+    setEditForm({ name: '新配置', provider: 'openai_compatible', baseUrl: PROVIDER_DEFAULT_BASE_URL.openai_compatible, apiKey: '', model: '' });
     setEditingId(null);
     setIsEditing(true);
     setTestStatus('idle');
     setTestError('');
+    setAvailableModels([]);
+    setShowModelDropdown(false);
+    setModelLoadError('');
+  };
+
+  // 切换提供商时自动填入默认 API 地址（仅当用户未自定义或新建时）
+  const handleProviderChange = (provider: string) => {
+    const defaultUrl = PROVIDER_DEFAULT_BASE_URL[provider as LlmProviderType] || '';
+    const currentUrl = editForm?.baseUrl || '';
+    // 如果当前 URL 为空，或等于某个提供商的默认值，则自动切换
+    const isDefaultUrl = Object.values(PROVIDER_DEFAULT_BASE_URL).includes(currentUrl);
+    setEditForm({
+      ...editForm,
+      provider,
+      baseUrl: isDefaultUrl || !editingId ? defaultUrl : currentUrl,
+    });
+    setAvailableModels([]);
+    setShowModelDropdown(false);
+    setModelLoadError('');
+  };
+
+  // 获取模型列表（直接用表单数据，无需先保存）
+  const handleFetchModels = async () => {
+    if (!editForm.apiKey) {
+      setModelLoadError('请先填写 API Key');
+      return;
+    }
+    setIsLoadingModels(true);
+    setModelLoadError('');
+    try {
+      const models = await llmConfigService.listModelsByParams(
+        editForm.provider,
+        editForm.baseUrl,
+        editForm.apiKey,
+      );
+      setAvailableModels(models);
+      setShowModelDropdown(true);
+    } catch (e: any) {
+      const errMsg = typeof e === 'string' ? e : (e?.message || JSON.stringify(e));
+      setModelLoadError(errMsg);
+    } finally {
+      setIsLoadingModels(false);
+    }
   };
 
   const handleSave = async () => {
@@ -474,19 +546,19 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
 
   return (
     <div className="fixed top-0 right-0 bottom-0 left-16 z-50 animate-in slide-in-from-right duration-300">
-      <div className="h-full bg-white shadow-2xl flex">
-        <div className="w-64 bg-slate-50 border-r border-slate-200 p-6 flex flex-col gap-2 shrink-0">
+      <div className="h-full bg-white dark:bg-slate-900 shadow-2xl flex">
+        <div className="w-64 bg-slate-50 dark:bg-slate-800 border-r border-slate-200 dark:border-slate-700 p-6 flex flex-col gap-2 shrink-0">
           <div className="flex items-center justify-between mb-8 px-3">
-            <h2 className="text-[16px] font-semibold text-slate-800">全局设置</h2>
+            <h2 className="text-[16px] font-semibold text-slate-800 dark:text-slate-100">全局设置</h2>
           </div>
-          <button onClick={() => { setTab('llm'); setIsEditing(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'llm' ? "bg-white text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 hover:bg-slate-200/50")}>模型配置 (BYOK)</button>
-          <button onClick={() => { setTab('mcp'); setIsEditing(false); setIsEditingMcp(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'mcp' ? "bg-white text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 hover:bg-slate-200/50")}>MCP 工具</button>
-          <button onClick={() => { setTab('scheduler'); setIsEditing(false); setIsEditingMcp(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'scheduler' ? "bg-white text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 hover:bg-slate-200/50")}>调度时间</button>
-          <button onClick={() => { setTab('data'); setIsEditing(false); setIsEditingMcp(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'data' ? "bg-white text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 hover:bg-slate-200/50")}>数据与隐私</button>
+          <button onClick={() => { setTab('llm'); setIsEditing(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'llm' ? "bg-white dark:bg-slate-900 text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-700/50")}>模型服务配置</button>
+          <button onClick={() => { setTab('mcp'); setIsEditing(false); setIsEditingMcp(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'mcp' ? "bg-white dark:bg-slate-900 text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-700/50")}>MCP 工具</button>
+          <button onClick={() => { setTab('scheduler'); setIsEditing(false); setIsEditingMcp(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'scheduler' ? "bg-white dark:bg-slate-900 text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-700/50")}>调度时间</button>
+          <button onClick={() => { setTab('data'); setIsEditing(false); setIsEditingMcp(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'data' ? "bg-white dark:bg-slate-900 text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-700/50")}>数据与隐私</button>
         </div>
         <div className="flex-1 p-10 overflow-y-auto">
           <div className="flex justify-between items-center mb-8">
-            <h3 className="text-[24px] font-semibold text-slate-800">{tab === 'llm' ? 'LLM Provider 配置' : tab === 'mcp' ? 'MCP 工具配置' : tab === 'scheduler' ? '调度时间配置' : '数据与隐私'}</h3>
+            <h3 className="text-[24px] font-semibold text-slate-800 dark:text-slate-100">{tab === 'llm' ? 'LLM Provider 配置' : tab === 'mcp' ? 'MCP 工具配置' : tab === 'scheduler' ? '调度时间配置' : '数据与隐私'}</h3>
             <button
               onClick={() => {
                 if (tab === 'mcp' && isEditingMcp) {
@@ -504,83 +576,117 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
                 onClose();
               }}
               aria-label={tab === 'mcp' && isEditingMcp ? '返回 MCP 工具列表' : tab === 'llm' && isEditing ? '返回 LLM 配置列表' : '关闭全局设置'}
-              className="p-2 text-slate-400 hover:bg-slate-100 rounded-full transition-colors"
+              className="p-2 text-slate-400 dark:text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-full transition-colors"
             ><X size={24}/></button>
           </div>
           
           {tab === 'llm' && (
             <div className="space-y-6">
-              <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-4 text-[13px] text-indigo-800 leading-relaxed">
-                EgoSync 采用 BYOK (Bring Your Own Key) 模式，我们不触碰你的数据，也不赚取 API 差价。支持配置多个 Provider，您可以自由切换使用。
+              <div className="bg-indigo-50 dark:bg-indigo-900/30 border border-indigo-100 dark:border-indigo-700 rounded-xl p-4 text-[13px] text-indigo-800 leading-relaxed">
+                支持配置多个自定义大模型服务，你可以自由切换使用。
               </div>
 
               {!isEditing ? (
                 <div className="space-y-4">
                   {configs.map((conf) => (
-                    <div key={conf.id} className={cn("border rounded-xl p-4 transition-all", conf.isDefault ? "bg-indigo-50/30 border-indigo-200 shadow-sm" : "bg-white border-slate-200 hover:border-slate-300")}>
+                    <div key={conf.id} className={cn("border rounded-xl p-4 transition-all", conf.isDefault ? "bg-indigo-50/30 dark:bg-indigo-900/30 border-indigo-200 dark:border-indigo-700 shadow-sm" : "bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600")}>
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
                           <input type="radio" id={`conf-${conf.id}`} name="activeConfig" checked={conf.isDefault} onChange={() => handleSetDefault(conf.id)} className="w-4 h-4 text-indigo-600 accent-indigo-600" />
-                          <label htmlFor={`conf-${conf.id}`} className="font-medium text-[15px] text-slate-800 cursor-pointer">{conf.name}</label>
+                          <label htmlFor={`conf-${conf.id}`} className="font-medium text-[15px] text-slate-800 dark:text-slate-100 cursor-pointer">{conf.name}</label>
                           {conf.isDefault && <span className="px-2 py-0.5 rounded text-[11px] font-medium bg-indigo-100 text-indigo-700">当前启用</span>}
                         </div>
                         <div className="flex items-center gap-2">
-                          <button onClick={() => handleTestConnection(conf.id)} disabled={testingConfigId === conf.id} className="px-3 py-1.5 text-[13px] font-medium text-slate-600 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors disabled:opacity-50">
+                          <button onClick={() => handleTestConnection(conf.id)} disabled={testingConfigId === conf.id} className="px-3 py-1.5 text-[13px] font-medium text-slate-600 dark:text-slate-300 hover:text-green-600 hover:bg-green-50 dark:hover:bg-green-900/30 rounded-lg transition-colors disabled:opacity-50">
                             {testingConfigId === conf.id ? <Loader2 size={14} className="animate-loading-spin" /> : '测试连接'}
                           </button>
-                          <button onClick={() => handleEdit(conf)} className="px-3 py-1.5 text-[13px] font-medium text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors">编辑</button>
-                          <button onClick={() => handleDelete(conf.id)} className="px-3 py-1.5 text-[13px] font-medium text-slate-600 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">删除</button>
+                          <button onClick={() => handleEdit(conf)} className="px-3 py-1.5 text-[13px] font-medium text-slate-600 dark:text-slate-300 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 rounded-lg transition-colors">编辑</button>
+                          <button onClick={() => handleDelete(conf.id)} className="px-3 py-1.5 text-[13px] font-medium text-slate-600 dark:text-slate-300 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors">删除</button>
                         </div>
                       </div>
-                      <div className="mt-3 pl-7 grid grid-cols-2 gap-y-2 text-[13px] text-slate-500">
-                        <div><span className="text-slate-400 mr-2">模型:</span>{conf.model || '-'}</div>
-                        <div><span className="text-slate-400 mr-2">标准:</span>{conf.provider === 'anthropic' ? 'Anthropic (Claude)' : conf.provider === 'minimax' ? 'MiniMax' : 'OpenAI 兼容'}</div>
+                      <div className="mt-3 pl-7 grid grid-cols-2 gap-y-2 text-[13px] text-slate-500 dark:text-slate-400">
+                        <div><span className="text-slate-400 dark:text-slate-500 mr-2">模型:</span>{conf.model || '-'}</div>
+                        <div><span className="text-slate-400 dark:text-slate-500 mr-2">提供商:</span>{PROVIDER_LABEL[conf.provider] || conf.provider}</div>
                       </div>
                       {testStatus !== 'idle' && testingConfigId === null && lastTestedConfigId === conf.id && (
-                        <div className={cn("mt-3 pl-7 text-[13px] flex items-center gap-1.5", testStatus === 'success' ? 'text-green-600' : testStatus === 'error' ? 'text-red-600' : 'text-slate-500')}>
+                        <div className={cn("mt-3 pl-7 text-[13px] flex items-center gap-1.5", testStatus === 'success' ? 'text-green-600' : testStatus === 'error' ? 'text-red-600' : 'text-slate-500 dark:text-slate-400')}>
                           {testStatus === 'success' && <><Check size={14} /> 连接成功</>}
                           {testStatus === 'error' && <><AlertCircle size={14} /> {testError}</>}
                         </div>
                       )}
                     </div>
                   ))}
-                  <button onClick={handleNew} className="w-full py-4 border-2 border-dashed border-slate-200 rounded-xl text-[14px] font-medium text-slate-500 hover:border-indigo-300 hover:text-indigo-600 hover:bg-indigo-50/50 transition-all flex items-center justify-center gap-2">
+                  <button onClick={handleNew} className="w-full py-4 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-xl text-[14px] font-medium text-slate-500 dark:text-slate-400 hover:border-indigo-300 dark:hover:border-indigo-600 hover:text-indigo-600 hover:bg-indigo-50/50 dark:hover:bg-indigo-900/30 transition-all flex items-center justify-center gap-2">
                     <Plus size={16} /> 添加新配置
                   </button>
                 </div>
               ) : (
-                <div className="bg-slate-50 border border-slate-200 rounded-xl p-6 animate-in slide-in-from-bottom-2">
+                <div className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-6 animate-in slide-in-from-bottom-2">
                   <div className="flex justify-between items-center mb-6">
-                    <h4 className="text-[16px] font-medium text-slate-800">{editingId ? '编辑配置' : '新建配置'}</h4>
+                    <h4 className="text-[16px] font-medium text-slate-800 dark:text-slate-100">{editingId ? '编辑配置' : '新建配置'}</h4>
                   </div>
                   <div className="space-y-4">
                     <div>
-                      <label className="block text-[13px] font-medium text-slate-700 mb-1.5">配置名称</label>
-                      <input type="text" value={editForm.name} onChange={e => setEditForm({...editForm, name: e.target.value})} className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none" />
+                      <label className="block text-[13px] font-medium text-slate-700 dark:text-slate-300 mb-1.5">配置名称</label>
+                      <input type="text" value={editForm.name} onChange={e => setEditForm({...editForm, name: e.target.value})} className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none" />
                     </div>
                     <div>
-                      <label className="block text-[13px] font-medium text-slate-700 mb-1.5">Provider 标准</label>
-                      <select value={editForm.provider} onChange={e => setEditForm({...editForm, provider: e.target.value})} className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none">
-                        <option value="openai_compatible">OpenAI 兼容 (OpenAI, DeepSeek, Ollama...)</option>
-                        <option value="anthropic">Anthropic (Claude)</option>
+                      <label className="block text-[13px] font-medium text-slate-700 dark:text-slate-300 mb-1.5">提供商</label>
+                      <select value={editForm.provider} onChange={e => handleProviderChange(e.target.value)} className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none">
+                        <option value="openai_compatible">OpenAI兼容</option>
+                        <option value="anthropic">Anthropic兼容</option>
                         <option value="minimax">MiniMax</option>
+                        <option value="zhipu">智谱</option>
+                        <option value="deepseek">Deepseek</option>
+                        <option value="kimi">Kimi</option>
+                        <option value="bailian">阿里云百炼</option>
                       </select>
                     </div>
                     <div>
-                      <label className="block text-[13px] font-medium text-slate-700 mb-1.5">Base URL</label>
-                      <input type="text" value={editForm.baseUrl} onChange={e => setEditForm({...editForm, baseUrl: e.target.value})} placeholder={editForm.provider === 'anthropic' ? 'https://api.anthropic.com' : editForm.provider === 'minimax' ? 'https://api.minimaxi.com/v1' : 'https://api.openai.com/v1'} className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none font-mono" />
+                      <label className="block text-[13px] font-medium text-slate-700 dark:text-slate-300 mb-1.5">API地址</label>
+                      <input type="text" value={editForm.baseUrl} onChange={e => setEditForm({...editForm, baseUrl: e.target.value})} className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none font-mono" />
                     </div>
                     <div>
-                      <label className="block text-[13px] font-medium text-slate-700 mb-1.5">API Key{editingId ? ' (留空则不修改)' : ''}</label>
-                      <input type="password" value={editForm.apiKey} onChange={e => setEditForm({...editForm, apiKey: e.target.value})} placeholder={editingId ? '••••••••' : 'sk-...'} className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none font-mono" />
+                      <label className="block text-[13px] font-medium text-slate-700 dark:text-slate-300 mb-1.5">API 密钥{editingId ? ' (留空则不修改)' : ''}</label>
+                      <input type="password" value={editForm.apiKey} onChange={e => setEditForm({...editForm, apiKey: e.target.value})} placeholder={editingId ? '••••••••' : 'sk-...'} className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none font-mono" />
                     </div>
                     <div>
-                      <label className="block text-[13px] font-medium text-slate-700 mb-1.5">Model Name</label>
-                      <input type="text" value={editForm.model} onChange={e => setEditForm({...editForm, model: e.target.value})} placeholder={editForm.provider === 'minimax' ? 'MiniMax-M3' : 'gpt-4o'} className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none font-mono" />
+                      <label className="block text-[13px] font-medium text-slate-700 dark:text-slate-300 mb-1.5">模型名称</label>
+                      <div className="flex gap-2">
+                        <input type="text" value={editForm.model} onChange={e => setEditForm({...editForm, model: e.target.value})} placeholder="gpt-4o" className="flex-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none font-mono" />
+                        <button type="button" onClick={handleFetchModels} disabled={isLoadingModels} className="shrink-0 px-3 py-2.5 border border-slate-300 dark:border-slate-600 rounded-lg text-[13px] font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors disabled:opacity-50 whitespace-nowrap">
+                          {isLoadingModels ? <Loader2 size={14} className="animate-loading-spin inline" /> : '获取模型列表'}
+                        </button>
+                      </div>
+                      {modelLoadError && (
+                        <div className="mt-1.5 text-[12px] text-red-600 flex items-center gap-1.5">
+                          <AlertCircle size={12} /> {modelLoadError}
+                        </div>
+                      )}
+                      {showModelDropdown && availableModels.length > 0 && (
+                        <div className="mt-2 relative">
+                          <select
+                            value=""
+                            onChange={e => {
+                              if (e.target.value) {
+                                setEditForm({...editForm, model: e.target.value});
+                                setShowModelDropdown(false);
+                              }
+                            }}
+                            className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none font-mono"
+                          >
+                            <option value="">-- 选择模型 ({availableModels.length} 个) --</option>
+                            {availableModels.map(m => <option key={m} value={m}>{m}</option>)}
+                          </select>
+                        </div>
+                      )}
+                      {showModelDropdown && availableModels.length === 0 && (
+                        <div className="mt-1.5 text-[12px] text-slate-500 dark:text-slate-400">未获取到可用模型</div>
+                      )}
                     </div>
                   </div>
                   <div className="mt-6 flex justify-end gap-3">
-                    <button onClick={() => setIsEditing(false)} className="px-5 py-2.5 border border-slate-300 rounded-lg text-[13px] font-medium text-slate-700 hover:bg-slate-100 transition-colors">取消</button>
+                    <button onClick={() => setIsEditing(false)} className="px-5 py-2.5 border border-slate-300 dark:border-slate-600 rounded-lg text-[13px] font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors">取消</button>
                     <button onClick={handleSave} disabled={isSaving} className="px-5 py-2.5 bg-indigo-600 text-white rounded-lg text-[13px] font-medium hover:bg-indigo-700 transition-colors shadow-sm disabled:opacity-50">
                       {isSaving ? <Loader2 size={14} className="animate-loading-spin inline mr-1" /> : null}
                       保存配置
@@ -606,19 +712,19 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
               {!isEditingMcp ? (
                 <div className="space-y-4">
                   {mcpServers.length === 0 ? (
-                    <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-[13px] text-slate-400">暂无 MCP server</div>
+                    <div className="rounded-xl border border-dashed border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-4 py-8 text-center text-[13px] text-slate-400 dark:text-slate-500">暂无 MCP server</div>
                   ) : mcpServers.map(server => (
-                    <div key={server.id} className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+                    <div key={server.id} className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-4 shadow-sm">
                       <div className="flex items-start justify-between gap-4">
                         <div className="min-w-0">
                           <div className="flex flex-wrap items-center gap-2">
                             <span className={cn('w-2.5 h-2.5 rounded-full', server.enabled ? 'bg-emerald-500' : 'bg-slate-300')} />
-                            <span className="text-[15px] font-medium text-slate-800 break-words">{server.name}</span>
-                            <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-500">{mcpServerTypeLabel(server.serverType)}</span>
-                            {!server.enabled && <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-500">已停用</span>}
+                            <span className="text-[15px] font-medium text-slate-800 dark:text-slate-100 break-words">{server.name}</span>
+                            <span className="rounded-full border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-2 py-0.5 text-[11px] font-medium text-slate-500 dark:text-slate-400">{mcpServerTypeLabel(server.serverType)}</span>
+                            {!server.enabled && <span className="rounded-full border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-2 py-0.5 text-[11px] font-medium text-slate-500 dark:text-slate-400">已停用</span>}
                           </div>
-                          <p className="mt-2 break-words font-mono text-[12px] text-slate-500">{server.commandOrUrl}</p>
-                          <p className={cn('mt-1.5 break-words text-[12.5px] leading-relaxed', server.description ? 'text-slate-500' : 'text-slate-400')}>描述：{server.description || '暂无描述'}</p>
+                          <p className="mt-2 break-words font-mono text-[12px] text-slate-500 dark:text-slate-400">{server.commandOrUrl}</p>
+                          <p className={cn('mt-1.5 break-words text-[12.5px] leading-relaxed', server.description ? 'text-slate-500 dark:text-slate-400' : 'text-slate-400 dark:text-slate-500')}>描述：{server.description || '暂无描述'}</p>
                           {mcpTestResult?.id === server.id && (
                             <div className={cn('mt-2 flex items-center gap-1.5 text-[12.5px]', mcpTestResult.status === 'success' ? 'text-emerald-600' : 'text-red-600')}>
                               {mcpTestResult.status === 'success' ? <Check size={14} /> : <AlertCircle size={14} />}
@@ -640,30 +746,30 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
                           >
                             <span
                               className={cn(
-                                'absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform',
+                                'absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white dark:bg-slate-900 shadow-sm transition-transform',
                                 server.enabled ? 'translate-x-5' : 'translate-x-0'
                               )}
                             />
                           </button>
-                          <button onClick={() => handleTestMcp(server.id)} disabled={testingMcpId === server.id} className="px-3 py-1.5 text-[13px] font-medium text-slate-600 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors disabled:opacity-50">
+                          <button onClick={() => handleTestMcp(server.id)} disabled={testingMcpId === server.id} className="px-3 py-1.5 text-[13px] font-medium text-slate-600 dark:text-slate-300 hover:text-green-600 hover:bg-green-50 dark:hover:bg-green-900/30 rounded-lg transition-colors disabled:opacity-50">
                             {testingMcpId === server.id ? <Loader2 size={14} className="animate-loading-spin" /> : '测试连接'}
                           </button>
-                          <button onClick={() => handleEditMcp(server)} className="px-3 py-1.5 text-[13px] font-medium text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors">编辑</button>
-                          <button onClick={() => setPendingDeleteMcp(server)} className="px-3 py-1.5 text-[13px] font-medium text-slate-600 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">删除</button>
+                          <button onClick={() => handleEditMcp(server)} className="px-3 py-1.5 text-[13px] font-medium text-slate-600 dark:text-slate-300 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 rounded-lg transition-colors">编辑</button>
+                          <button onClick={() => setPendingDeleteMcp(server)} className="px-3 py-1.5 text-[13px] font-medium text-slate-600 dark:text-slate-300 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors">删除</button>
                         </div>
                       </div>
                     </div>
                   ))}
-                  <button onClick={handleNewMcp} className="w-full py-4 border-2 border-dashed border-slate-200 rounded-xl text-[14px] font-medium text-slate-500 hover:border-indigo-300 hover:text-indigo-600 hover:bg-indigo-50/50 transition-all flex items-center justify-center gap-2">
+                  <button onClick={handleNewMcp} className="w-full py-4 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-xl text-[14px] font-medium text-slate-500 dark:text-slate-400 hover:border-indigo-300 dark:hover:border-indigo-600 hover:text-indigo-600 hover:bg-indigo-50/50 dark:hover:bg-indigo-900/30 transition-all flex items-center justify-center gap-2">
                     <Plus size={16} /> 添加 MCP server
                   </button>
                 </div>
               ) : (
-                <div className="bg-slate-50 border border-slate-200 rounded-xl p-6 animate-in slide-in-from-bottom-2">
-                  <h4 className="text-[16px] font-medium text-slate-800 mb-6">{editingMcpId ? '编辑 MCP server' : '新增 MCP server'}</h4>
+                <div className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-6 animate-in slide-in-from-bottom-2">
+                  <h4 className="text-[16px] font-medium text-slate-800 dark:text-slate-100 mb-6">{editingMcpId ? '编辑 MCP server' : '新增 MCP server'}</h4>
                   {!editingMcpId && (
-                    <div className="mb-6 rounded-xl border border-dashed border-slate-200 bg-white p-4">
-                      <label htmlFor="mcp-json-import" className="block text-[13px] font-medium text-slate-700 mb-1.5">MCP JSON</label>
+                    <div className="mb-6 rounded-xl border border-dashed border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-4">
+                      <label htmlFor="mcp-json-import" className="block text-[13px] font-medium text-slate-700 dark:text-slate-300 mb-1.5">MCP JSON</label>
                       <textarea
                         id="mcp-json-import"
                         aria-label="MCP JSON"
@@ -671,42 +777,42 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
                         onChange={e => setMcpImportJson(e.target.value)}
                         rows={4}
                         placeholder='{ "name": "天气查询", "type": "sse", "url": "https://example.com/mcp" }'
-                        className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none font-mono resize-none"
+                        className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none font-mono resize-none"
                       />
                       <div className="mt-3 flex justify-end">
-                        <button onClick={handleImportMcpJson} className="px-4 py-2 rounded-lg text-[13px] font-medium text-indigo-600 hover:bg-indigo-50 border border-indigo-200 transition-colors">导入 JSON</button>
+                        <button onClick={handleImportMcpJson} className="px-4 py-2 rounded-lg text-[13px] font-medium text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-700 transition-colors">导入 JSON</button>
                       </div>
                     </div>
                   )}
                   <div className="space-y-4">
                     <div>
-                      <label className="block text-[13px] font-medium text-slate-700 mb-1.5">名称</label>
-                      <input type="text" value={mcpForm.name} onChange={e => setMcpForm({ ...mcpForm, name: e.target.value })} className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none" />
+                      <label className="block text-[13px] font-medium text-slate-700 dark:text-slate-300 mb-1.5">名称</label>
+                      <input type="text" value={mcpForm.name} onChange={e => setMcpForm({ ...mcpForm, name: e.target.value })} className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none" />
                     </div>
                     <div>
-                      <label className="block text-[13px] font-medium text-slate-700 mb-1.5">类型</label>
-                      <select value={mcpForm.serverType} onChange={e => setMcpForm({ ...mcpForm, serverType: e.target.value as McpServerType })} className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none">
+                      <label className="block text-[13px] font-medium text-slate-700 dark:text-slate-300 mb-1.5">类型</label>
+                      <select value={mcpForm.serverType} onChange={e => setMcpForm({ ...mcpForm, serverType: e.target.value as McpServerType })} className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none">
                         <option value="sse">SSE</option>
                         <option value="streamable_http">Streamable HTTP</option>
                         <option value="stdio">stdio</option>
                       </select>
                     </div>
                     <div>
-                      <label className="block text-[13px] font-medium text-slate-700 mb-1.5">URL / Command</label>
-                      <input type="text" value={mcpForm.commandOrUrl} onChange={e => setMcpForm({ ...mcpForm, commandOrUrl: e.target.value })} placeholder={isRemoteMcpType(mcpForm.serverType) ? 'http://localhost:8000/sse' : 'npx -y @modelcontextprotocol/server-filesystem'} className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none font-mono" />
+                      <label className="block text-[13px] font-medium text-slate-700 dark:text-slate-300 mb-1.5">URL / Command</label>
+                      <input type="text" value={mcpForm.commandOrUrl} onChange={e => setMcpForm({ ...mcpForm, commandOrUrl: e.target.value })} placeholder={isRemoteMcpType(mcpForm.serverType) ? 'http://localhost:8000/sse' : 'npx -y @modelcontextprotocol/server-filesystem'} className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none font-mono" />
                     </div>
                     <div>
-                      <label className="block text-[13px] font-medium text-slate-700 mb-1.5">环境变量引用 JSON</label>
-                      <textarea value={mcpForm.envRefs} onChange={e => setMcpForm({ ...mcpForm, envRefs: e.target.value })} rows={3} className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none font-mono resize-none" />
-                      <p className="mt-1.5 text-[12px] text-slate-400">示例：{`{"TOKEN":"env:CALENDAR_TOKEN"}`}</p>
+                      <label className="block text-[13px] font-medium text-slate-700 dark:text-slate-300 mb-1.5">环境变量引用 JSON</label>
+                      <textarea value={mcpForm.envRefs} onChange={e => setMcpForm({ ...mcpForm, envRefs: e.target.value })} rows={3} className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none font-mono resize-none" />
+                      <p className="mt-1.5 text-[12px] text-slate-400 dark:text-slate-500">示例：{`{"TOKEN":"env:CALENDAR_TOKEN"}`}</p>
                     </div>
                     <div>
-                      <label className="block text-[13px] font-medium text-slate-700 mb-1.5">描述（选填）</label>
-                      <textarea value={mcpForm.description} onChange={e => setMcpForm({ ...mcpForm, description: e.target.value })} rows={2} className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none resize-none" />
+                      <label className="block text-[13px] font-medium text-slate-700 dark:text-slate-300 mb-1.5">描述（选填）</label>
+                      <textarea value={mcpForm.description} onChange={e => setMcpForm({ ...mcpForm, description: e.target.value })} rows={2} className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none resize-none" />
                     </div>
                   </div>
                   <div className="mt-6 flex justify-end gap-3">
-                    <button onClick={() => setIsEditingMcp(false)} className="px-5 py-2.5 border border-slate-300 rounded-lg text-[13px] font-medium text-slate-700 hover:bg-slate-100 transition-colors">取消</button>
+                    <button onClick={() => setIsEditingMcp(false)} className="px-5 py-2.5 border border-slate-300 dark:border-slate-600 rounded-lg text-[13px] font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors">取消</button>
                     <button onClick={handleSaveMcp} disabled={isSavingMcp} className="px-5 py-2.5 bg-indigo-600 text-white rounded-lg text-[13px] font-medium hover:bg-indigo-700 transition-colors shadow-sm disabled:opacity-50">
                       {isSavingMcp ? <Loader2 size={14} className="animate-loading-spin inline mr-1" /> : null}
                       保存 MCP server
@@ -717,13 +823,13 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
 
               {pendingDeleteMcp && (
                 <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/30 px-4">
-                  <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
-                    <h4 className="text-[16px] font-semibold text-slate-800">确认删除 MCP server？</h4>
-                    <p className="mt-2 text-[13px] leading-relaxed text-slate-500">
+                  <div className="w-full max-w-md rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-6 shadow-2xl">
+                    <h4 className="text-[16px] font-semibold text-slate-800 dark:text-slate-100">确认删除 MCP server？</h4>
+                    <p className="mt-2 text-[13px] leading-relaxed text-slate-500 dark:text-slate-400">
                       删除后会从全局 MCP 工具列表移除「{pendingDeleteMcp.name}」，并解除所有角色绑定。
                     </p>
                     <div className="mt-6 flex justify-end gap-3">
-                      <button onClick={() => setPendingDeleteMcp(null)} className="px-4 py-2 rounded-lg border border-slate-300 text-[13px] font-medium text-slate-700 hover:bg-slate-50 transition-colors">取消</button>
+                      <button onClick={() => setPendingDeleteMcp(null)} className="px-4 py-2 rounded-lg border border-slate-300 dark:border-slate-600 text-[13px] font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors">取消</button>
                       <button onClick={() => handleDeleteMcp(pendingDeleteMcp.id)} className="px-4 py-2 rounded-lg bg-red-600 text-[13px] font-medium text-white hover:bg-red-700 transition-colors">确认删除</button>
                     </div>
                   </div>
@@ -734,7 +840,7 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
 
           {tab === 'scheduler' && (
             <div className="space-y-6">
-              <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-4 text-[13px] text-indigo-800 leading-relaxed flex items-start gap-2">
+              <div className="bg-indigo-50 dark:bg-indigo-900/30 border border-indigo-100 dark:border-indigo-700 rounded-xl p-4 text-[13px] text-indigo-800 leading-relaxed flex items-start gap-2">
                 <Clock size={16} className="mt-0.5 shrink-0" />
                 <span>为每个主动性档位设置每日触发时间点（本地时间，精确到分钟）。所有 moderate / proactive 角色共用对应档位的时间点，保存后下次调度自动生效。</span>
               </div>
@@ -747,29 +853,29 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
 
               <div className="space-y-6">
                 {(['moderate', 'proactive'] as const).map(level => (
-                  <div key={level} className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
+                  <div key={level} className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-5 shadow-sm">
                     <div className="flex items-center gap-2 mb-4">
-                      <span className="text-[15px] font-medium text-slate-800">
+                      <span className="text-[15px] font-medium text-slate-800 dark:text-slate-100">
                         {level === 'moderate' ? '适度建议' : '积极主动'}
                       </span>
-                      <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-500">
+                      <span className="rounded-full border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-2 py-0.5 text-[11px] font-medium text-slate-500 dark:text-slate-400">
                         {schedulerTimes[level].length} 个时间点
                       </span>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
                       {schedulerTimes[level].map((time, index) => (
-                        <div key={index} className="flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1.5">
+                        <div key={index} className="flex items-center gap-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1.5">
                           <input
                             type="time"
                             value={time}
                             onChange={e => handleSchedulerTimeChange(level, index, e.target.value)}
-                            className="text-[13px] text-slate-700 outline-none bg-transparent"
+                            className="text-[13px] text-slate-700 dark:text-slate-300 outline-none bg-transparent"
                           />
                           <button
                             type="button"
                             aria-label={`删除 ${time}`}
                             onClick={() => handleRemoveSchedulerTime(level, index)}
-                            className="text-slate-400 hover:text-red-500 transition-colors"
+                            className="text-slate-400 dark:text-slate-500 hover:text-red-500 transition-colors"
                           >
                             <X size={14} />
                           </button>
@@ -779,7 +885,7 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
                         <button
                           type="button"
                           onClick={() => handleAddSchedulerTime(level)}
-                          className="inline-flex items-center gap-1 rounded-lg border border-dashed border-slate-300 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-500 hover:border-indigo-300 hover:text-indigo-600 transition-colors"
+                          className="inline-flex items-center gap-1 rounded-lg border border-dashed border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-3 py-1.5 text-[12px] font-medium text-slate-500 dark:text-slate-400 hover:border-indigo-300 dark:hover:border-indigo-600 hover:text-indigo-600 transition-colors"
                         >
                           <Plus size={14} /> 添加
                         </button>
@@ -805,15 +911,15 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
                 )}
               </div>
 
-              <div className="pt-6 border-t border-slate-200">
+              <div className="pt-6 border-t border-slate-200 dark:border-slate-700">
                 <div className="flex items-center justify-between">
                   <div className="flex items-start gap-3">
-                    <div className="w-10 h-10 rounded-lg bg-indigo-50 flex items-center justify-center text-indigo-600 shrink-0">
+                    <div className="w-10 h-10 rounded-lg bg-indigo-50 dark:bg-indigo-900/30 flex items-center justify-center text-indigo-600 shrink-0">
                       <Bell size={18} />
                     </div>
                     <div>
-                      <h4 className="text-[15px] font-medium text-slate-800">敲门通知声音</h4>
-                      <p className="text-[13px] text-slate-500 mt-0.5">收到「敲门」级别通知时播放提示音</p>
+                      <h4 className="text-[15px] font-medium text-slate-800 dark:text-slate-100">敲门通知声音</h4>
+                      <p className="text-[13px] text-slate-500 dark:text-slate-400 mt-0.5">收到「敲门」级别通知时播放提示音</p>
                     </div>
                   </div>
                   <button
@@ -829,7 +935,7 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
                     )}
                   >
                     <span className={cn(
-                      "absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow-sm transition-transform duration-200",
+                      "absolute top-0.5 left-0.5 w-5 h-5 bg-white dark:bg-slate-900 rounded-full shadow-sm transition-transform duration-200",
                       knockSoundEnabled && "translate-x-6"
                     )} />
                   </button>
@@ -841,8 +947,8 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
           {tab === 'data' && (
             <div className="space-y-8">
               <div>
-                <h4 className="text-[15px] font-medium text-slate-800 mb-2">导出数据</h4>
-                <p className="text-[13px] text-slate-500 mb-4">将所有角色的记忆、任务和对话记录导出为标准格式。选择需要的格式后点击确认，系统会弹出文件夹选择对话框。</p>
+                <h4 className="text-[15px] font-medium text-slate-800 dark:text-slate-100 mb-2">导出数据</h4>
+                <p className="text-[13px] text-slate-500 dark:text-slate-400 mb-4">将所有角色的记忆、任务和对话记录导出为标准格式。选择需要的格式后点击确认，系统会弹出文件夹选择对话框。</p>
 
                 {exportError && (
                   <div className="mb-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-[13px] text-red-600 flex items-center gap-2">
@@ -866,42 +972,42 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
                 {!showFormatSelect && !isExporting && (
                   <button
                     onClick={() => { setShowFormatSelect(true); setExportResult(null); setExportError(''); }}
-                    className="flex items-center gap-2 px-5 py-2.5 border border-slate-300 rounded-lg text-[14px] font-medium text-slate-700 hover:bg-slate-50 transition-colors"
+                    className="flex items-center gap-2 px-5 py-2.5 border border-slate-300 dark:border-slate-600 rounded-lg text-[14px] font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
                   >
                     <Download size={16}/> 导出存档
                   </button>
                 )}
 
                 {showFormatSelect && !isExporting && (
-                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-3">
-                    <p className="text-[13px] font-medium text-slate-700">选择导出格式（可多选）</p>
+                  <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 p-4 space-y-3">
+                    <p className="text-[13px] font-medium text-slate-700 dark:text-slate-300">选择导出格式（可多选）</p>
                     <div className="space-y-2">
                       <label className="flex items-center gap-2 cursor-pointer">
                         <input
                           type="checkbox"
                           checked={selectedFormats.includes('sqlite')}
                           onChange={() => toggleFormat('sqlite')}
-                          className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                          className="w-4 h-4 rounded border-slate-300 dark:border-slate-600 text-indigo-600 focus:ring-indigo-500"
                         />
-                        <span className="text-[14px] text-slate-700">SQLite 备份 <span className="text-slate-400 text-[12px]">（推荐，可用于数据恢复）</span></span>
+                        <span className="text-[14px] text-slate-700 dark:text-slate-300">SQLite 备份 <span className="text-slate-400 dark:text-slate-500 text-[12px]">（推荐，可用于数据恢复）</span></span>
                       </label>
                       <label className="flex items-center gap-2 cursor-pointer">
                         <input
                           type="checkbox"
                           checked={selectedFormats.includes('json')}
                           onChange={() => toggleFormat('json')}
-                          className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                          className="w-4 h-4 rounded border-slate-300 dark:border-slate-600 text-indigo-600 focus:ring-indigo-500"
                         />
-                        <span className="text-[14px] text-slate-700">JSON 格式 <span className="text-slate-400 text-[12px]">（更适合跨版本数据迁移）</span></span>
+                        <span className="text-[14px] text-slate-700 dark:text-slate-300">JSON 格式 <span className="text-slate-400 dark:text-slate-500 text-[12px]">（更适合跨版本数据迁移）</span></span>
                       </label>
                       <label className="flex items-center gap-2 cursor-pointer">
                         <input
                           type="checkbox"
                           checked={selectedFormats.includes('markdown')}
                           onChange={() => toggleFormat('markdown')}
-                          className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                          className="w-4 h-4 rounded border-slate-300 dark:border-slate-600 text-indigo-600 focus:ring-indigo-500"
                         />
-                        <span className="text-[14px] text-slate-700">Markdown 报告 <span className="text-slate-400 text-[12px]">（可读性高，不可用于数据恢复）</span></span>
+                        <span className="text-[14px] text-slate-700 dark:text-slate-300">Markdown 报告 <span className="text-slate-400 dark:text-slate-500 text-[12px]">（可读性高，不可用于数据恢复）</span></span>
                       </label>
                     </div>
                     <div className="flex items-center gap-2 pt-1">
@@ -914,7 +1020,7 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
                       </button>
                       <button
                         onClick={() => { setShowFormatSelect(false); setSelectedFormats([]); }}
-                        className="px-4 py-2 rounded-lg text-[13px] font-medium text-slate-600 hover:bg-slate-100 transition-colors"
+                        className="px-4 py-2 rounded-lg text-[13px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
                       >
                         取消
                       </button>
@@ -923,15 +1029,15 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
                 )}
 
                 {isExporting && (
-                  <div className="flex items-center gap-2 px-5 py-2.5 text-[14px] text-slate-600">
+                  <div className="flex items-center gap-2 px-5 py-2.5 text-[14px] text-slate-600 dark:text-slate-300">
                     <Loader2 size={16} className="animate-loading-spin" /> 导出中...
                   </div>
                 )}
               </div>
 
               <div>
-                <h4 className="text-[15px] font-medium text-slate-800 mb-2">导入数据</h4>
-                <p className="text-[13px] text-slate-500 mb-4">导入 存档文件（.db 或 .json）恢复数据。导入前会自动备份当前数据。</p>
+                <h4 className="text-[15px] font-medium text-slate-800 dark:text-slate-100 mb-2">导入数据</h4>
+                <p className="text-[13px] text-slate-500 dark:text-slate-400 mb-4">导入 存档文件（.db 或 .json）恢复数据。导入前会自动备份当前数据。</p>
 
                 {importError && (
                   <div className="mb-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-[13px] text-red-600 flex items-center gap-2">
@@ -955,7 +1061,7 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
                     <p className="text-[13px] text-amber-700 leading-relaxed">
                       导入将覆盖当前所有数据（导入前已自动备份）。确认要继续吗？
                     </p>
-                    <p className="text-[12px] text-slate-500 break-all">文件：{pendingImportPath}</p>
+                    <p className="text-[12px] text-slate-500 dark:text-slate-400 break-all">文件：{pendingImportPath}</p>
                     <div className="flex items-center gap-2 pt-1">
                       <button
                         onClick={handleImport}
@@ -965,7 +1071,7 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
                       </button>
                       <button
                         onClick={() => { setShowImportConfirm(false); setPendingImportPath(null); setImportError(''); }}
-                        className="px-4 py-2 rounded-lg text-[13px] font-medium text-slate-600 hover:bg-slate-100 transition-colors"
+                        className="px-4 py-2 rounded-lg text-[13px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
                       >
                         取消
                       </button>
@@ -975,10 +1081,10 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
 
                 {!showImportConfirm && !isImporting && (
                   <div className="space-y-2">
-                    <p className="text-[12px] text-slate-400">支持 JSON 或 SQLite 存档文件；SQLite 导出含两个 .db 文件，选择其中任一即可自动导入全部数据。</p>
+                    <p className="text-[12px] text-slate-400 dark:text-slate-500">支持 JSON 或 SQLite 存档文件；SQLite 导出含两个 .db 文件，选择其中任一即可自动导入全部数据。</p>
                     <button
                       onClick={handleImportSelect}
-                      className="flex items-center gap-2 px-5 py-2.5 border border-slate-300 rounded-lg text-[14px] font-medium text-slate-700 hover:bg-slate-50 transition-colors"
+                      className="flex items-center gap-2 px-5 py-2.5 border border-slate-300 dark:border-slate-600 rounded-lg text-[14px] font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
                     >
                       <Upload size={16}/> 导入存档
                     </button>
@@ -986,15 +1092,15 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
                 )}
 
                 {isImporting && (
-                  <div className="flex items-center gap-2 px-5 py-2.5 text-[14px] text-slate-600">
+                  <div className="flex items-center gap-2 px-5 py-2.5 text-[14px] text-slate-600 dark:text-slate-300">
                     <Loader2 size={16} className="animate-loading-spin" /> 导入中...
                   </div>
                 )}
               </div>
 
-              <div className="pt-6 border-t border-slate-200">
+              <div className="pt-6 border-t border-slate-200 dark:border-slate-700">
                 <h4 className="text-[15px] font-medium text-red-600 mb-2 flex items-center gap-2">危险区域</h4>
-                <p className="text-[13px] text-slate-500 mb-4">永久销毁本地数据库中的所有数据。此操作不可逆！</p>
+                <p className="text-[13px] text-slate-500 dark:text-slate-400 mb-4">永久销毁本地数据库中的所有数据。此操作不可逆！</p>
 
                 {destroyError && (
                   <div className="mb-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-[13px] text-red-600 flex items-center gap-2">
@@ -1020,7 +1126,7 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
                         value={destroyConfirmText}
                         onChange={e => setDestroyConfirmText(e.target.value)}
                         placeholder='输入"确认销毁"以继续'
-                        className="w-full bg-white border border-red-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-red-500/20 focus:border-red-500 outline-none"
+                        className="w-full bg-white dark:bg-slate-900 border border-red-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-red-500/20 focus:border-red-500 outline-none"
                       />
                     </div>
                     <div className="flex items-center gap-2 pt-1">
@@ -1033,7 +1139,7 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
                       </button>
                       <button
                         onClick={() => { setShowDestroyConfirm(false); setDestroyConfirmText(''); setDestroyError(''); }}
-                        className="px-4 py-2 rounded-lg text-[13px] font-medium text-slate-600 hover:bg-slate-100 transition-colors"
+                        className="px-4 py-2 rounded-lg text-[13px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
                       >
                         取消
                       </button>
@@ -1055,10 +1161,10 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
       {saveError && (
         <Modal onClose={() => setSaveError('')} width="w-[420px]" ariaLabel="保存失败">
           <div className="p-6">
-            <h2 className="text-[18px] font-semibold text-slate-800 flex items-center gap-2">
+            <h2 className="text-[18px] font-semibold text-slate-800 dark:text-slate-100 flex items-center gap-2">
               <AlertCircle size={20} className="text-red-500" /> 保存失败
             </h2>
-            <p className="mt-3 text-[13px] leading-6 text-slate-600 break-all">{saveError}</p>
+            <p className="mt-3 text-[13px] leading-6 text-slate-600 dark:text-slate-300 break-all">{saveError}</p>
             <div className="mt-6 flex justify-end">
               <button onClick={() => setSaveError('')} className="px-5 py-2.5 bg-slate-800 text-white rounded-lg text-[13px] font-medium hover:bg-slate-700 transition-colors">
                 知道了

@@ -9,11 +9,11 @@ describe('管家对话旅程', () => {
     await navigateToButler();
   });
 
-  it('管家视图应显示数字管家标题', async () => {
-    const header = await $('h2=数字管家');
+  it('管家视图应显示分身管家标题', async () => {
+    const header = await $('h2=分身管家');
     await header.waitForDisplayed({ timeout: 15000 });
     const text = await header.getText();
-    expect(text).toBe('数字管家');
+    expect(text).toBe('分身管家');
   });
 
   it('应显示聊天输入框', async () => {

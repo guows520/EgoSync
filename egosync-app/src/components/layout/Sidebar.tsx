@@ -66,7 +66,7 @@ export function Sidebar({ roles, currentView, onViewChange, isSettingsOpen, onOp
           onClick={() => handleNav('butler')}
           title="管家"
           aria-label="管家"
-          className={cn("w-11 h-11 rounded-xl flex items-center justify-center transition-all duration-200 shrink-0", !isSettingsOpen && currentView === 'butler' ? "bg-indigo-600 text-white shadow-lg shadow-indigo-200 scale-105" : "text-slate-500 hover:bg-slate-200")}
+          className={cn("w-11 h-11 rounded-xl flex items-center justify-center transition-all duration-200 shrink-0", !isSettingsOpen && currentView === 'butler' ? "bg-indigo-600 text-white shadow-lg shadow-indigo-200 dark:shadow-indigo-900/50 scale-105" : "text-slate-500 hover:bg-slate-200 dark:hover:bg-slate-700 dark:text-slate-400")}
         >
           <Home size={22} strokeWidth={2.5} />
         </button>
@@ -94,7 +94,7 @@ export function Sidebar({ roles, currentView, onViewChange, isSettingsOpen, onOp
       </div>
 
       <div className="flex flex-col items-center gap-3 mt-auto pt-4 pb-2">
-        <button onClick={onToggleNotif} title="通知" aria-label={unreadCount > 0 ? '有新通知' : (whisperUnread > 0 ? '有耳语通知' : '通知')} className={cn("relative w-11 h-11 rounded-xl flex items-center justify-center transition-colors", isNotifOpen ? "bg-indigo-600 text-white shadow-lg shadow-indigo-200" : "text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 hover:text-slate-700 dark:hover:text-slate-200")}>
+        <button onClick={onToggleNotif} title="通知" aria-label={unreadCount > 0 ? '有新通知' : (whisperUnread > 0 ? '有耳语通知' : '通知')} className={cn("relative w-11 h-11 rounded-xl flex items-center justify-center transition-colors", isNotifOpen ? "bg-indigo-600 text-white shadow-lg shadow-indigo-200 dark:shadow-indigo-900/50" : "text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 hover:text-slate-700 dark:hover:text-slate-200")}>
           <Bell size={20} />
           {unreadCount > 0 ? (
             <span className="absolute top-1.5 right-1.5 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-[#F1F3F5] dark:border-slate-800"></span>
@@ -105,7 +105,7 @@ export function Sidebar({ roles, currentView, onViewChange, isSettingsOpen, onOp
         <button onClick={onToggleTheme} title={theme === 'light' ? '切换深色' : '切换浅色'} aria-label={theme === 'light' ? '切换深色模式' : '切换浅色模式'} className="w-11 h-11 rounded-xl flex items-center justify-center text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 hover:text-slate-700 dark:hover:text-slate-200 transition-colors">
           {theme === 'light' ? <Moon size={20} /> : <Sun size={20} />}
         </button>
-        <button onClick={onOpenSettings} title="设置" aria-label="设置" className={cn("w-11 h-11 rounded-xl flex items-center justify-center transition-colors", isSettingsOpen ? "bg-indigo-600 text-white shadow-lg shadow-indigo-200" : "text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 hover:text-slate-700 dark:hover:text-slate-200")}>
+        <button onClick={onOpenSettings} title="设置" aria-label="设置" className={cn("w-11 h-11 rounded-xl flex items-center justify-center transition-colors", isSettingsOpen ? "bg-indigo-600 text-white shadow-lg shadow-indigo-200 dark:shadow-indigo-900/50" : "text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 hover:text-slate-700 dark:hover:text-slate-200")}>
           <SettingsIcon size={22} />
         </button>
       </div>

@@ -46,7 +46,7 @@ interface TaskCardCallbacks {
 const EMPTY_CLASSIFYING_IDS: Set<string> = new Set();
 
 const CARD_BASE_CLASS =
-  'bg-white border border-slate-200 rounded-xl p-4 flex gap-3.5 shadow-sm group hover:border-indigo-300 hover:shadow-md transition-all duration-200 motion-reduce:transition-none';
+  'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-4 flex gap-3.5 shadow-sm group hover:border-indigo-300 dark:hover:border-indigo-600 hover:shadow-md transition-all duration-200 motion-reduce:transition-none';
 
 function TaskCardBody({ task, callbacks, dragHandle, isClassifying }: { task: Task; callbacks: TaskCardCallbacks; dragHandle?: ReactNode; isClassifying?: boolean }) {
   return (
@@ -59,7 +59,7 @@ function TaskCardBody({ task, callbacks, dragHandle, isClassifying }: { task: Ta
         }}
         className={cn(
           'transition-colors shrink-0 mt-0.5',
-          task.isCompleted ? 'text-emerald-500' : 'text-slate-300 hover:text-emerald-500',
+          task.isCompleted ? 'text-emerald-500' : 'text-slate-300 dark:text-slate-600 hover:text-emerald-500',
         )}
         aria-label={`${task.isCompleted ? '撤销完成' : '完成'} ${task.title}`}
       >
@@ -69,13 +69,13 @@ function TaskCardBody({ task, callbacks, dragHandle, isClassifying }: { task: Ta
         <p
           className={cn(
             'text-[14.5px] font-medium leading-snug',
-            task.isCompleted ? 'text-slate-400 line-through' : 'text-slate-800',
+            task.isCompleted ? 'text-slate-400 dark:text-slate-500 line-through' : 'text-slate-800 dark:text-slate-100',
           )}
         >
           {task.title}
         </p>
         <div className="flex items-center gap-2 mt-2.5 flex-wrap">
-          {task.deadline && <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-transparent text-slate-500 border border-slate-300">{formatDeadline(task.deadline)}</span>}
+          {task.deadline && <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-transparent text-slate-500 dark:text-slate-400 border border-slate-300 dark:border-slate-600">{formatDeadline(task.deadline)}</span>}
           {task.isBigRock && <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-transparent text-amber-600 border border-amber-400">大石头</span>}
           {task.protectionStatus === 'at_risk' && (
             <span
@@ -103,7 +103,7 @@ function TaskCardBody({ task, callbacks, dragHandle, isClassifying }: { task: Ta
             event.stopPropagation();
             callbacks.onOpenTask(task);
           }}
-          className="p-1.5 rounded-md text-slate-400 hover:text-indigo-600 hover:bg-indigo-50"
+          className="p-1.5 rounded-md text-slate-400 dark:text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/30"
           aria-label={`编辑 ${task.title}`}
         >
           <Edit2 size={15} />
@@ -113,7 +113,7 @@ function TaskCardBody({ task, callbacks, dragHandle, isClassifying }: { task: Ta
             event.stopPropagation();
             callbacks.onRequestDelete(task);
           }}
-          className="p-1.5 rounded-md text-slate-400 hover:text-red-600 hover:bg-red-50"
+          className="p-1.5 rounded-md text-slate-400 dark:text-slate-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30"
           aria-label={`删除 ${task.title}`}
         >
           <Trash2 size={15} />
@@ -150,7 +150,7 @@ function SortableTaskCard({ task, callbacks, isClassifying, disabled = false }: 
               {...attributes}
               {...listeners}
               onClick={event => event.stopPropagation()}
-              className="text-slate-300 hover:text-slate-500 cursor-grab active:cursor-grabbing shrink-0 mt-0.5 touch-none"
+              className="text-slate-300 dark:text-slate-600 hover:text-slate-500 cursor-grab active:cursor-grabbing shrink-0 mt-0.5 touch-none"
               aria-label={`拖动排序 ${task.title}`}
             >
               <GripVertical size={18} />
@@ -240,7 +240,7 @@ export function TasksTab({ role, tasks, isLoading, error, classifyingIds = EMPTY
   };
 
   if (isLoading) {
-    return <div className="text-[13px] text-slate-500">任务加载中...</div>;
+    return <div className="text-[13px] text-slate-500 dark:text-slate-400">任务加载中...</div>;
   }
 
   if (error) {
@@ -326,8 +326,8 @@ export function TasksTab({ role, tasks, isLoading, error, classifyingIds = EMPTY
         <div className="flex flex-col gap-3">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <h3 className="text-[15px] font-semibold text-slate-800">任务清单</h3>
-              <p className="mt-0.5 text-[12px] text-slate-500">管理当前角色的任务</p>
+              <h3 className="text-[15px] font-semibold text-slate-800 dark:text-slate-100">任务清单</h3>
+              <p className="mt-0.5 text-[12px] text-slate-500 dark:text-slate-400">管理当前角色的任务</p>
             </div>
             <button
               onClick={() => onOpenTask(null)}
@@ -338,8 +338,8 @@ export function TasksTab({ role, tasks, isLoading, error, classifyingIds = EMPTY
             </button>
           </div>
 
-          <div className="flex items-center gap-1 flex-nowrap rounded-xl border border-slate-200 bg-white/70 px-2.5 py-2" role="group" aria-label="按象限筛选">
-            <Filter size={14} className="text-slate-400 shrink-0" />
+          <div className="flex items-center gap-1 flex-nowrap rounded-xl border border-slate-200 dark:border-slate-700 bg-white/70 dark:bg-slate-800/70 px-2.5 py-2" role="group" aria-label="按象限筛选">
+            <Filter size={14} className="text-slate-400 dark:text-slate-500 shrink-0" />
             {quadrantChips.map(chip => (
               <button
                 key={chip.value}
@@ -348,7 +348,7 @@ export function TasksTab({ role, tasks, isLoading, error, classifyingIds = EMPTY
                 aria-pressed={quadrantFilter === chip.value}
                 className={cn(
                   'px-2 py-0.5 rounded-md text-[12px] font-medium transition-colors motion-reduce:transition-none whitespace-nowrap',
-                  quadrantFilter === chip.value ? 'text-slate-700' : 'text-slate-500 hover:bg-slate-100',
+                  quadrantFilter === chip.value ? 'text-slate-700 dark:text-slate-300' : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700',
                 )}
                 style={quadrantFilter === chip.value ? { backgroundColor: 'color-mix(in srgb, var(--role-accent) 15%, white)', color: 'var(--role-accent)' } : undefined}
               >
@@ -362,7 +362,7 @@ export function TasksTab({ role, tasks, isLoading, error, classifyingIds = EMPTY
               aria-pressed={showBigRocksOnly}
               className={cn(
                 'inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[12px] font-medium transition-colors motion-reduce:transition-none whitespace-nowrap',
-                showBigRocksOnly ? 'bg-amber-100 text-amber-700' : 'text-slate-500 hover:bg-slate-100',
+                showBigRocksOnly ? 'bg-amber-100 text-amber-700' : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700',
               )}
             >
               <Target size={13} /> 只看大石头
@@ -375,7 +375,7 @@ export function TasksTab({ role, tasks, isLoading, error, classifyingIds = EMPTY
       )}
 
       {visibleTasks.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-slate-200 bg-white/70 p-6 text-center text-[13px] text-slate-500">
+        <div className="rounded-xl border border-dashed border-slate-200 dark:border-slate-700 bg-white/70 dark:bg-slate-800/70 p-6 text-center text-[13px] text-slate-500 dark:text-slate-400">
           {tasks.length === 0 ? '还没有任务，先添加一个小目标吧' : '当前筛选无匹配任务'}
         </div>
       ) : (
@@ -396,7 +396,7 @@ export function TasksTab({ role, tasks, isLoading, error, classifyingIds = EMPTY
               </span>
             );
             const countBadge = (
-              <span className="inline-flex items-center justify-center min-w-[20px] px-1.5 rounded-full bg-slate-100 text-slate-500 text-[11px] font-semibold">
+              <span className="inline-flex items-center justify-center min-w-[20px] px-1.5 rounded-full bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400 text-[11px] font-semibold">
                 {count}
               </span>
             );
@@ -411,7 +411,7 @@ export function TasksTab({ role, tasks, isLoading, error, classifyingIds = EMPTY
                     </span>
                     {countBadge}
                   </div>
-                  <p className="text-[12.5px] text-slate-400">{quadrantEmptyHint[quadrant]}</p>
+                  <p className="text-[12.5px] text-slate-400 dark:text-slate-500">{quadrantEmptyHint[quadrant]}</p>
                 </div>
               );
             }
@@ -439,7 +439,7 @@ export function TasksTab({ role, tasks, isLoading, error, classifyingIds = EMPTY
                         type="button"
                         onClick={() => toggleCompletedSection(quadrant)}
                         aria-expanded={isExpanded}
-                        className="flex items-center gap-1.5 px-2 py-1 text-[12px] font-medium text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-md transition-colors w-fit"
+                        className="flex items-center gap-1.5 px-2 py-1 text-[12px] font-medium text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-md transition-colors w-fit"
                       >
                         {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                         <CheckCircle2 size={14} className="text-emerald-500" />
@@ -467,8 +467,8 @@ export function TasksTab({ role, tasks, isLoading, error, classifyingIds = EMPTY
       {pendingDeleteTask && (
         <Modal onClose={() => !isDeleting && setPendingDeleteTask(null)} width="w-[420px]" ariaLabel="确认删除任务">
           <div className="p-6">
-            <h2 className="text-[18px] font-semibold text-slate-800">确认删除任务？</h2>
-            <p className="mt-3 text-[13px] leading-6 text-slate-500">
+            <h2 className="text-[18px] font-semibold text-slate-800 dark:text-slate-100">确认删除任务？</h2>
+            <p className="mt-3 text-[13px] leading-6 text-slate-500 dark:text-slate-400">
               删除后任务会从当前清单移除，但历史记录会保留。确定要删除“{pendingDeleteTask.title}”吗？
             </p>
             {deleteError && <p className="mt-4 text-[12px] text-red-600">{deleteError}</p>}
@@ -476,7 +476,7 @@ export function TasksTab({ role, tasks, isLoading, error, classifyingIds = EMPTY
               <button
                 onClick={() => setPendingDeleteTask(null)}
                 disabled={isDeleting}
-                className="px-4 py-2 border border-slate-200 text-slate-600 rounded-lg text-[13px] font-medium hover:bg-slate-50 disabled:opacity-60"
+                className="px-4 py-2 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 rounded-lg text-[13px] font-medium hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-60"
               >
                 取消
               </button>

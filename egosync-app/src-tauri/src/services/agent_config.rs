@@ -468,7 +468,7 @@ impl AgentConfigService {
 [工具使用边界]
 - 你有四类工具可用，必须严格区分：
   1. delegate_to_role：把需要角色处理的事情委派给 EgoSync 角色。参数 target_role_id 必须是「可委派角色清单」中列出的 id（UUID 格式），不要传角色名称。仅当用户需要角色做某事（安排、规划、处理、跟进）时才调用。
-  2. create_task / complete_task / delete_task：任务操作工具。当用户在对话中要求创建任务、标记完成、删除任务时调用。参数 role_id 和 task_id 必须是系统 prompt 中列出的 ID。
+  2. create_task / complete_task / delete_task：任务操作工具。当用户在对话中要求创建任务、标记完成、删除任务时调用；用户陈述某项已有任务已完成、已提交或已做完，也视为完成操作。完成或删除已有任务时不得调用 delegate_to_role。参数 role_id 和 task_id 必须是系统 prompt 中列出的 ID。
   3. create_role / record_emergence_rejection：角色涌现相关工具。
   4. skill 系统（如 find-skills）：用于发现可用的编程/自动化技能，与 EgoSync 角色完全无关。不要用角色名称调用 skill 系统。
 - 查询与委派的区分：当用户询问任务进展、有哪些任务、需要关注什么时，直接基于[各角色任务]回答，不要调用 delegate_to_role。只有当用户需要角色做某事时才委派。
@@ -1179,6 +1179,20 @@ mod tests {
         assert!(prompt.contains("已启用"));
         assert!(!prompt.contains("未启用"));
         assert_eq!(entry["permission"], json!({ "*": "allow", "skill": "deny" }));
+    }
+
+    #[test]
+    fn build_butler_entry_routes_existing_task_actions_without_delegation() {
+        let entry = AgentConfigService::build_butler_entry(&ButlerSkillsConfig {
+            find_skills: false,
+            skill_creator: false,
+            enabled_skill_ids: Vec::new(),
+        });
+        let prompt = entry["prompt"].as_str().unwrap();
+
+        assert!(prompt.contains("完成或删除已有任务时不得调用 delegate_to_role"));
+        assert!(prompt.contains("已完成、已提交或已做完，也视为完成操作"));
+        assert!(prompt.contains("create_task / complete_task / delete_task"));
     }
 
     #[test]

@@ -1092,7 +1092,8 @@ fn format_task_context_line(task: &crate::models::task::Task) -> String {
         .map(|value| format!(" 截止:{}", value))
         .unwrap_or_default();
     format!(
-        "- {}{} {}",
+        "- id={} {}{} {}",
+        task.id,
         badges.join(""),
         deadline,
         truncate_chars(task.title.trim(), TASK_CONTEXT_TITLE_CHARS)
@@ -1134,7 +1135,7 @@ pub async fn build_role_task_summary(
     }
 
     Ok(format!(
-        "[当前角色任务]\n{}：\n{}\n规则：这是 EgoSync 内部任务列表；当用户询问任务、待办、安排或下一步时，优先依据本段回答，不要去工作目录寻找任务文件。未完成任务必须全部覆盖；已完成任务只在总量不超过 {} 条时补充。",
+        "[当前角色任务]\n{}：\n{}\n规则：这是 EgoSync 内部任务列表；当用户询问任务、待办、安排或下一步时，优先依据本段回答，不要去工作目录寻找任务文件。未完成任务必须全部覆盖；已完成任务只在总量不超过 {} 条时补充。任务 ID 仅用于 complete_task / delete_task 工具参数，不得在自然语言回复中展示。",
         role.name,
         lines.join("\n"),
         TASK_CONTEXT_VISIBLE_LIMIT
@@ -1183,7 +1184,7 @@ pub async fn build_butler_task_summary(main_pool: &DbPool) -> Result<String, App
     }
 
     Ok(format!(
-        "[各角色任务]\n{}\n规则：这是 EgoSync 内部任务列表；当用户询问任一角色的任务、待办、安排或下一步时，优先依据本段回答，不要去工作目录寻找任务文件。每个角色未完成任务必须全部覆盖；已完成任务只在该角色总量不超过 {} 条时补充。",
+        "[各角色任务]\n{}\n规则：这是 EgoSync 内部任务列表；当用户询问任一角色的任务、待办、安排或下一步时，优先依据本段回答，不要去工作目录寻找任务文件。每个角色未完成任务必须全部覆盖；已完成任务只在该角色总量不超过 {} 条时补充。任务 ID 仅用于 complete_task / delete_task 工具参数，不得在自然语言回复中展示。",
         blocks.join("\n"),
         TASK_CONTEXT_VISIBLE_LIMIT
     ))
@@ -1399,7 +1400,7 @@ pub async fn build_butler_system_prompt(
             "\n\n[行为指南]\n\
             - 先判断用户意图类型：陈述事实/偏好、查询任务、操作任务（创建/完成/删除）、委派任务给角色处理。\n\
             - 如果用户只是陈述某个角色相关事实或偏好（例如孩子叫什么、喜欢什么、学习表现如何），直接用自然口吻确认，不要调用工具，不要解释系统会如何记录或同步。\n\
-            - 当用户要求创建任务、标记任务完成、删除任务时，调用对应的 create_task / complete_task / delete_task 工具。task_id 和 role_id 必须是[各角色任务]或「可委派角色清单」中列出的 ID。\n\
+            - 当用户要求创建任务、标记任务完成、删除任务时，调用对应的 create_task / complete_task / delete_task 工具；用户陈述某项已有任务已完成、已提交或已做完，也视为完成操作。完成或删除已有任务时不得调用 delegate_to_role。task_id 和 role_id 必须是[各角色任务]或「可委派角色清单」中列出的 ID。\n\
             - 当用户询问任务进展、有哪些任务、需要关注什么时，直接基于[各角色任务]回答，不要调用 delegate_to_role。查询任务不等于委派任务。\n\
             - 如果用户交代的是某个角色相关任务、安排、日程、待办、规划或需要跟进的事项（例如家长会、约定、准备材料、制定练习计划），只要能匹配 active 角色，就调用 delegate_to_role。\n\
             - 不要向用户暴露内部机制：不要说“系统会同步”“同步到某角色”“角色已收到”“委派成功”“工具调用”等。\n\
@@ -1502,7 +1503,7 @@ pub async fn build_butler_dynamic_prompt(
 [行为指南]
             - 先判断用户意图类型：陈述事实/偏好、查询任务、操作任务（创建/完成/删除）、委派任务给角色处理。
             - 如果用户只是陈述某个角色相关事实或偏好（例如孩子叫什么、喜欢什么、学习表现如何），直接用自然口吻确认，不要调用工具，不要解释系统会如何记录或同步。
-            - 当用户要求创建任务、标记任务完成、删除任务时，调用对应的 create_task / complete_task / delete_task 工具。task_id 和 role_id 必须是[各角色任务]或「可委派角色清单」中列出的 ID。
+            - 当用户要求创建任务、标记任务完成、删除任务时，调用对应的 create_task / complete_task / delete_task 工具；用户陈述某项已有任务已完成、已提交或已做完，也视为完成操作。完成或删除已有任务时不得调用 delegate_to_role。task_id 和 role_id 必须是[各角色任务]或「可委派角色清单」中列出的 ID。
             - 当用户询问任务进展、有哪些任务、需要关注什么时，直接基于[各角色任务]回答，不要调用 delegate_to_role。查询任务不等于委派任务。
             - 如果用户交代的是某个角色相关任务、安排、日程、待办、规划或需要跟进的事项（例如家长会、约定、准备材料、制定练习计划），只要能匹配 active 角色，就调用 delegate_to_role。target_role_id 必须是「可委派角色清单」中列出的 id（UUID），不要传角色名称。
             - 不要向用户暴露内部机制：不要说"系统会同步""同步到某角色""角色已收到""委派成功""工具调用"等。
@@ -5651,7 +5652,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_build_role_messages_includes_current_role_tasks_and_excludes_other_roles_tasks() {
+    async fn test_role_messages_include_role_scoped_tasks() {
         let main_pool = setup_test_main_pool().await;
         let conv_pool = setup_test_conv_pool().await;
 
@@ -5681,7 +5682,7 @@ mod tests {
             .await
             .unwrap();
 
-        crate::db::tasks::create_task(
+        let role_task = crate::db::tasks::create_task(
             &main_pool,
             &CreateTaskInput {
                 owner_type: None,
@@ -5694,7 +5695,7 @@ mod tests {
         )
         .await
         .unwrap();
-        crate::db::tasks::create_task(
+        let other_role_task = crate::db::tasks::create_task(
             &main_pool,
             &CreateTaskInput {
                 owner_type: None,
@@ -5715,7 +5716,16 @@ mod tests {
 
         assert!(system.contains("[当前角色任务]"));
         assert!(system.contains("梳理需求范围"));
+        // WHY: natural-language completion/deletion must receive the authoritative
+        // task UUID, while role-scoped context must not leak another role's UUID.
+        assert!(system.lines().any(|line| {
+            line.contains(&format!("id={}", role_task.id)) && line.contains("梳理需求范围")
+        }));
         assert!(!system.contains("准备视觉稿"));
+        assert!(!system.contains(&other_role_task.id));
+        assert!(system.contains(
+            "任务 ID 仅用于 complete_task / delete_task 工具参数，不得在自然语言回复中展示"
+        ));
     }
 
     #[tokio::test]
@@ -5745,7 +5755,7 @@ mod tests {
         .await
         .unwrap();
 
-        crate::db::tasks::create_task(
+        let first_unfinished = crate::db::tasks::create_task(
             &main_pool,
             &CreateTaskInput {
                 owner_type: None,
@@ -5758,7 +5768,7 @@ mod tests {
         )
         .await
         .unwrap();
-        crate::db::tasks::create_task(
+        let second_unfinished = crate::db::tasks::create_task(
             &main_pool,
             &CreateTaskInput {
                 owner_type: None,
@@ -5771,6 +5781,8 @@ mod tests {
         )
         .await
         .unwrap();
+        let mut completed_48 = None;
+        let mut completed_49 = None;
         for index in 1..=50 {
             let task = crate::db::tasks::create_task(
                 &main_pool,
@@ -5785,6 +5797,11 @@ mod tests {
             )
             .await
             .unwrap();
+            if index == 48 {
+                completed_48 = Some(task.id.clone());
+            } else if index == 49 {
+                completed_49 = Some(task.id.clone());
+            }
             sqlx::query(
                 "UPDATE tasks SET is_completed = 1, completed_at = '2026-06-16T00:00:00Z' WHERE id = ?1",
             )
@@ -5793,7 +5810,7 @@ mod tests {
             .await
             .unwrap();
         }
-        crate::db::tasks::create_task(
+        let other_role_task = crate::db::tasks::create_task(
             &main_pool,
             &CreateTaskInput {
                 owner_type: None,
@@ -5815,8 +5832,20 @@ mod tests {
         assert!(summary.contains("未完成任务 1"));
         assert!(summary.contains("未完成任务 2"));
         assert!(summary.contains("运营待办 1"));
+        // WHY: every injected task must remain addressable by complete_task/delete_task.
+        assert!(summary.lines().any(|line| {
+            line.contains(&format!("id={}", first_unfinished.id)) && line.contains("未完成任务 1")
+        }));
+        assert!(summary.lines().any(|line| {
+            line.contains(&format!("id={}", second_unfinished.id)) && line.contains("未完成任务 2")
+        }));
+        assert!(summary.lines().any(|line| {
+            line.contains(&format!("id={}", other_role_task.id)) && line.contains("运营待办 1")
+        }));
         assert!(summary.contains("已完成任务 48"));
+        assert!(summary.contains(completed_48.as_deref().unwrap()));
         assert!(!summary.contains("已完成任务 49"));
+        assert!(!summary.contains(completed_49.as_deref().unwrap()));
         assert!(!summary.contains("已完成任务 50"));
     }
 
@@ -5835,8 +5864,9 @@ mod tests {
         .await
         .unwrap();
 
+        let mut unfinished_51 = None;
         for index in 1..=51 {
-            crate::db::tasks::create_task(
+            let task = crate::db::tasks::create_task(
                 &main_pool,
                 &CreateTaskInput {
                     owner_type: None,
@@ -5849,6 +5879,9 @@ mod tests {
             )
             .await
             .unwrap();
+            if index == 51 {
+                unfinished_51 = Some(task.id);
+            }
         }
         let completed = crate::db::tasks::create_task(
             &main_pool,
@@ -5874,7 +5907,11 @@ mod tests {
         assert!(summary.contains("未完成超限任务 01"));
         assert!(summary.contains("未完成超限任务 50"));
         assert!(summary.contains("未完成超限任务 51"));
+        assert!(summary.lines().any(|line| {
+            line.contains(unfinished_51.as_deref().unwrap()) && line.contains("未完成超限任务 51")
+        }));
         assert!(!summary.contains("不应注入的已完成任务"));
+        assert!(!summary.contains(&completed.id));
         assert!(summary.contains("另有 1 条已完成任务未注入"));
     }
 
@@ -6429,6 +6466,9 @@ mod tests {
         let prompt = build_butler_system_prompt(&conv_pool, &main_pool)
             .await
             .unwrap();
+        let dynamic_prompt = build_butler_dynamic_prompt(&conv_pool, &main_pool)
+            .await
+            .unwrap();
 
         assert!(prompt.contains("儿子喜欢书法课"));
         assert!(prompt.contains("陈述某个角色相关事实或偏好"));
@@ -6445,6 +6485,10 @@ mod tests {
         assert!(prompt.contains("不要因为同一角色或同一对象存在其它记忆"));
         assert!(prompt.contains("不要列出其它领域记忆"));
         assert!(!prompt.contains("当用户的需求清晰指向某个角色时"));
+        assert!(prompt.contains("完成或删除已有任务时不得调用 delegate_to_role"));
+        assert!(dynamic_prompt.contains("完成或删除已有任务时不得调用 delegate_to_role"));
+        assert!(prompt.contains("已完成、已提交或已做完，也视为完成操作"));
+        assert!(dynamic_prompt.contains("已完成、已提交或已做完，也视为完成操作"));
     }
 
     #[tokio::test]

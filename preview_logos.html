@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EgoSync Logo 概念渲染预览</title>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Noto+Sans+SC:wght@300;400;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-color: #0b0f19;
+      --card-bg: rgba(255, 255, 255, 0.03);
+      --card-border: rgba(255, 255, 255, 0.08);
+      --text-main: #f8fafc;
+      --text-sub: #94a3b8;
+    }
+    
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg-color);
+      color: var(--text-main);
+      font-family: 'Outfit', 'Noto Sans SC', sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 40px 20px;
+      overflow-x: hidden;
+      background-image: 
+        radial-gradient(circle at 10% 20%, rgba(99, 102, 241, 0.15) 0%, transparent 40%),
+        radial-gradient(circle at 90% 80%, rgba(236, 72, 153, 0.15) 0%, transparent 40%);
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 50px;
+      max-width: 600px;
+    }
+
+    h1 {
+      font-size: 2.8rem;
+      font-weight: 800;
+      background: linear-gradient(135deg, #a5b4fc 0%, #6366f1 50%, #f472b6 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 12px;
+      letter-spacing: -1px;
+    }
+
+    p.subtitle {
+      font-size: 1.1rem;
+      color: var(--text-sub);
+      line-height: 1.6;
+      font-weight: 300;
+    }
+
+    .container {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 30px;
+      max-width: 1100px;
+      width: 100%;
+    }
+
+    @media (max-width: 900px) {
+      .container {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .card {
+      background: var(--card-bg);
+      border: 1px stroke var(--card-border);
+      border-radius: 24px;
+      padding: 30px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+      backdrop-filter: blur(12px);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+      text-align: center;
+    }
+
+    .card:hover {
+      transform: translateY(-8px);
+      border-color: rgba(255, 255, 255, 0.2);
+      box-shadow: 0 20px 40px rgba(99, 102, 241, 0.1);
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .logo-wrapper {
+      margin-bottom: 24px;
+      border-radius: 20px;
+      overflow: hidden;
+      box-shadow: 0 12px 24px rgba(0,0,0,0.3);
+      transition: transform 0.4s ease;
+    }
+
+    .card:hover .logo-wrapper {
+      transform: scale(1.05);
+    }
+
+    .card h2 {
+      font-size: 1.4rem;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+
+    .card h2 span {
+      font-size: 0.9rem;
+      color: var(--text-sub);
+      display: block;
+      margin-top: 4px;
+      font-weight: 400;
+    }
+
+    .desc {
+      font-size: 0.9rem;
+      color: var(--text-sub);
+      line-height: 1.5;
+      font-weight: 300;
+      margin-top: 10px;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 4px 12px;
+      background: rgba(99, 102, 241, 0.2);
+      border: 1px solid rgba(99, 102, 241, 0.3);
+      border-radius: 20px;
+      color: #a5b4fc;
+      font-size: 0.75rem;
+      font-weight: 600;
+      margin-bottom: 16px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1>EgoSync</h1>
+    <p class="subtitle">桌面应用 Logo 概念设计渲染预览。三款纯 SVG 矢量矢量设计均具备极高清的渲染保真度与深海配色调性。</p>
+  </header>
+
+  <main class="container">
+    
+    <!-- 方案一 -->
+    <section class="card">
+      <span class="badge">Option 01</span>
+      <div class="logo-wrapper">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200" style="background:#0F172A; border-radius:32px; display:block;">
+          <defs>
+            <radialGradient id="bgGlow1" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stop-color="#4F46E5" stop-opacity="0.3"/>
+              <stop offset="100%" stop-color="#0F172A" stop-opacity="0"/>
+            </radialGradient>
+            <linearGradient id="g1" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#6366F1"/><stop offset="100%" stop-color="#4338CA"/>
+            </linearGradient>
+            <linearGradient id="g2" x1="100%" y1="0%" x2="0%" y2="100%">
+              <stop offset="0%" stop-color="#10B981"/><stop offset="100%" stop-color="#047857"/>
+            </linearGradient>
+            <linearGradient id="g3" x1="0%" y1="100%" x2="100%" y2="0%">
+              <stop offset="0%" stop-color="#A855F7"/><stop offset="100%" stop-color="#6D28D9"/>
+            </linearGradient>
+            <linearGradient id="g4" x1="100%" y1="100%" x2="0%" y2="0%">
+              <stop offset="0%" stop-color="#F43F5E"/><stop offset="100%" stop-color="#BE123C"/>
+            </linearGradient>
+          </defs>
+          <rect width="200" height="200" fill="#0F172A" rx="32"/>
+          <circle cx="100" cy="100" r="100" fill="url(#bgGlow1)"/>
+          <g transform="translate(100,100) scale(1.1)">
+            <polygon points="0,-50 35,-15 -35,-15" fill="url(#g1)" opacity="0.95"/>
+            <polygon points="0,-50 0,0 35,-15" fill="#FFF" opacity="0.15"/>
+            <polygon points="0,0 35,-15 50,30" fill="url(#g2)" opacity="0.9"/>
+            <polygon points="0,0 50,30 -50,30" fill="url(#g3)" opacity="0.85"/>
+            <polygon points="0,50 50,30 -50,30" fill="url(#g3)" opacity="0.95"/>
+            <polygon points="0,0 -50,30 -35,-15" fill="url(#g4)" opacity="0.9"/>
+            <line x1="0" y1="-50" x2="0" y2="50" stroke="#FFF" stroke-opacity="0.35" stroke-width="1.5"/>
+            <line x1="-50" y1="30" x2="50" y2="30" stroke="#FFF" stroke-opacity="0.2" stroke-width="1"/>
+            <circle cx="0" cy="0" r="4" fill="#FFFFFF"/>
+          </g>
+        </svg>
+      </div>
+      <h2>多面人格棱镜 <span>Prismatic Ego</span></h2>
+      <p class="desc">将自我的工作、学习、家庭等多重人格状态比作色彩缤纷的透光几何棱镜。拼合时折射出一体的自我（Ego-Integrity）。</p>
+    </section>
+
+    <!-- 方案二 -->
+    <section class="card">
+      <span class="badge">Option 02</span>
+      <div class="logo-wrapper">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200" style="background:#0F172A; border-radius:32px; display:block;">
+          <defs>
+            <radialGradient id="bgGlow2" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stop-color="#8B5CF6" stop-opacity="0.25"/>
+              <stop offset="100%" stop-color="#0F172A" stop-opacity="0"/>
+            </radialGradient>
+            <linearGradient id="orbitGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#EC4899" />
+              <stop offset="50%" stop-color="#8B5CF6" />
+              <stop offset="100%" stop-color="#3B82F6" />
+            </linearGradient>
+            <filter id="neonGlow">
+              <feGaussianBlur stdDeviation="4" result="blur" />
+              <feMerge>
+                <feMergeNode in="blur" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+          </defs>
+          <rect width="200" height="200" fill="#0F172A" rx="32"/>
+          <circle cx="100" cy="100" r="100" fill="url(#bgGlow2)"/>
+          <g transform="translate(100,100)">
+            <path d="M-50,0 C-50,-25 -25,-25 0,0 C25,25 50,25 50,0 C50,-25 25,-25 0,0 C-25,25 -50,25 -50,0 Z" 
+                  fill="none" stroke="url(#orbitGrad)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" filter="url(#neonGlow)"/>
+            <path d="M-50,0 C-50,-25 -25,-25 0,0 C25,25 50,25 50,0 C50,-25 25,-25 0,0 C-25,25 -50,25 -50,0 Z" 
+                  fill="none" stroke="#FFFFFF" stroke-width="1.2" stroke-opacity="0.75"/>
+            <circle cx="0" cy="0" r="10" fill="#FFFFFF" filter="url(#neonGlow)"/>
+            <circle cx="0" cy="0" r="4" fill="#8B5CF6"/>
+            <circle cx="-35" cy="-14" r="5" fill="#10B981" filter="url(#neonGlow)"/>
+            <circle cx="35" cy="14" r="5" fill="#F59E0B" filter="url(#neonGlow)"/>
+          </g>
+        </svg>
+      </div>
+      <h2>无限轨与管家星 <span>Orbiting EgoSync</span></h2>
+      <p class="desc">经典的莫比乌斯环构成无限符号，中轴放置恒温明亮的管家星（Butler Core），星轨之上环绕着不同角色的律动与协同。</p>
+    </section>
+
+    <!-- 方案三 -->
+    <section class="card">
+      <span class="badge">Option 03</span>
+      <div class="logo-wrapper">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200" style="background:#090D1A; border-radius:32px; display:block;">
+          <defs>
+            <radialGradient id="bgGlow3" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stop-color="#EC4899" stop-opacity="0.2"/>
+              <stop offset="100%" stop-color="#090D1A" stop-opacity="0"/>
+            </radialGradient>
+            <linearGradient id="wingL" x1="100%" y1="50%" x2="0%" y2="50%">
+              <stop offset="0%" stop-color="#8B5CF6" />
+              <stop offset="100%" stop-color="#3B82F6" stop-opacity="0.3" />
+            </linearGradient>
+            <linearGradient id="wingR" x1="0%" y1="50%" x2="100%" y2="50%">
+              <stop offset="0%" stop-color="#8B5CF6" />
+              <stop offset="100%" stop-color="#EC4899" stop-opacity="0.3" />
+            </linearGradient>
+            <filter id="glowF">
+              <feGaussianBlur stdDeviation="3" result="blur" />
+              <feMerge>
+                <feMergeNode in="blur" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+          </defs>
+          <rect width="200" height="200" fill="#090D1A" rx="32"/>
+          <circle cx="100" cy="100" r="100" fill="url(#bgGlow3)"/>
+          <g transform="translate(100,100)">
+            <path d="M-6,0 C-30,-40 -70,-30 -70,5 C-70,35 -40,40 -6,10" fill="url(#wingL)" opacity="0.6"/>
+            <path d="M6,0 C30,-40 70,-30 70,5 C70,35 40,40 6,10" fill="url(#wingR)" opacity="0.6"/>
+            <path d="M-6,-20 C-40,-50 -65,-10 -6,0" fill="none" stroke="#60A5FA" stroke-width="1.5" stroke-dasharray="3,3"/>
+            <path d="M6,-20 C40,-50 65,-10 6,0" fill="none" stroke="#F472B6" stroke-width="1.5" stroke-dasharray="3,3"/>
+            <circle cx="-50" cy="-20" r="3" fill="#60A5FA" filter="url(#glowF)"/>
+            <circle cx="-60" cy="15" r="4" fill="#3B82F6" filter="url(#glowF)"/>
+            <circle cx="50" cy="-20" r="3" fill="#F472B6" filter="url(#glowF)"/>
+            <circle cx="60" cy="15" r="4" fill="#EC4899" filter="url(#glowF)"/>
+            <polygon points="-6,-30 6,-30 2,-3 -2,-3" fill="#FFFFFF"/>
+            <polygon points="-2,3 2,3 6,30 -6,30" fill="#FFFFFF"/>
+            <line x1="0" y1="-30" x2="0" y2="30" stroke="#FFFFFF" stroke-width="1.5"/>
+            <circle cx="0" cy="0" r="4" fill="#FFFFFF" filter="url(#glowF)"/>
+          </g>
+        </svg>
+      </div>
+      <h2>对称双翼与神经网 <span>Neural Butterfly</span></h2>
+      <p class="desc">蝴蝶蜕变之翼结合神经网络与声波共振电波，在中轴沙漏的辅助下，让逻辑脑与感性脑在同步中达到能量平衡。</p>
+    </section>
+
+  </main>
+
+</body>
+</html>

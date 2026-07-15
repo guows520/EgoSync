@@ -3864,6 +3864,61 @@ struct DelegatedTaskOutcome {
     #[serde(skip_serializing_if = "Option::is_none")] duplicate_of: Option<String>,
 }
 
+fn delegated_task_process_candidate(call: Option<&ToolCall>, outcome: &DelegatedTaskOutcome, call_index: usize) -> ProcessEventCandidate {
+    let title = outcome.title.as_deref().unwrap_or("未命名任务");
+    let (status, summary) = match outcome.status.as_str() {
+        "created" => ("completed", format!("已创建任务：{}", title)),
+        "duplicate_skipped" if outcome.error.is_some() || outcome.task_id.is_none() => (
+            "error",
+            outcome.error.clone().unwrap_or_else(|| format!("重复任务未创建：{}", title)),
+        ),
+        "duplicate_skipped" => ("skipped", format!("已跳过重复任务：{}", title)),
+        _ => ("error", outcome.error.clone().unwrap_or_else(|| format!("创建任务失败：{}", title))),
+    };
+    let parsed_input = call
+        .and_then(|call| serde_json::from_str::<serde_json::Value>(&call.arguments).ok())
+        .unwrap_or_else(|| serde_json::json!({ "title": outcome.title, "deadline": outcome.deadline }));
+    let mut input = match parsed_input {
+        serde_json::Value::Object(input) => serde_json::Value::Object(input),
+        raw => serde_json::json!({ "raw": raw }),
+    };
+    input["name"] = format!("delegated-task-call:{}:{}", call_index, outcome.call_id).into();
+    let raw_tool_name = call.map(|call| call.name.as_str()).unwrap_or(CREATE_DELEGATED_TASK_TOOL);
+
+    ProcessEventCandidate {
+        event_type: "tool".to_string(),
+        tool_name: Some("create_task".to_string()),
+        status: Some(status.to_string()),
+        summary,
+        raw_json: serde_json::json!({
+            "description": format!("创建任务：{}", title),
+            "input": input,
+            "output": if outcome.status == "error" { serde_json::Value::Null } else { serde_json::to_value(outcome).unwrap_or(serde_json::Value::Null) },
+            "error": outcome.error,
+            "delegatedToolName": raw_tool_name,
+            "outcome": outcome,
+        }),
+    }
+}
+
+async fn persist_delegated_task_process_events(
+    conv_pool: &ConversationsPool,
+    conversation_id: &str,
+    message_id: &str,
+    calls: &[ToolCall],
+    outcomes: &[DelegatedTaskOutcome],
+) {
+    let session_id = format!("delegated-role:{}", message_id);
+    for (index, outcome) in outcomes.iter().enumerate() {
+        let candidate = delegated_task_process_candidate(calls.get(index), outcome, index);
+        persist_process_event(
+            conv_pool, conversation_id, message_id, &session_id,
+            &candidate.event_type, candidate.tool_name.as_deref(), candidate.status.as_deref(),
+            &candidate.summary, &candidate.raw_json, None,
+        ).await;
+    }
+}
+
 async fn execute_delegated_task_calls(main_pool: &DbPool, role_id: &str, calls: &[ToolCall]) -> Vec<DelegatedTaskOutcome> {
     #[derive(serde::Deserialize)]
     struct Args { title: String, #[serde(default)] deadline: Option<String> }
@@ -3959,6 +4014,7 @@ async fn collect_local_stream(
 
 struct DelegatedRoleRun {
     reply: String,
+    task_calls: Vec<ToolCall>,
     outcomes: Vec<DelegatedTaskOutcome>,
 }
 
@@ -3986,7 +4042,7 @@ async fn run_delegated_role_provider(
     }).await;
     if first.tool_calls.is_empty() {
         let reply = if first.text.trim().is_empty() { "角色未能生成建议，请稍后重试。".to_string() } else { first.text };
-        return DelegatedRoleRun { reply, outcomes: Vec::new() };
+        return DelegatedRoleRun { reply, task_calls: Vec::new(), outcomes: Vec::new() };
     }
 
     let outcomes = execute_delegated_task_calls(main_pool, role_id, &first.tool_calls).await;
@@ -4000,7 +4056,7 @@ async fn run_delegated_role_provider(
     } else {
         followup.text
     };
-    DelegatedRoleRun { reply, outcomes }
+    DelegatedRoleRun { reply, task_calls: first.tool_calls, outcomes }
 }
 
 /// Story 2.3 AC-1 / AC-4 / AC-8: 把任务委派给角色 LLM 处理并返回结果。
@@ -4202,14 +4258,28 @@ pub async fn execute_delegate_to_role(
     let task_outcome_summary = delegated_task_authority_summary(&run.outcomes);
 
     // 持久化角色 assistant 消息
-    let _ = crate::db::conversations::update_message_content(
+    let content_updated = crate::db::conversations::update_message_content(
         conv_pool,
         &role_assistant_msg.id,
         &role_reply,
     )
-    .await;
-    let _ =
-        crate::db::conversations::mark_message_complete(conv_pool, &role_assistant_msg.id).await;
+    .await
+    .map_err(|error| {
+        tracing::warn!(conversation_id = %role_conv.id, message_id = %role_assistant_msg.id, %error, "update delegated role assistant content failed");
+        error
+    })
+    .is_ok();
+    if content_updated {
+        persist_delegated_task_process_events(conv_pool, &role_conv.id, &role_assistant_msg.id, &run.task_calls, &run.outcomes).await;
+        if let Err(error) = crate::db::conversations::mark_message_complete(conv_pool, &role_assistant_msg.id).await {
+            tracing::warn!(conversation_id = %role_conv.id, message_id = %role_assistant_msg.id, %error, "mark delegated role assistant complete failed");
+            if let Err(cleanup_error) = crate::db::conversations::delete_message_process_events(conv_pool, &role_assistant_msg.id).await {
+                tracing::warn!(conversation_id = %role_conv.id, message_id = %role_assistant_msg.id, error = %cleanup_error, "cleanup delegated task process events failed");
+            }
+        }
+    } else {
+        tracing::warn!(conversation_id = %role_conv.id, message_id = %role_assistant_msg.id, "skip delegated task process events because role assistant message was not finalized");
+    }
 
     // 返回给管家 LLM 的 tool result：明确这是来自哪个角色的回复，引导管家转述
     let tool_result = format!(
@@ -4645,6 +4715,77 @@ mod tests {
         assert!(run.reply.contains("权威结果"), "收尾失败必须有确定性 fallback");
         assert!(summary.contains("\"status\":\"created\"") && summary.contains("\"status\":\"error\""));
         assert_eq!(tasks::list_tasks_by_role(&pool, &role.id).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn delegated_task_process_events_preserve_status_order_and_role_ownership() {
+        let conv_pool = setup_test_conv_pool().await;
+        let role_conv = crate::db::conversations::create_conversation(&conv_pool, Some("role-pm")).await.unwrap();
+        let role_message = crate::db::conversations::insert_message(&conv_pool, &role_conv.id, "assistant", "", false).await.unwrap();
+        let butler_conv = crate::db::conversations::get_or_create_butler_conversation(&conv_pool).await.unwrap();
+        let butler_message = crate::db::conversations::insert_message(&conv_pool, &butler_conv.id, "assistant", "管家回复", true).await.unwrap();
+        let calls = vec![
+            task_call("ok-1", "准备产品方案", Some("2026-07-16T15:00:00+08:00")),
+            task_call("ok-2", "安排产品会议", None),
+            task_call("bad", "   ", None),
+            task_call("dup", "准备产品方案", Some("2026-07-16T15:00:00+08:00")),
+        ];
+        let outcomes = vec![
+            DelegatedTaskOutcome { call_id: "ok-1".into(), status: "created".into(), title: Some("准备产品方案".into()), deadline: Some("2026-07-16T15:00:00+08:00".into()), task_id: Some("task-1".into()), error: None, warning: None, duplicate_of: None },
+            DelegatedTaskOutcome { call_id: "ok-2".into(), status: "created".into(), title: Some("安排产品会议".into()), deadline: None, task_id: Some("task-2".into()), error: None, warning: None, duplicate_of: None },
+            DelegatedTaskOutcome { call_id: "bad".into(), status: "error".into(), title: None, deadline: None, task_id: None, error: Some("任务标题不能为空，本次未创建。".into()), warning: None, duplicate_of: None },
+            DelegatedTaskOutcome { call_id: "dup".into(), status: "duplicate_skipped".into(), title: Some("准备产品方案".into()), deadline: Some("2026-07-16T15:00:00+08:00".into()), task_id: Some("task-1".into()), error: None, warning: None, duplicate_of: Some("ok-1".into()) },
+        ];
+
+        persist_delegated_task_process_events(&conv_pool, &role_conv.id, &role_message.id, &calls, &outcomes).await;
+
+        let events = crate::db::conversations::list_message_process_events(&conv_pool, &role_message.id).await.unwrap();
+        assert_eq!(events.len(), 4, "每个任务调用都必须保留独立终态事件");
+        assert_eq!(events.iter().map(|event| event.status.as_deref()).collect::<Vec<_>>(), vec![Some("completed"), Some("completed"), Some("error"), Some("skipped")]);
+        assert!(events.iter().all(|event| event.tool_name.as_deref() == Some("create_task")));
+        assert!(events.iter().all(|event| event.conversation_id == role_conv.id && event.message_id == role_message.id));
+        let first_raw: serde_json::Value = serde_json::from_str(&events[0].raw_json).unwrap();
+        assert_eq!(first_raw["delegatedToolName"], CREATE_DELEGATED_TASK_TOOL);
+        assert_eq!(first_raw["input"]["title"], "准备产品方案");
+        assert_eq!(first_raw["input"]["name"], "delegated-task-call:0:ok-1");
+        assert_eq!(first_raw["outcome"]["taskId"], "task-1");
+        let error_raw: serde_json::Value = serde_json::from_str(&events[2].raw_json).unwrap();
+        assert!(error_raw["error"].as_str().unwrap().contains("标题不能为空"));
+        let duplicate_raw: serde_json::Value = serde_json::from_str(&events[3].raw_json).unwrap();
+        assert_eq!(duplicate_raw["outcome"]["duplicateOf"], "ok-1");
+        assert_eq!(duplicate_raw["input"]["name"], "delegated-task-call:3:dup", "相邻同标题调用必须具有独立 UI identity");
+        assert!(crate::db::conversations::list_message_process_events(&conv_pool, &butler_message.id).await.unwrap().is_empty(), "角色过程不得写入管家消息");
+    }
+
+    #[test]
+    fn delegated_duplicate_of_failed_creation_remains_an_error_event() {
+        let outcome = DelegatedTaskOutcome {
+            call_id: "dup-failed".into(), status: "duplicate_skipped".into(), title: Some("准备评审".into()),
+            deadline: None, task_id: None, error: Some("任务创建失败：角色不存在".into()), warning: None,
+            duplicate_of: Some("first-failed".into()),
+        };
+
+        let candidate = delegated_task_process_candidate(None, &outcome, 0);
+
+        assert_eq!(candidate.status.as_deref(), Some("error"), "重复调用不得掩盖首次写库失败");
+        assert!(candidate.summary.contains("角色不存在"));
+
+        let non_object_call = ToolCall { id: String::new(), name: CREATE_DELEGATED_TASK_TOOL.into(), arguments: "[]".into() };
+        let first = delegated_task_process_candidate(Some(&non_object_call), &outcome, 2);
+        let second = delegated_task_process_candidate(Some(&non_object_call), &outcome, 3);
+        assert_eq!(first.raw_json["input"]["raw"], serde_json::json!([]));
+        assert_ne!(first.raw_json["input"]["name"], second.raw_json["input"]["name"], "非法参数和重复 call ID 仍须保持独立 UI identity");
+    }
+
+    #[tokio::test]
+    async fn delegated_pure_consultation_persists_no_task_process_event() {
+        let conv_pool = setup_test_conv_pool().await;
+        let role_conv = crate::db::conversations::create_conversation(&conv_pool, Some("role-pm")).await.unwrap();
+        let role_message = crate::db::conversations::insert_message(&conv_pool, &role_conv.id, "assistant", "建议先明确目标。", true).await.unwrap();
+
+        persist_delegated_task_process_events(&conv_pool, &role_conv.id, &role_message.id, &[], &[]).await;
+
+        assert!(crate::db::conversations::list_message_process_events(&conv_pool, &role_message.id).await.unwrap().is_empty(), "纯咨询不应制造任务过程");
     }
 
     #[test]
@@ -5476,6 +5617,29 @@ mod tests {
             .execute(&pool)
             .await
             .expect("failed to add title");
+
+        sqlx::raw_sql(
+            "CREATE TABLE message_process_events (
+                id TEXT PRIMARY KEY NOT NULL,
+                conversation_id TEXT NOT NULL,
+                message_id TEXT NOT NULL,
+                opencode_session_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                tool_name TEXT,
+                status TEXT,
+                summary TEXT NOT NULL,
+                raw_json TEXT NOT NULL,
+                working_directory TEXT,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+                FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
+            );
+            CREATE INDEX idx_message_process_events_message_id ON message_process_events(message_id);
+            CREATE INDEX idx_message_process_events_conversation_id ON message_process_events(conversation_id);",
+        )
+        .execute(&pool)
+        .await
+        .expect("failed to add message_process_events");
 
         // Story 2.3: 与 run_conversations_migrations 同步，否则 list_messages SELECT 会爆
         sqlx::raw_sql("ALTER TABLE messages ADD COLUMN routing_metadata TEXT")

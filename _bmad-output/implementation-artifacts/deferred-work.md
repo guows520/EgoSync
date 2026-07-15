@@ -184,3 +184,7 @@ All items resolved in the same session:
 - **内存去重键在 spawn 前置 (LOW)**：`scheduler.rs:431-432` 在 `tokio::spawn` 之前即置 `last_briefing_trigger_date`，瞬时 LLM 失败（返回 Ok(false)）当天不再重试，需重启应用方可恢复。符合 AC10"同一天只触发一次"语义且避免 LLM 故障时每分钟重试，可改为仅在确认写入/已存在时置位作为未来优化。
 - **tick 精确分钟匹配可能跳过触发 (LOW)**：`scheduler.rs:431` 与现有角色调度器同模式，60s tick 若因系统休眠/负载漂移整分钟漏 tick，当天简报不触发（DB 去重不补触发）。属既有调度设计约定。
 - **50 条记忆窗口可能挤掉昨日记忆 (LOW)**：`briefing_generator.rs:186-196` 取最近 50 条记忆后在 Rust 侧过滤昨日，重度用户当日记忆 >50 条时昨日记忆段落可能为空。Dev Notes（story line 301）已知此约束。
+
+## Deferred from: code review of fix-opencode-agent-name-identity (2026-07-15)
+
+- **Butler prompt 既有断言与当前静态 prompt 不一致（MEDIUM，测试门禁）**：`services::agent_config::tests` 中 3 项既有测试仍期待旧文案 `你是EgoSync管家` 或 prompt 不出现 `find-skills`，而基线 `9b16c880` 的静态 prompt 已不满足这些断言。当前结果为 31 通过、3 失败；失败不是移除 Agent `name` 所致，应单独校准 Butler prompt 契约与测试。

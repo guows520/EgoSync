@@ -391,7 +391,6 @@ impl AgentConfigService {
         let permission = Self::parse_permissions(&role.skills_config);
 
         json!({
-            "name": role.name,
             "mode": "subagent",
             "description": format!("{}角色Agent", role.name),
             "prompt": prompt,
@@ -484,7 +483,6 @@ impl AgentConfigService {
         let permission = Self::parse_permissions(&skills_config);
 
         json!({
-            "name": "管家",
             "mode": "primary",
             "prompt": prompt_parts.join("\n"),
             "permission": permission
@@ -972,11 +970,18 @@ mod tests {
 
     #[test]
     fn build_agent_entry_produces_subagent_with_prompt() {
-        // WHY: opencode needs mode=subagent + composite prompt containing
-        // the role's goal so the LLM receives the correct persona.
+        // WHY: the config key is the runtime identity; a display `name` would
+        // make opencode persist a different identity and fail its later lookup.
+        // The Chinese persona must therefore remain in prompt/description only.
         let role = active_role("r1", "产品经理", "管理产品规划");
         let entry = AgentConfigService::build_agent_entry(&role);
+        assert!(entry.get("name").is_none());
         assert_eq!(entry["mode"], "subagent");
+        assert_eq!(entry["description"], "产品经理角色Agent");
+        assert!(entry["prompt"]
+            .as_str()
+            .unwrap()
+            .contains("角色名: 产品经理"));
         assert!(entry["prompt"].as_str().unwrap().contains("管理产品规划"));
         assert_eq!(entry["disable"], false);
     }
@@ -1158,11 +1163,15 @@ mod tests {
 
     #[test]
     fn build_butler_entry_includes_meta_skill_prompt() {
+        // WHY: `butler` must remain the sole runtime identity while the prompt
+        // carries the user-facing persona, otherwise opencode cannot re-find it.
         let entry = AgentConfigService::build_butler_entry(&ButlerSkillsConfig {
             find_skills: true,
             skill_creator: false,
             enabled_skill_ids: Vec::new(),
         });
+        assert!(entry.get("name").is_none());
+        assert_eq!(entry["mode"], "primary");
         let prompt = entry["prompt"].as_str().unwrap();
         assert!(prompt.contains("你是EgoSync管家"));
         assert!(prompt.contains("find-skills"));
@@ -1219,8 +1228,8 @@ mod tests {
 
     #[test]
     fn sync_role_created_adds_agent_to_config() {
-        // WHY: creating an EgoSync role must immediately make a matching
-        // opencode agent available so the role can converse via opencode.
+        // WHY: role-{id} must be the only runtime identity after persistence;
+        // a Chinese `name` would split lookup identity from the config key.
         let dir = tempfile::tempdir().unwrap();
         let svc = AgentConfigService::new(dir.path().join("opencode.json"));
 
@@ -1229,7 +1238,15 @@ mod tests {
 
         let config = svc.load().unwrap();
         assert!(config["agent"]["role-r1"].is_object());
-        assert_eq!(config["agent"]["role-r1"]["name"], "产品经理");
+        assert!(config["agent"]["role-r1"].get("name").is_none());
+        assert_eq!(
+            config["agent"]["role-r1"]["description"],
+            "产品经理角色Agent"
+        );
+        assert!(config["agent"]["role-r1"]["prompt"]
+            .as_str()
+            .unwrap()
+            .contains("角色名: 产品经理"));
     }
 
     // ── sync_role_updated ─────────────────────────────────────────
@@ -1292,14 +1309,15 @@ mod tests {
 
     #[test]
     fn ensure_butler_creates_primary_agent_when_missing() {
-        // WHY: the butler must always exist as the primary agent — it is the
-        // user's default conversational entry point.
+        // WHY: the butler must exist under its stable routing key without a
+        // second runtime name that would break opencode's identity lookup.
         let dir = tempfile::tempdir().unwrap();
         let svc = AgentConfigService::new(dir.path().join("opencode.json"));
 
         svc.ensure_butler().unwrap();
 
         let config = svc.load().unwrap();
+        assert!(config["agent"]["butler"].get("name").is_none());
         assert_eq!(config["agent"]["butler"]["mode"], "primary");
         assert_eq!(config["agent"]["butler"]["permission"]["*"], "allow");
         assert_eq!(config["agent"]["butler"]["permission"]["skill"], "deny");
@@ -1335,8 +1353,8 @@ mod tests {
 
     #[test]
     fn full_sync_rebuilds_agent_section_from_roles() {
-        // WHY: startup sync must produce an opencode.json that exactly matches
-        // DB state — stale/orphan entries cause ghost agents.
+        // WHY: startup sync is authoritative, so every generated entry must use
+        // only its map key as runtime identity while preserving lifecycle flags.
         let dir = tempfile::tempdir().unwrap();
         let svc = AgentConfigService::new(dir.path().join("opencode.json"));
 
@@ -1367,6 +1385,8 @@ mod tests {
         assert!(agents.contains_key("role-r1"));
         // archived role present but disabled
         assert_eq!(agents["role-r2"]["disable"], true);
+        // no generated entry may override its stable map-key identity
+        assert!(agents.values().all(|entry| entry.get("name").is_none()));
         // orphan removed
         assert!(!agents.contains_key("role-orphan"));
         // Role agents have butler-exclusive tools disabled

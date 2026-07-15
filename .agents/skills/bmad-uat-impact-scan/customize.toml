@@ -1,0 +1,16 @@
+# DO NOT EDIT -- overwritten on every update.
+#
+# Workflow customization surface for bmad-uat-impact-scan.
+
+[workflow]
+
+activation_steps_prepend = []
+
+activation_steps_append = []
+
+persistent_facts = [
+  "file:{project-root}/**/project-context.md",
+  "Never silently reuse a stale UAT case. Stale cases are flagged for human confirmation, then rebuilt via bmad-uat-build-cases — never auto-rebuilt.",
+]
+
+on_complete = ""

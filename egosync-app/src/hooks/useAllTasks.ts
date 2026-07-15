@@ -5,6 +5,7 @@ import { useTauriEvent } from './useTauriEvent';
 
 const TASK_LOAD_ERROR = '任务暂时加载失败，请稍后再试';
 const TASK_CLASSIFIED_EVENT = 'task:classified';
+const TASK_TOOL_ACTION_EVENT = 'task:tool-action';
 
 function filterKey(filter: AllTasksFilter) {
   return `${filter.quadrant ?? 'all'}:${filter.isBigRock === undefined ? 'all' : String(filter.isBigRock)}`;
@@ -49,6 +50,16 @@ export function useAllTasks(filter: AllTasksFilter = {}) {
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [stableFilterKey],
+  );
+
+  // 监听任务操作工具事件（complete_task / delete_task），刷新任务列表
+  useTauriEvent<{ action: string }>(
+    TASK_TOOL_ACTION_EVENT,
+    () => {
+      setReloadKey(key => key + 1);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
   );
 
   const refetch = useCallback(() => {

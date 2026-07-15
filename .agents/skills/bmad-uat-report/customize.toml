@@ -1,0 +1,16 @@
+# DO NOT EDIT -- overwritten on every update.
+#
+# Workflow customization surface for bmad-uat-report.
+
+[workflow]
+
+activation_steps_prepend = []
+
+activation_steps_append = []
+
+persistent_facts = [
+  "file:{project-root}/**/project-context.md",
+  "This skill never runs tests — it only renders/aggregates reports from already-recorded results in uat-status.yaml and case files.",
+]
+
+on_complete = ""

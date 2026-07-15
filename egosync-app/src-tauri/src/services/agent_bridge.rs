@@ -115,9 +115,11 @@ impl AgentBridge {
         &self,
         session_id: &str,
         content: &str,
+        agent: &str,
     ) -> Result<Option<OpencodeCompletedMessage>, AppError> {
         let url = format!("{}/session/{}/message", self.base_url, session_id);
         let body = serde_json::json!({
+            "agent": agent,
             "parts": [{ "type": "text", "text": content }]
         });
 

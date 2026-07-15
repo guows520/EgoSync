@@ -1,0 +1,21 @@
+# DO NOT EDIT -- overwritten on every update.
+#
+# Workflow customization surface for bmad-uat-prepare-data.
+
+[workflow]
+
+activation_steps_prepend = []
+
+activation_steps_append = []
+
+persistent_facts = [
+  "file:{project-root}/**/project-context.md",
+  "All test data is real business data (relative to mock), prepared on a dedicated production-isolated UAT environment. External dependencies (payment/SMS/third-party APIs) point at sandboxes/test accounts. Never touch production data.",
+  "write-isolated cases use dedicated business entities so cases never pollute each other; read-only cases share baseline data.",
+]
+
+# Optional override: central directory for user-provided test data.
+# Leave empty to use {output_folder}/uat/data. Set an absolute path for large files.
+# data_dir = ""
+
+on_complete = ""

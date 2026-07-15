@@ -187,10 +187,18 @@ impl SidecarManager {
         };
 
         if self.health_check().await {
-            return Err(AppError::SidecarError(format!(
-                "opencode port {} is already serving before sidecar startup",
+            tracing::warn!(
+                "opencode port {} is already in use before sidecar startup; killing stale process",
                 self.port
-            )));
+            );
+            kill_process_on_port(self.port).await;
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            if self.health_check().await {
+                return Err(AppError::SidecarError(format!(
+                    "opencode port {} is still serving after killing stale process",
+                    self.port
+                )));
+            }
         }
 
         tracing::info!(
@@ -431,6 +439,31 @@ impl SidecarManager {
                 return Err(AppError::SidecarError(detail));
             }
             tokio::time::sleep(STARTUP_POLL_INTERVAL).await;
+        }
+    }
+}
+
+/// Kill any process listening on the given port (Windows: via netstat + taskkill).
+async fn kill_process_on_port(port: u16) {
+    let output = tokio::process::Command::new("cmd")
+        .args(["/c", &format!("netstat -ano | findstr :{port} | findstr LISTENING")])
+        .output()
+        .await;
+    let Ok(output) = output else {
+        tracing::warn!("kill_process_on_port: netstat failed");
+        return;
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 5 {
+            if let Ok(pid) = parts[4].parse::<u32>() {
+                tracing::info!("kill_process_on_port: killing PID {} on port {}", pid, port);
+                let _ = tokio::process::Command::new("taskkill")
+                    .args(["/F", "/PID", &pid.to_string()])
+                    .output()
+                    .await;
+            }
         }
     }
 }

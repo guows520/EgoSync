@@ -10,14 +10,16 @@ use crate::models::skill::SkillRegistryEntry;
 
 // ── Custom Tools (written to .opencode/tools/) ────────────────────────────
 
-/// Write opencode custom tool definitions into the global tools directory.
-/// Global tools (`~/.config/opencode/tools/`) are available to all opencode
-/// project instances regardless of working directory.
-pub fn write_custom_tools(_workspace_dir: &std::path::Path) -> Result<(), AppError> {
-    // opencode uses ~/.config/opencode/ on all platforms (including Windows)
-    let home =
-        dirs::home_dir().ok_or_else(|| AppError::SidecarError("无法获取用户主目录".to_string()))?;
-    let tools_dir = home.join(".config").join("opencode").join("tools");
+/// Write opencode custom tool definitions into the XDG_CONFIG_HOME tools directory.
+/// opencode discovers custom tools from `$XDG_CONFIG_HOME/opencode/tools/*.ts`.
+/// The sidecar sets XDG_CONFIG_HOME to `<workspace>/../opencode-global/config`,
+/// so we derive the tools path from the workspace directory to match.
+pub fn write_custom_tools(workspace_dir: &std::path::Path) -> Result<(), AppError> {
+    let global_config_dir = workspace_dir
+        .parent()
+        .map(|p| p.join("opencode-global").join("config"))
+        .ok_or_else(|| AppError::SidecarError("无法推导 opencode global config 目录".to_string()))?;
+    let tools_dir = global_config_dir.join("opencode").join("tools");
     std::fs::create_dir_all(&tools_dir)
         .map_err(|e| AppError::SidecarError(format!("创建 opencode/tools 目录失败: {}", e)))?;
 
@@ -28,6 +30,9 @@ pub fn write_custom_tools(_workspace_dir: &std::path::Path) -> Result<(), AppErr
             "record_emergence_rejection.ts",
             TOOL_RECORD_EMERGENCE_REJECTION,
         ),
+        ("create_task.ts", TOOL_CREATE_TASK),
+        ("complete_task.ts", TOOL_COMPLETE_TASK),
+        ("delete_task.ts", TOOL_DELETE_TASK),
     ];
 
     for (filename, content) in tools {
@@ -44,9 +49,9 @@ pub fn write_custom_tools(_workspace_dir: &std::path::Path) -> Result<(), AppErr
 const TOOL_CREATE_ROLE: &str = r#"import { tool } from "@opencode-ai/plugin"
 
 export default tool({
-  description: "向用户提议创建一个新的数字角色。此工具只发送提议弹窗，不直接创建角色——用户必须在弹窗中确认后角色才会真正创建。当用户要求创建角色时必须调用此工具，而不是假装创建。",
+  description: "向用户提议创建一个新的数字角色。此工具只发送提议弹窗，不直接创建角色——用户必须在弹窗中确认后角色才会真正创建。只在用户明确同意创建角色后才调用此工具（例如用户回复'好啊''建一个吧'）。当你在建议创建角色但用户尚未回应时，绝对不要调用此工具。角色名称必须是用户自己的身份词，不要用比喻或口号式表达。",
   args: {
-    name: tool.schema.string().describe("角色名称，简洁中文名词，如'产品经理'、'写作助手'"),
+    name: tool.schema.string().describe("角色名称，必须是日常生活中直白的身份词，2-6个中文字。角色代表用户自己的身份，不是外部服务提供者：用户自己健身管理用'健康管理'而非'健身教练'，自己学英语用'学习者'而非'英语老师'；但如果健身教练是用户的本职工作，则'健身教练'就是正确命名。好的命名：家庭：丈夫、父亲、母亲、儿子、女儿；工作：产品经理、教师、程序员、设计师、健身教练；社区：邻居、志愿者；自我：阅读者、学习者、健康管理。不要用比喻、口号或文学化表达。不好的命名：掌舵人、领航者、生命建筑师、灵魂守护者。命名原则：用户看到名字就能立刻明白这个角色管什么，不需要解释。"),
     goal: tool.schema.string().optional().describe("角色的核心目标或职责描述，10-20字"),
     icon: tool.schema.string().optional().describe("角色图标标识符。可选: briefcase, code, chart-bar, palette, pen-tool, book-open, graduation-cap, dumbbell, heart-pulse, leaf, home, users, baby, gamepad-2, music, camera, plane, utensils, coffee, target, sparkles, lightbulb, compass, wallet"),
     color: tool.schema.string().optional().describe("角色品牌色hex值。可选: #4F46E5, #0EA5E9, #10B981, #F59E0B, #EF4444, #8B5CF6, #EC4899, #64748B"),
@@ -63,7 +68,7 @@ export default tool({
       goal: args.goal?.trim() || undefined,
       icon: args.icon?.trim() || undefined,
       color: args.color?.trim() || undefined,
-      _instruction: "角色已创建成功。你的回复只需简短确认，如'好的，已创建'或'角色已就绪'。不要列出角色细节（名称、目标、图标、配色），不要提及弹窗。"
+      _instruction: "角色提议已发送给用户，等待用户在弹窗中确认。你的回复只需简短说明已发出提议，如'好的，我帮你准备了一个角色提议，你可以在弹窗里确认或调整'。不要说角色已创建或已就绪，因为用户还没确认。"
     })
   },
 })
@@ -132,6 +137,133 @@ export default tool({
       action: "record_emergence_rejection",
       domain: args.domain.trim(),
     })
+  },
+})
+"#;
+
+const TOOL_CREATE_TASK: &str = r#"import { tool } from "@opencode-ai/plugin"
+
+export default tool({
+  description: "为指定角色创建一条新任务。当用户在对话中要求创建任务、安排待办、添加日程时调用。任务创建后默认放入 Q2（重要不紧急），后台会自动分类。",
+  args: {
+    role_id: tool.schema.string().describe("目标角色的ID（必须是系统prompt中列出的角色ID之一）"),
+    title: tool.schema.string().describe("任务标题，简洁描述要做什么，5-40字"),
+    deadline: tool.schema.string().optional().describe("截止日期，格式 YYYY-MM-DD。如果没有明确截止时间则不传"),
+  },
+  async execute(args, context) {
+    if (!args.role_id || args.role_id.trim().length === 0) {
+      return "错误：缺少必需参数 role_id"
+    }
+    if (!args.title || args.title.trim().length === 0) {
+      return "错误：缺少必需参数 title"
+    }
+    const token = process.env.EGOSYNC_DELEGATE_BRIDGE_TOKEN
+    const port = process.env.EGOSYNC_DELEGATE_BRIDGE_PORT
+    if (!token || !port) {
+      return "创建任务失败：本地桥接服务未配置。"
+    }
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/create-task`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "Authorization": `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          role_id: args.role_id.trim(),
+          title: args.title.trim(),
+          deadline: args.deadline?.trim() || undefined,
+        }),
+        signal: context.abort,
+      })
+      const result = await response.json().catch(() => ({ status: "error", message: "响应解析失败" }))
+      if (!response.ok) {
+        return JSON.stringify({ action: "create_task", status: "error", message: result.message || `创建任务失败：后端返回 HTTP ${response.status}` })
+      }
+      return JSON.stringify({ action: "create_task", status: result.status || "ok", message: result.message || "任务创建成功。", task_id: result.task_id })
+    } catch (error) {
+      return JSON.stringify({ action: "create_task", status: "error", message: `创建任务失败：无法连接本地桥接服务（${error instanceof Error ? error.message : String(error)}）。` })
+    }
+  },
+})
+"#;
+
+const TOOL_COMPLETE_TASK: &str = r#"import { tool } from "@opencode-ai/plugin"
+
+export default tool({
+  description: "将指定任务标记为已完成。当用户在对话中要求标记任务完成、任务已做完、任务已提交时调用。",
+  args: {
+    task_id: tool.schema.string().describe("要完成的任务ID（必须是[各角色任务]中列出的任务ID）"),
+  },
+  async execute(args, context) {
+    if (!args.task_id || args.task_id.trim().length === 0) {
+      return "错误：缺少必需参数 task_id"
+    }
+    const token = process.env.EGOSYNC_DELEGATE_BRIDGE_TOKEN
+    const port = process.env.EGOSYNC_DELEGATE_BRIDGE_PORT
+    if (!token || !port) {
+      return "操作失败：本地桥接服务未配置。"
+    }
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/complete-task`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "Authorization": `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          task_id: args.task_id.trim(),
+        }),
+        signal: context.abort,
+      })
+      const result = await response.json().catch(() => ({ status: "error", message: "响应解析失败" }))
+      if (!response.ok) {
+        return JSON.stringify({ action: "complete_task", status: "error", message: result.message || `操作失败：后端返回 HTTP ${response.status}` })
+      }
+      return JSON.stringify({ action: "complete_task", status: result.status || "ok", message: result.message || "任务已标记为完成。" })
+    } catch (error) {
+      return JSON.stringify({ action: "complete_task", status: "error", message: `操作失败：无法连接本地桥接服务（${error instanceof Error ? error.message : String(error)}）。` })
+    }
+  },
+})
+"#;
+
+const TOOL_DELETE_TASK: &str = r#"import { tool } from "@opencode-ai/plugin"
+
+export default tool({
+  description: "删除指定任务。当用户在对话中要求删除任务、取消某个待办时调用。",
+  args: {
+    task_id: tool.schema.string().describe("要删除的任务ID（必须是[各角色任务]中列出的任务ID）"),
+  },
+  async execute(args, context) {
+    if (!args.task_id || args.task_id.trim().length === 0) {
+      return "错误：缺少必需参数 task_id"
+    }
+    const token = process.env.EGOSYNC_DELEGATE_BRIDGE_TOKEN
+    const port = process.env.EGOSYNC_DELEGATE_BRIDGE_PORT
+    if (!token || !port) {
+      return "操作失败：本地桥接服务未配置。"
+    }
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/delete-task`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "Authorization": `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          task_id: args.task_id.trim(),
+        }),
+        signal: context.abort,
+      })
+      const result = await response.json().catch(() => ({ status: "error", message: "响应解析失败" }))
+      if (!response.ok) {
+        return JSON.stringify({ action: "delete_task", status: "error", message: result.message || `操作失败：后端返回 HTTP ${response.status}` })
+      }
+      return JSON.stringify({ action: "delete_task", status: result.status || "ok", message: result.message || "任务已删除。" })
+    } catch (error) {
+      return JSON.stringify({ action: "delete_task", status: "error", message: `操作失败：无法连接本地桥接服务（${error instanceof Error ? error.message : String(error)}）。` })
+    }
   },
 })
 "#;
@@ -297,7 +429,52 @@ impl AgentConfigService {
         registry: &[SkillRegistryEntry],
     ) -> Value {
         let skills_config = crate::services::butler_config::skills_config_json(skills);
-        let mut prompt_parts = vec!["你是EgoSync管家".to_string()];
+        let static_prompt = r#"你是数字分身管家，用户的私人助理和生活协调者。
+你的语调稳重、可靠、有温度，像一位值得信赖的英式管家。
+你帮助用户管理角色、任务和日程，但决定权永远在用户手中。
+用简洁自然的中文回复，不用 emoji。
+
+[透明推理与不确定性规则]
+- 可以基于[已知记忆]回答普通问题，但用户没有明确要求来源、依据、原文或你怎么知道时，不要主动展示记忆标签或内部链接。
+- 用户追问"为什么""依据是什么""你怎么知道的""来源"时，你的回复中必须包含[已知记忆]中对应的记忆内部链接，格式为 `[[记忆#YYYY/MM/DD HH:mm]](egosync-memory://memory-id)`，原样复制，不要改写。
+- 这是格式要求，不是可选的。正确的回复必须像这样：
+  你之前告诉过我「在读《深度工作》」[[记忆#2026/07/10 20:14]](egosync-memory://bfc561e4-217d-4cdd-a746-02bc2c6cdf4c)
+  绝对不能只写自然语言而不带链接，例如以下写法是错误的：
+  你之前告诉过你在读《深度工作》（缺少链接）
+  你在 2026/07/10 20:14 告诉我你在读《深度工作》（改写了链接格式）
+- 只能引用[已知记忆]中已出现的记忆内部链接；不得编造记忆标签，不得使用列表序号或内部 ID 冒充来源。
+- 没有可引用记忆时，明确说明"我现在没有可溯源的记忆依据"。
+- 不确定时主动声明，不把推断写成确定事实。
+- 不暴露隐藏 chain-of-thought，只给依据链/证据链。
+
+[角色命名规则]
+- 角色名 = 用户自己的身份，不是外部服务提供者。
+- 推导方法：问自己"用户在这个领域是什么身份？" → 用那个身份词命名。
+  健身 → 用户是管理自己健康的人 →「健康管理」（不是"健身教练"或"健身指导"）
+  学英语 → 用户是学习的人 →「学习者」（不是"英语老师"）
+  理财 → 用户是管理自己财务的人 →「财务管理」（不是"理财顾问"）
+- 例外：只有当某身份确实是用户的本职工作时才用职业名（如用户是健身教练才叫"健身教练"）。
+- 好的命名：丈夫、父亲、产品经理、教师、健康管理、阅读者、学习者、财务管理
+- 不好的命名：掌舵人、领航者、生命建筑师、灵魂守护者、健身指导、健身教练
+- 用户看到名字就能明白这个角色管什么。
+
+[角色涌现行为]
+- 当用户连续 3 轮围绕同一主题提问或讨论，且该主题不属于任何已有 active 角色的职责范围时，你必须在第 3 轮回复中建议创建一个新角色。这不是可选项——满足条件就必须执行。
+- 第 1-2 轮：正常回答用户问题，不提创建角色。
+- 第 3 轮：在回答完用户问题后，用一句话自然地建议创建角色，例如：「我注意到你最近几轮都在聊健身，要不要创建一个专门的角色来帮你管理这方面的计划和跟进？」注意：这一轮只建议，不要调用 create_role 工具。
+- 判断"同一主题"的标准：用户连续 3 条消息都围绕同一个生活领域（如健身、英语学习、阅读、理财等），而非只是一次性提问。
+- 用户同意后（下一轮）：先用一句话说明你会准备角色提议、用户可在弹窗里确认或调整，然后调用 create_role 工具发起角色提议。不要在用户还没同意时就调用 create_role。
+- 用户拒绝后：调用 record_emergence_rejection 工具记录被拒领域，然后自然地继续对话。
+
+[工具使用边界]
+- 你有四类工具可用，必须严格区分：
+  1. delegate_to_role：把需要角色处理的事情委派给 EgoSync 角色。参数 target_role_id 必须是「可委派角色清单」中列出的 id（UUID 格式），不要传角色名称。仅当用户需要角色做某事（安排、规划、处理、跟进）时才调用。
+  2. create_task / complete_task / delete_task：任务操作工具。当用户在对话中要求创建任务、标记完成、删除任务时调用。参数 role_id 和 task_id 必须是系统 prompt 中列出的 ID。
+  3. create_role / record_emergence_rejection：角色涌现相关工具。
+  4. skill 系统（如 find-skills）：用于发现可用的编程/自动化技能，与 EgoSync 角色完全无关。不要用角色名称调用 skill 系统。
+- 查询与委派的区分：当用户询问任务进展、有哪些任务、需要关注什么时，直接基于[各角色任务]回答，不要调用 delegate_to_role。只有当用户需要角色做某事时才委派。
+- 不要用 opencode 的 task 工具委派 EgoSync 角色任务——task 是给编程 subagent 用的，不认识 EgoSync 角色。委派角色任务只能用 delegate_to_role。"#;
+        let mut prompt_parts = vec![static_prompt.to_string()];
         let meta_skill_prompt = crate::services::role_config::meta_skill_prompt(&skills_config);
         if !meta_skill_prompt.is_empty() {
             prompt_parts.push(meta_skill_prompt);

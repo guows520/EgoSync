@@ -169,6 +169,27 @@ _本文件包含 AI Agent 在本项目中实现代码时必须遵循的关键规
 **构建流程:**
 - `cd GUI && npm run tauri build` — Vite 生产构建 → Rust release 编译 → Tauri bundler 打包
 - 输出：`src-tauri/target/release/bundle/{msi,dmg,appimage}`
+- **Release 构建必须使用 `npx tauri build`（或 `npm run tauri build`）**，禁止单独执行 `cargo build --release`
+  - 原因：`tauri.conf.json` 中窗口配置为 `"visible": false`，前端 JS 加载完成后才调用 `getCurrentWindow().show()` 显示窗口。单独 `cargo build --release` 不会正确嵌入前端资源（`dist/`），导致 WebView 加载 `localhost:5173`（devUrl）失败，`show()` 永远不执行，窗口不可见
+  - `npx tauri build` 会先执行 `beforeBuildCommand`（`npm run build` → 生成 `dist/`），再编译 Rust 并通过 `generate_context!` 宏将 `dist/` 内容嵌入到二进制文件中
+  - 如需跳过打包（只生成 exe）：`npx tauri build --no-bundle`
+  - **`--no-bundle` 限制**：opencode.exe（bundle resource）不会被放到 exe 同级目录，sidecar 找不到 opencode 引擎，降级为基础对话模式。仅适合前端 UI 验证。完整 UAT（含 Agent 引擎/委派/任务工具）必须用 `npx tauri build`
+  - **本地打包前必须确保 `src-tauri/resources/opencode.exe` 存在**（~135MB）。CI 会自动从 GitHub 下载 `sst/opencode v1.15.10`，本地需手动下载：
+    ```powershell
+    curl -L --fail -o opencode.zip "https://github.com/sst/opencode/releases/download/v1.15.10/opencode-windows-x64.zip"
+    Expand-Archive opencode.zip -DestinationPath opencode-tmp
+    Copy-Item "opencode-tmp\opencode.exe" "egosync-app\src-tauri\resources\opencode.exe"
+    Remove-Item opencode.zip, opencode-tmp -Recurse -Force
+    ```
+  - **打包前检查清单**：确认 `resources/opencode.exe` 存在、确认无 `opencode.placeholder` 残留
+
+**修复后验证流程:**
+1. `cargo check` — 快速验证编译
+2. `npx tauri dev` — 快速功能验证（热重载，前提：resources/opencode.exe 存在）
+3. 验证通过后 → `npx tauri build` 完整打包 → 安装 MSI/NSIS 进行 UAT
+- **sidecar 端口残留**：应用退出时 opencode 进程可能未被正确终止，导致端口 4096 被占用。已修复：sidecar 启动时自动检测端口占用并杀旧进程
+- **日志位置**：`%APPDATA%\com.egosync.app\egosync.log`（注意与应用数据目录 `com.egosync.desktop` 不同）
+- **诊断日志**：`delegate_bridge.rs` 在委派请求的关键节点（到达、session 查找、执行、完成/超时）已添加 info/warn 日志。需要更详细诊断时设置 `RUST_LOG=debug`
 
 **CI/CD (GitHub Actions):**
 - 三平台并行构建 (Windows/macOS/Linux)

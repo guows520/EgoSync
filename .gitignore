@@ -45,6 +45,10 @@ egosync-app/src-tauri/target-claude-execution-trace/
 # Tauri dev 重启标记文件
 egosync-app/tauri-dev-*.txt
 
+# 本地 sidecar 与诊断输出
+egosync-app/src-tauri/resources/opencode.exe
+egosync-app/src-tauri/build_err.txt
+
 # E2E 测试产物（截图/日志/报告，由测试运行时生成）
 egosync-app/tests/e2e/screenshots/
 egosync-app/tests/e2e/logs/

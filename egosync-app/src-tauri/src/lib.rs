@@ -78,6 +78,7 @@ pub fn run() {
                 pool.clone(),
                 conv_pool.clone(),
                 bridge_token.clone(),
+                Some(app.handle().clone()),
             );
             app.manage(delegate_bridge.clone());
 

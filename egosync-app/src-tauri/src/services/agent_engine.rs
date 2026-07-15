@@ -249,6 +249,7 @@ fn is_builtin_underscore_tool(tool_name: &str) -> bool {
     matches!(
         tool_name,
         "create_role" | "delegate_to_role" | "record_emergence_rejection"
+        | "create_task" | "complete_task" | "delete_task"
     )
 }
 
@@ -1031,7 +1032,7 @@ fn ensure_non_empty_opencode_result(
 }
 
 const BUTLER_SYSTEM_PROMPT: &str = "\
-你是 EgoSync 的分身管家，用户的私人助理和生活协调者。\
+你是数字分身管家，用户的私人助理和生活协调者。\
 你的语调稳重、可靠、有温度，像一位值得信赖的英式管家。\
 你帮助用户管理角色、任务和日程，但决定权永远在用户手中。\
 用简洁自然的中文回复，不用 emoji。";
@@ -1046,15 +1047,6 @@ const TRANSPARENCY_UNCERTAINTY_RULES: &str = "\
 - 没有可引用记忆时，明确说明“我现在没有可溯源的记忆依据”。\n\
 - 不确定时主动声明，不把推断写成确定事实。\n\
 - 不暴露隐藏 chain-of-thought，只给依据链/证据链。";
-
-const UNCERTAINTY_NOTICE: &str = "我不太确定这个判断，建议你自己评估一下。";
-const HEDGING_MARKERS: &[&str] = &["可能", "也许", "不太确定", "大概", "看起来像"];
-const UNCERTAINTY_STATEMENT_MARKERS: &[&str] = &[
-    UNCERTAINTY_NOTICE,
-    "建议你自己评估",
-    "建议你自行评估",
-    "请你自己评估",
-];
 
 const HISTORY_LIMIT: i64 = 20;
 
@@ -1215,31 +1207,6 @@ fn format_memory_reference_line(memory: &crate::models::memory::Memory) -> Strin
         memory.category,
         truncate_chars(memory.content.trim(), BUTLER_MEMORY_PER_LINE_CHARS)
     )
-}
-
-fn append_uncertainty_notice_if_needed(text: &mut String) -> Option<&'static str> {
-    let visible = text.trim();
-    if visible.is_empty() {
-        return None;
-    }
-    if !HEDGING_MARKERS
-        .iter()
-        .any(|marker| visible.contains(marker))
-    {
-        return None;
-    }
-    if UNCERTAINTY_STATEMENT_MARKERS
-        .iter()
-        .any(|marker| visible.contains(marker))
-    {
-        return None;
-    }
-
-    if !text.ends_with('\n') {
-        text.push_str("\n\n");
-    }
-    text.push_str(UNCERTAINTY_NOTICE);
-    Some(UNCERTAINTY_NOTICE)
 }
 
 pub async fn build_butler_memory_summary(main_pool: &DbPool) -> Result<String, AppError> {
@@ -1429,15 +1396,19 @@ pub async fn build_butler_system_prompt(
         // 行为指南只在有可委派角色时才有意义；零角色时不要诱导 LLM 调用工具。
         system_prompt.push_str(
             "\n\n[行为指南]\n\
-            - 先判断用户是在陈述事实/偏好，还是在交代任务/安排/待办/需要后续行动。\n\
+            - 先判断用户意图类型：陈述事实/偏好、查询任务、操作任务（创建/完成/删除）、委派任务给角色处理。\n\
             - 如果用户只是陈述某个角色相关事实或偏好（例如孩子叫什么、喜欢什么、学习表现如何），直接用自然口吻确认，不要调用工具，不要解释系统会如何记录或同步。\n\
+            - 当用户要求创建任务、标记任务完成、删除任务时，调用对应的 create_task / complete_task / delete_task 工具。task_id 和 role_id 必须是[各角色任务]或「可委派角色清单」中列出的 ID。\n\
+            - 当用户询问任务进展、有哪些任务、需要关注什么时，直接基于[各角色任务]回答，不要调用 delegate_to_role。查询任务不等于委派任务。\n\
             - 如果用户交代的是某个角色相关任务、安排、日程、待办、规划或需要跟进的事项（例如家长会、约定、准备材料、制定练习计划），只要能匹配 active 角色，就调用 delegate_to_role。\n\
             - 不要向用户暴露内部机制：不要说“系统会同步”“同步到某角色”“角色已收到”“委派成功”“工具调用”等。\n\
             - 当用户只是询问已知事实（例如某个孩子喜欢什么、某个固定安排是什么）时，优先基于[已知记忆]回答，并可说明目前只知道这些。\n\
             - 当用户询问明确属性或偏好槽位（例如“喜欢吃什么”“喜欢什么运动”“某天安排是什么”）时，只回答与该问题槽位直接相关的记忆；不要因为同一角色或同一对象存在其它记忆，就补充阅读、学习、家庭日等无关事实。若没有直接相关记忆，只简短说明还不知道，不要列出其它领域记忆。\n\
             - 用户一句话同时涉及多个角色且需要角色处理时：可以在同一轮内调用多个 delegate_to_role（并行委派）。\n\
-            - 意图模糊或没有合适角色时：不要调用工具，用一句话主动追问用户希望由谁来处理。\n\
-            - 收到角色回复（tool result）后：融合成自然回复，不要强调内部流转；只有用户明确问是谁处理时，才说明对应角色。"
+            - 意图模糊或没有合适角色时：不要调用 delegate_to_role，直接用文字帮助用户或简短追问需求细节。但如果已满足[角色涌现行为]中的触发条件（用户连续 3 轮围绕同一主题），则必须在回复中建议创建角色——这不是可选的。\n\
+            - 收到角色回复（tool result）后：融合成自然回复，不要强调内部流转；只有用户明确问是谁处理时，才说明对应角色。\n\
+            - 如果 delegate_to_role 返回失败（包含「委派失败」字样），不要在同一轮中再次调用 delegate_to_role 重试。直接用自然语言告诉用户该事项已记录，稍后会由对应角色处理。\n\
+            - 用户追问\u{201c}为什么\u{201d}\u{201c}依据是什么\u{201d}\u{201c}你怎么知道的\u{201d}\u{201c}来源\u{201d}时，回复中必须原样包含[已知记忆]中对应的记忆内部链接 `[[记忆#YYYY/MM/DD HH:mm]](egosync-memory://memory-id)`，不要只写自然语言。例如：你之前告诉过我「在读《深度工作》」[[记忆#2026/07/10 20:14]](egosync-memory://bfc561e4-217d-4cdd-a746-02bc2c6cdf4c)"
         );
     }
 
@@ -1462,6 +1433,7 @@ pub async fn build_butler_system_prompt(
         - 当你发现用户在最近几轮对话中反复提到某个尚未被任何 active 角色覆盖的领域时，可以用自然对话的方式建议创建一个新角色。\n\
         - 不要在第一轮就建议，至少观察到用户 2-3 次提及同一领域后再提议。\n\
         - 建议时用自然口吻，例如：「我注意到你最近经常聊到 X，要不要创建一个专门的角色来帮你？」\n\
+        - 角色命名用日常生活中直白的身份词，不要用比喻或口号式表达。角色代表用户自己的身份，不是外部服务提供者：用户自己健身管理用「健康管理」而非「健身教练」，自己学英语用「学习者」而非「英语老师」；但如果健身教练是用户的本职工作，则「健身教练」就是正确命名。好的命名（覆盖不同生活领域）：家庭：丈夫、父亲、母亲、儿子、女儿；工作：产品经理、教师、程序员、设计师、健身教练；社区：邻居、志愿者；自我：阅读者、学习者、健康管理。不好的命名：掌舵人、领航者、生命建筑师、灵魂守护者。用户看到名字就能明白这个角色管什么。\n\
         - 用户同意后：先用一句话说明你会准备角色提议、用户可在弹窗里确认或调整，然后调用 create_role 工具发起角色提议；不要在工具调用后再追加确认话术。\n\
         - 用户拒绝后：调用 record_emergence_rejection 工具记录被拒领域，然后自然地继续对话。"
     );
@@ -1478,6 +1450,95 @@ pub async fn build_butler_system_prompt(
     Ok(system_prompt)
 }
 
+/// Build only the dynamic part of the butler prompt (role roster, tasks, memory,
+/// cross-role summary, delegation guidelines, cooldowns). Used by the opencode
+/// path as a user-message prefix — static parts (identity, transparency rules,
+/// emergence instructions) are already in the opencode agent's `prompt` field.
+pub async fn build_butler_dynamic_prompt(
+    conv_pool: &ConversationsPool,
+    main_pool: &DbPool,
+) -> Result<String, AppError> {
+    let mut dynamic_prompt = String::new();
+
+    let active_roles = crate::db::roles::list_active_roles(main_pool).await?;
+    if !active_roles.is_empty() {
+        dynamic_prompt.push_str("\n\n[可委派角色清单]");
+        for r in &active_roles {
+            dynamic_prompt.push_str(&format!(
+                "\n- id={} | 名称={} | 目标={}",
+                r.id,
+                r.name,
+                if r.goal.trim().is_empty() {
+                    "（未设定）"
+                } else {
+                    r.goal.trim()
+                }
+            ));
+        }
+    }
+
+    let butler_task_summary = build_butler_task_summary(main_pool).await?;
+    if !butler_task_summary.is_empty() {
+        dynamic_prompt.push_str("\n\n");
+        dynamic_prompt.push_str(&butler_task_summary);
+    }
+
+    let memory_summary = build_butler_memory_summary(main_pool).await?;
+    if !memory_summary.is_empty() {
+        dynamic_prompt.push_str("\n\n");
+        dynamic_prompt.push_str(&memory_summary);
+    }
+
+    let cross_summary = build_cross_role_summary(conv_pool, main_pool).await?;
+    if !cross_summary.is_empty() {
+        dynamic_prompt.push_str("\n\n");
+        dynamic_prompt.push_str(&cross_summary);
+    }
+
+    if !active_roles.is_empty() {
+        dynamic_prompt.push_str(r#"
+
+[行为指南]
+            - 先判断用户意图类型：陈述事实/偏好、查询任务、操作任务（创建/完成/删除）、委派任务给角色处理。
+            - 如果用户只是陈述某个角色相关事实或偏好（例如孩子叫什么、喜欢什么、学习表现如何），直接用自然口吻确认，不要调用工具，不要解释系统会如何记录或同步。
+            - 当用户要求创建任务、标记任务完成、删除任务时，调用对应的 create_task / complete_task / delete_task 工具。task_id 和 role_id 必须是[各角色任务]或「可委派角色清单」中列出的 ID。
+            - 当用户询问任务进展、有哪些任务、需要关注什么时，直接基于[各角色任务]回答，不要调用 delegate_to_role。查询任务不等于委派任务。
+            - 如果用户交代的是某个角色相关任务、安排、日程、待办、规划或需要跟进的事项（例如家长会、约定、准备材料、制定练习计划），只要能匹配 active 角色，就调用 delegate_to_role。target_role_id 必须是「可委派角色清单」中列出的 id（UUID），不要传角色名称。
+            - 不要向用户暴露内部机制：不要说"系统会同步""同步到某角色""角色已收到""委派成功""工具调用"等。
+            - 当用户只是询问已知事实（例如某个孩子喜欢什么、某个固定安排是什么）时，优先基于[已知记忆]回答，并可说明目前只知道这些。
+            - 当用户询问明确属性或偏好槽位（例如"喜欢吃什么""喜欢什么运动""某天安排是什么"）时，只回答与该问题槽位直接相关的记忆；不要因为同一角色或同一对象存在其它记忆，就补充阅读、学习、家庭日等无关事实。若没有直接相关记忆，只简短说明还不知道，不要列出其它领域记忆。
+            - 用户一句话同时涉及多个角色且需要角色处理时：可以在同一轮内调用多个 delegate_to_role（并行委派）。
+            - 意图模糊或没有合适角色时：不要调用 delegate_to_role，直接用文字帮助用户或简短追问需求细节。但如果已满足[角色涌现行为]中的触发条件（用户连续 3 轮围绕同一主题），则必须在回复中建议创建角色——这不是可选的。
+            - 收到角色回复（tool result）后：融合成自然回复，不要强调内部流转；只有用户明确问是谁处理时，才说明对应角色。
+            - 如果 delegate_to_role 返回失败（包含「委派失败」字样），不要在同一轮中再次调用 delegate_to_role 重试。直接用自然语言告诉用户该事项已记录，稍后会由对应角色处理。
+            - 用户追问"为什么""依据是什么""你怎么知道的""来源"时，回复中必须原样包含[已知记忆]中对应的记忆内部链接 `[[记忆#YYYY/MM/DD HH:mm]](egosync-memory://memory-id)`，不要只写自然语言。例如：你之前告诉过我「在读《深度工作》」[[记忆#2026/07/10 20:14]](egosync-memory://bfc561e4-217d-4cdd-a746-02bc2c6cdf4c)"#);
+    }
+
+    // Cooldowns (dynamic) — only the cooldown list, not the full emergence instructions
+    let cooldowns = crate::db::app_settings::get_emergence_cooldowns(main_pool)
+        .await
+        .unwrap_or_default();
+    let now = chrono::Utc::now();
+    let active_cooldowns: Vec<String> = cooldowns
+        .into_iter()
+        .filter(|(_, ts)| {
+            chrono::DateTime::parse_from_rfc3339(ts)
+                .map(|dt| now.signed_duration_since(dt).num_days() < 7)
+                .unwrap_or(false)
+        })
+        .map(|(domain, _)| domain)
+        .collect();
+
+    if !active_cooldowns.is_empty() {
+        dynamic_prompt.push_str(&format!(
+            "\n\n[角色涌现-冷却列表]\n- 最近被拒绝的领域（7天内不要再建议）：{}",
+            active_cooldowns.join("、")
+        ));
+    }
+
+    Ok(dynamic_prompt)
+}
+
 pub async fn build_butler_messages(
     conv_pool: &ConversationsPool,
     main_pool: &DbPool,
@@ -1487,6 +1548,12 @@ pub async fn build_butler_messages(
     let mut result = Vec::new();
 
     let system_prompt = build_butler_system_prompt(conv_pool, main_pool).await?;
+
+    // 诊断日志：打印实际发送给 LLM 的 system prompt（前3000字符）
+    tracing::info!(
+        "[build_butler_messages] system prompt 预览 (前3000字符):\n{}",
+        system_prompt.chars().take(3000).collect::<String>()
+    );
 
     result.push(ChatCompletionMessage {
         role: "system".to_string(),
@@ -1708,7 +1775,16 @@ create_role 工具不会立即创建角色。它只是【向用户发起一个�
 - 不要问用户喜欢什么图标、颜色 —— 你自己从白名单选最合适的。\n\n\
 【工具使用规则】\n\
 你有一个 create_role 工具。识别到合适的身份维度后【直接】调用：\n\
-1. name：从对话中提炼的简洁角色名（中文 2–5 字）\n\
+1. name：从对话中提炼的直白身份词（中文 2–6 字）。\n\
+   必须是日常生活中常用的普通词语，不要用比喻或口号式表达。\n\
+   角色代表用户自己的身份，不是外部服务提供者：用户自己健身管理用「健康管理」而非「健身教练」，自己学英语用「学习者」而非「英语老师」；但如果健身教练是用户的本职工作，则「健身教练」就是正确命名。\n\
+   好的命名（覆盖不同生活领域）：\n\
+   家庭：丈夫、父亲、母亲、儿子、女儿；\n\
+   工作：产品经理、教师、程序员、设计师、健身教练；\n\
+   社区：邻居、志愿者；\n\
+   自我：阅读者、学习者、健康管理。\n\
+   不好的命名：掌舵人、领航者、生命建筑师、灵魂守护者。\n\
+   原则：用户看到名字就明白这个角色管什么，不需要额外解释。\n\
 2. icon：从下列标识符中选最贴合的：\n\
    briefcase（工作/职业）、code（编程/技术）、chart-bar（数据/分析）、palette（设计/创作）、\n\
    pen-tool（写作）、book-open（阅读/学习）、graduation-cap（教育）、dumbbell（健身/运动）、\n\
@@ -1897,7 +1973,7 @@ fn create_role_tool_definition() -> ToolDefinition {
             "properties": {
                 "name": {
                     "type": "string",
-                    "description": "角色名称，简洁的中文名词，如「产品经理」「健身教练」「父亲」"
+                    "description": "角色名称，必须是日常生活中直白的身份词，2-6个中文字。角色代表用户自己的身份，不是外部服务提供者：用户自己健身管理用「健康管理」而非「健身教练」，自己学英语用「学习者」而非「英语老师」；但如果健身教练是用户的本职工作，则「健身教练」就是正确命名。好的命名（覆盖不同生活领域）：家庭：丈夫、父亲、母亲、儿子、女儿；工作：产品经理、教师、程序员、设计师、健身教练；社区：邻居、志愿者；自我：阅读者、学习者、健康管理。不要用比喻、口号或文学化表达。不好的命名：掌舵人、领航者、生命建筑师、灵魂守护者、破浪者。命名原则：用户看到名字就能立刻明白这个角色管什么，不需要解释。"
                 },
                 "icon": {
                     "type": "string",
@@ -2113,21 +2189,34 @@ async fn try_run_opencode_stream(
             user_message.to_string()
         }
     } else {
-        // Butler — full system prompt with roster + emergence (consistent with direct-LLM path)
-        let butler_prompt = build_butler_system_prompt(conv_pool, main_pool)
+        // Butler — only dynamic context (roster, tasks, memory, cooldowns).
+        // Static parts (identity, transparency rules, emergence instructions)
+        // are already in the opencode agent's `prompt` field.
+        let dynamic_prompt = build_butler_dynamic_prompt(conv_pool, main_pool)
             .await
-            .unwrap_or_else(|_| String::from(BUTLER_SYSTEM_PROMPT));
-        format!("[系统指示]\n{}\n---\n{}", butler_prompt, user_message)
+            .unwrap_or_default();
+        if dynamic_prompt.is_empty() {
+            user_message.to_string()
+        } else {
+            format!("[动态上下文]\n{}\n---\n{}", dynamic_prompt, user_message)
+        }
     };
+
+    // 诊断日志：打印实际发送给 opencode 的完整 content
+    tracing::info!(
+        "[try_run_opencode_stream] 发送内容预览 (前2000字符): {}",
+        content.chars().take(2000).collect::<String>()
+    );
 
     // Trigger the prompt. POST /session/{id}/message is synchronous (returns
     // the completed message as JSON). Live tokens stream via the event bus;
     // the returned body is retained as a fallback when events miss final text.
+    let agent_key = opencode_agent_key(role_id);
     let bridge = agent_bridge.clone();
     let send_session_id = session_id.clone();
     let (result_tx, mut result_rx) = tokio::sync::oneshot::channel();
     tokio::spawn(async move {
-        let result = bridge.send_message(&send_session_id, &content).await;
+        let result = bridge.send_message(&send_session_id, &content, &agent_key).await;
         let _ = result_tx.send(result);
     });
 
@@ -2618,9 +2707,6 @@ async fn try_run_opencode_stream(
             .await;
         }
         remove_recorded_narration_prefixes(&mut final_text, &recorded_action_narrations);
-        if let Some(notice) = append_uncertainty_notice_if_needed(&mut final_text) {
-            emit_stream_token(app_handle, conversation_id, Some(assistant_message_id), notice, false);
-        }
         conversations::update_message_content(conv_pool, assistant_message_id, &final_text)
             .await
             .ok();
@@ -2652,9 +2738,6 @@ async fn try_run_opencode_stream(
         }
         remove_recorded_narration_prefixes(&mut accumulated_text, &recorded_action_narrations);
         // 普通单段对话：单气泡收尾（改动前的原行为）。
-        if let Some(notice) = append_uncertainty_notice_if_needed(&mut accumulated_text) {
-            emit_stream_token(app_handle, conversation_id, None, notice, false);
-        }
         conversations::update_message_content(conv_pool, assistant_message_id, &accumulated_text)
             .await
             .ok();
@@ -3102,17 +3185,6 @@ pub async fn run_stream(
                             tool_calls_received.len()
                         );
                     }
-                    if let Some(notice) =
-                        append_uncertainty_notice_if_needed(&mut final_accumulated)
-                    {
-                        emit_stream_token(
-                            &app_handle,
-                            &conversation_id,
-                            Some(&final_message_id),
-                            notice,
-                            false,
-                        );
-                    }
                     conversations::update_message_content(
                         &conv_pool,
                         &final_message_id,
@@ -3184,9 +3256,6 @@ pub async fn run_stream(
                 }
 
                 // Save final message
-                if let Some(notice) = append_uncertainty_notice_if_needed(&mut accumulated) {
-                    emit_stream_token(&app_handle, &conversation_id, None, notice, false);
-                }
                 conversations::update_message_content(
                     &conv_pool,
                     &assistant_message_id,
@@ -3233,9 +3302,6 @@ pub async fn run_stream(
                     emit_stream_token(&app_handle, &conversation_id, None, &batch, false);
                 }
 
-                if let Some(notice) = append_uncertainty_notice_if_needed(&mut accumulated) {
-                    emit_stream_token(&app_handle, &conversation_id, None, notice, false);
-                }
                 conversations::update_message_content(
                     &conv_pool,
                     &assistant_message_id,
@@ -3527,6 +3593,32 @@ async fn handle_tool_part<R: tauri::Runtime>(
                 }),
             );
             return Some(worker);
+        }
+        "create_task" | "complete_task" | "delete_task" => {
+            let status = result_json
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let message = result_json
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            tracing::info!(
+                "[opencode-tool] {}: status={} message={}",
+                action,
+                status,
+                message
+            );
+            if status == "ok" {
+                let _ = app_handle.emit(
+                    "task:tool-action",
+                    serde_json::json!({
+                        "action": action,
+                        "message": message,
+                        "conversationId": conversation_id,
+                    }),
+                );
+            }
         }
         "record_emergence_rejection" => {
             let domain = result_json
@@ -5847,23 +5939,6 @@ mod tests {
 
         assert!(!system.contains(&memory.id));
         assert!(!system.contains("用户周五有家庭聚餐"));
-    }
-
-    #[test]
-    fn test_uncertainty_notice_appends_only_for_hedged_visible_assistant_text() {
-        let mut hedged = "这个安排可能更合适。".to_string();
-        let appended = append_uncertainty_notice_if_needed(&mut hedged);
-        assert_eq!(appended, Some(UNCERTAINTY_NOTICE));
-        assert!(hedged.contains(UNCERTAINTY_NOTICE));
-
-        let mut already_clear = "我不太确定这个判断，建议你自己评估一下。".to_string();
-        assert_eq!(
-            append_uncertainty_notice_if_needed(&mut already_clear),
-            None
-        );
-
-        let mut confident = "这个安排更合适。".to_string();
-        assert_eq!(append_uncertainty_notice_if_needed(&mut confident), None);
     }
 
     #[tokio::test]

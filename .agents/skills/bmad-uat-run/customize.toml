@@ -1,0 +1,19 @@
+# DO NOT EDIT -- overwritten on every update.
+#
+# Workflow customization surface for bmad-uat-run.
+
+[workflow]
+
+activation_steps_prepend = []
+
+activation_steps_append = []
+
+persistent_facts = [
+  "file:{project-root}/**/project-context.md",
+  "UAT runs only against a dedicated, production-isolated UAT environment with external dependencies (payment/SMS/third-party) pointed at sandboxes. Never run against production.",
+  "UAT is black-box: provide business evidence and interface anchors; code path:line localization is bmad-investigate's job, not this skill's.",
+  "Per-case isolation: read-only cases share baseline data; write-isolated cases reset dedicated entities before and clean up after.",
+  "UAT status is written to uat-status.yaml only — never back into sprint-status.yaml.",
+]
+
+on_complete = ""

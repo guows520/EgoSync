@@ -592,8 +592,6 @@ pub async fn chat_new_conversation(
     app_handle: tauri::AppHandle,
 ) -> Result<Conversation, AppError> {
     if let Some(old_id) = old_conversation_id {
-        conversations::update_conversation_updated_at(&conv_pool, &old_id).await?;
-
         let messages = match conversations::list_messages(&conv_pool, &old_id).await {
             Ok(messages) => messages,
             Err(err) => {

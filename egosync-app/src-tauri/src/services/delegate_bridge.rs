@@ -9,7 +9,10 @@ use tokio::time::{timeout, Duration};
 use tokio_util::sync::CancellationToken;
 
 use crate::db::pool::{ConversationsPool, DbPool};
+use crate::db;
 use crate::error::AppError;
+use crate::models::task::{CreateTaskInput, TaskOwnerType};
+use tauri::{AppHandle, Emitter};
 
 const MAX_BODY_BYTES: usize = 16 * 1024;
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
@@ -28,6 +31,7 @@ pub struct DelegateBridge {
     delegation_limit: Arc<Semaphore>,
     connection_limit: Arc<Semaphore>,
     token: String,
+    app_handle: Option<AppHandle>,
 }
 
 #[derive(Clone)]
@@ -50,6 +54,32 @@ struct DelegateResponse {
     role_response: String,
 }
 
+#[derive(Deserialize)]
+struct CreateTaskRequest {
+    role_id: String,
+    title: String,
+    #[serde(default)]
+    deadline: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct CompleteTaskRequest {
+    task_id: String,
+}
+
+#[derive(Deserialize)]
+struct DeleteTaskRequest {
+    task_id: String,
+}
+
+#[derive(Serialize)]
+struct TaskActionResponse {
+    status: String,
+    message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    task_id: Option<String>,
+}
+
 struct HttpRequest {
     method: String,
     path: String,
@@ -58,7 +88,7 @@ struct HttpRequest {
 }
 
 impl DelegateBridge {
-    pub fn new(main_pool: DbPool, conv_pool: ConversationsPool, token: String) -> Self {
+    pub fn new(main_pool: DbPool, conv_pool: ConversationsPool, token: String, app_handle: Option<AppHandle>) -> Self {
         Self {
             main_pool,
             conv_pool,
@@ -67,6 +97,7 @@ impl DelegateBridge {
             delegation_limit: Arc::new(Semaphore::new(MAX_CONCURRENT_DELEGATIONS)),
             connection_limit: Arc::new(Semaphore::new(MAX_CONCURRENT_CONNECTIONS)),
             token,
+            app_handle,
         }
     }
 
@@ -89,12 +120,164 @@ impl DelegateBridge {
         sessions.remove(session_id);
     }
 
+    async fn create_task(&self, req: CreateTaskRequest) -> TaskActionResponse {
+        let role_id = req.role_id.trim();
+        let title = req.title.trim();
+        if role_id.is_empty() {
+            return TaskActionResponse {
+                status: "bad_request".to_string(),
+                message: "缺少角色ID。".to_string(),
+                task_id: None,
+            };
+        }
+        if title.is_empty() {
+            return TaskActionResponse {
+                status: "bad_request".to_string(),
+                message: "缺少任务标题。".to_string(),
+                task_id: None,
+            };
+        }
+
+        let input = CreateTaskInput {
+            owner_type: Some(TaskOwnerType::Role),
+            role_id: Some(role_id.to_string()),
+            title: title.to_string(),
+            deadline: req.deadline.as_deref().map(|s| s.trim()).filter(|s| !s.is_empty()).map(|s| s.to_string()),
+            quadrant: None,
+            is_big_rock: None,
+        };
+
+        match db::tasks::create_task(&self.main_pool, &input).await {
+            Ok(task) => {
+                tracing::info!(
+                    "[bridge] create_task: role_id={} title={} task_id={}",
+                    role_id, title, task.id
+                );
+                let pool = self.main_pool.clone();
+                let task_id = task.id.clone();
+                let app_handle = self.app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    let classified = match crate::services::task_classifier::classify_and_persist(&pool, &task_id).await {
+                        Ok(updated) => Some(updated),
+                        Err(e) => {
+                            tracing::warn!(task_id = %task_id, error = %e, "bridge 创建任务后自动分类失败，保留默认 Q2");
+                            db::tasks::get_active_task_pub(&pool, &task_id).await.ok()
+                        }
+                    };
+                    if let Some(updated) = classified {
+                        if let Some(ref app) = app_handle {
+                            let _ = app.emit("task:classified", &updated);
+                        }
+                    }
+                });
+                TaskActionResponse {
+                    status: "ok".to_string(),
+                    message: format!("任务「{}」已创建，默认放入 Q2，后台正在自动分类。", title),
+                    task_id: Some(task.id),
+                }
+            }
+            Err(e) => {
+                tracing::warn!("[bridge] create_task failed: role_id={} title={} error={}", role_id, title, e);
+                TaskActionResponse {
+                    status: "error".to_string(),
+                    message: format!("创建任务失败：{}", e),
+                    task_id: None,
+                }
+            }
+        }
+    }
+
+    async fn complete_task(&self, req: CompleteTaskRequest) -> TaskActionResponse {
+        let task_id = req.task_id.trim();
+        if task_id.is_empty() {
+            return TaskActionResponse {
+                status: "bad_request".to_string(),
+                message: "缺少任务ID。".to_string(),
+                task_id: None,
+            };
+        }
+
+        match db::tasks::set_task_completion(&self.main_pool, task_id, true).await {
+            Ok(task) => {
+                tracing::info!("[bridge] complete_task: task_id={} title={}", task_id, task.title);
+                TaskActionResponse {
+                    status: "ok".to_string(),
+                    message: format!("任务「{}」已标记为完成。", task.title),
+                    task_id: Some(task.id),
+                }
+            }
+            Err(e) => {
+                tracing::warn!("[bridge] complete_task failed: task_id={} error={}", task_id, e);
+                TaskActionResponse {
+                    status: "error".to_string(),
+                    message: format!("标记完成失败：{}", e),
+                    task_id: None,
+                }
+            }
+        }
+    }
+
+    async fn delete_task(&self, req: DeleteTaskRequest) -> TaskActionResponse {
+        let task_id = req.task_id.trim();
+        if task_id.is_empty() {
+            return TaskActionResponse {
+                status: "bad_request".to_string(),
+                message: "缺少任务ID。".to_string(),
+                task_id: None,
+            };
+        }
+
+        let task = match db::tasks::get_active_task_pub(&self.main_pool, task_id).await {
+            Ok(t) => t,
+            Err(e) => {
+                return TaskActionResponse {
+                    status: "error".to_string(),
+                    message: format!("任务不存在：{}", e),
+                    task_id: None,
+                };
+            }
+        };
+
+        match db::tasks::soft_delete_task(&self.main_pool, task_id).await {
+            Ok(()) => {
+                tracing::info!("[bridge] delete_task: task_id={} title={}", task_id, task.title);
+                TaskActionResponse {
+                    status: "ok".to_string(),
+                    message: format!("任务「{}」已删除。", task.title),
+                    task_id: Some(task.id),
+                }
+            }
+            Err(e) => {
+                tracing::warn!("[bridge] delete_task failed: task_id={} error={}", task_id, e);
+                TaskActionResponse {
+                    status: "error".to_string(),
+                    message: format!("删除任务失败：{}", e),
+                    task_id: None,
+                }
+            }
+        }
+    }
+
     async fn delegate_to_role(&self, request: DelegateRequest) -> DelegateResponse {
+        tracing::info!(
+            "[bridge] delegate_to_role: session_id={} target_role_id={}",
+            request.session_id, request.target_role_id
+        );
         let session = {
             let sessions = self.sessions.lock().await;
-            sessions.get(&request.session_id).cloned()
+            let count = sessions.len();
+            let s = sessions.get(&request.session_id).cloned();
+            tracing::debug!(
+                "[bridge] session lookup: registered_sessions={} found={}",
+                count, s.is_some()
+            );
+            s
         };
         let Some(session) = session else {
+            tracing::warn!(
+                "[bridge] session_not_found: session_id={} (no matching registered session)",
+                request.session_id
+            );
             return DelegateResponse {
                 status: "session_not_found".to_string(),
                 role_response: "委派失败：未找到当前会话上下文，请稍后重试。".to_string(),
@@ -143,6 +326,7 @@ impl DelegateBridge {
                 };
             }
         };
+        tracing::info!("[bridge] calling execute_delegate_to_role: role_id={}", target_role_id);
         let (role_response, record) = match timeout(
             DELEGATION_TIMEOUT,
             crate::services::agent_engine::execute_delegate_to_role(
@@ -153,8 +337,15 @@ impl DelegateBridge {
         )
         .await
         {
-            Ok(result) => result,
+            Ok((resp, rec)) => {
+                tracing::info!(
+                    "[bridge] delegate_to_role completed: role_id={} response_len={}",
+                    target_role_id, resp.len()
+                );
+                (resp, rec)
+            }
             Err(_) => {
+                tracing::warn!("[bridge] delegate_to_role timed out after {}s", DELEGATION_TIMEOUT.as_secs());
                 return DelegateResponse {
                     status: "timeout".to_string(),
                     role_response: "委派失败：角色处理超时，请稍后重试。".to_string(),
@@ -266,6 +457,57 @@ async fn handle_connection(mut stream: TcpStream, bridge: DelegateBridge) {
                         400,
                         "Bad Request",
                         &serde_json::json!({ "status": "bad_request", "role_response": "委派参数解析失败。" }),
+                    ),
+                }
+            }
+        }
+        Ok(request) if request.method == "POST" && request.path == "/create-task" => {
+            if let Err(response) = bridge.validate_request(&request) {
+                response
+            } else {
+                match serde_json::from_slice::<CreateTaskRequest>(&request.body) {
+                    Ok(req) => {
+                        let response = bridge.create_task(req).await;
+                        json_response(200, "OK", &response)
+                    }
+                    Err(_) => json_response(
+                        400,
+                        "Bad Request",
+                        &serde_json::json!({ "status": "bad_request", "message": "创建任务参数解析失败。" }),
+                    ),
+                }
+            }
+        }
+        Ok(request) if request.method == "POST" && request.path == "/complete-task" => {
+            if let Err(response) = bridge.validate_request(&request) {
+                response
+            } else {
+                match serde_json::from_slice::<CompleteTaskRequest>(&request.body) {
+                    Ok(req) => {
+                        let response = bridge.complete_task(req).await;
+                        json_response(200, "OK", &response)
+                    }
+                    Err(_) => json_response(
+                        400,
+                        "Bad Request",
+                        &serde_json::json!({ "status": "bad_request", "message": "完成任务参数解析失败。" }),
+                    ),
+                }
+            }
+        }
+        Ok(request) if request.method == "POST" && request.path == "/delete-task" => {
+            if let Err(response) = bridge.validate_request(&request) {
+                response
+            } else {
+                match serde_json::from_slice::<DeleteTaskRequest>(&request.body) {
+                    Ok(req) => {
+                        let response = bridge.delete_task(req).await;
+                        json_response(200, "OK", &response)
+                    }
+                    Err(_) => json_response(
+                        400,
+                        "Bad Request",
+                        &serde_json::json!({ "status": "bad_request", "message": "删除任务参数解析失败。" }),
                     ),
                 }
             }

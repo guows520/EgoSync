@@ -4,6 +4,7 @@ import { cn } from '../../lib/utils';
 import { ButlerWorkspacePanel } from './ButlerWorkspacePanel';
 import { ChatStream } from '../chat/ChatStream';
 import { useSuggestions } from '../../hooks/useSuggestions';
+import { useTaskDecompositions } from '../../hooks/useTaskDecompositions';
 import { ActionCard } from './ActionCard';
 import { taskService } from '../../services/taskService';
 import type { SourceNavigationTarget } from '../../types/chat';
@@ -51,6 +52,7 @@ export function ButlerView({ roles, onViewChange, archivedRoles, onRestoreRole, 
   const [sourceNavigationTarget, setSourceNavigationTarget] = useState<SourceNavigationTarget | null>(null);
   const [butlerConversationId, setButlerConversationId] = useState<string | null>(null);
   const { suggestions, confirmSuggestion, rejectSuggestion, removeSuggestion } = useSuggestions(butlerConversationId);
+  const { proposals, refetch: refetchTaskDecompositions, acceptProposal, keepSingleProposal } = useTaskDecompositions(butlerConversationId);
 
   useEffect(() => {
     if (!externalSourceNavigationTarget) return;
@@ -139,6 +141,10 @@ export function ButlerView({ roles, onViewChange, archivedRoles, onRestoreRole, 
             onConfirmSuggestion={confirmSuggestion}
             onRejectSuggestion={rejectSuggestion}
             onDismissSuggestion={removeSuggestion}
+            taskDecompositions={proposals}
+            onAcceptTaskDecomposition={acceptProposal}
+            onKeepSingleTaskDecomposition={keepSingleProposal}
+            onStreamDone={refetchTaskDecompositions}
             refreshTrigger={chatRefreshTrigger}
             onConversationIdChange={setButlerConversationId}
           />

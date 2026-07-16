@@ -6,10 +6,12 @@ import { ChatBubble, ExecutionTrace } from './ChatBubble';
 import { ChatInput } from './ChatInput';
 import { ChatHeader } from './ChatHeader';
 import { ActionCard } from '../butler/ActionCard';
+import { TaskDecompositionCard } from '../butler/TaskDecompositionCard';
 import { getRoleIconComponent, normalizeColorHex } from '../../lib/roleIcons';
 import type { ChatMessage, StreamPayload, Conversation, TitleUpdatedPayload, SourceNavigationTarget, MessageProcessEvent, ExecutionTraceBlock, ExecutionTraceDetail } from '../../types/chat';
 import type { Role } from '../../types/role';
 import type { SuggestionWithRole } from '../../types/suggestion';
+import type { TaskDecompositionProposal } from '../../types/taskDecomposition';
 
 interface ChatStreamProps {
   /** 角色视图传入对应 Role；管家/onboarding 视图传 null。 */
@@ -21,6 +23,10 @@ interface ChatStreamProps {
   onConfirmSuggestion?: (id: string) => void;
   onRejectSuggestion?: (id: string, reason: string) => void;
   onDismissSuggestion?: (id: string) => void;
+  taskDecompositions?: TaskDecompositionProposal[];
+  onAcceptTaskDecomposition?: (id: string) => Promise<void> | void;
+  onKeepSingleTaskDecomposition?: (id: string) => Promise<void> | void;
+  onStreamDone?: () => void;
   /** Story 4.6: 外部递增此值时触发对话历史重新加载 */
   refreshTrigger?: number;
   /** 当前会话 ID 变化时通知父组件 */
@@ -506,6 +512,10 @@ export function ChatStream({
   onConfirmSuggestion,
   onRejectSuggestion,
   onDismissSuggestion,
+  taskDecompositions = [],
+  onAcceptTaskDecomposition,
+  onKeepSingleTaskDecomposition,
+  onStreamDone,
   refreshTrigger,
   onConversationIdChange,
 }: ChatStreamProps) {
@@ -801,6 +811,7 @@ export function ChatStream({
         }
         updateStreamBubbles(() => []);
         setIsStreaming(false);
+        onStreamDone?.();
       }
       const applyBucketClear = () => {
         if (isDelegationSegmentDone || isFinalDone) return;
@@ -873,7 +884,7 @@ export function ChatStream({
         return next;
       });
     }
-  }, [conversation, resetStreamProcessEvents]);
+  }, [conversation, onStreamDone, resetStreamProcessEvents]);
 
   useTauriEvent<StreamPayload>('llm:stream', handleStreamEvent, [conversation?.id]);
 
@@ -1066,14 +1077,18 @@ export function ChatStream({
             </div>
           )}
           {(() => {
-            const showSuggestions = suggestions.length > 0 && !isStreaming && onConfirmSuggestion && onRejectSuggestion && onDismissSuggestion;
+            const showSuggestions = suggestions.length > 0 && onConfirmSuggestion && onRejectSuggestion && onDismissSuggestion;
+            const showTaskDecompositions = taskDecompositions.length > 0
+              && onAcceptTaskDecomposition
+              && onKeepSingleTaskDecomposition;
+            const showActions = !isStreaming && (showSuggestions || showTaskDecompositions);
             const filteredMessages = messages.filter(m =>
               m.role !== 'system'
               && (m.role !== 'assistant' || m.content.trim().length > 0 || m.thinkingContent.trim().length > 0)
               && Boolean(m.isComplete || m.content || m.thinkingContent)
             );
 
-            if (!showSuggestions) {
+            if (!showActions) {
               return filteredMessages.map(msg => (
                 <Fragment key={msg.id}>
                   {streamingTraceAnchorMessageId === msg.id && (
@@ -1097,9 +1112,12 @@ export function ChatStream({
               ));
             }
 
-            const oldestSuggestionTime = Math.min(...suggestions.map(s => Date.parse(s.createdAt)).filter(Number.isFinite));
-            const suggestionInsertionIndex = Number.isFinite(oldestSuggestionTime)
-              ? filteredMessages.findIndex(m => Date.parse(m.createdAt) > oldestSuggestionTime)
+            const oldestActionTime = Math.min(
+              ...suggestions.map(s => Date.parse(s.createdAt)).filter(Number.isFinite),
+              ...taskDecompositions.map(proposal => Date.parse(proposal.createdAt)).filter(Number.isFinite),
+            );
+            const suggestionInsertionIndex = Number.isFinite(oldestActionTime)
+              ? filteredMessages.findIndex(m => Date.parse(m.createdAt) > oldestActionTime)
               : filteredMessages.length;
             const insertAt = suggestionInsertionIndex === -1 ? filteredMessages.length : suggestionInsertionIndex;
 
@@ -1138,9 +1156,17 @@ export function ChatStream({
                     <ActionCard
                       key={suggestion.id}
                       suggestion={suggestion}
-                      onConfirm={onConfirmSuggestion}
-                      onReject={onRejectSuggestion}
-                      onDismiss={onDismissSuggestion}
+                      onConfirm={onConfirmSuggestion!}
+                      onReject={onRejectSuggestion!}
+                      onDismiss={onDismissSuggestion!}
+                    />
+                  ))}
+                  {taskDecompositions.map(proposal => (
+                    <TaskDecompositionCard
+                      key={proposal.id}
+                      proposal={proposal}
+                      onAccept={onAcceptTaskDecomposition!}
+                      onKeepSingle={onKeepSingleTaskDecomposition!}
                     />
                   ))}
                 </div>

@@ -338,12 +338,21 @@ impl DelegateBridge {
             }
         };
         tracing::info!("[bridge] calling execute_delegate_to_role: role_id={}", target_role_id);
+        let source_conversation_id = sqlx::query_scalar::<_, String>(
+            "SELECT conversation_id FROM messages WHERE id = ?1",
+        )
+        .bind(&session.butler_user_message_id)
+        .fetch_optional(&*self.conv_pool)
+        .await
+        .ok()
+        .flatten();
         let (role_response, record) = match timeout(
             DELEGATION_TIMEOUT,
-            crate::services::agent_engine::execute_delegate_to_role(
+            crate::services::agent_engine::execute_delegate_to_role_with_source(
                 &self.main_pool,
                 &self.conv_pool,
                 &args,
+                source_conversation_id.as_deref(),
             ),
         )
         .await

@@ -13,4 +13,5 @@ pub mod settings;
 pub mod skill;
 pub mod suggestion;
 pub mod task;
+pub mod task_decomposition;
 pub mod weekly_review;

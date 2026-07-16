@@ -18,6 +18,9 @@ use crate::models::chat::{RoleProposedPayload, StreamPayload};
 use crate::commands::chat::OpencodeSessionState;
 use crate::models::role::CreateRoleInput;
 use crate::models::task::{CreateTaskInput, TaskOwnerType};
+use crate::models::task_decomposition::{
+    CreateTaskDecompositionProposalInput, TaskDecompositionItem,
+};
 use crate::services::secret_store;
 
 const OPENCODE_FALLBACK_NOTICE: &str = "Agent 引擎暂时不可用，当前为基础对话模式。\n\n";
@@ -3681,7 +3684,21 @@ async fn handle_delegate_tool_result(
             .filter(|s| !s.is_empty()),
     })
     .to_string();
-    let (_text, record) = execute_delegate_to_role(main_pool, conv_pool, &args).await;
+    let source_conversation_id = sqlx::query_scalar::<_, String>(
+        "SELECT conversation_id FROM messages WHERE id = ?1",
+    )
+    .bind(butler_user_message_id)
+    .fetch_optional(&**conv_pool)
+    .await
+    .ok()
+    .flatten();
+    let (_text, record) = execute_delegate_to_role_with_source(
+        main_pool,
+        conv_pool,
+        &args,
+        source_conversation_id.as_deref(),
+    )
+    .await;
     append_delegation_metadata(conv_pool, butler_user_message_id, &record).await;
     Some(record)
 }
@@ -3759,8 +3776,13 @@ async fn execute_tool_calls(
             }
             "delegate_to_role" => {
                 // Story 2.3 AC-2: 单轮内多个 delegate_to_role 串行执行（V1）
-                let (text, record) =
-                    execute_delegate_to_role(main_pool, conv_pool, &tc.arguments).await;
+                let (text, record) = execute_delegate_to_role_with_source(
+                    main_pool,
+                    conv_pool,
+                    &tc.arguments,
+                    Some(conversation_id),
+                )
+                .await;
                 delegations.push(record);
                 text
             }
@@ -3810,7 +3832,7 @@ pub struct DelegationRecord {
 }
 
 const CREATE_DELEGATED_TASK_TOOL: &str = "create_delegated_task";
-const DELEGATED_TASK_PROMPT: &str = "[委派任务跟踪]\n明确行动、未来日程、承诺、待办或交付物必须调用 create_delegated_task；纯咨询、分析、建议不要调用。一句话有多个独立行动时分别调用。截止时间可省略。工具不接受角色 ID，任务固定归属当前角色。只有工具结果 status=created 才能声称对应任务已创建；失败时如实说明，不得重试工具。";
+const DELEGATED_TASK_PROMPT: &str = "[委派任务跟踪]\n明确行动、未来日程、承诺、待办或交付物必须调用 create_delegated_task；纯咨询、分析、建议不要调用。一句话有多个独立行动时分别调用。截止时间可省略。工具不接受角色 ID，任务固定归属当前角色。单项调用结果 status=created 表示已创建；多项调用结果 status=proposed 表示仅生成待用户确认的拆分提案，绝不能声称任务已创建。失败时如实说明，不得重试工具。";
 
 fn delegated_task_tool_definition() -> ToolDefinition {
     ToolDefinition {
@@ -3870,6 +3892,7 @@ fn delegated_task_process_candidate(call: Option<&ToolCall>, outcome: &Delegated
     let title = outcome.title.as_deref().unwrap_or("未命名任务");
     let (status, summary) = match outcome.status.as_str() {
         "created" => ("completed", format!("已创建任务：{}", title)),
+        "proposed" => ("completed", format!("已提出任务拆分，等待用户确认：{}", title)),
         "duplicate_skipped" if outcome.error.is_some() || outcome.task_id.is_none() => (
             "error",
             outcome.error.clone().unwrap_or_else(|| format!("重复任务未创建：{}", title)),
@@ -3966,6 +3989,138 @@ async fn execute_delegated_task_calls(main_pool: &DbPool, role_id: &str, calls: 
     results
 }
 
+async fn propose_or_execute_delegated_task_calls(
+    main_pool: &DbPool,
+    role_id: &str,
+    source_conversation_id: Option<&str>,
+    task_summary: &str,
+    calls: &[ToolCall],
+) -> Vec<DelegatedTaskOutcome> {
+    #[derive(serde::Deserialize)]
+    struct Args {
+        title: String,
+        #[serde(default)]
+        deadline: Option<String>,
+    }
+
+    if calls.len() < 2 {
+        return execute_delegated_task_calls(main_pool, role_id, calls).await;
+    }
+
+    let mut seen = HashMap::<(String, String), String>::new();
+    let mut normalized = Vec::<TaskDecompositionItem>::new();
+    let mut outcomes = Vec::<DelegatedTaskOutcome>::with_capacity(calls.len());
+    for call in calls {
+        if call.name != CREATE_DELEGATED_TASK_TOOL {
+            outcomes.push(DelegatedTaskOutcome {
+                call_id: call.id.clone(),
+                status: "error".into(),
+                title: None,
+                deadline: None,
+                task_id: None,
+                error: Some("不允许执行该工具。".into()),
+                warning: None,
+                duplicate_of: None,
+            });
+            continue;
+        }
+        let args: Args = match serde_json::from_str(&call.arguments) {
+            Ok(args) => args,
+            Err(e) => {
+                outcomes.push(DelegatedTaskOutcome {
+                    call_id: call.id.clone(),
+                    status: "error".into(),
+                    title: None,
+                    deadline: None,
+                    task_id: None,
+                    error: Some(format!("任务参数无法解析：{}", e)),
+                    warning: None,
+                    duplicate_of: None,
+                });
+                continue;
+            }
+        };
+        let title = args.title.split_whitespace().collect::<Vec<_>>().join(" ");
+        if title.is_empty() {
+            outcomes.push(DelegatedTaskOutcome {
+                call_id: call.id.clone(),
+                status: "error".into(),
+                title: None,
+                deadline: None,
+                task_id: None,
+                error: Some("任务标题不能为空，本次未创建。".into()),
+                warning: None,
+                duplicate_of: None,
+            });
+            continue;
+        }
+        let (deadline, warning, _deadline_key) =
+            normalize_delegated_deadline(args.deadline.as_deref());
+        let key = (
+            title.to_lowercase(),
+            deadline.clone().unwrap_or_else(|| "none".to_string()),
+        );
+        if let Some(first_call_id) = seen.get(&key) {
+            outcomes.push(DelegatedTaskOutcome {
+                call_id: call.id.clone(),
+                status: "duplicate_skipped".into(),
+                title: Some(title),
+                deadline,
+                task_id: None,
+                error: None,
+                warning,
+                duplicate_of: Some(first_call_id.clone()),
+            });
+            continue;
+        }
+        seen.insert(key, call.id.clone());
+        normalized.push(TaskDecompositionItem {
+            title: title.clone(),
+            deadline: deadline.clone(),
+        });
+        outcomes.push(DelegatedTaskOutcome {
+            call_id: call.id.clone(),
+            status: "proposed".into(),
+            title: Some(title),
+            deadline,
+            task_id: None,
+            error: None,
+            warning,
+            duplicate_of: None,
+        });
+    }
+
+    if normalized.len() < 2 {
+        return execute_delegated_task_calls(main_pool, role_id, calls).await;
+    }
+
+    let Some(source_conversation_id) = source_conversation_id else {
+        for outcome in &mut outcomes {
+            if outcome.status == "proposed" {
+                outcome.status = "error".into();
+                outcome.error = Some("缺少来源管家会话，拆分提案未保存。".into());
+            }
+        }
+        return outcomes;
+    };
+
+    let input = CreateTaskDecompositionProposalInput {
+        role_id: role_id.to_string(),
+        source_conversation_id: source_conversation_id.to_string(),
+        task_summary: task_summary.to_string(),
+        items: normalized,
+    };
+    if let Err(e) = crate::db::task_decomposition::create_proposal(main_pool, &input).await {
+        for outcome in &mut outcomes {
+            if outcome.status == "proposed" {
+                outcome.status = "error".into();
+                outcome.error = Some(format!("拆分提案保存失败：{}", e));
+            }
+        }
+    }
+    outcomes
+}
+
 #[derive(Default)]
 struct LocalStreamOutput {
     text: String,
@@ -4035,6 +4190,8 @@ async fn run_delegated_role_provider(
     provider: &Arc<dyn LlmProvider>,
     main_pool: &DbPool,
     role_id: &str,
+    source_conversation_id: Option<&str>,
+    task_summary: &str,
     mut messages: Vec<ChatCompletionMessage>,
 ) -> DelegatedRoleRun {
     let first = collect_local_stream(provider, messages.clone(), ChatOptions {
@@ -4047,7 +4204,14 @@ async fn run_delegated_role_provider(
         return DelegatedRoleRun { reply, task_calls: Vec::new(), outcomes: Vec::new() };
     }
 
-    let outcomes = execute_delegated_task_calls(main_pool, role_id, &first.tool_calls).await;
+    let outcomes = propose_or_execute_delegated_task_calls(
+        main_pool,
+        role_id,
+        source_conversation_id,
+        task_summary,
+        &first.tool_calls,
+    )
+    .await;
     messages.push(ChatCompletionMessage { role: "assistant".to_string(), content: first.text, tool_calls: Some(first.tool_calls.clone()), tool_call_id: None });
     for (call, outcome) in first.tool_calls.iter().zip(outcomes.iter()) {
         messages.push(ChatCompletionMessage { role: "tool".to_string(), content: serde_json::to_string(outcome).unwrap_or_else(|_| "{\"status\":\"error\"}".to_string()), tool_calls: None, tool_call_id: Some(call.id.clone()) });
@@ -4070,6 +4234,15 @@ pub async fn execute_delegate_to_role(
     main_pool: &DbPool,
     conv_pool: &ConversationsPool,
     arguments: &str,
+) -> (String, DelegationRecord) {
+    execute_delegate_to_role_with_source(main_pool, conv_pool, arguments, None).await
+}
+
+pub(crate) async fn execute_delegate_to_role_with_source(
+    main_pool: &DbPool,
+    conv_pool: &ConversationsPool,
+    arguments: &str,
+    source_conversation_id: Option<&str>,
 ) -> (String, DelegationRecord) {
     #[derive(serde::Deserialize)]
     struct DelegateArgs {
@@ -4255,7 +4428,15 @@ pub async fn execute_delegate_to_role(
     }
 
     // 本地化 drain，不 emit `llm:stream`；后端结果独立于角色建议，作为权威状态返回管家。
-    let run = run_delegated_role_provider(&provider, main_pool, &role.id, role_messages).await;
+    let run = run_delegated_role_provider(
+        &provider,
+        main_pool,
+        &role.id,
+        source_conversation_id,
+        &args.task_summary,
+        role_messages,
+    )
+    .await;
     let role_reply = run.reply;
     let task_outcome_summary = delegated_task_authority_summary(&run.outcomes);
 
@@ -4632,7 +4813,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delegated_calls_allow_multiple_tasks_bind_role_and_deduplicate_exact_matches() {
+    async fn delegated_provider_multiple_calls_create_one_proposal_without_tasks() {
         let pool = setup_test_main_pool().await;
         let current = crate::db::roles::create_role(&pool, &CreateRoleInput { name: "产品经理".into(), icon: None, color: None, goal: None }).await.unwrap();
         let other = crate::db::roles::create_role(&pool, &CreateRoleInput { name: "学习者".into(), icon: None, color: None, goal: None }).await.unwrap();
@@ -4643,17 +4824,32 @@ mod tests {
             task_call("4", "准备 产品评审", Some("后天下午")),
             task_call("5", "   ", None),
         ];
-        let results = execute_delegated_task_calls(&pool, &current.id, &calls).await;
-        assert_eq!(results[0].status, "created");
+        let results = propose_or_execute_delegated_task_calls(
+            &pool,
+            &current.id,
+            Some("conv-butler"),
+            "准备产品评审",
+            &calls,
+        )
+        .await;
+        assert_eq!(results[0].status, "proposed");
         assert!(results[0].warning.as_deref().unwrap().contains("未保存截止时间"));
         assert_eq!(results[1].status, "duplicate_skipped");
-        assert_eq!(results[2].status, "created");
-        assert_eq!(results[3].status, "created", "不同的不可解析时间不能互相去重");
+        assert_eq!(results[2].status, "proposed");
+        assert_eq!(results[3].status, "duplicate_skipped", "无法保存的截止时间不应制造重复提案项");
         assert_eq!(results[4].status, "error");
         let current_tasks = tasks::list_tasks_by_role(&pool, &current.id).await.unwrap();
-        assert_eq!(current_tasks.len(), 3, "多个不同任务都应创建，完全重复项才跳过");
+        assert!(current_tasks.is_empty(), "多个不同任务必须等待用户确认");
         assert!(tasks::list_tasks_by_role(&pool, &other.id).await.unwrap().is_empty(), "模型角色 ID 不得覆盖当前角色");
-        assert!(current_tasks.iter().any(|task| task.deadline.is_none()));
+        let proposals = crate::db::task_decomposition::list_pending_by_conversation(
+            &pool,
+            "conv-butler",
+        )
+        .await
+        .unwrap();
+        assert_eq!(proposals.len(), 1);
+        assert_eq!(proposals[0].proposal.items.len(), 2);
+        assert_eq!(proposals[0].proposal.role_id, current.id);
     }
 
     #[tokio::test]
@@ -4679,7 +4875,15 @@ mod tests {
         ]);
         let messages = vec![ChatCompletionMessage { role: "system".into(), content: DELEGATED_TASK_PROMPT.into(), tool_calls: None, tool_call_id: None }];
 
-        let run = run_delegated_role_provider(&provider, &pool, &role.id, messages).await;
+        let run = run_delegated_role_provider(
+            &provider,
+            &pool,
+            &role.id,
+            Some("conv-butler"),
+            "准备产品评审",
+            messages,
+        )
+        .await;
 
         assert_eq!(run.outcomes.len(), 1, "provider 完成后排队的 ToolCall 仍必须执行");
         assert_eq!(run.outcomes[0].status, "created");
@@ -4694,7 +4898,15 @@ mod tests {
         let provider = scripted_provider(vec![vec![StreamEvent::Token("建议先讲目标与取舍。".into()), StreamEvent::Done]]);
         let messages = vec![ChatCompletionMessage { role: "system".into(), content: DELEGATED_TASK_PROMPT.into(), tool_calls: None, tool_call_id: None }];
 
-        let run = run_delegated_role_provider(&provider, &pool, &role.id, messages).await;
+        let run = run_delegated_role_provider(
+            &provider,
+            &pool,
+            &role.id,
+            Some("conv-butler"),
+            "咨询产品评审",
+            messages,
+        )
+        .await;
 
         assert!(run.outcomes.is_empty(), "纯咨询不应生成任务结果");
         assert_eq!(run.reply, "建议先讲目标与取舍。");
@@ -4711,7 +4923,15 @@ mod tests {
         ]);
         let messages = vec![ChatCompletionMessage { role: "system".into(), content: DELEGATED_TASK_PROMPT.into(), tool_calls: None, tool_call_id: None }];
 
-        let run = run_delegated_role_provider(&provider, &pool, &role.id, messages).await;
+        let run = run_delegated_role_provider(
+            &provider,
+            &pool,
+            &role.id,
+            Some("conv-butler"),
+            "准备产品评审",
+            messages,
+        )
+        .await;
         let summary = delegated_task_authority_summary(&run.outcomes);
 
         assert!(run.reply.contains("权威结果"), "收尾失败必须有确定性 fallback");
@@ -5597,6 +5817,12 @@ mod tests {
             .execute(&pool)
             .await
             .expect("failed to apply task owner scope migration");
+        sqlx::raw_sql(include_str!(
+            "../../migrations/027_task_decomposition_proposals.sql"
+        ))
+        .execute(&pool)
+        .await
+        .expect("failed to create task decomposition proposals");
 
         pool
     }

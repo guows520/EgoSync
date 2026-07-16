@@ -188,3 +188,7 @@ All items resolved in the same session:
 ## Deferred from: code review of fix-opencode-agent-name-identity (2026-07-15)
 
 - **Butler prompt 既有断言与当前静态 prompt 不一致（MEDIUM，测试门禁）**：`services::agent_config::tests` 中 3 项既有测试仍期待旧文案 `你是EgoSync管家` 或 prompt 不出现 `find-skills`，而基线 `9b16c880` 的静态 prompt 已不满足这些断言。当前结果为 31 通过、3 失败；失败不是移除 Agent `name` 所致，应单独校准 Butler prompt 契约与测试。
+
+## Deferred from: code review of disable-opencode-question-tool (2026-07-16)
+
+- **Rust 全仓格式门禁存在基线债务（测试门禁）**：`cargo fmt --check` 对多个未修改文件及 `agent_config.rs` 的历史代码报告大量差异，无法作为本次外科式修复的通过门禁。本次新增代码未引入 `git diff --check` 错误；全仓格式统一应单独实施，避免把无关格式重写混入功能修复。

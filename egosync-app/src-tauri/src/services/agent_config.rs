@@ -275,6 +275,9 @@ pub struct AgentConfigService {
 }
 
 const BUTLER_KEY: &str = "butler";
+const PLAIN_MESSAGE_CONFIRMATION_RULE: &str = r#"[用户确认规则]
+- 需要用户确认、选择或补充信息时，必须用普通消息清楚列出问题和可选项，然后结束本轮回复，等待用户的下一条消息。
+- 不要调用 question 工具。"#;
 
 impl AgentConfigService {
     pub fn new(config_path: PathBuf) -> Self {
@@ -386,6 +389,7 @@ impl AgentConfigService {
                 mcp_lines.join("\n")
             ));
         }
+        prompt_parts.push(PLAIN_MESSAGE_CONFIRMATION_RULE.to_string());
         let prompt = prompt_parts.join("\n");
 
         let permission = Self::parse_permissions(&role.skills_config);
@@ -402,6 +406,7 @@ impl AgentConfigService {
     /// Parse `skills_config` JSON → opencode permission object.
     /// Falls back to `{ "*": "allow" }` when empty or unparseable.
     /// EgoSync 管理自定义 Skill 的 prompt 注入，不允许 opencode 底层 `skill` 工具自动加载外部全局 Skill。
+    /// EgoSync 尚未实现 `question` 的回答与会话恢复协议，因此该工具也必须始终禁用。
     fn parse_permissions(skills_config: &str) -> Value {
         let default_perm = json!({ "*": "allow" });
         let config = crate::services::role_config::role_skill_config_from_json(skills_config);
@@ -412,6 +417,7 @@ impl AgentConfigService {
 
         if let Some(object) = permission.as_object_mut() {
             object.insert("skill".to_string(), json!("deny"));
+            object.insert("question".to_string(), json!("deny"));
         }
 
         permission
@@ -480,6 +486,7 @@ impl AgentConfigService {
         }
         let custom_skill_lines = Self::custom_skill_lines(&skills.enabled_skill_ids, registry);
         Self::push_custom_skill_prompt(&mut prompt_parts, &custom_skill_lines);
+        prompt_parts.push(PLAIN_MESSAGE_CONFIRMATION_RULE.to_string());
         let permission = Self::parse_permissions(&skills_config);
 
         json!({
@@ -994,7 +1001,7 @@ mod tests {
         let entry = AgentConfigService::build_agent_entry(&role);
         assert_eq!(
             entry["permission"],
-            json!({ "*": "allow", "skill": "deny" })
+            json!({ "*": "allow", "skill": "deny", "question": "deny" })
         );
     }
 
@@ -1027,6 +1034,35 @@ mod tests {
         assert_eq!(entry["permission"]["*"], "allow");
         assert_eq!(entry["permission"]["bash"], "ask");
         assert_eq!(entry["permission"]["skill"], "deny");
+    }
+
+    #[test]
+    fn permission_forces_question_deny_and_preserves_other_custom_permissions() {
+        // WHY: question requires an unsupported interactive reply protocol; user
+        // configuration must not re-enable it, while unrelated restrictions remain intact.
+        let role = make_role(
+            "r1",
+            "PM",
+            "goal",
+            "active",
+            r#"{"permissions":{"*":"allow","question":"allow","bash":"ask","write":"deny"}}"#,
+        );
+        let entry = AgentConfigService::build_agent_entry(&role);
+        assert_eq!(entry["permission"]["question"], "deny");
+        assert_eq!(entry["permission"]["bash"], "ask");
+        assert_eq!(entry["permission"]["write"], "deny");
+    }
+
+    #[test]
+    fn permission_defaults_to_allow_except_unsupported_tools_for_invalid_config() {
+        // WHY: malformed legacy configuration must fail safe without exposing
+        // interactive tools that EgoSync cannot complete.
+        let role = make_role("r1", "PM", "goal", "active", "not-json");
+        let entry = AgentConfigService::build_agent_entry(&role);
+        assert_eq!(
+            entry["permission"],
+            json!({ "*": "allow", "skill": "deny", "question": "deny" })
+        );
     }
 
     #[test]
@@ -1104,6 +1140,19 @@ mod tests {
     }
 
     #[test]
+    fn build_agent_entry_requires_plain_message_confirmation() {
+        // WHY: a role that needs clarification must end its turn so the normal
+        // chat input remains usable instead of entering an unrecoverable tool wait.
+        let role = active_role("r1", "PM", "goal");
+        let entry = AgentConfigService::build_agent_entry(&role);
+        let prompt = entry["prompt"].as_str().unwrap();
+        assert!(prompt.contains("用普通消息清楚列出问题和可选项"));
+        assert!(prompt.contains("结束本轮回复"));
+        assert!(prompt.contains("等待用户的下一条消息"));
+        assert!(prompt.contains("不要调用 question 工具"));
+    }
+
+    #[test]
     fn build_agent_entry_includes_enabled_custom_skill_ids() {
         let role = make_role(
             "r1",
@@ -1178,7 +1227,35 @@ mod tests {
         assert!(!prompt.contains("skill-creator"));
         assert!(prompt.contains("已启用"));
         assert!(!prompt.contains("未启用"));
-        assert_eq!(entry["permission"], json!({ "*": "allow", "skill": "deny" }));
+        assert!(prompt.contains("用普通消息清楚列出问题和可选项"));
+        assert!(prompt.contains("结束本轮回复"));
+        assert!(prompt.contains("等待用户的下一条消息"));
+        assert!(prompt.contains("不要调用 question 工具"));
+        assert_eq!(
+            entry["permission"],
+            json!({ "*": "allow", "skill": "deny", "question": "deny" })
+        );
+    }
+
+    #[test]
+    fn build_butler_entry_requires_plain_message_confirmation() {
+        // WHY: Butler clarification must remain a normal completed chat turn,
+        // even when other prompt sections change or have independent regressions.
+        let entry = AgentConfigService::build_butler_entry_with_skills(
+            &ButlerSkillsConfig {
+                find_skills: false,
+                skill_creator: false,
+                enabled_skill_ids: vec!["skill-1".to_string()],
+            },
+            &[custom_skill("skill-1", "daily-review", "日复盘助手")],
+        );
+        let prompt = entry["prompt"].as_str().unwrap();
+        assert!(prompt.contains("daily-review"));
+        assert!(prompt.contains("用普通消息清楚列出问题和可选项"));
+        assert!(prompt.contains("结束本轮回复"));
+        assert!(prompt.contains("等待用户的下一条消息"));
+        assert!(prompt.contains("不要调用 question 工具"));
+        assert!(prompt.ends_with(PLAIN_MESSAGE_CONFIRMATION_RULE));
     }
 
     #[test]
@@ -1219,7 +1296,10 @@ mod tests {
         assert!(prompt.contains("日复盘助手"));
         assert!(prompt.contains("不要调用或列出外部环境中的其它 Skill"));
         assert!(!prompt.contains("ghost-id"));
-        assert_eq!(config["agent"]["butler"]["permission"], json!({ "*": "allow", "skill": "deny" }));
+        assert_eq!(
+            config["agent"]["butler"]["permission"],
+            json!({ "*": "allow", "skill": "deny", "question": "deny" })
+        );
     }
 
     #[test]
@@ -1234,7 +1314,7 @@ mod tests {
         assert!(!prompt.contains("skill-creator"));
         assert_eq!(
             entry["permission"],
-            json!({ "*": "allow", "skill": "deny" })
+            json!({ "*": "allow", "skill": "deny", "question": "deny" })
         );
     }
 
@@ -1335,6 +1415,7 @@ mod tests {
         assert_eq!(config["agent"]["butler"]["mode"], "primary");
         assert_eq!(config["agent"]["butler"]["permission"]["*"], "allow");
         assert_eq!(config["agent"]["butler"]["permission"]["skill"], "deny");
+        assert_eq!(config["agent"]["butler"]["permission"]["question"], "deny");
     }
 
     #[test]

@@ -113,11 +113,22 @@ impl DelegateBridge {
                 butler_user_message_id: butler_user_message_id.to_string(),
             },
         );
+        tracing::info!(
+            session_id,
+            registered_sessions = sessions.len(),
+            "[stage-b-diag] delegate context registered"
+        );
     }
 
     pub async fn unregister_session(&self, session_id: &str) {
         let mut sessions = self.sessions.lock().await;
-        sessions.remove(session_id);
+        let removed = sessions.remove(session_id).is_some();
+        tracing::info!(
+            session_id,
+            removed,
+            registered_sessions = sessions.len(),
+            "[stage-b-diag] delegate context unregistered"
+        );
     }
 
     async fn create_task(&self, req: CreateTaskRequest) -> TaskActionResponse {

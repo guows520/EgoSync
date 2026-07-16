@@ -2170,11 +2170,12 @@ async fn try_run_opencode_stream(
             .register_session(&session_id, user_message_id)
             .await;
     }
-    tracing::debug!(
+    tracing::info!(
         session_id,
         ?role_id,
         conversation_id,
-        "stream session resolved"
+        delegation_session_registered,
+        "[stage-b-diag] stream session resolved"
     );
 
     // Subscribe BEFORE triggering the prompt so we don't miss early events.

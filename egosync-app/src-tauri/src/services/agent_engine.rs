@@ -1067,6 +1067,119 @@ const BUTLER_MEMORY_TOTAL_CHARS: usize = 3000;
 const TASK_CONTEXT_VISIBLE_LIMIT: usize = 50;
 const TASK_CONTEXT_TITLE_CHARS: usize = 80;
 
+const MISSION_VALUE_BASIS_RULES: &str = "\
+[使命与价值观依据]\n\
+- 回答用户的身份、价值观或长期优先级问题时，用户明确设定的使命宣言是第一依据，行为资料只能作为佐证。\n\
+- 如果行为资料与使命宣言不一致，应指出行为可能偏离使命或与使命存在冲突，不得用行为推断覆盖或改写用户明确设定的使命。";
+
+fn format_structured_mission(content: &str) -> Result<Option<String>, serde_json::Error> {
+    let value: serde_json::Value = serde_json::from_str(content)?;
+    let mut lines = Vec::new();
+
+    if let Some(mission) = value.get("mission").and_then(serde_json::Value::as_str) {
+        if !mission.trim().is_empty() {
+            lines.push(format!("使命：{}", mission.trim()));
+        }
+    }
+    let principle = value
+        .get("principle")
+        .or_else(|| value.get("value"))
+        .and_then(serde_json::Value::as_str);
+    if let Some(principle) = principle {
+        if !principle.trim().is_empty() {
+            lines.push(format!("原则：{}", principle.trim()));
+        }
+    }
+    if let Some(roles) = value.get("roles").and_then(serde_json::Value::as_array) {
+        let role_lines = roles
+            .iter()
+            .filter_map(|role| {
+                let name = role
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("")
+                    .trim();
+                let goal = role
+                    .get("goal")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("")
+                    .trim();
+                match (name.is_empty(), goal.is_empty()) {
+                    (false, false) => Some(format!("- {}——{}", name, goal)),
+                    (false, true) => Some(format!("- {}", name)),
+                    (true, false) => Some(format!("- {}", goal)),
+                    (true, true) => None,
+                }
+            })
+            .collect::<Vec<_>>();
+        if !role_lines.is_empty() {
+            lines.push(format!("角色目标：\n{}", role_lines.join("\n")));
+        }
+    } else {
+        let role_name = value
+            .get("role")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .trim();
+        let role_goal = value
+            .get("goal")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .trim();
+        if !role_name.is_empty() || !role_goal.is_empty() {
+            let role_line = match (role_name.is_empty(), role_goal.is_empty()) {
+                (false, false) => format!("- {}——{}", role_name, role_goal),
+                (false, true) => format!("- {}", role_name),
+                (true, false) => format!("- {}", role_goal),
+                (true, true) => unreachable!(),
+            };
+            lines.push(format!("角色目标：\n{}", role_line));
+        }
+    }
+
+    Ok((!lines.is_empty()).then(|| lines.join("\n")))
+}
+
+fn butler_values_without_mission_context() -> String {
+    format!(
+        "{}\n- 当前未设置使命宣言；只有这时才可依据行为资料推断价值观，并必须明确说明结论是基于当前行为的推断且存在不确定性。",
+        MISSION_VALUE_BASIS_RULES
+    )
+}
+
+async fn build_butler_mission_context(main_pool: &DbPool) -> Result<String, AppError> {
+    let mission = crate::db::mission::get_mission(main_pool).await?;
+    let Some(content) = mission
+        .as_ref()
+        .and_then(|mission| mission.content.as_deref())
+        .map(str::trim)
+        .filter(|content| !content.is_empty())
+    else {
+        return Ok(butler_values_without_mission_context());
+    };
+
+    let formatted = if mission
+        .as_ref()
+        .is_some_and(|mission| mission.format == "structured")
+    {
+        match format_structured_mission(content) {
+            Ok(Some(formatted)) => formatted,
+            Ok(None) => return Ok(butler_values_without_mission_context()),
+            Err(error) => {
+                tracing::warn!(%error, "使命宣言 structured 内容无法解析，保留原文注入管家上下文");
+                content.to_string()
+            }
+        }
+    } else {
+        content.to_string()
+    };
+
+    Ok(format!(
+        "{}\n[用户明确设定的使命宣言]\n{}",
+        MISSION_VALUE_BASIS_RULES, formatted
+    ))
+}
+
 fn truncate_chars(value: &str, limit: usize) -> String {
     value.chars().take(limit).collect()
 }
@@ -1329,6 +1442,10 @@ pub async fn build_butler_system_prompt(
     // 顺序固定，保证 LLM 先建立身份，再看到资源，最后被告诉怎么用资源。
     let mut system_prompt = String::from(BUTLER_SYSTEM_PROMPT);
 
+    let mission_context = build_butler_mission_context(main_pool).await?;
+    system_prompt.push_str("\n\n");
+    system_prompt.push_str(&mission_context);
+
     let butler_skills = crate::services::butler_config::get_butler_skills(main_pool)
         .await
         .unwrap_or_else(|e| {
@@ -1464,6 +1581,10 @@ pub async fn build_butler_dynamic_prompt(
     main_pool: &DbPool,
 ) -> Result<String, AppError> {
     let mut dynamic_prompt = String::new();
+
+    let mission_context = build_butler_mission_context(main_pool).await?;
+    dynamic_prompt.push_str("\n\n");
+    dynamic_prompt.push_str(&mission_context);
 
     let active_roles = crate::db::roles::list_active_roles(main_pool).await?;
     if !active_roles.is_empty() {
@@ -5822,6 +5943,10 @@ mod tests {
             .execute(&pool)
             .await
             .expect("failed to apply task owner scope migration");
+        sqlx::raw_sql(include_str!("../../migrations/020_mission.sql"))
+            .execute(&pool)
+            .await
+            .expect("failed to create mission table");
         sqlx::raw_sql(include_str!(
             "../../migrations/027_task_decomposition_proposals.sql"
         ))
@@ -6721,6 +6846,152 @@ mod tests {
         assert!(dynamic_prompt.contains("完成或删除已有任务时不得调用 delegate_to_role"));
         assert!(prompt.contains("已完成、已提交或已做完，也视为完成操作"));
         assert!(dynamic_prompt.contains("已完成、已提交或已做完，也视为完成操作"));
+    }
+
+    #[tokio::test]
+    async fn test_butler_prompts_mark_behavior_only_values_as_uncertain_inference() {
+        let main_pool = setup_test_main_pool().await;
+        let conv_pool = setup_test_conv_pool().await;
+
+        let system_prompt = build_butler_system_prompt(&conv_pool, &main_pool)
+            .await
+            .unwrap();
+        let dynamic_prompt = build_butler_dynamic_prompt(&conv_pool, &main_pool)
+            .await
+            .unwrap();
+
+        for prompt in [&system_prompt, &dynamic_prompt] {
+            assert!(prompt.contains("当前未设置使命宣言"));
+            assert!(prompt.contains("基于当前行为的推断且存在不确定性"));
+            assert!(!prompt.contains("[用户明确设定的使命宣言]"));
+        }
+
+        crate::db::mission::upsert_mission(&main_pool, Some("{}"), "structured")
+            .await
+            .unwrap();
+        let empty_structured_context = build_butler_mission_context(&main_pool).await.unwrap();
+        assert!(empty_structured_context.contains("当前未设置使命宣言"));
+        assert!(!empty_structured_context.contains("[用户明确设定的使命宣言]"));
+    }
+
+    #[tokio::test]
+    async fn test_butler_prompts_prioritize_free_mission_over_behavior() {
+        let main_pool = setup_test_main_pool().await;
+        let conv_pool = setup_test_conv_pool().await;
+        crate::db::mission::upsert_mission(
+            &main_pool,
+            Some("通过持续创造，让更多普通人获得成长机会。"),
+            "free",
+        )
+        .await
+        .unwrap();
+
+        let system_prompt = build_butler_system_prompt(&conv_pool, &main_pool)
+            .await
+            .unwrap();
+        let dynamic_prompt = build_butler_dynamic_prompt(&conv_pool, &main_pool)
+            .await
+            .unwrap();
+
+        for prompt in [&system_prompt, &dynamic_prompt] {
+            assert!(prompt.contains("通过持续创造，让更多普通人获得成长机会。"));
+            assert!(prompt.contains("用户明确设定的使命宣言是第一依据"));
+            assert!(prompt.contains("行为资料只能作为佐证"));
+            assert!(prompt.contains("行为可能偏离使命或与使命存在冲突"));
+            assert!(prompt.contains("不得用行为推断覆盖或改写"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_butler_prompts_render_structured_mission_as_readable_sections() {
+        let main_pool = setup_test_main_pool().await;
+        let conv_pool = setup_test_conv_pool().await;
+        let content = serde_json::json!({
+            "mission": "帮助身边的人活得更从容",
+            "principle": "诚实并持续学习",
+            "roles": [
+                { "name": "父亲", "goal": "陪伴孩子独立成长" },
+                { "name": "创造者", "goal": "做长期有益的产品" }
+            ]
+        })
+        .to_string();
+        crate::db::mission::upsert_mission(&main_pool, Some(&content), "structured")
+            .await
+            .unwrap();
+
+        let system_prompt = build_butler_system_prompt(&conv_pool, &main_pool)
+            .await
+            .unwrap();
+        let dynamic_prompt = build_butler_dynamic_prompt(&conv_pool, &main_pool)
+            .await
+            .unwrap();
+
+        for prompt in [&system_prompt, &dynamic_prompt] {
+            assert!(prompt.contains("使命：帮助身边的人活得更从容"));
+            assert!(prompt.contains("原则：诚实并持续学习"));
+            assert!(prompt.contains("角色目标：\n- 父亲——陪伴孩子独立成长"));
+            assert!(prompt.contains("- 创造者——做长期有益的产品"));
+            assert!(!prompt.contains("\"mission\""));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_butler_prompts_render_legacy_structured_mission_as_readable_sections() {
+        let main_pool = setup_test_main_pool().await;
+        let conv_pool = setup_test_conv_pool().await;
+        let content = serde_json::json!({
+            "role": "父亲",
+            "value": "诚实并持续学习",
+            "goal": "陪伴孩子独立成长"
+        })
+        .to_string();
+        crate::db::mission::upsert_mission(&main_pool, Some(&content), "structured")
+            .await
+            .unwrap();
+
+        let system_prompt = build_butler_system_prompt(&conv_pool, &main_pool)
+            .await
+            .unwrap();
+        let dynamic_prompt = build_butler_dynamic_prompt(&conv_pool, &main_pool)
+            .await
+            .unwrap();
+
+        for prompt in [&system_prompt, &dynamic_prompt] {
+            assert!(prompt.contains("原则：诚实并持续学习"));
+            assert!(prompt.contains("角色目标：\n- 父亲——陪伴孩子独立成长"));
+            assert!(!prompt.contains("\"role\""));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_structured_mission_parse_failure_preserves_original_content() {
+        let main_pool = setup_test_main_pool().await;
+        crate::db::mission::upsert_mission(
+            &main_pool,
+            Some("这不是合法 JSON，但仍是用户明确写下的使命"),
+            "structured",
+        )
+        .await
+        .unwrap();
+
+        let context = build_butler_mission_context(&main_pool).await.unwrap();
+
+        assert!(context.contains("这不是合法 JSON，但仍是用户明确写下的使命"));
+        assert!(context.contains("用户明确设定的使命宣言是第一依据"));
+    }
+
+    #[tokio::test]
+    async fn test_butler_prompt_builders_fail_when_mission_query_fails() {
+        let conv_pool = setup_test_conv_pool().await;
+        let system_main_pool = setup_test_main_pool().await;
+        system_main_pool.close().await;
+        let system_result = build_butler_system_prompt(&conv_pool, &system_main_pool).await;
+        assert!(matches!(system_result, Err(AppError::DbError(_))));
+
+        let dynamic_main_pool = setup_test_main_pool().await;
+        dynamic_main_pool.close().await;
+        let dynamic_result = build_butler_dynamic_prompt(&conv_pool, &dynamic_main_pool).await;
+        assert!(matches!(dynamic_result, Err(AppError::DbError(_))));
     }
 
     #[tokio::test]

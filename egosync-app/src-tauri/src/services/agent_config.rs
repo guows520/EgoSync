@@ -144,16 +144,13 @@ export default tool({
 const TOOL_CREATE_TASK: &str = r#"import { tool } from "@opencode-ai/plugin"
 
 export default tool({
-  description: "为指定角色创建一条新任务。当用户在对话中要求创建任务、安排待办、添加日程时调用。任务创建后默认放入 Q2（重要不紧急），后台会自动分类。",
+  description: "创建一条新任务。角色直聊时任务自动归属当前角色，无需提供角色ID；管家为指定角色创建时才提供角色ID。任务创建后默认放入 Q2（重要不紧急），后台会自动分类。",
   args: {
-    role_id: tool.schema.string().describe("目标角色的ID（必须是系统prompt中列出的角色ID之一）"),
+    role_id: tool.schema.string().optional().describe("目标角色的ID。仅管家跨角色创建时提供，必须是系统prompt中列出的角色ID之一；角色直聊时不要提供"),
     title: tool.schema.string().describe("任务标题，简洁描述要做什么，5-40字"),
     deadline: tool.schema.string().optional().describe("截止日期，格式 YYYY-MM-DD。如果没有明确截止时间则不传"),
   },
   async execute(args, context) {
-    if (!args.role_id || args.role_id.trim().length === 0) {
-      return "错误：缺少必需参数 role_id"
-    }
     if (!args.title || args.title.trim().length === 0) {
       return "错误：缺少必需参数 title"
     }
@@ -170,7 +167,8 @@ export default tool({
           "Authorization": `Bearer ${token}`,
         },
         body: JSON.stringify({
-          role_id: args.role_id.trim(),
+          sessionId: context.sessionID,
+          roleId: args.role_id?.trim() || undefined,
           title: args.title.trim(),
           deadline: args.deadline?.trim() || undefined,
         }),
@@ -1270,6 +1268,16 @@ mod tests {
         assert!(prompt.contains("完成或删除已有任务时不得调用 delegate_to_role"));
         assert!(prompt.contains("已完成、已提交或已做完，也视为完成操作"));
         assert!(prompt.contains("create_task / complete_task / delete_task"));
+    }
+
+    #[test]
+    fn create_task_tool_uses_session_context_and_optional_role_id() {
+        // WHY: role chat already has a trusted server-side owner, so the model must
+        // never be forced to guess an internal role UUID in order to create a task.
+        assert!(TOOL_CREATE_TASK.contains("role_id: tool.schema.string().optional()"));
+        assert!(TOOL_CREATE_TASK.contains("sessionId: context.sessionID"));
+        assert!(TOOL_CREATE_TASK.contains("roleId: args.role_id?.trim()"));
+        assert!(!TOOL_CREATE_TASK.contains("缺少必需参数 role_id"));
     }
 
     #[test]

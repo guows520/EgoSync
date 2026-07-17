@@ -35,8 +35,9 @@ pub struct DelegateBridge {
 }
 
 #[derive(Clone)]
-struct DelegateSessionContext {
-    butler_user_message_id: String,
+enum DelegateSessionContext {
+    Butler { butler_user_message_id: String },
+    Role { role_id: String },
 }
 
 #[derive(Deserialize)]
@@ -55,8 +56,11 @@ struct DelegateResponse {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct CreateTaskRequest {
-    role_id: String,
+    session_id: String,
+    #[serde(default)]
+    role_id: Option<String>,
     title: String,
     #[serde(default)]
     deadline: Option<String>,
@@ -109,7 +113,7 @@ impl DelegateBridge {
         let mut sessions = self.sessions.lock().await;
         sessions.insert(
             session_id.to_string(),
-            DelegateSessionContext {
+            DelegateSessionContext::Butler {
                 butler_user_message_id: butler_user_message_id.to_string(),
             },
         );
@@ -118,6 +122,15 @@ impl DelegateBridge {
             registered_sessions = sessions.len(),
             "[stage-b-diag] delegate context registered"
         );
+    }
+
+    pub async fn register_role_session(&self, session_id: &str, role_id: &str) {
+        let mut sessions = self.sessions.lock().await;
+        sessions.insert(
+            session_id.to_string(),
+            DelegateSessionContext::Role { role_id: role_id.to_string() },
+        );
+        tracing::info!(session_id, role_id, registered_sessions = sessions.len(), "role task context registered");
     }
 
     pub async fn unregister_session(&self, session_id: &str) {
@@ -132,12 +145,12 @@ impl DelegateBridge {
     }
 
     async fn create_task(&self, req: CreateTaskRequest) -> TaskActionResponse {
-        let role_id = req.role_id.trim();
+        let session_id = req.session_id.trim();
         let title = req.title.trim();
-        if role_id.is_empty() {
+        if session_id.is_empty() {
             return TaskActionResponse {
                 status: "bad_request".to_string(),
-                message: "缺少角色ID。".to_string(),
+                message: "未找到当前会话上下文，请稍后重试。".to_string(),
                 task_id: None,
             };
         }
@@ -149,9 +162,55 @@ impl DelegateBridge {
             };
         }
 
+        let session = {
+            let sessions = self.sessions.lock().await;
+            sessions.get(session_id).cloned()
+        };
+        let Some(session) = session else {
+            return TaskActionResponse {
+                status: "session_not_found".to_string(),
+                message: "未找到当前会话上下文，请稍后重试。".to_string(),
+                task_id: None,
+            };
+        };
+        let requested_role_id = req.role_id.as_deref().map(str::trim).filter(|id| !id.is_empty());
+        let role_id = match session {
+            DelegateSessionContext::Role { role_id } => {
+                tracing::info!(session_id, bound_role_id = %role_id, requested_role_id = ?requested_role_id, "role task owner resolved from session context");
+                role_id
+            }
+            DelegateSessionContext::Butler { .. } => match requested_role_id {
+                Some(role_id) => role_id.to_string(),
+                None => return TaskActionResponse {
+                    status: "bad_request".to_string(),
+                    message: "管家创建角色任务时必须指定目标角色。".to_string(),
+                    task_id: None,
+                },
+            },
+        };
+        let role_available = match db::roles::get_role(&self.main_pool, &role_id).await {
+            Ok(role) => role.status == "active",
+            Err(AppError::NotFound(_)) => false,
+            Err(error) => {
+                tracing::warn!(role_id = %role_id, error = %error, "failed to validate task owner role");
+                return TaskActionResponse {
+                    status: "error".to_string(),
+                    message: "验证目标角色失败，请稍后重试。".to_string(),
+                    task_id: None,
+                };
+            }
+        };
+        if !role_available {
+            return TaskActionResponse {
+                status: "role_not_found".to_string(),
+                message: "目标角色不存在或已不可用。".to_string(),
+                task_id: None,
+            };
+        }
+
         let input = CreateTaskInput {
             owner_type: Some(TaskOwnerType::Role),
-            role_id: Some(role_id.to_string()),
+            role_id: Some(role_id.clone()),
             title: title.to_string(),
             deadline: req.deadline.as_deref().map(|s| s.trim()).filter(|s| !s.is_empty()).map(|s| s.to_string()),
             quadrant: None,
@@ -338,10 +397,16 @@ impl DelegateBridge {
             }
         };
         tracing::info!("[bridge] calling execute_delegate_to_role: role_id={}", target_role_id);
+        let DelegateSessionContext::Butler { butler_user_message_id } = session else {
+            return DelegateResponse {
+                status: "bad_request".to_string(),
+                role_response: "委派失败：角色会话不能发起跨角色委派。".to_string(),
+            };
+        };
         let source_conversation_id = sqlx::query_scalar::<_, String>(
             "SELECT conversation_id FROM messages WHERE id = ?1",
         )
-        .bind(&session.butler_user_message_id)
+        .bind(&butler_user_message_id)
         .fetch_optional(&*self.conv_pool)
         .await
         .ok()
@@ -376,7 +441,7 @@ impl DelegateBridge {
         let _metadata_guard = self.metadata_lock.lock().await;
         crate::services::agent_engine::append_delegation_metadata(
             &self.conv_pool,
-            &session.butler_user_message_id,
+            &butler_user_message_id,
             &record,
         )
         .await;
@@ -661,6 +726,23 @@ fn json_response<T: Serialize>(status: u16, reason: &str, value: &T) -> String {
 mod tests {
     use super::*;
 
+    async fn test_bridge() -> (DelegateBridge, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let main = crate::db::pool::init_db(&dir.path().join("main.db")).await.unwrap();
+        let conv = crate::db::pool::init_conversations_db(&dir.path().join("conv.db")).await.unwrap();
+        (DelegateBridge::new(main, conv, "token".into(), None), dir)
+    }
+
+    async fn test_role(bridge: &DelegateBridge, name: &str) -> String {
+        crate::db::roles::create_role(&bridge.main_pool, &crate::models::role::CreateRoleInput {
+            name: name.into(), icon: None, color: None, goal: None,
+        }).await.unwrap().id
+    }
+
+    fn task_request(session_id: &str, role_id: Option<String>, title: &str) -> CreateTaskRequest {
+        CreateTaskRequest { session_id: session_id.into(), role_id, title: title.into(), deadline: None }
+    }
+
     #[test]
     fn parse_content_length_accepts_case_insensitive_header() {
         let headers = "POST /delegate-to-role HTTP/1.1\r\ncontent-length: 42\r\n\r\n";
@@ -734,5 +816,66 @@ mod tests {
     fn find_header_end_returns_body_start() {
         let request = b"POST / HTTP/1.1\r\nContent-Length: 2\r\n\r\n{}";
         assert_eq!(find_header_end(request), Some(38));
+    }
+
+    #[test]
+    fn create_task_request_accepts_camel_case_tool_payload() {
+        // WHY: the opencode custom tool and Rust bridge must share the public
+        // camelCase JSON contract or valid role-chat requests fail at decoding.
+        let request: CreateTaskRequest = serde_json::from_value(serde_json::json!({
+            "sessionId": "role-session",
+            "roleId": "role-1",
+            "title": "家长会"
+        }))
+        .unwrap();
+        assert_eq!(request.session_id, "role-session");
+        assert_eq!(request.role_id.as_deref(), Some("role-1"));
+    }
+
+    #[tokio::test]
+    async fn role_sessions_ignore_spoofed_owner_and_do_not_cross() {
+        // WHY: role identity is trusted session state, never model-controlled input.
+        let (bridge, _dir) = test_bridge().await;
+        let family = test_role(&bridge, "家庭").await;
+        let work = test_role(&bridge, "工作").await;
+        bridge.register_role_session("family-session", &family).await;
+        bridge.register_role_session("work-session", &work).await;
+
+        assert_eq!(bridge.create_task(task_request("family-session", Some(work.clone()), "家长会")).await.status, "ok");
+        assert_eq!(bridge.create_task(task_request("work-session", None, "项目周报")).await.status, "ok");
+        let owners: Vec<String> = sqlx::query_scalar("SELECT role_id FROM tasks ORDER BY title")
+            .fetch_all(&bridge.main_pool).await.unwrap();
+        assert_eq!(owners, vec![family, work]);
+    }
+
+    #[tokio::test]
+    async fn butler_keeps_explicit_role_creation() {
+        let (bridge, _dir) = test_bridge().await;
+        let family = test_role(&bridge, "家庭").await;
+        bridge.register_session("butler-session", "message-1").await;
+        let response = bridge.create_task(task_request("butler-session", Some(family.clone()), "家长会")).await;
+        assert_eq!(response.status, "ok");
+        let owner: String = sqlx::query_scalar("SELECT role_id FROM tasks WHERE id = ?1")
+            .bind(response.task_id.unwrap()).fetch_one(&bridge.main_pool).await.unwrap();
+        assert_eq!(owner, family);
+    }
+
+    #[tokio::test]
+    async fn unknown_session_and_deleted_role_create_no_tasks() {
+        let (bridge, _dir) = test_bridge().await;
+        let family = test_role(&bridge, "家庭").await;
+        let missing = bridge.create_task(task_request("missing", Some(family.clone()), "家长会")).await;
+        assert_eq!(missing.status, "session_not_found");
+        assert!(missing.message.contains("未找到当前会话上下文"));
+
+        bridge.register_role_session("family-session", &family).await;
+        sqlx::query("DELETE FROM roles WHERE id = ?1").bind(&family)
+            .execute(&bridge.main_pool).await.unwrap();
+        let deleted = bridge.create_task(task_request("family-session", None, "家长会")).await;
+        assert_eq!(deleted.status, "role_not_found");
+        assert_eq!(deleted.message, "目标角色不存在或已不可用。");
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tasks")
+            .fetch_one(&bridge.main_pool).await.unwrap();
+        assert_eq!(count, 0);
     }
 }

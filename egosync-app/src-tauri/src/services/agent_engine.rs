@@ -2167,23 +2167,6 @@ async fn try_run_opencode_stream(
             }
         }
     };
-    let delegation_session_registered = role_id.is_none() && !user_message_id.is_empty();
-    if delegation_session_registered {
-        delegate_bridge
-            .register_session(&session_id, user_message_id)
-            .await;
-    }
-    tracing::info!(
-        session_id,
-        ?role_id,
-        conversation_id,
-        delegation_session_registered,
-        "[stage-b-diag] stream session resolved"
-    );
-
-    // Subscribe BEFORE triggering the prompt so we don't miss early events.
-    let mut event_rx = event_router.subscribe(&session_id).await;
-
     // Build the message content — inject full system prompt prefix.
     // For butler: includes role roster + emergence instructions (same as direct-LLM path).
     // For roles: includes the role's personality/goal prompt.
@@ -2207,6 +2190,28 @@ async fn try_run_opencode_stream(
             format!("[动态上下文]\n{}\n---\n{}", dynamic_prompt, user_message)
         }
     };
+
+    let bridge_session_registered = if let Some(role_id) = role_id {
+        delegate_bridge.register_role_session(&session_id, role_id).await;
+        true
+    } else if !user_message_id.is_empty() {
+        delegate_bridge
+            .register_session(&session_id, user_message_id)
+            .await;
+        true
+    } else {
+        false
+    };
+    tracing::info!(
+        session_id,
+        ?role_id,
+        conversation_id,
+        bridge_session_registered,
+        "[stage-b-diag] stream session resolved"
+    );
+
+    // Subscribe BEFORE triggering the prompt so we don't miss early events.
+    let mut event_rx = event_router.subscribe(&session_id).await;
 
     // 诊断日志：打印实际发送给 opencode 的完整 content
     tracing::info!(
@@ -2274,7 +2279,7 @@ async fn try_run_opencode_stream(
             biased;
             _ = cancel_token.cancelled() => {
                 event_router.unsubscribe(&session_id).await;
-                if delegation_session_registered {
+                if bridge_session_registered {
                     delegate_bridge.unregister_session(&session_id).await;
                 }
                 if final_message_id.is_some() {
@@ -2448,7 +2453,7 @@ async fn try_run_opencode_stream(
                                         McpSessionRetryDecision::RefreshRuntimeAndRetry
                                     ) {
                                         event_router.unsubscribe(&session_id).await;
-                                        if delegation_session_registered {
+                                        if bridge_session_registered {
                                             delegate_bridge.unregister_session(&session_id).await;
                                         }
                                         return Err(OpencodeStreamAttemptError::InvalidMcpSession);
@@ -2580,7 +2585,7 @@ async fn try_run_opencode_stream(
                 let should_drain = match send_done {
                     Ok(Err(e)) => {
                         event_router.unsubscribe(&session_id).await;
-                        if delegation_session_registered {
+                        if bridge_session_registered {
                             delegate_bridge.unregister_session(&session_id).await;
                         }
                         if accumulated_text.is_empty() && final_text.is_empty() {
@@ -2623,7 +2628,7 @@ async fn try_run_opencode_stream(
     }
 
     event_router.unsubscribe(&session_id).await;
-    if delegation_session_registered {
+    if bridge_session_registered {
         delegate_bridge.unregister_session(&session_id).await;
     }
 

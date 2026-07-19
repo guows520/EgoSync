@@ -108,6 +108,20 @@ pub fn run() {
                 services::agent_config::AgentConfigService::new(opencode_config_path);
             {
                 let pool_ref: &sqlx::SqlitePool = app.state::<db::pool::DbPool>().inner();
+                let managed_skills_root = opencode_workspace_dir.join(".opencode").join("skills");
+                let managed_skills_ready = match tauri::async_runtime::block_on(async {
+                    services::skill_registry::migrate_legacy_managed_paths(
+                        pool_ref,
+                        &managed_skills_root,
+                    )
+                    .await
+                }) {
+                    Ok(()) => true,
+                    Err(e) => {
+                        tracing::warn!("迁移 legacy Skill 受控路径失败（相关 Skill 保持禁用）: {}", e);
+                        false
+                    }
+                };
                 let all_roles = tauri::async_runtime::block_on(async {
                     db::roles::list_all_roles(pool_ref).await
                 });
@@ -118,13 +132,15 @@ pub fn run() {
                     tracing::warn!("Failed to load butler Skill config: {}", e);
                     services::butler_config::default_butler_skills()
                 });
-                let skill_registry = tauri::async_runtime::block_on(async {
-                    db::skills::list_skills(pool_ref).await
-                })
-                .unwrap_or_else(|e| {
-                    tracing::warn!("Failed to load Skill registry for opencode sync: {}", e);
+                let skill_registry = if managed_skills_ready {
+                    tauri::async_runtime::block_on(async { db::skills::list_skills(pool_ref).await })
+                        .unwrap_or_else(|e| {
+                            tracing::warn!("Failed to load Skill registry for opencode sync: {}", e);
+                            Vec::new()
+                        })
+                } else {
                     Vec::new()
-                });
+                };
                 let role_mcp_prompts = tauri::async_runtime::block_on(async {
                     services::mcp_server::role_mcp_prompt_map(pool_ref).await
                 })

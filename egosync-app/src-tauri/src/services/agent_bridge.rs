@@ -78,6 +78,23 @@ impl AgentBridge {
             .map_err(|e| AppError::SidecarError(format!("get_messages parse failed: {}", e)))
     }
 
+    /// Fork a session so the next turn reloads agent permissions and Skills
+    /// while retaining the existing OpenCode message history.
+    pub async fn fork_session(&self, session_id: &str) -> Result<SessionInfo, AppError> {
+        let url = format!("{}/session/{}/fork", self.base_url, session_id);
+        let resp = self
+            .http_client
+            .post(&url)
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .map_err(|e| AppError::SidecarError(format!("fork_session request failed: {}", e)))?;
+        let resp = Self::ensure_success_with_body(resp).await?;
+        resp.json::<SessionInfo>()
+            .await
+            .map_err(|e| AppError::SidecarError(format!("fork_session parse failed: {}", e)))
+    }
+
     /// Abort / cancel a running session.
     pub async fn abort_session(&self, session_id: &str) -> Result<(), AppError> {
         let url = format!("{}/session/{}/abort", self.base_url, session_id);

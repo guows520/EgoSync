@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -11,10 +11,13 @@ use tokio_util::sync::CancellationToken;
 use crate::db::pool::{ConversationsPool, DbPool};
 use crate::db;
 use crate::error::AppError;
+use crate::models::skill::{ImportCustomSkillInput, PreviewCustomSkillInput, SkillRoleScope, BUTLER_SCOPE_ID};
 use crate::models::task::{CreateTaskInput, TaskOwnerType};
-use tauri::{AppHandle, Emitter};
+use crate::services::agent_config::AgentConfigService;
+use tauri::{AppHandle, Emitter, Manager};
 
-const MAX_BODY_BYTES: usize = 16 * 1024;
+const DEFAULT_MAX_BODY_BYTES: usize = 16 * 1024;
+const SKILL_MAX_BODY_BYTES: usize = 128 * 1024;
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
 const DELEGATION_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_CONCURRENT_DELEGATIONS: usize = 2;
@@ -28,6 +31,8 @@ pub struct DelegateBridge {
     conv_pool: ConversationsPool,
     sessions: Arc<Mutex<HashMap<String, DelegateSessionContext>>>,
     metadata_lock: Arc<Mutex<()>>,
+    skill_creation_lock: Arc<Mutex<()>>,
+    session_rollovers: Arc<Mutex<HashSet<String>>>,
     delegation_limit: Arc<Semaphore>,
     connection_limit: Arc<Semaphore>,
     token: String,
@@ -84,6 +89,24 @@ struct TaskActionResponse {
     task_id: Option<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateSkillRequest {
+    session_id: String,
+    content: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateSkillResponse {
+    status: String,
+    message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    skill_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    skill_name: Option<String>,
+}
+
 struct HttpRequest {
     method: String,
     path: String,
@@ -98,6 +121,8 @@ impl DelegateBridge {
             conv_pool,
             sessions: Arc::new(Mutex::new(HashMap::new())),
             metadata_lock: Arc::new(Mutex::new(())),
+            skill_creation_lock: Arc::new(Mutex::new(())),
+            session_rollovers: Arc::new(Mutex::new(HashSet::new())),
             delegation_limit: Arc::new(Semaphore::new(MAX_CONCURRENT_DELEGATIONS)),
             connection_limit: Arc::new(Semaphore::new(MAX_CONCURRENT_CONNECTIONS)),
             token,
@@ -142,6 +167,241 @@ impl DelegateBridge {
             registered_sessions = sessions.len(),
             "[stage-b-diag] delegate context unregistered"
         );
+    }
+
+    pub async fn take_session_rollover(&self, session_id: &str) -> bool {
+        self.session_rollovers.lock().await.remove(session_id)
+    }
+
+    async fn create_skill(&self, req: CreateSkillRequest) -> CreateSkillResponse {
+        let session_id = req.session_id.trim();
+        let content = req.content.trim();
+        if session_id.is_empty() || content.is_empty() {
+            return CreateSkillResponse {
+                status: "bad_request".to_string(),
+                message: "创建 Skill 失败：缺少当前会话或完整 SKILL.md 内容。".to_string(),
+                skill_id: None,
+                skill_name: None,
+            };
+        }
+
+        let session = {
+            let sessions = self.sessions.lock().await;
+            sessions.get(session_id).cloned()
+        };
+        let Some(session) = session else {
+            return CreateSkillResponse {
+                status: "session_not_found".to_string(),
+                message: "创建 Skill 失败：未找到当前会话上下文，请稍后重试。".to_string(),
+                skill_id: None,
+                skill_name: None,
+            };
+        };
+        let owner_id = match &session {
+            DelegateSessionContext::Role { role_id } => role_id.as_str(),
+            DelegateSessionContext::Butler { .. } => BUTLER_SCOPE_ID,
+        };
+
+        let Some(app_handle) = self.app_handle.as_ref() else {
+            return CreateSkillResponse {
+                status: "runtime_unavailable".to_string(),
+                message: "创建 Skill 失败：应用运行时不可用。".to_string(),
+                skill_id: None,
+                skill_name: None,
+            };
+        };
+        let Some(agent_config) = app_handle.try_state::<AgentConfigService>() else {
+            return CreateSkillResponse {
+                status: "runtime_unavailable".to_string(),
+                message: "创建 Skill 失败：Agent 配置服务不可用。".to_string(),
+                skill_id: None,
+                skill_name: None,
+            };
+        };
+
+        let enabled = match &session {
+            DelegateSessionContext::Role { role_id } => crate::db::roles::get_role(&self.main_pool, role_id)
+                .await
+                .map(|role| crate::services::role_config::skill_enabled(&role.skills_config, crate::services::role_config::SKILL_CREATOR_KEY))
+                .unwrap_or(false),
+            DelegateSessionContext::Butler { .. } => crate::services::butler_config::get_butler_skills(&self.main_pool)
+                .await
+                .map(|skills| skills.skill_creator)
+                .unwrap_or(false),
+        };
+        if !enabled {
+            return CreateSkillResponse {
+                status: "forbidden".to_string(),
+                message: "创建 Skill 失败：当前角色未启用 skill-creator。".to_string(),
+                skill_id: None,
+                skill_name: None,
+            };
+        }
+
+        // Serialize create operations so two concurrent requests cannot race
+        // while writing the same OpenCode discovery directory.
+        let _creation_guard = self.skill_creation_lock.lock().await;
+
+        let preview = match crate::services::skill_registry::preview_custom_skill(
+            &self.main_pool,
+            &PreviewCustomSkillInput { content: Some(content.to_string()) },
+        )
+        .await
+        {
+            Ok(preview) => preview,
+            Err(error) => return CreateSkillResponse {
+                status: "validation_error".to_string(),
+                message: format!("创建 Skill 失败：{}", error),
+                skill_id: None,
+                skill_name: None,
+            },
+        };
+        let existing_id = preview.duplicate.as_ref().map(|duplicate| duplicate.existing.id.clone());
+        if let Some(duplicate) = preview.duplicate.as_ref() {
+            if duplicate.existing.name != preview.name
+                || duplicate.existing.content_hash != preview.content_hash
+            {
+                return CreateSkillResponse {
+                    status: "conflict".to_string(),
+                    message: "创建 Skill 失败：同名或同内容的 Skill 已存在，请更换名称或在设置页确认覆盖。".to_string(),
+                    skill_id: None,
+                    skill_name: None,
+                };
+            }
+        }
+        let was_enabled = match (&session, existing_id.as_deref()) {
+            (DelegateSessionContext::Role { role_id }, Some(skill_id)) => crate::db::roles::get_role(&self.main_pool, role_id)
+                .await
+                .map(|role| crate::services::role_config::enabled_skill_ids_from_config(&role.skills_config).iter().any(|id| id == skill_id))
+                .unwrap_or(false),
+            (DelegateSessionContext::Butler { .. }, Some(skill_id)) => crate::services::butler_config::get_butler_skills(&self.main_pool)
+                .await
+                .map(|skills| skills.enabled_skill_ids.iter().any(|id| id == skill_id))
+                .unwrap_or(false),
+            _ => false,
+        };
+
+        let app_data_dir = match app_handle.path().app_data_dir() {
+            Ok(path) => path,
+            Err(error) => return CreateSkillResponse {
+                status: "runtime_unavailable".to_string(),
+                message: format!("创建 Skill 失败：无法获取应用目录（{}）", error),
+                skill_id: None,
+                skill_name: None,
+            },
+        };
+        let skills_root = app_data_dir.join("opencode-workspace").join(".opencode").join("skills");
+        let (entry, newly_imported) = if let Some(duplicate) = preview.duplicate.as_ref() {
+            if let Err(error) = crate::services::skill_registry::enable_skill_for_owner(
+                &self.main_pool,
+                &duplicate.existing.id,
+                owner_id,
+            )
+            .await
+            {
+                tracing::error!(error = %error, "绑定已有 Skill 到当前角色失败");
+                return CreateSkillResponse {
+                    status: "error".to_string(),
+                    message: "创建 Skill 失败：无法绑定到当前角色。".to_string(),
+                    skill_id: None,
+                    skill_name: None,
+                };
+            }
+            (duplicate.existing.clone(), false)
+        } else {
+            let input = ImportCustomSkillInput {
+                content: Some(content.to_string()),
+                overwrite_existing: false,
+                role_scope: Some(SkillRoleScope { all_roles: false, role_ids: vec![owner_id.to_string()] }),
+            };
+            match crate::services::skill_registry::import_custom_skill(&self.main_pool, &skills_root, &input).await {
+                Ok(result) => match result.entry {
+                    Some(entry) => (entry, true),
+                    None => return CreateSkillResponse {
+                        status: "error".to_string(),
+                        message: "创建 Skill 失败：导入结果不完整。".to_string(),
+                        skill_id: None,
+                        skill_name: None,
+                    },
+                },
+                Err(error) => {
+                    tracing::error!(skill_name = %preview.name, error = %error, "Skill 导入失败，执行补偿清理");
+                    let rollback = if let Ok(Some(partial)) = crate::db::skills::find_skill_by_name(&self.main_pool, &preview.name).await {
+                        crate::services::skill_registry::delete_custom_skill(&self.main_pool, &partial.id).await.map(|_| ())
+                    } else {
+                        std::fs::remove_dir_all(skills_root.join(&preview.name))
+                            .or_else(|cleanup_error| if cleanup_error.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(cleanup_error) })
+                            .map_err(|cleanup_error| AppError::ValidationError(cleanup_error.to_string()))
+                    };
+                    let rollback_complete = rollback.is_ok();
+                    if let Err(rollback_error) = rollback {
+                        tracing::error!(skill_name = %preview.name, error = %rollback_error, "Skill 导入失败后的补偿清理未完成");
+                    }
+                    return CreateSkillResponse {
+                        status: "error".to_string(),
+                        message: if rollback_complete {
+                            "创建 Skill 失败：导入未完成，已回滚。".to_string()
+                        } else {
+                            "创建 Skill 失败，且自动回滚未完成；请在设置页检查残留状态。".to_string()
+                        },
+                        skill_id: None,
+                        skill_name: None,
+                    };
+                }
+            }
+        };
+
+        let (registry, registry_read_failed) = match crate::db::skills::list_skills(&self.main_pool).await {
+            Ok(registry) => (registry, false),
+            Err(error) => {
+                tracing::error!(error = %error, "创建 Skill 后读取 registry 失败");
+                (Vec::new(), true)
+            }
+        };
+        let sync_result = if registry_read_failed {
+            Err(AppError::DbError("读取 Skill registry 失败".to_string()))
+        } else { match &session {
+            DelegateSessionContext::Role { role_id } => match crate::db::roles::get_role(&self.main_pool, role_id).await {
+                Ok(role) => crate::services::mcp_server::sync_role_agent_with_mcp(&self.main_pool, &agent_config, &role, &registry).await,
+                Err(error) => Err(error),
+            },
+            DelegateSessionContext::Butler { .. } => match crate::services::butler_config::get_butler_skills(&self.main_pool).await {
+                Ok(skills) => agent_config.sync_butler_skills_with_registry(&skills, &registry),
+                Err(error) => Err(error),
+            },
+        }};
+        if registry_read_failed || sync_result.is_err() {
+            let rollback = if newly_imported {
+                crate::services::skill_registry::delete_custom_skill(&self.main_pool, &entry.id).await.map(|_| ())
+            } else if !was_enabled {
+                crate::services::skill_registry::remove_skill_from_role(&self.main_pool, &entry.id, owner_id).await
+            } else {
+                Ok(())
+            };
+            let rollback_complete = rollback.is_ok();
+            if let Err(rollback_error) = rollback {
+                tracing::error!(skill_id = %entry.id, error = %rollback_error, "Skill 同步失败后的回滚也失败");
+            }
+            return CreateSkillResponse {
+                status: "sync_error".to_string(),
+                message: if rollback_complete {
+                    "创建 Skill 失败：配置同步未完成，已回滚。".to_string()
+                } else {
+                    "创建 Skill 失败，且自动回滚未完成；请在设置页检查残留状态。".to_string()
+                },
+                skill_id: None,
+                skill_name: None,
+            };
+        }
+
+        self.session_rollovers.lock().await.insert(session_id.to_string());
+
+        CreateSkillResponse {
+            status: "ok".to_string(),
+            message: format!("Skill {} 已创建并启用到当前角色。", entry.name),
+            skill_id: Some(entry.id),
+            skill_name: Some(entry.name),
+        }
     }
 
     async fn create_task(&self, req: CreateTaskRequest) -> TaskActionResponse {
@@ -563,6 +823,20 @@ async fn handle_connection(mut stream: TcpStream, bridge: DelegateBridge) {
                 }
             }
         }
+        Ok(request) if request.method == "POST" && request.path == "/create-skill" => {
+            if let Err(response) = bridge.validate_request(&request) {
+                response
+            } else {
+                match serde_json::from_slice::<CreateSkillRequest>(&request.body) {
+                    Ok(req) => json_response(200, "OK", &bridge.create_skill(req).await),
+                    Err(_) => json_response(
+                        400,
+                        "Bad Request",
+                        &serde_json::json!({ "status": "bad_request", "message": "创建 Skill 参数解析失败。" }),
+                    ),
+                }
+            }
+        }
         Ok(request) if request.method == "POST" && request.path == "/complete-task" => {
             if let Err(response) = bridge.validate_request(&request) {
                 response
@@ -632,7 +906,7 @@ async fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, String
         if let Some(pos) = find_header_end(&buffer) {
             break pos;
         }
-        if buffer.len() > MAX_BODY_BYTES {
+        if buffer.len() > DEFAULT_MAX_BODY_BYTES {
             return Err("请求头过大".to_string());
         }
     };
@@ -645,7 +919,12 @@ async fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, String
     let method = parts.next().unwrap_or_default().to_string();
     let path = parts.next().unwrap_or_default().to_string();
     let content_length = parse_content_length(&header_text).unwrap_or(0);
-    if content_length > MAX_BODY_BYTES {
+    let max_body_bytes = if path == "/create-skill" {
+        SKILL_MAX_BODY_BYTES
+    } else {
+        DEFAULT_MAX_BODY_BYTES
+    };
+    if content_length > max_body_bytes {
         return Err("请求体过大".to_string());
     }
 
@@ -830,6 +1109,40 @@ mod tests {
         .unwrap();
         assert_eq!(request.session_id, "role-session");
         assert_eq!(request.role_id.as_deref(), Some("role-1"));
+    }
+
+    #[test]
+    fn create_skill_request_accepts_camel_case_tool_payload() {
+        // WHY: generated create_skill.ts sends camelCase and the local bridge
+        // must retain the complete SKILL.md rather than a model-written path.
+        let request: CreateSkillRequest = serde_json::from_value(serde_json::json!({
+            "sessionId": "role-session",
+            "content": "---\nname: uat-greeting\ndescription: 问候语\n---\n"
+        }))
+        .unwrap();
+        assert_eq!(request.session_id, "role-session");
+        assert!(request.content.contains("name: uat-greeting"));
+    }
+
+    #[tokio::test]
+    async fn create_skill_rejects_unknown_session_before_writing() {
+        let (bridge, _dir) = test_bridge().await;
+        let response = bridge
+            .create_skill(CreateSkillRequest {
+                session_id: "missing-session".into(),
+                content: "---\nname: uat-greeting\ndescription: 问候语\n---\n".into(),
+            })
+            .await;
+        assert_eq!(response.status, "session_not_found");
+        assert!(crate::db::skills::list_skills(&bridge.main_pool).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn session_rollover_is_consumed_once() {
+        let (bridge, _dir) = test_bridge().await;
+        bridge.session_rollovers.lock().await.insert("session-1".into());
+        assert!(bridge.take_session_rollover("session-1").await);
+        assert!(!bridge.take_session_rollover("session-1").await);
     }
 
     #[tokio::test]

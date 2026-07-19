@@ -227,7 +227,116 @@ pub async fn delete_custom_skill(pool: &SqlitePool, skill_id: &str) -> Result<Ve
             affected.push(role.id);
         }
     }
+
+    // Butler 不在 roles 表中，必须单独清理；否则创建后的同步回滚会留下死 id。
+    let mut butler_skills = crate::services::butler_config::get_butler_skills(pool).await?;
+    if butler_skills.enabled_skill_ids.iter().any(|id| id == skill_id) {
+        butler_skills.enabled_skill_ids.retain(|id| id != skill_id);
+        crate::services::butler_config::set_butler_skills_config(pool, &butler_skills).await?;
+    }
     Ok(affected)
+}
+
+/// Upgrade hash-based managed paths created by older EgoSync versions to the
+/// `<name>/SKILL.md` layout required by OpenCode discovery.
+pub async fn migrate_legacy_managed_paths(
+    pool: &SqlitePool,
+    skills_root: &Path,
+) -> Result<(), AppError> {
+    let registry = skills::list_skills(pool).await?;
+    for entry in &registry {
+        if registry.iter().filter(|item| item.name == entry.name).count() != 1
+            || validate_skill_name(&entry.name).is_err()
+        {
+            continue;
+        }
+        let expected = managed_skill_path(skills_root, &entry.name, &entry.content_hash);
+        let current = PathBuf::from(&entry.managed_path);
+        if current == expected {
+            continue;
+        }
+        let content = std::fs::read_to_string(&current).map_err(|e| {
+            AppError::ValidationError(format!("迁移 Skill {} 失败：{}", entry.name, e))
+        })?;
+        if content_hash(&content) != entry.content_hash {
+            return Err(AppError::ValidationError(format!(
+                "迁移 Skill {} 失败：受控文件内容已变化",
+                entry.name
+            )));
+        }
+        if expected.exists() {
+            let existing = std::fs::read_to_string(&expected).map_err(|e| {
+                AppError::ValidationError(format!("读取 Skill {} 新路径失败：{}", entry.name, e))
+            })?;
+            if content_hash(&existing) != entry.content_hash {
+                return Err(AppError::ValidationError(format!(
+                    "迁移 Skill {} 失败：目标路径已被不同内容占用",
+                    entry.name
+                )));
+            }
+        } else {
+            std::fs::create_dir_all(expected.parent().unwrap_or(skills_root))
+                .map_err(|e| AppError::ValidationError(format!("创建 Skill 迁移目录失败：{}", e)))?;
+            std::fs::write(&expected, &content)
+                .map_err(|e| AppError::ValidationError(format!("写入 Skill 迁移文件失败：{}", e)))?;
+        }
+        skills::update_skill_metadata(
+            pool,
+            &entry.id,
+            &entry.name,
+            &entry.description,
+            &expected.to_string_lossy(),
+            &entry.content_hash,
+        )
+        .await?;
+        if let Some(parent) = current.parent() {
+            if parent.starts_with(skills_root)
+                && parent != skills_root
+                && parent != expected.parent().unwrap_or(skills_root)
+            {
+                let _ = std::fs::remove_dir_all(parent);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Add one owner without replacing the Skill's existing role scope.
+pub async fn enable_skill_for_owner(
+    pool: &SqlitePool,
+    skill_id: &str,
+    owner_id: &str,
+) -> Result<(), AppError> {
+    if owner_id == BUTLER_SCOPE_ID {
+        let mut config = crate::services::butler_config::get_butler_skills(pool).await?;
+        if !config.enabled_skill_ids.iter().any(|id| id == skill_id) {
+            config.enabled_skill_ids.push(skill_id.to_string());
+            crate::services::butler_config::set_butler_skills_config(pool, &config).await?;
+        }
+        return Ok(());
+    }
+
+    let mut bindings = crate::db::skill_bindings::role_ids_for_skill(pool, skill_id).await?;
+    let all_roles = bindings
+        .iter()
+        .any(|id| id == crate::db::skill_bindings::ALL_ROLES_BINDING);
+    if !all_roles && !bindings.iter().any(|id| id == owner_id) {
+        bindings.push(owner_id.to_string());
+        crate::db::skill_bindings::replace_bindings(pool, skill_id, false, &bindings).await?;
+    }
+    let role = crate::db::roles::get_role(pool, owner_id).await?;
+    let mut config = crate::services::role_config::skills_from_config(&role.skills_config);
+    let mut ids = config.enabled_skill_ids.unwrap_or_default();
+    if !ids.iter().any(|id| id == skill_id) {
+        ids.push(skill_id.to_string());
+        config.enabled_skill_ids = Some(ids);
+        let raw = crate::services::role_config::normalize_skills_config_with_existing(
+            &role.skills_config,
+            &config,
+        )?;
+        crate::db::roles::set_role_skills_config_raw(pool, owner_id, &raw).await?;
+    }
+    Ok(())
 }
 
 pub async fn preview_custom_skill(
@@ -619,6 +728,16 @@ async fn preview_from_parsed_with_source(
     parsed: ParsedSkill,
     source_type: &str,
 ) -> Result<SkillImportPreview, AppError> {
+    if let Some(existing) = skills::list_skills(pool)
+        .await?
+        .into_iter()
+        .find(|entry| entry.name == parsed.name && entry.source_type != source_type)
+    {
+        return Err(AppError::ValidationError(format!(
+            "Skill 名称 {} 已被另一来源占用（{}）",
+            parsed.name, existing.source_type
+        )));
+    }
     let duplicate = if let Some(existing) =
         skills::find_skill_by_content_hash(pool, &parsed.content_hash).await?
     {
@@ -666,31 +785,22 @@ fn frontmatter_value(frontmatter: &str, key: &str) -> Result<String, AppError> {
 }
 
 fn validate_skill_name(name: &str) -> Result<(), AppError> {
-    // name 仅用于 UI 显示与 DB 记录，不再参与文件系统路径构造
-    //（受控目录改用 content_hash 派生，见 managed_skill_path），
-    // 因此放宽为允许 Unicode 字母/数字/中文，仅拒绝可能破坏展示或路径安全的字符：
-    // 控制字符、路径分隔符（/ \）、前后空白边界。
-    let trimmed = name.trim();
-    if trimmed.is_empty() {
+    let bytes = name.as_bytes();
+    let valid = !bytes.is_empty()
+        && bytes.len() <= 64
+        && bytes[0].is_ascii_lowercase()
+        && bytes[bytes.len() - 1].is_ascii_alphanumeric()
+        && bytes.iter().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
+        && !name.contains("--");
+    if !valid {
         return Err(AppError::ValidationError(
-            "Skill name 不能为空".to_string(),
+            "Skill name 必须为 1-64 位小写字母、数字或单个连字符，且不能以连字符开头或结尾".to_string(),
         ));
     }
-    if trimmed.len() != name.len() {
-        return Err(AppError::ValidationError(
-            "Skill name 不能以空白字符开头或结尾".to_string(),
-        ));
+    if matches!(name, "con" | "prn" | "aux" | "nul" | "com1" | "com2" | "com3" | "com4" | "com5" | "com6" | "com7" | "com8" | "com9" | "lpt1" | "lpt2" | "lpt3" | "lpt4" | "lpt5" | "lpt6" | "lpt7" | "lpt8" | "lpt9") {
+        return Err(AppError::ValidationError("Skill name 不能使用系统保留名".to_string()));
     }
-    let invalid = name
-        .chars()
-        .any(|ch| ch.is_control() || matches!(ch, '/' | '\\'));
-    if invalid {
-        Err(AppError::ValidationError(
-            "Skill name 不能包含控制字符或路径分隔符（/ \\）".to_string(),
-        ))
-    } else {
-        Ok(())
-    }
+    Ok(())
 }
 
 fn content_hash(content: &str) -> String {
@@ -702,12 +812,10 @@ fn content_hash(content: &str) -> String {
     format!("{:016x}", hash)
 }
 
-fn managed_skill_path(skills_root: &Path, _name: &str, content_hash: &str) -> PathBuf {
-    // 目录名使用 content_hash 派生，彻底脱钩于用户输入的 name：
-    // 既避免 `..`/`.` 路径穿越、大小写不敏感文件系统的副本互相覆盖，
-    // 也规避 Windows 保留名（CON/NUL 等）建目录失败。content_hash 由
-    // content_hash() 生成，固定 16 位十六进制，文件系统安全。
-    skills_root.join(content_hash).join(SKILL_FILE_NAME)
+fn managed_skill_path(skills_root: &Path, name: &str, _content_hash: &str) -> PathBuf {
+    // OpenCode 只发现 `.opencode/skills/<name>/SKILL.md`，且目录名必须与
+    // frontmatter name 一致。validate_skill_name 已在到达这里前完成路径安全校验。
+    skills_root.join(name).join(SKILL_FILE_NAME)
 }
 
 #[cfg(test)]
@@ -814,6 +922,98 @@ mod tests {
         assert!(
             matches!(err, AppError::ValidationError(message) if message.contains("frontmatter"))
         );
+    }
+
+    #[test]
+    fn skill_name_matches_opencode_discovery_contract() {
+        // WHY: OpenCode discovers a Skill by its frontmatter name and matching
+        // directory, so accepting aliases that cannot become that directory
+        // would make a successfully imported Skill impossible to load.
+        for valid in ["uat-greeting", "a", "skill2"] {
+            validate_skill_name(valid).unwrap();
+        }
+        for invalid in ["UAT-Greeting", "uat_greeting", "-skill", "skill-", "skill--name", "con"] {
+            assert!(validate_skill_name(invalid).is_err(), "{invalid} must be rejected");
+        }
+    }
+
+    #[test]
+    fn managed_skill_path_uses_frontmatter_name_directory() {
+        let root = Path::new("workspace/.opencode/skills");
+        assert_eq!(
+            managed_skill_path(root, "uat-greeting", "ignored-hash"),
+            root.join("uat-greeting").join("SKILL.md")
+        );
+    }
+
+    #[tokio::test]
+    async fn enabling_duplicate_for_owner_preserves_existing_binding() {
+        let pool = setup_test_db().await;
+        for (id, name) in [("role-1", "原角色"), ("role-2", "新角色")] {
+            sqlx::query("INSERT INTO roles (id, name) VALUES (?1, ?2)")
+                .bind(id)
+                .bind(name)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let entry = skills::create_skill(
+            &pool,
+            "uat-greeting",
+            "问候语",
+            "managed/uat-greeting/SKILL.md",
+            "hash-1",
+        )
+        .await
+        .unwrap();
+        crate::db::skill_bindings::replace_bindings(
+            &pool,
+            &entry.id,
+            false,
+            &["role-1".to_string()],
+        )
+        .await
+        .unwrap();
+
+        enable_skill_for_owner(&pool, &entry.id, "role-2").await.unwrap();
+
+        assert_eq!(
+            crate::db::skill_bindings::role_ids_for_skill(&pool, &entry.id)
+                .await
+                .unwrap(),
+            vec!["role-1".to_string(), "role-2".to_string()]
+        );
+        let role = crate::db::roles::get_role(&pool, "role-2").await.unwrap();
+        assert!(crate::services::role_config::enabled_skill_ids_from_config(&role.skills_config)
+            .contains(&entry.id));
+    }
+
+    #[tokio::test]
+    async fn migrates_legacy_hash_directory_to_name_directory() {
+        let pool = setup_test_db().await;
+        let root = tempdir().unwrap();
+        let content = skill_content("uat-greeting", "问候语");
+        let hash = content_hash(&content);
+        let legacy = root.path().join(&hash).join("SKILL.md");
+        std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        std::fs::write(&legacy, &content).unwrap();
+        let entry = skills::create_skill(
+            &pool,
+            "uat-greeting",
+            "问候语",
+            &legacy.to_string_lossy(),
+            &hash,
+        )
+        .await
+        .unwrap();
+
+        migrate_legacy_managed_paths(&pool, root.path()).await.unwrap();
+
+        let migrated = skills::get_skill(&pool, &entry.id).await.unwrap();
+        let expected = root.path().join("uat-greeting").join("SKILL.md");
+        assert_eq!(PathBuf::from(migrated.managed_path), expected);
+        assert!(expected.exists());
+        assert!(!legacy.exists());
     }
 
     #[tokio::test]

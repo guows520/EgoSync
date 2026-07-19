@@ -33,6 +33,7 @@ pub fn write_custom_tools(workspace_dir: &std::path::Path) -> Result<(), AppErro
         ("create_task.ts", TOOL_CREATE_TASK),
         ("complete_task.ts", TOOL_COMPLETE_TASK),
         ("delete_task.ts", TOOL_DELETE_TASK),
+        ("create_skill.ts", TOOL_CREATE_SKILL),
     ];
 
     for (filename, content) in tools {
@@ -266,6 +267,47 @@ export default tool({
 })
 "#;
 
+const TOOL_CREATE_SKILL: &str = r#"import { tool } from "@opencode-ai/plugin"
+
+export default tool({
+  description: "将 skill-creator 生成的完整 SKILL.md 交给 EgoSync 验证、受控保存、注册，并自动绑定到当前角色。必须先加载 skill-creator；只有本工具返回成功后才能告诉用户 Skill 已创建。",
+  args: {
+    content: tool.schema.string().describe("完整的 SKILL.md 内容，必须包含合法 YAML frontmatter（name 和 description）及正文"),
+  },
+  async execute(args, context) {
+    if (!args.content || args.content.trim().length === 0) {
+      return JSON.stringify({ action: "create_skill", status: "error", message: "创建 Skill 失败：缺少完整 SKILL.md 内容。" })
+    }
+    const token = process.env.EGOSYNC_DELEGATE_BRIDGE_TOKEN
+    const port = process.env.EGOSYNC_DELEGATE_BRIDGE_PORT
+    if (!token || !port) {
+      return JSON.stringify({ action: "create_skill", status: "error", message: "创建 Skill 失败：本地桥接服务未配置。" })
+    }
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/create-skill`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "Authorization": `Bearer ${token}`,
+        },
+        body: JSON.stringify({ sessionId: context.sessionID, content: args.content }),
+        signal: context.abort,
+      })
+      const result = await response.json().catch(() => ({ status: "error", message: "响应解析失败" }))
+      return JSON.stringify({
+        action: "create_skill",
+        status: response.ok ? (result.status || "ok") : "error",
+        message: result.message || `创建 Skill 失败：后端返回 HTTP ${response.status}`,
+        skill_id: result.skillId,
+        skill_name: result.skillName,
+      })
+    } catch (error) {
+      return JSON.stringify({ action: "create_skill", status: "error", message: `创建 Skill 失败：无法连接本地桥接服务（${error instanceof Error ? error.message : String(error)}）。` })
+    }
+  },
+})
+"#;
+
 /// Manages the `agent` section of `opencode.json`, synchronising EgoSync roles
 /// to opencode agent entries on every CRUD operation.
 pub struct AgentConfigService {
@@ -336,7 +378,7 @@ impl AgentConfigService {
     fn push_custom_skill_prompt(prompt_parts: &mut Vec<String>, custom_skill_lines: &[String]) {
         if !custom_skill_lines.is_empty() {
             prompt_parts.push(format!(
-                "[自定义 Skill]\n{}\n只能按以上 EgoSync 已导入 Skill 的说明行动，不要调用或列出外部环境中的其它 Skill。",
+                "[自定义 Skill]\n{}\n用户要求使用以上 Skill 时，必须通过原生 skill 工具按名称加载后再执行；不要调用或列出未授权的其它 Skill。",
                 custom_skill_lines.join("\n")
             ));
         }
@@ -390,7 +432,7 @@ impl AgentConfigService {
         prompt_parts.push(PLAIN_MESSAGE_CONFIRMATION_RULE.to_string());
         let prompt = prompt_parts.join("\n");
 
-        let permission = Self::parse_permissions(&role.skills_config);
+        let permission = Self::parse_permissions(&role.skills_config, registry);
 
         json!({
             "mode": "subagent",
@@ -403,9 +445,9 @@ impl AgentConfigService {
 
     /// Parse `skills_config` JSON → opencode permission object.
     /// Falls back to `{ "*": "allow" }` when empty or unparseable.
-    /// EgoSync 管理自定义 Skill 的 prompt 注入，不允许 opencode 底层 `skill` 工具自动加载外部全局 Skill。
+    /// Skill 默认全部隐藏，仅允许当前角色开启的元 Skill 与绑定的自定义 Skill。
     /// EgoSync 尚未实现 `question` 的回答与会话恢复协议，因此该工具也必须始终禁用。
-    fn parse_permissions(skills_config: &str) -> Value {
+    fn parse_permissions(skills_config: &str, registry: &[SkillRegistryEntry]) -> Value {
         let default_perm = json!({ "*": "allow" });
         let config = crate::services::role_config::role_skill_config_from_json(skills_config);
         let mut permission = match config.permissions.as_ref() {
@@ -414,7 +456,39 @@ impl AgentConfigService {
         };
 
         if let Some(object) = permission.as_object_mut() {
-            object.insert("skill".to_string(), json!("deny"));
+            let mut skill_permission = Map::new();
+            skill_permission.insert("*".to_string(), json!("deny"));
+            if config.meta.find_skills {
+                skill_permission.insert(
+                    crate::services::role_config::FIND_SKILLS_KEY.to_string(),
+                    json!("allow"),
+                );
+            }
+            if config.meta.skill_creator {
+                skill_permission.insert(
+                    crate::services::role_config::SKILL_CREATOR_KEY.to_string(),
+                    json!("allow"),
+                );
+            }
+            for skill_id in &config.enabled_skill_ids {
+                if let Some(skill) = registry.iter().find(|skill| &skill.id == skill_id) {
+                    // Legacy registry rows predate strict name validation. Never
+                    // let a historical `*` overwrite the deny-by-default rule.
+                    if registry.iter().filter(|entry| entry.name == skill.name).count() == 1
+                        && skill.name != "*"
+                        && skill.name.as_bytes().iter().all(|byte| {
+                            byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-'
+                        })
+                    {
+                        skill_permission.insert(skill.name.clone(), json!("allow"));
+                    }
+                }
+            }
+            object.insert("skill".to_string(), Value::Object(skill_permission));
+            object.insert(
+                "create_skill".to_string(),
+                json!(if config.meta.skill_creator { "allow" } else { "deny" }),
+            );
             object.insert("question".to_string(), json!("deny"));
         }
 
@@ -485,7 +559,7 @@ impl AgentConfigService {
         let custom_skill_lines = Self::custom_skill_lines(&skills.enabled_skill_ids, registry);
         Self::push_custom_skill_prompt(&mut prompt_parts, &custom_skill_lines);
         prompt_parts.push(PLAIN_MESSAGE_CONFIRMATION_RULE.to_string());
-        let permission = Self::parse_permissions(&skills_config);
+        let permission = Self::parse_permissions(&skills_config, registry);
 
         json!({
             "mode": "primary",
@@ -994,12 +1068,12 @@ mod tests {
     // ── permission mapping ────────────────────────────────────────
 
     #[test]
-    fn permission_denies_skill_when_meta_skills_missing() {
+    fn permission_denies_all_skills_and_create_bridge_when_meta_skills_missing() {
         let role = active_role("r1", "PM", "goal");
         let entry = AgentConfigService::build_agent_entry(&role);
         assert_eq!(
             entry["permission"],
-            json!({ "*": "allow", "skill": "deny", "question": "deny" })
+            json!({ "*": "allow", "skill": { "*": "deny" }, "create_skill": "deny", "question": "deny" })
         );
     }
 
@@ -1020,7 +1094,7 @@ mod tests {
     }
 
     #[test]
-    fn permission_forces_skill_deny_when_custom_permissions_allow_skill() {
+    fn permission_replaces_custom_skill_allow_with_scoped_deny() {
         let role = make_role(
             "r1",
             "PM",
@@ -1031,7 +1105,8 @@ mod tests {
         let entry = AgentConfigService::build_agent_entry(&role);
         assert_eq!(entry["permission"]["*"], "allow");
         assert_eq!(entry["permission"]["bash"], "ask");
-        assert_eq!(entry["permission"]["skill"], "deny");
+        assert_eq!(entry["permission"]["skill"]["*"], "deny");
+        assert_eq!(entry["permission"]["create_skill"], "deny");
     }
 
     #[test]
@@ -1059,12 +1134,12 @@ mod tests {
         let entry = AgentConfigService::build_agent_entry(&role);
         assert_eq!(
             entry["permission"],
-            json!({ "*": "allow", "skill": "deny", "question": "deny" })
+            json!({ "*": "allow", "skill": { "*": "deny" }, "create_skill": "deny", "question": "deny" })
         );
     }
 
     #[test]
-    fn permission_denies_skill_tool_when_meta_skill_enabled() {
+    fn permission_allows_skill_creator_and_create_bridge_when_enabled() {
         let role = make_role(
             "r1",
             "PM",
@@ -1073,11 +1148,13 @@ mod tests {
             r#"{"find-skills":false,"skill-creator":true,"permissions":{"*":"allow","skill":"allow"}}"#,
         );
         let entry = AgentConfigService::build_agent_entry(&role);
-        assert_eq!(entry["permission"]["skill"], "deny");
+        assert_eq!(entry["permission"]["skill"]["*"], "deny");
+        assert_eq!(entry["permission"]["skill"]["skill-creator"], "allow");
+        assert_eq!(entry["permission"]["create_skill"], "allow");
     }
 
     #[test]
-    fn permission_denies_external_skill_tool_even_when_meta_skill_enabled() {
+    fn permission_allows_only_enabled_meta_skills() {
         let role = make_role(
             "r1",
             "PM",
@@ -1086,11 +1163,14 @@ mod tests {
             r#"{"find-skills":true,"skill-creator":true,"permissions":{"*":"allow","skill":"allow"}}"#,
         );
         let entry = AgentConfigService::build_agent_entry(&role);
-        assert_eq!(entry["permission"]["skill"], "deny");
+        assert_eq!(entry["permission"]["skill"]["*"], "deny");
+        assert_eq!(entry["permission"]["skill"]["find-skills"], "allow");
+        assert_eq!(entry["permission"]["skill"]["skill-creator"], "allow");
+        assert_eq!(entry["permission"]["create_skill"], "allow");
     }
 
     #[test]
-    fn permission_denies_external_skill_tool_even_when_custom_skill_enabled() {
+    fn permission_allows_enabled_custom_skill_only() {
         let role = make_role(
             "r1",
             "PM",
@@ -1103,11 +1183,29 @@ mod tests {
             &[custom_skill("skill-1", "daily-review", "日复盘助手")],
         );
         assert!(entry["prompt"].as_str().unwrap().contains("daily-review"));
-        assert_eq!(entry["permission"]["skill"], "deny");
+        assert_eq!(entry["permission"]["skill"]["*"], "deny");
+        assert_eq!(entry["permission"]["skill"]["daily-review"], "allow");
+        assert_eq!(entry["permission"]["create_skill"], "deny");
     }
 
     #[test]
-    fn butler_permission_denies_external_skill_tool_even_with_visible_custom_skill() {
+    fn permission_never_allows_legacy_wildcard_skill_name() {
+        let role = make_role(
+            "r1",
+            "PM",
+            "goal",
+            "active",
+            r#"{"enabledSkillIds":["legacy-star"]}"#,
+        );
+        let entry = AgentConfigService::build_agent_entry_with_skills(
+            &role,
+            &[custom_skill("legacy-star", "*", "legacy invalid name")],
+        );
+        assert_eq!(entry["permission"]["skill"]["*"], "deny");
+    }
+
+    #[test]
+    fn butler_permission_allows_enabled_meta_and_custom_skills() {
         let entry = AgentConfigService::build_butler_entry_with_skills(
             &ButlerSkillsConfig {
                 find_skills: true,
@@ -1117,7 +1215,11 @@ mod tests {
             &[custom_skill("skill-1", "daily-review", "日复盘助手")],
         );
         assert!(entry["prompt"].as_str().unwrap().contains("daily-review"));
-        assert_eq!(entry["permission"]["skill"], "deny");
+        assert_eq!(entry["permission"]["skill"]["*"], "deny");
+        assert_eq!(entry["permission"]["skill"]["find-skills"], "allow");
+        assert_eq!(entry["permission"]["skill"]["skill-creator"], "allow");
+        assert_eq!(entry["permission"]["skill"]["daily-review"], "allow");
+        assert_eq!(entry["permission"]["create_skill"], "allow");
     }
 
     #[test]
@@ -1167,9 +1269,9 @@ mod tests {
         assert!(prompt.contains("[自定义 Skill]"));
         assert!(prompt.contains("daily-review"));
         assert!(prompt.contains("日复盘助手"));
-        assert!(prompt.contains("不要调用或列出外部环境中的其它 Skill"));
+        assert!(prompt.contains("必须通过原生 skill 工具加载"));
         assert!(!prompt.contains("skill-1"));
-        assert_eq!(entry["permission"]["skill"], "deny");
+        assert_eq!(entry["permission"]["skill"]["daily-review"], "allow");
     }
 
     #[test]
@@ -1189,7 +1291,7 @@ mod tests {
         );
         let prompt = entry["prompt"].as_str().unwrap();
         assert!(!prompt.contains("[自定义 Skill]"));
-        assert_eq!(entry["permission"]["skill"], "deny");
+        assert_eq!(entry["permission"]["skill"]["*"], "deny");
     }
 
     #[test]
@@ -1205,7 +1307,7 @@ mod tests {
         let prompt = entry["prompt"].as_str().unwrap();
         assert!(!prompt.contains("[自定义 Skill]"));
         assert!(!prompt.contains("daily-review"));
-        assert_eq!(entry["permission"]["skill"], "deny");
+        assert_eq!(entry["permission"]["skill"]["*"], "deny");
     }
 
     #[test]
@@ -1231,7 +1333,7 @@ mod tests {
         assert!(prompt.contains("不要调用 question 工具"));
         assert_eq!(
             entry["permission"],
-            json!({ "*": "allow", "skill": "deny", "question": "deny" })
+            json!({ "*": "allow", "skill": { "*": "deny", "find-skills": "allow" }, "create_skill": "deny", "question": "deny" })
         );
     }
 
@@ -1302,11 +1404,11 @@ mod tests {
         assert!(prompt.contains("[自定义 Skill]"));
         assert!(prompt.contains("daily-review"));
         assert!(prompt.contains("日复盘助手"));
-        assert!(prompt.contains("不要调用或列出外部环境中的其它 Skill"));
+        assert!(prompt.contains("必须通过原生 skill 工具加载"));
         assert!(!prompt.contains("ghost-id"));
         assert_eq!(
             config["agent"]["butler"]["permission"],
-            json!({ "*": "allow", "skill": "deny", "question": "deny" })
+            json!({ "*": "allow", "skill": { "*": "deny", "daily-review": "allow" }, "create_skill": "deny", "question": "deny" })
         );
     }
 
@@ -1322,7 +1424,7 @@ mod tests {
         assert!(!prompt.contains("skill-creator"));
         assert_eq!(
             entry["permission"],
-            json!({ "*": "allow", "skill": "deny", "question": "deny" })
+            json!({ "*": "allow", "skill": { "*": "deny" }, "create_skill": "deny", "question": "deny" })
         );
     }
 

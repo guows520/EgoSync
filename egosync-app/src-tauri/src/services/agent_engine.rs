@@ -514,6 +514,37 @@ fn extract_json_string(raw: &serde_json::Value, paths: &[&[&str]]) -> Option<Str
     })
 }
 
+fn replace_cached_session_id(
+    sessions: &mut std::collections::HashMap<String, OpencodeSessionState>,
+    conversation_id: &str,
+    previous_session_id: &str,
+    next_session_id: &str,
+) {
+    if let Some(state) = sessions.get_mut(conversation_id) {
+        for cached_id in state.sessions_by_directory.values_mut() {
+            if cached_id == previous_session_id {
+                *cached_id = next_session_id.to_string();
+            }
+        }
+        state.active_session_id = next_session_id.to_string();
+    }
+}
+
+fn live_tool_display_name(tool_name: &str, part_raw: &serde_json::Value, fallback: &str) -> String {
+    if tool_name.eq_ignore_ascii_case("skill") {
+        return extract_json_string(
+            part_raw,
+            &[
+                &["input", "name"],
+                &["state", "input", "name"],
+                &["toolInvocation", "args", "name"],
+            ],
+        )
+        .unwrap_or_else(|| fallback.to_string());
+    }
+    fallback.to_string()
+}
+
 fn normalize_read_input(tool_name: Option<&str>, input: Option<serde_json::Value>) -> Option<serde_json::Value> {
     let Some(tool_name) = tool_name else { return input };
     if !tool_name.eq_ignore_ascii_case("read") {
@@ -2249,7 +2280,7 @@ async fn try_run_opencode_stream(
     let mcp_scope_lock = app_handle
         .try_state::<crate::commands::chat::OpencodeMcpScopeLock>()
         .map(|state| state.0.clone());
-    let session_id = {
+    let mut session_id = {
         let _mcp_scope_guard = match mcp_scope_lock.as_ref() {
             Some(lock) => Some(lock.lock().await),
             None => None,
@@ -2288,6 +2319,18 @@ async fn try_run_opencode_stream(
             }
         }
     };
+    if delegate_bridge.take_session_rollover(&session_id).await {
+        let forked = agent_bridge.fork_session(&session_id).await?;
+        let previous_session_id = session_id;
+        session_id = forked.id;
+        let mut sessions = opencode_sessions.lock().await;
+        replace_cached_session_id(
+            &mut sessions,
+            conversation_id,
+            &previous_session_id,
+            &session_id,
+        );
+    }
     // Build the message content — inject full system prompt prefix.
     // For butler: includes role roster + emergence instructions (same as direct-LLM path).
     // For roles: includes the role's personality/goal prompt.
@@ -2595,10 +2638,15 @@ async fn try_run_opencode_stream(
                                             recorded_action_narrations.push(summary);
                                         }
                                         if matches!(candidate.status.as_deref(), Some("running" | "completed")) {
-                                            let display_tool_name = candidate
+                                            let fallback_display_name = candidate
                                                 .tool_name
                                                 .clone()
                                                 .unwrap_or_else(|| tool_name.to_string());
+                                            let display_tool_name = live_tool_display_name(
+                                                tool_name,
+                                                part_raw,
+                                                &fallback_display_name,
+                                            );
                                             emit_tool_status(app_handle, conversation_id, &display_tool_name, tool_status);
                                         }
                                         persist_and_emit_process_event(
@@ -4914,6 +4962,37 @@ mod tests {
         let mut args = serde_json::json!({"title": title});
         if let Some(value) = deadline { args["deadline"] = value.into(); }
         ToolCall { id: id.to_string(), name: CREATE_DELEGATED_TASK_TOOL.to_string(), arguments: args.to_string() }
+    }
+
+    #[test]
+    fn live_skill_status_exposes_loaded_skill_name() {
+        // WHY: UAT must distinguish an actual native Skill load from a generic
+        // narration that merely claims a Skill was used.
+        let part = serde_json::json!({
+            "tool": "skill",
+            "state": { "status": "running", "input": { "name": "uat-greeting" } }
+        });
+        assert_eq!(live_tool_display_name("skill", &part, "skill"), "uat-greeting");
+        assert_eq!(live_tool_display_name("bash", &part, "bash"), "bash");
+    }
+
+    #[test]
+    fn skill_rollover_replaces_only_matching_cached_session() {
+        let mut sessions = std::collections::HashMap::from([(
+            "conv-1".to_string(),
+            OpencodeSessionState {
+                active_session_id: "old".to_string(),
+                sessions_by_directory: std::collections::HashMap::from([
+                    ("scope-a".to_string(), "old".to_string()),
+                    ("scope-b".to_string(), "other".to_string()),
+                ]),
+            },
+        )]);
+        replace_cached_session_id(&mut sessions, "conv-1", "old", "forked");
+        let state = sessions.get("conv-1").unwrap();
+        assert_eq!(state.active_session_id, "forked");
+        assert_eq!(state.sessions_by_directory["scope-a"], "forked");
+        assert_eq!(state.sessions_by_directory["scope-b"], "other");
     }
 
     #[test]

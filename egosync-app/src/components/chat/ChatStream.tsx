@@ -353,7 +353,7 @@ function toolDisplayTitle(event: MessageProcessEvent): string {
   if (toolName === 'skill') {
     const input = processEventInput(raw);
     const skillName = stringifyProcessValue(firstProcessValue(input, [['name'], ['skill'], ['skillName']]));
-    return skillName ? `加载 ${skillName} 转换能力` : '加载 Skill 能力';
+    return skillName ? `加载 ${skillName} Skill` : '加载 Skill';
   }
   return event.summary;
 }

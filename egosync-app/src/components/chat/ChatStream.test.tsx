@@ -525,7 +525,7 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
     fireEvent.click(within(message).getByRole('button', { name: '执行过程' }));
 
     expect(await within(message).findByText('先加载 markitdown 转换能力，然后检查本机是否已安装转换工具。')).toBeInTheDocument();
-    expect(within(message).getByRole('button', { name: /加载 markitdown 转换能力/ })).toBeInTheDocument();
+    expect(within(message).getByRole('button', { name: /加载 markitdown Skill/ })).toBeInTheDocument();
     expect(within(message).getByText('确认 markitdown 已安装，可以继续转换。')).toBeInTheDocument();
     const shellCard = within(message).getByRole('button', { name: /检查 markitdown 是否已安装/ });
     expect(shellCard).toBeInTheDocument();

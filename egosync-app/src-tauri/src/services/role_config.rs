@@ -159,7 +159,12 @@ pub fn meta_skill_prompt(skills_config: &str) -> String {
     prompt.extend(lines);
     if find_skills {
         prompt.push(
-            "Skill 发现边界：只能介绍 EgoSync 当前启用或可见的 Skill；如果当前没有可见 Skill，就直接说明当前没有可展示 Skill；不得列出 Claude Code、gstack、opencode 或外部环境中的其它 Skill。".to_string(),
+            "当用户要求搜索、查找或推荐 Skill 时，必须先调用原生 skill 工具并传入 name=find-skills，再严格按该 Skill 的工作流执行真实搜索；调用或搜索失败时必须如实说明，不得凭空编造候选。可以推荐外部生态候选，但未经用户确认不得安装或导入。".to_string(),
+        );
+    }
+    if skill_creator {
+        prompt.push(
+            "当用户要求创建或扩展 Skill 时，必须先调用原生 skill 工具并传入 name=skill-creator；完成完整 SKILL.md 草稿后必须调用 create_skill 工具交由 EgoSync 验证、注册并绑定当前角色。只有 create_skill 返回成功后才能宣称创建完成，失败时必须明确说明失败。".to_string(),
         );
     }
     prompt.join("\n")
@@ -340,12 +345,21 @@ mod tests {
     }
 
     #[test]
-    fn meta_skill_prompt_limits_discovery_to_egosync_visible_skills() {
+    fn meta_skill_prompt_requires_real_discovery_without_auto_install() {
         let prompt = meta_skill_prompt(r#"{"find-skills":true,"skill-creator":false}"#);
 
-        assert!(prompt.contains("只能介绍 EgoSync 当前启用或可见的 Skill"));
-        assert!(prompt.contains("不得列出 Claude Code、gstack、opencode 或外部环境中的其它 Skill"));
-        assert!(prompt.contains("没有可见 Skill"));
+        assert!(prompt.contains("name=find-skills"));
+        assert!(prompt.contains("真实搜索"));
+        assert!(prompt.contains("未经用户确认不得安装或导入"));
+    }
+
+    #[test]
+    fn meta_skill_prompt_requires_creator_and_controlled_import() {
+        let prompt = meta_skill_prompt(r#"{"find-skills":false,"skill-creator":true}"#);
+
+        assert!(prompt.contains("name=skill-creator"));
+        assert!(prompt.contains("create_skill"));
+        assert!(prompt.contains("只有 create_skill 返回成功后"));
     }
 
     #[test]

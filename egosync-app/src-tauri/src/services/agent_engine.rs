@@ -24,6 +24,7 @@ use crate::models::task_decomposition::{
 use crate::services::secret_store;
 
 const OPENCODE_FALLBACK_NOTICE: &str = "Agent 引擎暂时不可用，当前为基础对话模式。\n\n";
+const OPENCODE_TOOL_EXECUTION_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Resolve the opencode project directory to a stable path outside the dev
 /// project tree. Using `"."` previously caused opencode to write `.opencode/`
@@ -464,6 +465,68 @@ fn build_tool_process_event_candidate_with_display_map(
     display_map: &McpToolDisplayMap,
 ) -> Option<ProcessEventCandidate> {
     build_tool_process_event_candidate_inner(part_raw, Some(display_map))
+}
+
+#[derive(Debug, Clone)]
+struct ToolExecutionDeadline {
+    part_id: String,
+    tool_name: String,
+    deadline: Instant,
+}
+
+fn update_tool_execution_deadline(
+    active: &mut Option<ToolExecutionDeadline>,
+    part_id: &str,
+    tool_name: &str,
+    status: &str,
+    now: Instant,
+) {
+    match status {
+        "running" => {
+            if active.as_ref().map(|current| current.part_id.as_str()) != Some(part_id) {
+                *active = Some(ToolExecutionDeadline {
+                    part_id: part_id.to_string(),
+                    tool_name: tool_name.to_string(),
+                    deadline: now + OPENCODE_TOOL_EXECUTION_TIMEOUT,
+                });
+            }
+        }
+        "completed" | "failed" | "error" | "cancelled" | "canceled" => {
+            if active.as_ref().map(|current| current.part_id.as_str()) == Some(part_id) {
+                *active = None;
+            }
+        }
+        _ => {}
+    }
+}
+
+fn tool_execution_timeout_candidate(tool_name: &str) -> ProcessEventCandidate {
+    ProcessEventCandidate {
+        event_type: "tool".to_string(),
+        tool_name: Some(tool_name.to_string()),
+        status: Some("failed".to_string()),
+        summary: format!("{} 加载超时，会话已终止", tool_name),
+        raw_json: serde_json::json!({
+            "tool": tool_name,
+            "status": "failed",
+            "error": "tool execution timeout",
+            "timeoutSeconds": OPENCODE_TOOL_EXECUTION_TIMEOUT.as_secs(),
+        }),
+    }
+}
+
+fn tool_execution_timeout_message(tool_name: &str) -> String {
+    if tool_name.eq_ignore_ascii_case("find-skills") {
+        format!(
+            "抱歉，{} 加载超时，Agent 会话已终止。请检查 Skill 安装路径是否重复，或稍后重试。",
+            tool_name
+        )
+    } else {
+        format!(
+            "抱歉，{} 执行超时，Agent 会话已终止，请稍后重试。",
+            tool_name
+        )
+    }
 }
 
 fn process_tool_summary(tool_name: &str, status: &str) -> String {
@@ -2403,6 +2466,7 @@ async fn try_run_opencode_stream(
     let mut accumulated_thinking = String::new();
     let mut completed = false;
     let mut drain_deadline: Option<tokio::time::Instant> = None;
+    let mut active_tool_timeout: Option<ToolExecutionDeadline> = None;
     // Fix 2: messageID → role mapping. opencode sends message.part.updated for
     // *both* user and assistant messages. We must learn each message's role from
     // "message.updated" events and only stream assistant-role parts to the UI.
@@ -2448,13 +2512,33 @@ async fn try_run_opencode_stream(
                 }
                 if final_message_id.is_some() {
                     if !accumulated_thinking.is_empty() {
-                        conversations::update_message_thinking(conv_pool, assistant_message_id, &accumulated_thinking).await.ok();
+                        conversations::update_message_thinking(
+                        conv_pool,
+                        assistant_message_id,
+                        &accumulated_thinking,
+                    )
+                    .await
+                    .ok();
                     }
-                    conversations::update_message_content(conv_pool, assistant_message_id, &final_text).await.ok();
-                    conversations::mark_message_complete(conv_pool, assistant_message_id).await.ok();
+                    conversations::update_message_content(
+                        conv_pool,
+                        assistant_message_id,
+                        &final_text,
+                    )
+                    .await
+                    .ok();
+                    conversations::mark_message_complete(conv_pool, assistant_message_id)
+                    .await
+                    .ok();
                     emit_stream_done(app_handle, conversation_id, Some(assistant_message_id));
                 } else {
-                    conversations::update_message_content(conv_pool, assistant_message_id, &accumulated_text).await.ok();
+                    conversations::update_message_content(
+                        conv_pool,
+                        assistant_message_id,
+                        &accumulated_text,
+                    )
+                    .await
+                    .ok();
                     if !accumulated_thinking.is_empty() {
                         conversations::update_message_thinking(conv_pool, assistant_message_id, &accumulated_thinking).await.ok();
                     }
@@ -2637,17 +2721,32 @@ async fn try_run_opencode_stream(
                                         {
                                             recorded_action_narrations.push(summary);
                                         }
-                                        if matches!(candidate.status.as_deref(), Some("running" | "completed")) {
-                                            let fallback_display_name = candidate
-                                                .tool_name
-                                                .clone()
-                                                .unwrap_or_else(|| tool_name.to_string());
-                                            let display_tool_name = live_tool_display_name(
-                                                tool_name,
-                                                part_raw,
-                                                &fallback_display_name,
+                                        let fallback_display_name = candidate
+                                            .tool_name
+                                            .clone()
+                                            .unwrap_or_else(|| tool_name.to_string());
+                                        let display_tool_name = live_tool_display_name(
+                                            tool_name,
+                                            part_raw,
+                                            &fallback_display_name,
+                                        );
+                                        update_tool_execution_deadline(
+                                            &mut active_tool_timeout,
+                                            &part.id,
+                                            &display_tool_name,
+                                            tool_status,
+                                            Instant::now(),
+                                        );
+                                        if matches!(
+                                            candidate.status.as_deref(),
+                                            Some("running" | "completed")
+                                        ) {
+                                            emit_tool_status(
+                                                app_handle,
+                                                conversation_id,
+                                                &display_tool_name,
+                                                tool_status,
                                             );
-                                            emit_tool_status(app_handle, conversation_id, &display_tool_name, tool_status);
                                         }
                                         persist_and_emit_process_event(
                                             app_handle,
@@ -2782,6 +2881,62 @@ async fn try_run_opencode_stream(
                 }
                 completed = true;
                 break;
+            }
+            _ = async {
+                if let Some(deadline) = active_tool_timeout
+                    .as_ref()
+                    .map(|active| active.deadline)
+                {
+                    tokio::time::sleep_until(deadline).await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            }, if active_tool_timeout.is_some() => {
+                let timed_out = active_tool_timeout.take().expect("guarded by is_some");
+                tracing::error!(
+                    session_id,
+                    tool_name = %timed_out.tool_name,
+                    timeout_seconds = OPENCODE_TOOL_EXECUTION_TIMEOUT.as_secs(),
+                    "opencode tool execution timed out"
+                );
+                let _ = tokio::time::timeout(
+                    Duration::from_secs(2),
+                    agent_bridge.abort_session(&session_id),
+                )
+                .await;
+                event_router.unsubscribe(&session_id).await;
+                if bridge_session_registered {
+                    delegate_bridge.unregister_session(&session_id).await;
+                }
+                for worker in delegate_workers {
+                    worker.abort();
+                }
+                let candidate = tool_execution_timeout_candidate(&timed_out.tool_name);
+                persist_and_emit_process_event(
+                    app_handle,
+                    conv_pool,
+                    conversation_id,
+                    assistant_message_id,
+                    &session_id,
+                    &candidate,
+                    Some(&project_dir),
+                )
+                .await;
+                let friendly = tool_execution_timeout_message(&timed_out.tool_name);
+                if final_message_id.is_some() {
+                    final_text.push_str(&friendly);
+                    conversations::update_message_content(conv_pool, assistant_message_id, &final_text).await.ok();
+                } else {
+                    accumulated_text.push_str(&friendly);
+                    conversations::update_message_content(conv_pool, assistant_message_id, &accumulated_text).await.ok();
+                }
+                if !accumulated_thinking.is_empty() {
+                    conversations::update_message_thinking(conv_pool, assistant_message_id, &accumulated_thinking).await.ok();
+                }
+                conversations::mark_message_complete(conv_pool, assistant_message_id).await.ok();
+                emit_stream_done(app_handle, conversation_id, final_message_id.as_deref());
+                opencode_sessions.lock().await.remove(conversation_id);
+                return Ok(());
             }
             _ = async {
                 if let Some(deadline) = drain_deadline {
@@ -5415,6 +5570,85 @@ mod tests {
         assert!(!should_flush_final_narration(false, "这是一个普通回答。"));
         assert!(!should_flush_final_narration(true, "   "));
         assert!(!should_flush_final_narration(true, "转换完成，查看输出内容。"));
+    }
+
+    #[test]
+    fn running_tool_starts_one_fixed_deadline_until_terminal_status() {
+        // WHY: repeated running updates must not postpone the timeout forever,
+        // otherwise a stuck Skill can keep the conversation loading indefinitely.
+        let now = Instant::now();
+        let mut active = None;
+
+        update_tool_execution_deadline(
+            &mut active,
+            "part-skill",
+            "find-skills",
+            "running",
+            now,
+        );
+        let original_deadline = active
+            .as_ref()
+            .expect("running tool needs a deadline")
+            .deadline;
+        update_tool_execution_deadline(
+            &mut active,
+            "part-skill",
+            "find-skills",
+            "running",
+            now + Duration::from_secs(10),
+        );
+
+        assert_eq!(original_deadline, now + OPENCODE_TOOL_EXECUTION_TIMEOUT);
+        assert_eq!(active.as_ref().unwrap().deadline, original_deadline);
+
+        update_tool_execution_deadline(
+            &mut active,
+            "part-skill",
+            "find-skills",
+            "completed",
+            now + Duration::from_secs(20),
+        );
+        assert!(active.is_none(), "terminal status must cancel the timeout");
+    }
+
+    #[test]
+    fn unrelated_tool_completion_does_not_clear_active_deadline() {
+        // WHY: opencode may report multiple tool parts; only the matching part
+        // may cancel the guard protecting a still-running Skill.
+        let now = Instant::now();
+        let mut active = None;
+        update_tool_execution_deadline(&mut active, "part-skill", "find-skills", "running", now);
+        update_tool_execution_deadline(&mut active, "part-other", "read", "failed", now);
+
+        assert_eq!(
+            active.as_ref().map(|item| item.part_id.as_str()),
+            Some("part-skill")
+        );
+    }
+
+    #[test]
+    fn tool_timeout_candidate_is_explicit_and_actionable() {
+        // WHY: timeout must become a persisted failed process event instead of
+        // silently leaving the UI spinner and assistant message incomplete.
+        let candidate = tool_execution_timeout_candidate("find-skills");
+
+        assert_eq!(candidate.event_type, "tool");
+        assert_eq!(candidate.tool_name.as_deref(), Some("find-skills"));
+        assert_eq!(candidate.status.as_deref(), Some("failed"));
+        assert_eq!(
+            candidate.raw_json.get("error").and_then(|value| value.as_str()),
+            Some("tool execution timeout")
+        );
+        assert_eq!(
+            candidate
+                .raw_json
+                .get("timeoutSeconds")
+                .and_then(|value| value.as_u64()),
+            Some(OPENCODE_TOOL_EXECUTION_TIMEOUT.as_secs())
+        );
+        assert!(
+            tool_execution_timeout_message("find-skills").contains("Skill 安装路径是否重复")
+        );
     }
 
     #[test]

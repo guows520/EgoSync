@@ -604,8 +604,8 @@
 
 **阶段 B — Skill 开启时实际执行**
 6. 进入 `UAT-全开角色` 对话界面
-7. 输入：`帮我搜索并推荐几个可以用的 Skill`
-8. 观察角色是否实际调用了 find-skills 工具，返回 Skill 列表
+7. 输入：`帮我搜索并推荐 3 个适合 React 前端性能优化的 Skill。请实际使用 find-skills 搜索，列出 Skill 名称、用途、来源和安装命令，但不要安装。`
+8. 观察角色是否实际调用了 find-skills 工具，并在 60 秒内从 running 进入 completed 或 failed；整轮对话应在 120 秒内结束
 9. 继续输入：`帮我创建一个新的 Skill，名字叫 uat-greeting，功能是帮我写问候语`
 10. 观察角色是否实际调用了 skill-creator 工具创建 Skill
 10a. 不重启应用，进入当前角色设置页，确认 `uat-greeting` 已出现在自定义 Skill 列表中并处于启用状态
@@ -690,6 +690,8 @@
 
 阶段 B：
 - 角色实际调用 find-skills 工具，返回可用的 Skill 列表
+- find-skills 在 60 秒内从 running 进入 completed 或 failed，整轮对话在 120 秒内结束，不得永久停留在加载状态
+- 若工具超时，界面明确提示失败并终止 Agent Session，assistant message 标记为 complete
 - 角色实际调用 skill-creator 工具创建 Skill
 - 创建成功后 `uat-greeting` 自动注册、绑定并启用到当前角色，无需手工导入或重启
 - 同一对话的下一条消息真实加载 `uat-greeting`，执行过程明确显示具体 Skill 名称

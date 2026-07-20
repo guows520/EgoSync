@@ -316,6 +316,7 @@ impl DelegateBridge {
         } else {
             let input = ImportCustomSkillInput {
                 content: Some(content.to_string()),
+                source_path: None,
                 overwrite_existing: false,
                 role_scope: Some(SkillRoleScope { all_roles: false, role_ids: vec![owner_id.to_string()] }),
             };

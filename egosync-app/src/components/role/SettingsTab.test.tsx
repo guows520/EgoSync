@@ -245,6 +245,7 @@ describe('SettingsTab role CRUD actions', () => {
     });
     vi.mocked(skillService.pickCustomDirectory).mockResolvedValue({
       content: '---\nname: daily-review\ndescription: 日复盘助手\n---\n',
+      sourcePath: 'C:/UAT/skills/daily-review',
     });
     vi.mocked(skillService.previewCustom).mockResolvedValue({
       name: 'daily-review',
@@ -254,6 +255,8 @@ describe('SettingsTab role CRUD actions', () => {
     });
     vi.mocked(skillService.importCustom).mockResolvedValue({
       status: 'imported',
+      runtimeReady: true,
+      runtimeError: null,
       entry: customSkill,
       preview: {
         name: 'daily-review',
@@ -293,6 +296,7 @@ describe('SettingsTab role CRUD actions', () => {
     await waitFor(() => {
       expect(skillService.importCustom).toHaveBeenCalledWith({
         content: '---\nname: daily-review\ndescription: 日复盘助手\n---\n',
+        sourcePath: 'C:/UAT/skills/daily-review',
         overwriteExisting: false,
         roleScope: { allRoles: false, roleIds: ['role-1'] },
       });
@@ -301,7 +305,7 @@ describe('SettingsTab role CRUD actions', () => {
       expect(roleService.list).toHaveBeenCalledTimes(1);
     });
     expect(roleService.updateSkills).not.toHaveBeenCalled();
-    expect(await screen.findByText('自定义 Skill 已导入并启用')).toBeInTheDocument();
+    expect(await screen.findByText('自定义 Skill 已导入并可立即使用')).toBeInTheDocument();
 
     Object.defineProperty(window, 'showDirectoryPicker', {
       configurable: true,
@@ -312,6 +316,7 @@ describe('SettingsTab role CRUD actions', () => {
   it('导入 Skill 时勾选全部角色会持久化全部角色范围', async () => {
     vi.mocked(skillService.pickCustomDirectory).mockResolvedValue({
       content: '---\nname: daily-review\ndescription: 日复盘助手\n---\n',
+      sourcePath: 'C:/UAT/skills/daily-review',
     });
     vi.mocked(skillService.previewCustom).mockResolvedValue({
       name: 'daily-review',
@@ -321,6 +326,8 @@ describe('SettingsTab role CRUD actions', () => {
     });
     vi.mocked(skillService.importCustom).mockResolvedValue({
       status: 'imported',
+      runtimeReady: true,
+      runtimeError: null,
       entry: customSkill,
       preview: {
         name: 'daily-review',
@@ -352,6 +359,7 @@ describe('SettingsTab role CRUD actions', () => {
     await waitFor(() => {
       expect(skillService.importCustom).toHaveBeenCalledWith({
         content: '---\nname: daily-review\ndescription: 日复盘助手\n---\n',
+        sourcePath: 'C:/UAT/skills/daily-review',
         overwriteExisting: false,
         roleScope: { allRoles: true, roleIds: [] },
       });
@@ -623,6 +631,7 @@ describe('SettingsTab role CRUD actions', () => {
   it('角色导入 Skill 时复用范围可以包含管家', async () => {
     vi.mocked(skillService.pickCustomDirectory).mockResolvedValue({
       content: '---\nname: daily-review\ndescription: 日复盘助手\n---\n',
+      sourcePath: 'C:/UAT/skills/daily-review',
     });
     vi.mocked(skillService.previewCustom).mockResolvedValue({
       name: 'daily-review',
@@ -632,6 +641,8 @@ describe('SettingsTab role CRUD actions', () => {
     });
     vi.mocked(skillService.importCustom).mockResolvedValue({
       status: 'imported',
+      runtimeReady: true,
+      runtimeError: null,
       entry: customSkill,
       preview: {
         name: 'daily-review',
@@ -663,6 +674,7 @@ describe('SettingsTab role CRUD actions', () => {
     await waitFor(() => {
       expect(skillService.importCustom).toHaveBeenCalledWith({
         content: '---\nname: daily-review\ndescription: 日复盘助手\n---\n',
+        sourcePath: 'C:/UAT/skills/daily-review',
         overwriteExisting: false,
         roleScope: { allRoles: false, roleIds: ['role-1', '__butler__'] },
       });
@@ -688,6 +700,7 @@ describe('SettingsTab role CRUD actions', () => {
     const onUpdateRole = vi.fn();
     vi.mocked(skillService.pickCustomDirectory).mockResolvedValue({
       content: '---\nname: daily-review\ndescription: 日复盘助手\n---\n',
+      sourcePath: 'C:/UAT/skills/daily-review',
     });
     vi.mocked(skillService.previewCustom).mockResolvedValue({
       name: 'daily-review',
@@ -697,6 +710,8 @@ describe('SettingsTab role CRUD actions', () => {
     });
     vi.mocked(skillService.importCustom).mockResolvedValue({
       status: 'duplicate',
+      runtimeReady: true,
+      runtimeError: null,
       entry: customSkill,
       preview: {
         name: 'daily-review',
@@ -731,13 +746,14 @@ describe('SettingsTab role CRUD actions', () => {
     });
     expect(onUpdateRole).toHaveBeenCalledWith({ ...baseRole, skillsConfig: '{"enabledSkillIds":["skill-1"]}' });
     expect(onUpdateRole).toHaveBeenCalledWith({ ...secondRole, skillsConfig: '{"enabledSkillIds":["skill-1"]}' });
-    expect(await screen.findByText('Skill 已存在，已更新复用范围')).toBeInTheDocument();
+    expect(await screen.findByText('Skill 已存在，已更新复用范围并可使用')).toBeInTheDocument();
   });
 
   it('导入 Skill 复用到其他角色后刷新所有复用角色配置，使复用角色默认启用', async () => {
     const onUpdateRole = vi.fn();
     vi.mocked(skillService.pickCustomDirectory).mockResolvedValue({
       content: '---\nname: daily-review\ndescription: 日复盘助手\n---\n',
+      sourcePath: 'C:/UAT/skills/daily-review',
     });
     vi.mocked(skillService.previewCustom).mockResolvedValue({
       name: 'daily-review',
@@ -747,6 +763,8 @@ describe('SettingsTab role CRUD actions', () => {
     });
     vi.mocked(skillService.importCustom).mockResolvedValue({
       status: 'imported',
+      runtimeReady: true,
+      runtimeError: null,
       entry: customSkill,
       preview: {
         name: 'daily-review',
@@ -779,6 +797,7 @@ describe('SettingsTab role CRUD actions', () => {
     await waitFor(() => {
       expect(skillService.importCustom).toHaveBeenCalledWith({
         content: '---\nname: daily-review\ndescription: 日复盘助手\n---\n',
+        sourcePath: 'C:/UAT/skills/daily-review',
         overwriteExisting: false,
         roleScope: { allRoles: false, roleIds: ['role-1', 'role-2'] },
       });
@@ -842,7 +861,7 @@ describe('SettingsTab role CRUD actions', () => {
       items: [opencodeSkill],
       skipped: { total: 1, reasons: ['缺少 SKILL.md 的条目已跳过'] },
     });
-    vi.mocked(skillService.importOpencode).mockResolvedValue({ status: 'imported', entry: opencodeEntry, synced: true });
+    vi.mocked(skillService.importOpencode).mockResolvedValue({ status: 'imported', entry: opencodeEntry, synced: true, runtimeReady: true, runtimeError: null });
     vi.mocked(skillService.listForRole)
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([opencodeEntry])
@@ -876,7 +895,7 @@ describe('SettingsTab role CRUD actions', () => {
       });
     });
     expect(onUpdateRole).toHaveBeenCalledWith(refreshedRole);
-    expect(await screen.findByText('opencode Skill 已导入并启用')).toBeInTheDocument();
+    expect(await screen.findByText('opencode Skill 已导入并可立即使用')).toBeInTheDocument();
     rerender(<SettingsTab role={refreshedRole} activeRoleCount={2} onUpdateRole={onUpdateRole} />);
     expect(screen.getAllByText('writer').length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: /收起/ })).toBeInTheDocument();

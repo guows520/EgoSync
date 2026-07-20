@@ -57,7 +57,8 @@ pub async fn mcp_server_update(
     opencode_sessions: State<'_, OpencodeSessions>,
 ) -> Result<McpServer, AppError> {
     let _guard = mcp_scope_lock.0.lock().await;
-    let server = crate::services::mcp_server::update_server(&pool, &agent_config, &id, input).await?;
+    let server =
+        crate::services::mcp_server::update_server(&pool, &agent_config, &id, input).await?;
     refresh_opencode_runtime_after_mcp_change(&sidecar, &opencode_sessions).await;
     Ok(server)
 }
@@ -118,8 +119,19 @@ pub async fn mcp_server_remove_from_role(
     opencode_sessions: State<'_, OpencodeSessions>,
 ) -> Result<(), AppError> {
     let _guard = mcp_scope_lock.0.lock().await;
-    crate::services::mcp_server::remove_from_role(&pool, &agent_config, &role_id, &server_id).await?;
+    crate::services::mcp_server::remove_from_role(&pool, &agent_config, &role_id, &server_id)
+        .await?;
     refresh_opencode_runtime_after_mcp_change(&sidecar, &opencode_sessions).await;
+    Ok(())
+}
+
+pub(crate) async fn refresh_opencode_runtime(
+    sidecar: &Arc<Mutex<SidecarManager>>,
+    opencode_sessions: &OpencodeSessions,
+) -> Result<(), AppError> {
+    let mut manager = sidecar.lock().await;
+    manager.restart().await?;
+    opencode_sessions.0.lock().await.clear();
     Ok(())
 }
 
@@ -127,14 +139,8 @@ async fn refresh_opencode_runtime_after_mcp_change(
     sidecar: &Arc<Mutex<SidecarManager>>,
     opencode_sessions: &OpencodeSessions,
 ) {
-    let mut manager = sidecar.lock().await;
-    match manager.restart().await {
-        Ok(()) => {
-            opencode_sessions.0.lock().await.clear();
-        }
-        Err(e) => {
-            tracing::warn!("opencode runtime refresh after MCP change failed: {}", e);
-        }
+    if let Err(e) = refresh_opencode_runtime(sidecar, opencode_sessions).await {
+        tracing::warn!("opencode runtime refresh after MCP change failed: {}", e);
     }
 }
 
@@ -163,7 +169,7 @@ mod tests {
             let body = &rest[..end];
 
             assert!(
-                body.contains("sidecar: State<'_, Arc<Mutex<SidecarManager>>>") ,
+                body.contains("sidecar: State<'_, Arc<Mutex<SidecarManager>>>"),
                 "{} must receive sidecar state so runtime config can reload",
                 command
             );

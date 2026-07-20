@@ -1,5 +1,9 @@
-use tauri::{AppHandle, Manager, State};
+use std::sync::Arc;
 
+use tauri::{AppHandle, Manager, State};
+use tokio::sync::Mutex;
+
+use crate::commands::chat::OpencodeSessions;
 use crate::db::pool::DbPool;
 use crate::error::AppError;
 use crate::models::skill::{
@@ -8,6 +12,7 @@ use crate::models::skill::{
     PreviewCustomSkillInput, SkillImportPreview, SkillRegistryEntry, BUTLER_SCOPE_ID,
 };
 use crate::services::agent_config::AgentConfigService;
+use crate::services::sidecar::SidecarManager;
 
 #[tauri::command]
 pub async fn skill_list_registry(
@@ -40,9 +45,13 @@ pub async fn skill_pick_custom_directory() -> Result<PickCustomSkillDirectoryRes
         return Err(AppError::ValidationError("未选择 Skill 文件夹".to_string()));
     };
     let skill_path = directory.join("SKILL.md");
-    let content = std::fs::read_to_string(&skill_path)
-        .map_err(|_| AppError::ValidationError("所选文件夹中未找到可读取的 SKILL.md".to_string()))?;
-    Ok(PickCustomSkillDirectoryResult { content })
+    let content = std::fs::read_to_string(&skill_path).map_err(|_| {
+        AppError::ValidationError("所选文件夹中未找到可读取的 SKILL.md".to_string())
+    })?;
+    Ok(PickCustomSkillDirectoryResult {
+        content,
+        source_path: directory.to_string_lossy().to_string(),
+    })
 }
 
 #[tauri::command]
@@ -99,7 +108,13 @@ pub async fn skill_discover_opencode(
     ensure_find_skills_enabled(&pool, &role_id).await?;
     let project_dir = opencode_workspace_dir(&app)?;
     let home_dir = user_home_dir()?;
-    crate::services::skill_registry::discover_opencode_skills(&pool, &role_id, &project_dir, &home_dir).await
+    crate::services::skill_registry::discover_opencode_skills(
+        &pool,
+        &role_id,
+        &project_dir,
+        &home_dir,
+    )
+    .await
 }
 
 async fn sync_all_agents_with_mcp(
@@ -113,7 +128,9 @@ async fn sync_all_agents_with_mcp(
     let mcp_prompts = crate::services::mcp_server::role_mcp_prompt_map(pool)
         .await
         .unwrap_or_default();
-    if let Err(e) = agent_config.full_sync_with_skills_and_mcp(roles, butler_skills, registry, &mcp_prompts) {
+    if let Err(e) =
+        agent_config.full_sync_with_skills_and_mcp(roles, butler_skills, registry, &mcp_prompts)
+    {
         tracing::warn!("opencode sync after {} failed: {}", action, e);
         return false;
     }
@@ -127,6 +144,8 @@ pub async fn skill_import_opencode(
     pool: State<'_, DbPool>,
     app: AppHandle,
     agent_config: State<'_, AgentConfigService>,
+    sidecar: State<'_, Arc<Mutex<SidecarManager>>>,
+    opencode_sessions: State<'_, OpencodeSessions>,
 ) -> Result<ImportOpencodeSkillResult, AppError> {
     ensure_find_skills_enabled(&pool, &role_id).await?;
     let project_dir = opencode_workspace_dir(&app)?;
@@ -146,10 +165,25 @@ pub async fn skill_import_opencode(
     let registry = crate::db::skills::list_skills(&pool).await?;
     let roles = crate::db::roles::list_all_roles(&pool).await?;
     let butler_skills = crate::services::butler_config::get_butler_skills(&pool).await?;
-    if !sync_all_agents_with_mcp(&pool, &agent_config, &roles, &butler_skills, &registry, "opencode skill import").await {
+    if !sync_all_agents_with_mcp(
+        &pool,
+        &agent_config,
+        &roles,
+        &butler_skills,
+        &registry,
+        "opencode skill import",
+    )
+    .await
+    {
         // registry 写入已成功，但 opencode agent 未同步：如实告知前端 synced=false，
         // 避免谎称"已启用"。下一次同步路径会重新落地（AC5 最终一致）。
         result.synced = false;
+    }
+    if result.synced {
+        match crate::commands::mcp::refresh_opencode_runtime(&sidecar, &opencode_sessions).await {
+            Ok(()) => result.runtime_ready = true,
+            Err(e) => result.runtime_error = Some(e.to_string()),
+        }
     }
     Ok(result)
 }
@@ -160,6 +194,8 @@ pub async fn skill_import_custom(
     pool: State<'_, DbPool>,
     app: AppHandle,
     agent_config: State<'_, AgentConfigService>,
+    sidecar: State<'_, Arc<Mutex<SidecarManager>>>,
+    opencode_sessions: State<'_, OpencodeSessions>,
 ) -> Result<ImportCustomSkillResult, AppError> {
     let app_data_dir = app
         .path()
@@ -169,13 +205,34 @@ pub async fn skill_import_custom(
         .join("opencode-workspace")
         .join(".opencode")
         .join("skills");
-    let result = crate::services::skill_registry::import_custom_skill(&pool, &skills_root, &input).await?;
-    let registry = crate::db::skills::list_skills(&pool).await.unwrap_or_default();
-    let roles = crate::db::roles::list_all_roles(&pool).await.unwrap_or_default();
+    let mut result =
+        crate::services::skill_registry::import_custom_skill(&pool, &skills_root, &input).await?;
+    let registry = crate::db::skills::list_skills(&pool)
+        .await
+        .unwrap_or_default();
+    let roles = crate::db::roles::list_all_roles(&pool)
+        .await
+        .unwrap_or_default();
     let butler_skills = crate::services::butler_config::get_butler_skills(&pool)
         .await
         .unwrap_or_else(|_| crate::services::butler_config::default_butler_skills());
-    sync_all_agents_with_mcp(&pool, &agent_config, &roles, &butler_skills, &registry, "skill import").await;
+    let synced = sync_all_agents_with_mcp(
+        &pool,
+        &agent_config,
+        &roles,
+        &butler_skills,
+        &registry,
+        "skill import",
+    )
+    .await;
+    if synced {
+        match crate::commands::mcp::refresh_opencode_runtime(&sidecar, &opencode_sessions).await {
+            Ok(()) => result.runtime_ready = true,
+            Err(e) => result.runtime_error = Some(e.to_string()),
+        }
+    } else {
+        result.runtime_error = Some("opencode agent 配置同步失败".to_string());
+    }
     Ok(result)
 }
 
@@ -188,12 +245,24 @@ pub async fn skill_remove_from_role(
 ) -> Result<(), AppError> {
     crate::services::skill_registry::remove_skill_from_role(&pool, &skill_id, &role_id).await?;
 
-    let registry = crate::db::skills::list_skills(&pool).await.unwrap_or_default();
-    let roles = crate::db::roles::list_all_roles(&pool).await.unwrap_or_default();
+    let registry = crate::db::skills::list_skills(&pool)
+        .await
+        .unwrap_or_default();
+    let roles = crate::db::roles::list_all_roles(&pool)
+        .await
+        .unwrap_or_default();
     let butler_skills = crate::services::butler_config::get_butler_skills(&pool)
         .await
         .unwrap_or_else(|_| crate::services::butler_config::default_butler_skills());
-    sync_all_agents_with_mcp(&pool, &agent_config, &roles, &butler_skills, &registry, "skill remove from role").await;
+    sync_all_agents_with_mcp(
+        &pool,
+        &agent_config,
+        &roles,
+        &butler_skills,
+        &registry,
+        "skill remove from role",
+    )
+    .await;
     Ok(())
 }
 
@@ -205,11 +274,23 @@ pub async fn skill_delete(
 ) -> Result<(), AppError> {
     crate::services::skill_registry::delete_custom_skill(&pool, &skill_id).await?;
 
-    let registry = crate::db::skills::list_skills(&pool).await.unwrap_or_default();
-    let roles = crate::db::roles::list_all_roles(&pool).await.unwrap_or_default();
+    let registry = crate::db::skills::list_skills(&pool)
+        .await
+        .unwrap_or_default();
+    let roles = crate::db::roles::list_all_roles(&pool)
+        .await
+        .unwrap_or_default();
     let butler_skills = crate::services::butler_config::get_butler_skills(&pool)
         .await
         .unwrap_or_else(|_| crate::services::butler_config::default_butler_skills());
-    sync_all_agents_with_mcp(&pool, &agent_config, &roles, &butler_skills, &registry, "skill delete").await;
+    sync_all_agents_with_mcp(
+        &pool,
+        &agent_config,
+        &roles,
+        &butler_skills,
+        &registry,
+        "skill delete",
+    )
+    .await;
     Ok(())
 }

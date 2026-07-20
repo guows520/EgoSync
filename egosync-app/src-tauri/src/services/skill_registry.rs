@@ -517,12 +517,9 @@ pub async fn import_opencode_skill(
     // 受控目录即 opencode 项目级 skills 根，副本天然被 agent 自动发现（AC5），
     // 且源文件被删/改后 registry 仍指向稳定副本（AC4 持久性）。
     let managed_path = managed_skill_path(skills_root, &parsed.name, &parsed.content_hash);
-    if let Some(parent) = managed_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| AppError::ValidationError(format!("创建受控 Skill 目录失败: {}", e)))?;
-    }
-    std::fs::write(&managed_path, &content)
-        .map_err(|e| AppError::ValidationError(format!("保存 Skill 文件失败: {}", e)))?;
+    let source_dir = source_path.parent()
+        .ok_or_else(|| AppError::ValidationError("opencode Skill 源目录无效".to_string()))?;
+    replace_managed_skill_directory(source_dir, managed_path.parent().unwrap_or(skills_root))?;
     let managed_path_text = managed_path.to_string_lossy().to_string();
     let entry = match skills::create_skill_with_source(
         pool,
@@ -574,6 +571,8 @@ async fn finalize_opencode_binding(
         // registry 与绑定已落地；opencode agent 同步在 command 层执行，
         // synced 默认 true，command 层在 full_sync 失败时下调为 false。
         synced: true,
+        runtime_ready: false,
+        runtime_error: None,
     })
 }
 
@@ -601,7 +600,17 @@ pub async fn import_custom_skill(
     skills_root: &Path,
     input: &ImportCustomSkillInput,
 ) -> Result<ImportCustomSkillResult, AppError> {
-    let content = load_skill_content(input.content.as_deref())?;
+    let source_dir = input.source_path.as_deref().map(PathBuf::from);
+    let content = if let Some(source_dir) = source_dir.as_ref() {
+        let source_content = std::fs::read_to_string(source_dir.join(SKILL_FILE_NAME))
+            .map_err(|e| AppError::ValidationError(format!("读取源 Skill 失败: {}", e)))?;
+        if input.content.as_deref().is_some_and(|previewed| previewed != source_content) {
+            return Err(AppError::ValidationError("Skill 文件已变更，请重新预览后导入".to_string()));
+        }
+        source_content
+    } else {
+        load_skill_content(input.content.as_deref())?
+    };
     let parsed = parse_skill_content(&content)?;
     let preview = preview_from_parsed(pool, parsed.clone()).await?;
     let scope = normalized_scope(input.role_scope.as_ref());
@@ -620,17 +629,23 @@ pub async fn import_custom_skill(
                 status: "duplicate".to_string(),
                 entry: Some(duplicate.existing.clone()),
                 preview,
+                runtime_ready: false,
+                runtime_error: None,
             });
         }
     }
 
     let managed_path = managed_skill_path(skills_root, &parsed.name, &parsed.content_hash);
-    if let Some(parent) = managed_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| AppError::ValidationError(format!("创建受控 Skill 目录失败: {}", e)))?;
+    if let Some(source_dir) = source_dir.as_ref() {
+        replace_managed_skill_directory(source_dir, managed_path.parent().unwrap_or(skills_root))?;
+    } else {
+        if let Some(parent) = managed_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| AppError::ValidationError(format!("创建受控 Skill 目录失败: {}", e)))?;
+        }
+        std::fs::write(&managed_path, &content)
+            .map_err(|e| AppError::ValidationError(format!("保存 Skill 文件失败: {}", e)))?;
     }
-    std::fs::write(&managed_path, &content)
-        .map_err(|e| AppError::ValidationError(format!("保存 Skill 文件失败: {}", e)))?;
     let managed_path_text = managed_path.to_string_lossy().to_string();
 
     let entry = if let Some(duplicate) = preview.duplicate.as_ref() {
@@ -668,6 +683,8 @@ pub async fn import_custom_skill(
         status: "imported".to_string(),
         entry: Some(entry),
         preview,
+        runtime_ready: false,
+        runtime_error: None,
     })
 }
 
@@ -812,6 +829,27 @@ fn content_hash(content: &str) -> String {
     format!("{:016x}", hash)
 }
 
+fn copy_skill_directory(source: &Path, destination: &Path) -> Result<(), AppError> {
+    std::fs::create_dir_all(destination).map_err(|e| AppError::ValidationError(format!("创建受控 Skill 目录失败: {}", e)))?;
+    for entry in std::fs::read_dir(source).map_err(|e| AppError::ValidationError(format!("读取 Skill 目录失败: {}", e)))? {
+        let entry = entry.map_err(|e| AppError::ValidationError(format!("读取 Skill 条目失败: {}", e)))?;
+        let file_type = entry.file_type().map_err(|e| AppError::ValidationError(format!("读取 Skill 条目类型失败: {}", e)))?;
+        if file_type.is_symlink() { return Err(AppError::ValidationError("Skill 目录不能包含符号链接".to_string())); }
+        let target = destination.join(entry.file_name());
+        if file_type.is_dir() { copy_skill_directory(&entry.path(), &target)?; }
+        else if file_type.is_file() { std::fs::copy(entry.path(), target).map_err(|e| AppError::ValidationError(format!("复制 Skill 文件失败: {}", e)))?; }
+    }
+    Ok(())
+}
+
+fn replace_managed_skill_directory(source: &Path, destination: &Path) -> Result<(), AppError> {
+    let temp = destination.with_extension("importing");
+    if temp.exists() { std::fs::remove_dir_all(&temp).map_err(|e| AppError::ValidationError(format!("清理临时 Skill 目录失败: {}", e)))?; }
+    copy_skill_directory(source, &temp)?;
+    if destination.exists() { std::fs::remove_dir_all(destination).map_err(|e| AppError::ValidationError(format!("替换受控 Skill 目录失败: {}", e)))?; }
+    std::fs::rename(temp, destination).map_err(|e| AppError::ValidationError(format!("保存 Skill 目录失败: {}", e)))
+}
+
 fn managed_skill_path(skills_root: &Path, name: &str, _content_hash: &str) -> PathBuf {
     // OpenCode 只发现 `.opencode/skills/<name>/SKILL.md`，且目录名必须与
     // frontmatter name 一致。validate_skill_name 已在到达这里前完成路径安全校验。
@@ -823,6 +861,19 @@ mod tests {
     use super::*;
     use sqlx::sqlite::SqlitePoolOptions;
     use tempfile::tempdir;
+
+    #[test]
+    fn copy_skill_directory_preserves_scripts() {
+        let source = tempdir().unwrap();
+        std::fs::write(source.path().join(SKILL_FILE_NAME), skill_content("ppt-generation", "生成演示文稿")).unwrap();
+        std::fs::create_dir_all(source.path().join("scripts")).unwrap();
+        std::fs::write(source.path().join("scripts").join("generate.py"), "print('ok')").unwrap();
+        let destination = tempdir().unwrap();
+        let target = destination.path().join("ppt-generation");
+        copy_skill_directory(source.path(), &target).unwrap();
+        assert!(target.join(SKILL_FILE_NAME).is_file());
+        assert!(target.join("scripts").join("generate.py").is_file());
+    }
 
     async fn setup_test_db() -> SqlitePool {
         let pool = SqlitePoolOptions::new()
@@ -1059,6 +1110,7 @@ mod tests {
             dir.path(),
             &ImportCustomSkillInput {
                 content: Some(skill_content("daily-review", "日复盘助手")),
+                source_path: None,
                 overwrite_existing: false,
                 role_scope: None,
             },
@@ -1082,6 +1134,7 @@ mod tests {
             dir.path(),
             &ImportCustomSkillInput {
                 content: Some(skill_content("daily-review", "日复盘助手")),
+                source_path: None,
                 overwrite_existing: false,
                 role_scope: Some(SkillRoleScope {
                     all_roles: true,
@@ -1192,6 +1245,7 @@ mod tests {
             dir.path(),
             &ImportCustomSkillInput {
                 content: Some(skill_content("daily-review", "日复盘助手")),
+                source_path: None,
                 overwrite_existing: false,
                 role_scope: Some(SkillRoleScope {
                     all_roles: false,
@@ -1228,6 +1282,7 @@ mod tests {
             dir.path(),
             &ImportCustomSkillInput {
                 content: Some(skill_content("daily-review", "日复盘助手")),
+                source_path: None,
                 overwrite_existing: false,
                 role_scope: Some(SkillRoleScope {
                     all_roles: true,
@@ -1253,6 +1308,7 @@ mod tests {
             dir.path(),
             &ImportCustomSkillInput {
                 content: Some(content.clone()),
+                source_path: None,
                 overwrite_existing: false,
                 role_scope: None,
             },
@@ -1265,6 +1321,7 @@ mod tests {
             dir.path(),
             &ImportCustomSkillInput {
                 content: Some(content),
+                source_path: None,
                 overwrite_existing: false,
                 role_scope: None,
             },

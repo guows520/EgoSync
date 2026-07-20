@@ -625,12 +625,12 @@
 
 **阶段 D — 自定义 Skill 导入并执行**
 17. 进入 `UAT-全开角色` 设置页的 Skill 区域
-18. 点击「导入自定义 Skill」，选择文件 `C:\UAT\skills\uat-weekly-report\SKILL.md`
+18. 点击「导入自定义 Skill」，选择文件夹 `C:\UAT\skills\uat-weekly-report`（文件夹根目录必须包含 `SKILL.md`；`scripts/`、`assets/` 等配套内容会一并复制）
 19. 查看解析预览（名称应为 `uat-weekly-report`，说明为 `生成周报摘要的自定义技能`）
 20. 确认导入
 21. 在该角色的 Skill 列表中启用 `uat-weekly-report`
-22. 完全退出并重启应用
-23. 重新进入该角色设置页，确认 `uat-weekly-report` 仍在列表中且为启用状态
+22. 确认界面提示“自定义 Skill 已导入并可立即使用”；无需重启应用
+23. 保持当前应用运行，重新进入该角色设置页，确认 `uat-weekly-report` 仍在列表中且为启用状态
 24. 进入该角色对话，输入：`用 uat-weekly-report 技能帮我生成本周周报摘要，本周完成了产品需求文档和用户调研`
 25. 观察角色是否实际调用了该自定义 Skill
 
@@ -707,7 +707,8 @@
 阶段 D：
 - 导入预览正确显示 name=`uat-weekly-report`、description=`生成周报摘要的自定义技能`
 - 导入成功后 Skill 出现在列表中，sourceType 为 custom
-- 重启后该 Skill 仍在列表中且启用状态保留（已复制到受控目录）
+- Skill 完整目录已复制到受控目录，导入后无需重启即可加载；若运行时刷新失败，界面必须明确提示重启后生效
+- 重新进入设置页后该 Skill 仍在列表中且启用状态保留
 - 对话中角色实际调用该自定义 Skill 生成周报摘要
 - 生成的摘要与输入内容相关，非空泛模板
 

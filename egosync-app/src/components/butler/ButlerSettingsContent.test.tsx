@@ -96,7 +96,7 @@ describe('ButlerSettingsContent', () => {
     });
     vi.mocked(skillService.listAllRoleSkills).mockResolvedValue([]);
     vi.mocked(skillService.discoverOpencode).mockResolvedValue({ items: [], skipped: { total: 0, reasons: [] } });
-    vi.mocked(skillService.importOpencode).mockResolvedValue({ status: 'imported', entry: null, synced: true });
+    vi.mocked(skillService.importOpencode).mockResolvedValue({ status: 'imported', entry: null, synced: true, runtimeReady: true, runtimeError: null });
     vi.mocked(roleService.list).mockResolvedValue([baseRole, secondRole]);
     vi.mocked(missionService.get).mockResolvedValue(null);
     vi.mocked(missionService.inferValues).mockResolvedValue(null);
@@ -177,6 +177,7 @@ describe('ButlerSettingsContent', () => {
   it('管家选择 Skill 文件夹时可选择复用角色范围', async () => {
     vi.mocked(skillService.pickCustomDirectory).mockResolvedValue({
       content: '---\nname: daily-review\ndescription: 日复盘助手\n---\n',
+      sourcePath: 'C:/UAT/skills/daily-review',
     });
     vi.mocked(skillService.previewCustom).mockResolvedValue({
       name: 'daily-review',
@@ -186,6 +187,8 @@ describe('ButlerSettingsContent', () => {
     });
     vi.mocked(skillService.importCustom).mockResolvedValue({
       status: 'imported',
+      runtimeReady: true,
+      runtimeError: null,
       entry: customSkill,
       preview: {
         name: 'daily-review',
@@ -342,7 +345,7 @@ describe('ButlerSettingsContent', () => {
       items: [opencodeSkill],
       skipped: { total: 1, reasons: ['缺少 SKILL.md 的条目已跳过'] },
     });
-    vi.mocked(skillService.importOpencode).mockResolvedValue({ status: 'imported', entry: opencodeEntry, synced: true });
+    vi.mocked(skillService.importOpencode).mockResolvedValue({ status: 'imported', entry: opencodeEntry, synced: true, runtimeReady: true, runtimeError: null });
     vi.mocked(skillService.listAllRoleSkills)
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([opencodeEntry])
@@ -470,6 +473,7 @@ describe('ButlerSettingsContent', () => {
   it('管家导入 Skill 的复用范围包含管家选项', async () => {
     vi.mocked(skillService.pickCustomDirectory).mockResolvedValue({
       content: '---\nname: daily-review\ndescription: 日复盘助手\n---\n',
+      sourcePath: 'C:/UAT/skills/daily-review',
     });
     vi.mocked(skillService.previewCustom).mockResolvedValue({
       name: 'daily-review',
@@ -479,6 +483,8 @@ describe('ButlerSettingsContent', () => {
     });
     vi.mocked(skillService.importCustom).mockResolvedValue({
       status: 'imported',
+      runtimeReady: true,
+      runtimeError: null,
       entry: customSkill,
       preview: {
         name: 'daily-review',

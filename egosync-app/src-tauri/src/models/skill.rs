@@ -87,12 +87,15 @@ pub struct ImportOpencodeSkillResult {
     /// registry 写入后是否已成功同步到 opencode agent 配置。
     /// command 层在 full_sync 失败时置为 false，前端据此避免谎称"已启用"。
     pub synced: bool,
+    pub runtime_ready: bool,
+    pub runtime_error: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct PickCustomSkillDirectoryResult {
     pub content: String,
+    pub source_path: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -106,6 +109,8 @@ pub struct PreviewCustomSkillInput {
 pub struct ImportCustomSkillInput {
     pub content: Option<String>,
     #[serde(default)]
+    pub source_path: Option<String>,
+    #[serde(default)]
     pub overwrite_existing: bool,
     #[serde(default)]
     pub role_scope: Option<SkillRoleScope>,
@@ -117,4 +122,6 @@ pub struct ImportCustomSkillResult {
     pub status: String,
     pub entry: Option<SkillRegistryEntry>,
     pub preview: SkillImportPreview,
+    pub runtime_ready: bool,
+    pub runtime_error: Option<String>,
 }

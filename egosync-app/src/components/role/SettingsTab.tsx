@@ -64,6 +64,7 @@ export function SettingsTab({
   const [importingOpencodePath, setImportingOpencodePath] = useState('');
   const [removingOpencodeId, setRemovingOpencodeId] = useState('');
   const [pendingSkillContent, setPendingSkillContent] = useState('');
+  const [pendingSkillSourcePath, setPendingSkillSourcePath] = useState('');
   const [reuseAllRoles, setReuseAllRoles] = useState(false);
   const [reuseRoleIds, setReuseRoleIds] = useState<string[]>([role.id]);
   const [isLoadingSkills, setIsLoadingSkills] = useState(false);
@@ -120,6 +121,7 @@ export function SettingsTab({
     setImportingOpencodePath('');
     setRemovingOpencodeId('');
     setPendingSkillContent('');
+    setPendingSkillSourcePath('');
     setReuseAllRoles(false);
     setReuseRoleIds([role.id]);
     setRoleMcpServers([]);
@@ -318,6 +320,7 @@ export function SettingsTab({
       const picked = await skillService.pickCustomDirectory();
       const preview = await skillService.previewCustom({ content: picked.content });
       setPendingSkillContent(picked.content);
+      setPendingSkillSourcePath(picked.sourcePath);
       setSkillPreview(preview);
     } catch (e) {
       const text = typeof e === 'string' ? e : (JSON.stringify(e) ?? String(e));
@@ -325,6 +328,7 @@ export function SettingsTab({
         return;
       }
       setPendingSkillContent('');
+      setPendingSkillSourcePath('');
       setError(toFriendlyError(e, '未能从所选 Skill 文件夹读取 SKILL.md'));
     } finally {
       setIsPickingDirectory(false);
@@ -339,6 +343,7 @@ export function SettingsTab({
     try {
       const result = await skillService.importCustom({
         content: pendingSkillContent,
+        sourcePath: pendingSkillSourcePath,
         overwriteExisting,
         roleScope: { allRoles: reuseAllRoles, roleIds: reuseAllRoles ? [] : reuseRoleIds },
       });
@@ -354,7 +359,12 @@ export function SettingsTab({
       }
       setSkillPreview(result.status === 'duplicate' ? result.preview : null);
       setPendingSkillContent(result.status === 'duplicate' ? pendingSkillContent : '');
-      setSettingsSavedMessage(result.status === 'duplicate' ? 'Skill 已存在，已更新复用范围' : '自定义 Skill 已导入并启用');
+      setPendingSkillSourcePath(result.status === 'duplicate' ? pendingSkillSourcePath : '');
+      if (!result.runtimeReady) {
+        setSettingsSavedMessage('自定义 Skill 已导入，但运行时刷新失败；重启应用后生效');
+      } else {
+        setSettingsSavedMessage(result.status === 'duplicate' ? 'Skill 已存在，已更新复用范围并可使用' : '自定义 Skill 已导入并可立即使用');
+      }
     } catch (e) {
       setError(toFriendlyError(e, '导入自定义 Skill 失败，请稍后重试'));
     } finally {
@@ -423,8 +433,10 @@ export function SettingsTab({
       // 如实提示用户稍后会自动重试同步。
       if (result.status === 'duplicate') {
         setSettingsSavedMessage('Skill 已存在，已更新复用范围');
+      } else if (result.synced && result.runtimeReady) {
+        setSettingsSavedMessage('opencode Skill 已导入并可立即使用');
       } else if (result.synced) {
-        setSettingsSavedMessage('opencode Skill 已导入并启用');
+        setSettingsSavedMessage('opencode Skill 已导入，但运行时刷新失败；重启应用后生效');
       } else {
         setSettingsSavedMessage('opencode Skill 已导入，但同步到 agent 暂时失败，将在下次同步时自动生效');
       }

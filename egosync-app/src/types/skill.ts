@@ -52,6 +52,8 @@ export interface ImportOpencodeSkillResult {
   entry: SkillRegistryEntry | null;
   /** registry 写入后是否已成功同步到 opencode agent。false 时不应声称"已启用"。 */
   synced: boolean;
+  runtimeReady: boolean;
+  runtimeError: string | null;
 }
 
 export interface SkillImportPreview {
@@ -63,6 +65,7 @@ export interface SkillImportPreview {
 
 export interface PickCustomSkillDirectoryResult {
   content: string;
+  sourcePath: string;
 }
 
 export interface PreviewCustomSkillInput {
@@ -71,6 +74,7 @@ export interface PreviewCustomSkillInput {
 
 export interface ImportCustomSkillInput {
   content?: string;
+  sourcePath?: string;
   overwriteExisting?: boolean;
   roleScope?: SkillRoleScope;
 }
@@ -79,4 +83,6 @@ export interface ImportCustomSkillResult {
   status: 'imported' | 'duplicate';
   entry: SkillRegistryEntry | null;
   preview: SkillImportPreview;
+  runtimeReady: boolean;
+  runtimeError: string | null;
 }

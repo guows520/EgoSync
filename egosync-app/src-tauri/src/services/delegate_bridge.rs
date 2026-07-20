@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -32,7 +32,7 @@ pub struct DelegateBridge {
     sessions: Arc<Mutex<HashMap<String, DelegateSessionContext>>>,
     metadata_lock: Arc<Mutex<()>>,
     skill_creation_lock: Arc<Mutex<()>>,
-    session_rollovers: Arc<Mutex<HashSet<String>>>,
+    runtime_refresh_pending: Arc<Mutex<bool>>,
     delegation_limit: Arc<Semaphore>,
     connection_limit: Arc<Semaphore>,
     token: String,
@@ -122,7 +122,7 @@ impl DelegateBridge {
             sessions: Arc::new(Mutex::new(HashMap::new())),
             metadata_lock: Arc::new(Mutex::new(())),
             skill_creation_lock: Arc::new(Mutex::new(())),
-            session_rollovers: Arc::new(Mutex::new(HashSet::new())),
+            runtime_refresh_pending: Arc::new(Mutex::new(false)),
             delegation_limit: Arc::new(Semaphore::new(MAX_CONCURRENT_DELEGATIONS)),
             connection_limit: Arc::new(Semaphore::new(MAX_CONCURRENT_CONNECTIONS)),
             token,
@@ -169,8 +169,13 @@ impl DelegateBridge {
         );
     }
 
-    pub async fn take_session_rollover(&self, session_id: &str) -> bool {
-        self.session_rollovers.lock().await.remove(session_id)
+    pub async fn request_runtime_refresh(&self) {
+        *self.runtime_refresh_pending.lock().await = true;
+    }
+
+    pub async fn take_runtime_refresh(&self) -> bool {
+        let mut pending = self.runtime_refresh_pending.lock().await;
+        std::mem::take(&mut *pending)
     }
 
     async fn create_skill(&self, req: CreateSkillRequest) -> CreateSkillResponse {
@@ -394,7 +399,13 @@ impl DelegateBridge {
             };
         }
 
-        self.session_rollovers.lock().await.insert(session_id.to_string());
+        self.request_runtime_refresh().await;
+        if let Some(app_handle) = self.app_handle.as_ref() {
+            let _ = app_handle.emit(
+                "skill-registry-updated",
+                serde_json::json!({ "ownerId": owner_id, "skillId": entry.id }),
+            );
+        }
 
         CreateSkillResponse {
             status: "ok".to_string(),
@@ -1097,6 +1108,16 @@ mod tests {
         assert_eq!(find_header_end(request), Some(38));
     }
 
+    #[tokio::test]
+    async fn runtime_refresh_flag_is_consumed_once() {
+        // WHY: a newly created Skill must restart the process-level OpenCode
+        // registry exactly once before the next message is sent.
+        let (bridge, _dir) = test_bridge().await;
+        bridge.request_runtime_refresh().await;
+        assert!(bridge.take_runtime_refresh().await);
+        assert!(!bridge.take_runtime_refresh().await);
+    }
+
     #[test]
     fn create_task_request_accepts_camel_case_tool_payload() {
         // WHY: the opencode custom tool and Rust bridge must share the public
@@ -1135,14 +1156,6 @@ mod tests {
             .await;
         assert_eq!(response.status, "session_not_found");
         assert!(crate::db::skills::list_skills(&bridge.main_pool).await.unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn session_rollover_is_consumed_once() {
-        let (bridge, _dir) = test_bridge().await;
-        bridge.session_rollovers.lock().await.insert("session-1".into());
-        assert!(bridge.take_session_rollover("session-1").await);
-        assert!(!bridge.take_session_rollover("session-1").await);
     }
 
     #[tokio::test]

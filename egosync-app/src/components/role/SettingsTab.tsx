@@ -9,6 +9,7 @@ import type { ProactivityLevel, Role, RoleSkillsConfig } from '../../types/role'
 import type { McpServer } from '../../types/mcp';
 import type { OpencodeSkillCandidate, SkillImportPreview, SkillRegistryEntry } from '../../types/skill';
 import { ProactivityToggle } from './ProactivityToggle';
+import { useTauriEvent } from '../../hooks/useTauriEvent';
 
 interface SettingsTabProps {
   role: Role;
@@ -142,6 +143,13 @@ export function SettingsTab({
     setSkills(parseSkillsConfig(role.skillsConfig));
   }, [role.skillsConfig]);
 
+  useTauriEvent<{ ownerId: string }>('skill-registry-updated', (payload) => {
+    if (payload.ownerId !== role.id) return;
+    void skillService.listForRole(role.id)
+      .then(setRegistrySkills)
+      .catch(e => setError(toFriendlyError(e, 'Skill 列表刷新失败，请重新打开设置页')));
+  }, [role.id]);
+
   useEffect(() => {
     let cancelled = false;
     setIsLoadingSkills(true);
@@ -241,18 +249,35 @@ export function SettingsTab({
     setError('');
     setSettingsSavedMessage('');
     try {
-      await skillService.removeFromRole(skillId, role.id);
-      const items = await skillService.listForRole(role.id);
+      await skillService.delete(skillId);
+    } catch (e) {
+      setError(toFriendlyError(e, '删除自定义 Skill 失败，请稍后重试'));
+      setPendingSkill(null);
+      return;
+    }
+
+    setDeleteSkillTarget(null);
+    setRegistrySkills(prev => prev.filter(item => item.id !== skillId));
+    setSkills(prev => ({
+      ...prev,
+      enabledSkillIds: prev.enabledSkillIds.filter(id => id !== skillId),
+    }));
+
+    try {
+      const [items, refreshedRoles] = await Promise.all([
+        skillService.listForRole(role.id),
+        roleService.list(),
+      ]);
       setRegistrySkills(items);
-      setSkills(prev => ({
-        ...prev,
-        enabledSkillIds: prev.enabledSkillIds.filter(id => id !== skillId),
-      }));
-      setDeleteSkillTarget(null);
+      refreshedRoles.forEach(item => onUpdateRole?.(item));
+      const refreshedCurrentRole = refreshedRoles.find(item => item.id === role.id);
+      if (refreshedCurrentRole) {
+        setSkills(parseSkillsConfig(refreshedCurrentRole.skillsConfig));
+      }
       setSettingsSavedMessage('自定义 Skill 已删除');
       setTimeout(() => setSettingsSavedMessage(''), MESSAGE_TIMEOUT_MS);
     } catch (e) {
-      setError(toFriendlyError(e, '删除自定义 Skill 失败，请稍后重试'));
+      setError(toFriendlyError(e, '自定义 Skill 已删除，但列表刷新失败，请重新打开设置页'));
     } finally {
       setPendingSkill(null);
     }
@@ -969,7 +994,7 @@ export function SettingsTab({
           <div role="dialog" aria-modal="true" aria-label="删除自定义 Skill" className="w-[380px] rounded-2xl bg-white dark:bg-slate-800 p-6 shadow-2xl">
             <h3 className="mb-3 text-[16px] font-semibold text-slate-800 dark:text-slate-100">删除自定义 Skill</h3>
             <p className="mb-5 text-[14px] leading-relaxed text-slate-600 dark:text-slate-300">
-              确认删除「{deleteSkillTarget.name}」吗？
+              确认删除「{deleteSkillTarget.name}」吗？该 Skill 将从所有角色和管家中删除。
             </p>
             <div className="flex justify-end gap-3">
               <button type="button" onClick={() => setDeleteSkillTarget(null)} disabled={pendingSkill !== null} className="rounded-lg border border-slate-200 dark:border-slate-700 px-5 py-2.5 text-[13px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60">取消</button>

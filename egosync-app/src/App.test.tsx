@@ -34,11 +34,12 @@ vi.mock('./components/layout/Sidebar', () => ({
 }))
 
 vi.mock('./components/butler/ButlerView', () => ({
-  ButlerView: ({ sourceNavigationTarget, onSourceNavigationHandled, onRoleSourceNavigation, chatRefreshTrigger }: any) => (
+  ButlerView: ({ roles, sourceNavigationTarget, onSourceNavigationHandled, onRoleSourceNavigation, chatRefreshTrigger }: any) => (
     <div>
       <div>管家视图</div>
       <div data-testid="app-butler-source-target">{sourceNavigationTarget?.messageId ?? 'none'}</div>
       <div data-testid="app-butler-chat-refresh">{chatRefreshTrigger}</div>
+      <div data-testid="app-role-skills-config">{roles?.[0]?.skillsConfig ?? 'none'}</div>
       <button type="button" onClick={() => onSourceNavigationHandled?.()}>管家来源处理完成</button>
       <button
         type="button"
@@ -118,6 +119,7 @@ let roleProposedHandler: ((payload: RoleProposedPayload) => void) | undefined
 let bigrockReminderHandler: ((payload: { message: string; notificationId: string }) => void) | undefined
 let reviewGeneratedHandler: ((payload: { reviewId: string; weekStart: string; weekEnd: string }) => void) | undefined
 let bigrockProtectionHandler: ((payload: { taskId: string; taskTitle: string; message: string; notificationId: string }) => void) | undefined
+let skillRegistryUpdatedHandler: ((payload: { ownerId: string; skillId: string }) => void) | undefined
 
 function mockNormalLaunch() {
   vi.mocked(appService.isFirstLaunch).mockResolvedValue(false)
@@ -137,6 +139,9 @@ function mockNormalLaunch() {
     if (eventName === 'bigrock:protection') {
       bigrockProtectionHandler = handler as (payload: { taskId: string; taskTitle: string; message: string; notificationId: string }) => void
     }
+    if (eventName === 'skill-registry-updated') {
+      skillRegistryUpdatedHandler = handler as (payload: { ownerId: string; skillId: string }) => void
+    }
   })
 }
 
@@ -146,6 +151,7 @@ describe('App', () => {
     bigrockReminderHandler = undefined
     reviewGeneratedHandler = undefined
     bigrockProtectionHandler = undefined
+    skillRegistryUpdatedHandler = undefined
     vi.clearAllMocks()
     mockNormalLaunch()
   })
@@ -153,6 +159,23 @@ describe('App', () => {
   it('renders without crashing', () => {
     const { container } = render(<App />)
     expect(container).toBeTruthy()
+  })
+
+  it('refreshes global roles when the Skill registry changes', async () => {
+    render(<App />)
+
+    await waitFor(() => expect(roleService.list).toHaveBeenCalledTimes(1))
+    expect(skillRegistryUpdatedHandler).toBeDefined()
+
+    vi.mocked(roleService.list).mockResolvedValueOnce([
+      { ...createdRole, skillsConfig: '{"enabledSkillIds":["skill-created"]}' },
+    ])
+    await act(async () => {
+      skillRegistryUpdatedHandler?.({ ownerId: createdRole.id, skillId: 'skill-created' })
+    })
+
+    await waitFor(() => expect(roleService.list).toHaveBeenCalledTimes(2))
+    expect(screen.getByTestId('app-role-skills-config')).toHaveTextContent('skill-created')
   })
 
   it('opens the butler role proposal modal and refreshes roles after confirmation', async () => {

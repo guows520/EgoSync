@@ -25,6 +25,7 @@ use crate::services::secret_store;
 
 const OPENCODE_FALLBACK_NOTICE: &str = "Agent 引擎暂时不可用，当前为基础对话模式。\n\n";
 const OPENCODE_TOOL_EXECUTION_TIMEOUT: Duration = Duration::from_secs(60);
+const OPENCODE_SKILL_LOAD_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Resolve the opencode project directory to a stable path outside the dev
 /// project tree. Using `"."` previously caused opencode to write `.opencode/`
@@ -472,6 +473,8 @@ struct ToolExecutionDeadline {
     part_id: String,
     tool_name: String,
     deadline: Instant,
+    timeout: Duration,
+    retryable_skill_load: bool,
 }
 
 fn update_tool_execution_deadline(
@@ -479,15 +482,23 @@ fn update_tool_execution_deadline(
     part_id: &str,
     tool_name: &str,
     status: &str,
+    retryable_skill_load: bool,
     now: Instant,
 ) {
     match status {
         "running" => {
             if active.as_ref().map(|current| current.part_id.as_str()) != Some(part_id) {
+                let timeout = if retryable_skill_load {
+                    OPENCODE_SKILL_LOAD_TIMEOUT
+                } else {
+                    OPENCODE_TOOL_EXECUTION_TIMEOUT
+                };
                 *active = Some(ToolExecutionDeadline {
                     part_id: part_id.to_string(),
                     tool_name: tool_name.to_string(),
-                    deadline: now + OPENCODE_TOOL_EXECUTION_TIMEOUT,
+                    deadline: now + timeout,
+                    timeout,
+                    retryable_skill_load,
                 });
             }
         }
@@ -500,7 +511,11 @@ fn update_tool_execution_deadline(
     }
 }
 
-fn tool_execution_timeout_candidate(tool_name: &str) -> ProcessEventCandidate {
+fn should_retry_skill_load_timeout(retryable_skill_load: bool, already_retried: bool) -> bool {
+    retryable_skill_load && !already_retried
+}
+
+fn tool_execution_timeout_candidate(tool_name: &str, timeout: Duration) -> ProcessEventCandidate {
     ProcessEventCandidate {
         event_type: "tool".to_string(),
         tool_name: Some(tool_name.to_string()),
@@ -510,7 +525,7 @@ fn tool_execution_timeout_candidate(tool_name: &str) -> ProcessEventCandidate {
             "tool": tool_name,
             "status": "failed",
             "error": "tool execution timeout",
-            "timeoutSeconds": OPENCODE_TOOL_EXECUTION_TIMEOUT.as_secs(),
+            "timeoutSeconds": timeout.as_secs(),
         }),
     }
 }
@@ -575,22 +590,6 @@ fn extract_json_string(raw: &serde_json::Value, paths: &[&[&str]]) -> Option<Str
             .filter(|value| !value.is_empty())
             .map(str::to_string)
     })
-}
-
-fn replace_cached_session_id(
-    sessions: &mut std::collections::HashMap<String, OpencodeSessionState>,
-    conversation_id: &str,
-    previous_session_id: &str,
-    next_session_id: &str,
-) {
-    if let Some(state) = sessions.get_mut(conversation_id) {
-        for cached_id in state.sessions_by_directory.values_mut() {
-            if cached_id == previous_session_id {
-                *cached_id = next_session_id.to_string();
-            }
-        }
-        state.active_session_id = next_session_id.to_string();
-    }
 }
 
 fn live_tool_display_name(tool_name: &str, part_raw: &serde_json::Value, fallback: &str) -> String {
@@ -2271,6 +2270,7 @@ pub async fn resolve_default_provider(
 enum OpencodeStreamAttemptError {
     Fatal(AppError),
     InvalidMcpSession,
+    SkillLoadTimeout { tool_name: String },
 }
 
 impl From<AppError> for OpencodeStreamAttemptError {
@@ -2295,6 +2295,7 @@ async fn try_run_opencode_stream(
     event_router: Arc<crate::services::event_router::EventRouter>,
     delegate_bridge: crate::services::delegate_bridge::DelegateBridge,
     already_retried_mcp_session: bool,
+    already_retried_skill_load: bool,
 ) -> Result<(), OpencodeStreamAttemptError> {
     let disabled_message = if let Some(rid) = role_id {
         crate::db::roles::get_role(main_pool, rid)
@@ -2338,12 +2339,20 @@ async fn try_run_opencode_stream(
         return Ok(());
     }
 
+    if delegate_bridge.take_runtime_refresh().await {
+        if let Err(error) =
+            refresh_opencode_runtime_for_mcp_retry(app_handle, &opencode_sessions).await
+        {
+            delegate_bridge.request_runtime_refresh().await;
+            return Err(error.into());
+        }
+    }
     let project_dir = resolve_requested_working_directory(app_handle, working_directory)?;
     let mcp_scope_key = crate::services::mcp_server::mcp_scope_key_for_role(main_pool, role_id).await?;
     let mcp_scope_lock = app_handle
         .try_state::<crate::commands::chat::OpencodeMcpScopeLock>()
         .map(|state| state.0.clone());
-    let mut session_id = {
+    let session_id = {
         let _mcp_scope_guard = match mcp_scope_lock.as_ref() {
             Some(lock) => Some(lock.lock().await),
             None => None,
@@ -2382,18 +2391,6 @@ async fn try_run_opencode_stream(
             }
         }
     };
-    if delegate_bridge.take_session_rollover(&session_id).await {
-        let forked = agent_bridge.fork_session(&session_id).await?;
-        let previous_session_id = session_id;
-        session_id = forked.id;
-        let mut sessions = opencode_sessions.lock().await;
-        replace_cached_session_id(
-            &mut sessions,
-            conversation_id,
-            &previous_session_id,
-            &session_id,
-        );
-    }
     // Build the message content — inject full system prompt prefix.
     // For butler: includes role roster + emergence instructions (same as direct-LLM path).
     // For roles: includes the role's personality/goal prompt.
@@ -2735,6 +2732,7 @@ async fn try_run_opencode_stream(
                                             &part.id,
                                             &display_tool_name,
                                             tool_status,
+                                            tool_name.eq_ignore_ascii_case("skill"),
                                             Instant::now(),
                                         );
                                         if matches!(
@@ -2896,7 +2894,10 @@ async fn try_run_opencode_stream(
                 tracing::error!(
                     session_id,
                     tool_name = %timed_out.tool_name,
-                    timeout_seconds = OPENCODE_TOOL_EXECUTION_TIMEOUT.as_secs(),
+                    part_id = %timed_out.part_id,
+                    timeout_seconds = timed_out.timeout.as_secs(),
+                    retryable_skill_load = timed_out.retryable_skill_load,
+                    already_retried_skill_load,
                     "opencode tool execution timed out"
                 );
                 let _ = tokio::time::timeout(
@@ -2911,7 +2912,16 @@ async fn try_run_opencode_stream(
                 for worker in delegate_workers {
                     worker.abort();
                 }
-                let candidate = tool_execution_timeout_candidate(&timed_out.tool_name);
+                if should_retry_skill_load_timeout(
+                    timed_out.retryable_skill_load,
+                    already_retried_skill_load,
+                ) {
+                    opencode_sessions.lock().await.remove(conversation_id);
+                    return Err(OpencodeStreamAttemptError::SkillLoadTimeout {
+                        tool_name: timed_out.tool_name,
+                    });
+                }
+                let candidate = tool_execution_timeout_candidate(&timed_out.tool_name, timed_out.timeout);
                 persist_and_emit_process_event(
                     app_handle,
                     conv_pool,
@@ -3136,6 +3146,7 @@ pub async fn run_stream(
     let skip_opencode = onboarding_step.is_some();
 
     let mut already_retried_mcp_session = false;
+    let mut already_retried_skill_load = false;
     if !skip_opencode {
         loop {
             let result = try_run_opencode_stream(
@@ -3154,6 +3165,7 @@ pub async fn run_stream(
                 event_router.clone(),
                 delegate_bridge.clone(),
                 already_retried_mcp_session,
+                already_retried_skill_load,
             )
             .await;
 
@@ -3183,6 +3195,29 @@ pub async fn run_stream(
                         conversation_id,
                         "MCP session invalid after retry; falling back to LlmProvider"
                     );
+                    break;
+                }
+                Err(OpencodeStreamAttemptError::SkillLoadTimeout { tool_name })
+                    if !already_retried_skill_load =>
+                {
+                    already_retried_skill_load = true;
+                    tracing::warn!(
+                        conversation_id,
+                        tool_name = %tool_name,
+                        timeout_seconds = OPENCODE_SKILL_LOAD_TIMEOUT.as_secs(),
+                        "opencode skill load stalled; refreshing runtime and retrying once"
+                    );
+                    if let Err(e) = refresh_opencode_runtime_for_mcp_retry(&app_handle, &opencode_sessions).await {
+                        tracing::warn!(conversation_id, tool_name = %tool_name, error = %e, "opencode runtime refresh after skill load timeout failed");
+                        break;
+                    }
+                    let _ = conversations::delete_message_process_events(&conv_pool, &assistant_message_id).await;
+                    let _ = conversations::update_message_content(&conv_pool, &assistant_message_id, "").await;
+                    let _ = conversations::update_message_thinking(&conv_pool, &assistant_message_id, "").await;
+                    continue;
+                }
+                Err(OpencodeStreamAttemptError::SkillLoadTimeout { tool_name }) => {
+                    tracing::warn!(conversation_id, tool_name = %tool_name, "opencode skill load timed out after retry");
                     break;
                 }
                 Err(OpencodeStreamAttemptError::Fatal(e)) => {
@@ -5132,25 +5167,6 @@ mod tests {
     }
 
     #[test]
-    fn skill_rollover_replaces_only_matching_cached_session() {
-        let mut sessions = std::collections::HashMap::from([(
-            "conv-1".to_string(),
-            OpencodeSessionState {
-                active_session_id: "old".to_string(),
-                sessions_by_directory: std::collections::HashMap::from([
-                    ("scope-a".to_string(), "old".to_string()),
-                    ("scope-b".to_string(), "other".to_string()),
-                ]),
-            },
-        )]);
-        replace_cached_session_id(&mut sessions, "conv-1", "old", "forked");
-        let state = sessions.get("conv-1").unwrap();
-        assert_eq!(state.active_session_id, "forked");
-        assert_eq!(state.sessions_by_directory["scope-a"], "forked");
-        assert_eq!(state.sessions_by_directory["scope-b"], "other");
-    }
-
-    #[test]
     fn delegated_task_tool_enforces_intent_and_hides_role_id() {
         let tool = delegated_task_tool_definition();
         assert!(tool.parameters["properties"].get("roleId").is_none());
@@ -5584,6 +5600,7 @@ mod tests {
             "part-skill",
             "find-skills",
             "running",
+            true,
             now,
         );
         let original_deadline = active
@@ -5595,10 +5612,11 @@ mod tests {
             "part-skill",
             "find-skills",
             "running",
+            true,
             now + Duration::from_secs(10),
         );
 
-        assert_eq!(original_deadline, now + OPENCODE_TOOL_EXECUTION_TIMEOUT);
+        assert_eq!(original_deadline, now + OPENCODE_SKILL_LOAD_TIMEOUT);
         assert_eq!(active.as_ref().unwrap().deadline, original_deadline);
 
         update_tool_execution_deadline(
@@ -5606,6 +5624,7 @@ mod tests {
             "part-skill",
             "find-skills",
             "completed",
+            true,
             now + Duration::from_secs(20),
         );
         assert!(active.is_none(), "terminal status must cancel the timeout");
@@ -5617,8 +5636,8 @@ mod tests {
         // may cancel the guard protecting a still-running Skill.
         let now = Instant::now();
         let mut active = None;
-        update_tool_execution_deadline(&mut active, "part-skill", "find-skills", "running", now);
-        update_tool_execution_deadline(&mut active, "part-other", "read", "failed", now);
+        update_tool_execution_deadline(&mut active, "part-skill", "find-skills", "running", true, now);
+        update_tool_execution_deadline(&mut active, "part-other", "read", "failed", false, now);
 
         assert_eq!(
             active.as_ref().map(|item| item.part_id.as_str()),
@@ -5627,10 +5646,19 @@ mod tests {
     }
 
     #[test]
+    fn only_read_only_skill_load_retries_once() {
+        // WHY: automatic replay is safe only for the native read-only Skill loader;
+        // side-effecting tools and a second stalled attempt must fail explicitly.
+        assert!(should_retry_skill_load_timeout(true, false));
+        assert!(!should_retry_skill_load_timeout(true, true));
+        assert!(!should_retry_skill_load_timeout(false, false));
+    }
+
+    #[test]
     fn tool_timeout_candidate_is_explicit_and_actionable() {
         // WHY: timeout must become a persisted failed process event instead of
         // silently leaving the UI spinner and assistant message incomplete.
-        let candidate = tool_execution_timeout_candidate("find-skills");
+        let candidate = tool_execution_timeout_candidate("find-skills", OPENCODE_SKILL_LOAD_TIMEOUT);
 
         assert_eq!(candidate.event_type, "tool");
         assert_eq!(candidate.tool_name.as_deref(), Some("find-skills"));
@@ -5644,7 +5672,7 @@ mod tests {
                 .raw_json
                 .get("timeoutSeconds")
                 .and_then(|value| value.as_u64()),
-            Some(OPENCODE_TOOL_EXECUTION_TIMEOUT.as_secs())
+            Some(OPENCODE_SKILL_LOAD_TIMEOUT.as_secs())
         );
         assert!(
             tool_execution_timeout_message("find-skills").contains("Skill 安装路径是否重复")

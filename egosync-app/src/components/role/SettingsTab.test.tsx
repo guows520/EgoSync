@@ -8,6 +8,16 @@ import type { Role } from '../../types/role';
 import type { McpServer } from '../../types/mcp';
 import type { SkillRegistryEntry } from '../../types/skill';
 
+const tauriEventHandlers = vi.hoisted(() => ({
+  skillRegistryUpdated: undefined as ((payload: { ownerId: string }) => void) | undefined,
+}));
+
+vi.mock('../../hooks/useTauriEvent', () => ({
+  useTauriEvent: vi.fn((eventName: string, handler: (payload: { ownerId: string }) => void) => {
+    if (eventName === 'skill-registry-updated') tauriEventHandlers.skillRegistryUpdated = handler;
+  }),
+}));
+
 vi.mock('../../services/roleService', () => ({
   roleService: {
     create: vi.fn(),
@@ -115,6 +125,7 @@ describe('SettingsTab role CRUD actions', () => {
   beforeEach(() => {
     vi.useRealTimers();
     vi.clearAllMocks();
+    tauriEventHandlers.skillRegistryUpdated = undefined;
     vi.mocked(skillService.listRegistry).mockResolvedValue([]);
     vi.mocked(skillService.listForRole).mockResolvedValue([]);
     const mockedSkillService = skillService as typeof skillService & {
@@ -127,6 +138,19 @@ describe('SettingsTab role CRUD actions', () => {
     vi.mocked(mcpService.listAvailableForRole).mockResolvedValue([]);
     vi.mocked(mcpService.addToRole).mockResolvedValue(undefined);
     vi.mocked(mcpService.removeFromRole).mockResolvedValue(undefined);
+  });
+
+  it('设置页打开时，Agent 创建 Skill 后刷新可用 Skill 列表', async () => {
+    const customSkill: SkillRegistryEntry = { id: 'skill-created', name: 'uat-greeting', description: '问候', sourceType: 'custom', managedPath: 'managed', contentHash: 'hash', createdAt: '', updatedAt: '' };
+    vi.mocked(skillService.listForRole)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([customSkill]);
+    render(<SettingsTab role={{ ...baseRole, skillsConfig: '{"enabledSkillIds":["skill-created"]}' }} activeRoleCount={2} />);
+    await waitFor(() => expect(skillService.listForRole).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('switch', { name: 'uat-greeting' })).not.toBeInTheDocument();
+    await act(async () => { tauriEventHandlers.skillRegistryUpdated?.({ ownerId: 'role-1' }); });
+    expect(await screen.findByRole('switch', { name: 'uat-greeting' })).toHaveAttribute('aria-checked', 'true');
+    expect(skillService.listForRole).toHaveBeenCalledTimes(2);
   });
 
   it('保存后调用 update 并回传更新后的角色', async () => {
@@ -469,11 +493,12 @@ describe('SettingsTab role CRUD actions', () => {
     });
   });
 
-  it('自定义 Skill 删除必须先弹窗确认，确认后才从当前角色移除并刷新当前角色列表', async () => {
+  it('自定义 Skill 删除必须先弹窗确认，确认后才执行全局删除并刷新列表', async () => {
     vi.mocked(skillService.listForRole)
       .mockResolvedValueOnce([customSkill])
       .mockResolvedValueOnce([]);
-    vi.mocked(skillService.removeFromRole).mockResolvedValue(undefined);
+    vi.mocked(skillService.delete).mockResolvedValue(undefined);
+    vi.mocked(roleService.list).mockResolvedValue([baseRole]);
 
     render(<SettingsTab role={baseRole} activeRoleCount={2} />);
 
@@ -486,9 +511,9 @@ describe('SettingsTab role CRUD actions', () => {
     fireEvent.click(screen.getByRole('button', { name: '确认删除' }));
 
     await waitFor(() => {
-      expect(skillService.removeFromRole).toHaveBeenCalledWith('skill-1', 'role-1');
+      expect(skillService.delete).toHaveBeenCalledWith('skill-1');
     });
-    expect(skillService.delete).not.toHaveBeenCalled();
+    expect(skillService.removeFromRole).not.toHaveBeenCalled();
     await waitFor(() => {
       expect(skillService.listForRole).toHaveBeenCalledTimes(2);
     });
@@ -515,36 +540,70 @@ describe('SettingsTab role CRUD actions', () => {
     expect(screen.getByTestId('custom-skill-tooltip-skill-1')).toHaveClass('max-w-[min(28rem,calc(100vw-3rem))]');
   });
 
-  it('从角色删除自定义 Skill 只移除当前角色，不调用全局删除', async () => {
+  it('删除自定义 Skill 会执行全局删除并刷新所有角色状态', async () => {
+    const refreshedRole = { ...baseRole, skillsConfig: '{"enabledSkillIds":[]}' };
     vi.mocked(skillService.listForRole)
       .mockResolvedValueOnce([customSkill])
       .mockResolvedValueOnce([]);
-    vi.mocked(skillService.removeFromRole).mockResolvedValue(undefined);
+    vi.mocked(skillService.delete).mockResolvedValue(undefined);
+    vi.mocked(roleService.list).mockResolvedValue([refreshedRole, secondRole]);
+    const onUpdateRole = vi.fn();
+
+    render(<SettingsTab role={baseRole} activeRoleCount={2} onUpdateRole={onUpdateRole} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '删除 daily-review' }));
+
+    const dialog = await screen.findByRole('dialog', { name: '删除自定义 Skill' });
+    expect(dialog).toHaveTextContent('该 Skill 将从所有角色和管家中删除');
+    fireEvent.click(screen.getByRole('button', { name: '确认删除' }));
+
+    await waitFor(() => {
+      expect(skillService.delete).toHaveBeenCalledWith('skill-1');
+    });
+    expect(skillService.removeFromRole).not.toHaveBeenCalled();
+    expect(roleService.list).toHaveBeenCalled();
+    expect(onUpdateRole).toHaveBeenCalledWith(refreshedRole);
+    expect(onUpdateRole).toHaveBeenCalledWith(secondRole);
+    expect(await screen.findByText('自定义 Skill 已删除')).toBeInTheDocument();
+  });
+
+  it('自定义 Skill 删除失败时保留列表且不显示成功提示', async () => {
+    vi.mocked(skillService.listForRole).mockResolvedValue([customSkill]);
+    vi.mocked(skillService.delete).mockRejectedValue(new Error('delete failed'));
 
     render(<SettingsTab role={baseRole} activeRoleCount={2} />);
 
     fireEvent.click(await screen.findByRole('button', { name: '删除 daily-review' }));
-
-    expect(skillService.delete).not.toHaveBeenCalled();
-    const dialog = await screen.findByRole('dialog', { name: '删除自定义 Skill' });
-    expect(dialog).toHaveTextContent('确认删除「daily-review」吗？');
-    expect(dialog).not.toHaveTextContent('所有角色和管家');
     fireEvent.click(screen.getByRole('button', { name: '确认删除' }));
 
-    await waitFor(() => {
-      expect(skillService.removeFromRole).toHaveBeenCalledWith('skill-1', 'role-1');
-    });
-    expect(skillService.delete).not.toHaveBeenCalled();
-    await waitFor(() => {
-      expect(screen.getByText('自定义 Skill 已删除')).toBeInTheDocument();
-    });
+    expect(await screen.findByText('删除自定义 Skill 失败，请稍后重试')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '删除 daily-review' })).toBeInTheDocument();
+    expect(screen.queryByText('自定义 Skill 已删除')).not.toBeInTheDocument();
+  });
+
+  it('自定义 Skill 已删除但刷新失败时显示准确状态并移除本地条目', async () => {
+    vi.mocked(skillService.listForRole)
+      .mockResolvedValueOnce([customSkill])
+      .mockRejectedValueOnce(new Error('refresh failed'));
+    vi.mocked(skillService.delete).mockResolvedValue(undefined);
+    vi.mocked(roleService.list).mockResolvedValue([baseRole]);
+
+    render(<SettingsTab role={baseRole} activeRoleCount={2} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '删除 daily-review' }));
+    fireEvent.click(screen.getByRole('button', { name: '确认删除' }));
+
+    expect(await screen.findByText('自定义 Skill 已删除，但列表刷新失败，请重新打开设置页')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '删除 daily-review' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: '删除自定义 Skill' })).not.toBeInTheDocument();
   });
 
   it('自定义 Skill 删除成功提示会自动消失', async () => {
     vi.mocked(skillService.listForRole)
       .mockResolvedValueOnce([customSkill])
       .mockResolvedValueOnce([]);
-    vi.mocked(skillService.removeFromRole).mockResolvedValue(undefined);
+    vi.mocked(skillService.delete).mockResolvedValue(undefined);
+    vi.mocked(roleService.list).mockResolvedValue([baseRole]);
 
     render(<SettingsTab role={baseRole} activeRoleCount={2} />);
 
@@ -552,7 +611,7 @@ describe('SettingsTab role CRUD actions', () => {
     fireEvent.click(screen.getByRole('button', { name: '确认删除' }));
 
     await waitFor(() => {
-      expect(skillService.removeFromRole).toHaveBeenCalledWith('skill-1', 'role-1');
+      expect(skillService.delete).toHaveBeenCalledWith('skill-1');
     });
     expect(screen.getByText('自定义 Skill 已删除')).toBeInTheDocument();
 
@@ -827,6 +886,7 @@ describe('SettingsTab role CRUD actions', () => {
     await waitFor(() => {
       expect(skillService.removeFromRole).toHaveBeenCalledWith('skill-opencode', 'role-1');
     });
+    expect(skillService.delete).not.toHaveBeenCalled();
     expect(onUpdateRole).toHaveBeenCalledWith(removedRole);
     expect(await screen.findByText('opencode Skill 已取消导入')).toBeInTheDocument();
     rerender(<SettingsTab role={removedRole} activeRoleCount={2} onUpdateRole={onUpdateRole} />);

@@ -154,6 +154,16 @@ export default function App() {
     return { active, archived };
   }, [refreshArchivedRoles, refreshRoles]);
 
+  useTauriEvent<{ ownerId: string; skillId: string }>(
+    'skill-registry-updated',
+    useCallback(() => {
+      void refreshRoles().catch(error => {
+        console.error('Skill 注册表更新后刷新角色失败:', error);
+      });
+    }, [refreshRoles]),
+    [refreshRoles]
+  );
+
   // Story 2.5 AC-6: 管家模式下 role:proposed 事件监听
   // onboarding 模式下跳过（OnboardingView 自己处理）
   interface RoleProposedPayload {

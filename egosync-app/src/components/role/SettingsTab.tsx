@@ -1053,7 +1053,18 @@ function toFriendlyError(error: unknown, fallback: string) {
   // P8: error 可能为 undefined/null（Promise 以 undefined 拒绝时 JSON.stringify 返回 undefined），
   // 直接 .includes 会二次抛错，先兜底。
   if (error == null) return fallback;
-  const text = typeof error === 'string' ? error : (JSON.stringify(error) ?? String(error));
+  const validationError = typeof error === 'object'
+    && 'ValidationError' in error
+    && typeof error.ValidationError === 'string'
+    ? error.ValidationError
+    : null;
+  const text = validationError ?? (typeof error === 'string' ? error : (JSON.stringify(error) ?? String(error)));
+  if (text.includes('需要先启用 find-skills')) {
+    return '需要先启用 find-skills 才能发现可用 Skill';
+  }
+  if (text.includes('已被另一来源占用')) {
+    return '存在同名但来源不同的 Skill，请检查已导入的 Skill';
+  }
   if (text.includes(MIN_ACTIVE_ROLE_MESSAGE)) return MIN_ACTIVE_ROLE_MESSAGE;
   if (text.includes('角色名称不能为空')) return '角色名称不能为空';
   // P9: 不回显后端原始错误文本（可能含文件系统路径等内部细节），统一映射为固定友好文案。

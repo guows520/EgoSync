@@ -824,6 +824,18 @@ describe('SettingsTab role CRUD actions', () => {
     expect(mockedSkillService.discoverOpencode).not.toHaveBeenCalled();
   });
 
+  it('发现 opencode Skill 失败时展示安全的后端校验提示', async () => {
+    vi.mocked(skillService.discoverOpencode).mockRejectedValueOnce({
+      ValidationError: 'Skill 名称 writer 已被另一来源占用（custom）',
+    });
+
+    render(<SettingsTab role={{ ...baseRole, skillsConfig: '{"findSkills":true}' }} activeRoleCount={2} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '发现 opencode Skill' }));
+
+    expect(await screen.findByText('存在同名但来源不同的 Skill，请检查已导入的 Skill')).toBeInTheDocument();
+  });
+
   it('启用 find-skills 后展示 opencode 扫描结果和跳过摘要，并可导入到当前角色', async () => {
     const onUpdateRole = vi.fn();
     const opencodeSkill = {

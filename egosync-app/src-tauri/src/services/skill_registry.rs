@@ -8,7 +8,7 @@ use crate::models::skill::{
     DiscoverOpencodeSkillsResult, ImportCustomSkillInput, ImportCustomSkillResult,
     ImportOpencodeSkillInput, ImportOpencodeSkillResult, OpencodeSkillCandidate,
     OpencodeSkillSkippedSummary, PreviewCustomSkillInput, SkillDuplicateInfo, SkillImportPreview,
-    SkillRegistryEntry, SkillRoleScope, BUTLER_SCOPE_ID, SOURCE_TYPE_OPENCODE,
+    SkillRegistryEntry, SkillRoleScope, BUTLER_SCOPE_ID, SOURCE_TYPE_CUSTOM, SOURCE_TYPE_OPENCODE,
 };
 
 const SKILL_FILE_NAME: &str = "SKILL.md";
@@ -405,6 +405,7 @@ async fn scan_opencode_root(
     let Ok(entries) = std::fs::read_dir(root) else {
         return Ok(());
     };
+    let registry = skills::list_skills(pool).await?;
     for entry in entries {
         let entry = match entry {
             Ok(entry) => entry,
@@ -425,6 +426,12 @@ async fn scan_opencode_root(
             reasons.push("缺少 SKILL.md 的条目已跳过".to_string());
             continue;
         }
+        if registry.iter().any(|existing| {
+            existing.source_type == SOURCE_TYPE_CUSTOM
+                && paths_point_to_same_file(Path::new(&existing.managed_path), &skill_path)
+        }) {
+            continue;
+        }
         let content = match std::fs::read_to_string(&skill_path) {
             Ok(content) => content,
             Err(_) => {
@@ -441,7 +448,16 @@ async fn scan_opencode_root(
                 continue;
             }
         };
-        let preview = preview_from_parsed_with_source(pool, parsed.clone(), SOURCE_TYPE_OPENCODE).await?;
+        let preview =
+            match preview_from_parsed_with_source(pool, parsed.clone(), SOURCE_TYPE_OPENCODE).await
+            {
+            Ok(preview) => preview,
+            Err(AppError::ValidationError(message)) => {
+                reasons.push(message);
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
         let already_imported = preview
             .duplicate
             .as_ref()
@@ -458,6 +474,13 @@ async fn scan_opencode_root(
         });
     }
     Ok(())
+}
+
+fn paths_point_to_same_file(left: &Path, right: &Path) -> bool {
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => left == right,
+    }
 }
 
 /// 尽力从 SKILL.md frontmatter 中取出 name 作为跳过摘要的定位标识；
@@ -1368,6 +1391,130 @@ mod tests {
         assert!(result.items.iter().any(|item| item.name == "writer" && item.source_type == "opencode" && item.source_location == "全局"));
         assert_eq!(result.skipped.total, 1);
         assert!(result.items.iter().all(|item| item.name != "hidden"));
+    }
+
+    #[tokio::test]
+    async fn discover_opencode_skills_ignores_managed_custom_skill_and_keeps_scanning() {
+        let pool = setup_test_db().await;
+        sqlx::query("INSERT INTO roles (id, name) VALUES (?1, ?2)")
+            .bind("role-1")
+            .bind("产品经理")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let project = tempdir().unwrap();
+        let home = tempdir().unwrap();
+
+        let custom_dir = project
+            .path()
+            .join(".opencode")
+            .join("skills")
+            .join("uat-weekly-report");
+        std::fs::create_dir_all(&custom_dir).unwrap();
+        let custom_path = custom_dir.join(SKILL_FILE_NAME);
+        let custom_content = skill_content("uat-weekly-report", "生成周报摘要的自定义技能");
+        std::fs::write(&custom_path, &custom_content).unwrap();
+        let custom = parse_skill_content(&custom_content).unwrap();
+        skills::create_skill(
+            &pool,
+            &custom.name,
+            &custom.description,
+            custom_path.to_string_lossy().as_ref(),
+            &custom.content_hash,
+        )
+        .await
+        .unwrap();
+
+        let global_dir = home
+            .path()
+            .join(".config")
+            .join("opencode")
+            .join("skills")
+            .join("writer");
+        std::fs::create_dir_all(&global_dir).unwrap();
+        std::fs::write(
+            global_dir.join(SKILL_FILE_NAME),
+            skill_content("writer", "写作助手"),
+        )
+        .unwrap();
+
+        let result = discover_opencode_skills(&pool, "role-1", project.path(), home.path())
+            .await
+            .unwrap();
+
+        assert_eq!(result.items.len(), 1);
+        assert_eq!(result.items[0].name, "writer");
+        assert_eq!(result.skipped.total, 0);
+    }
+
+    #[tokio::test]
+    async fn discover_opencode_skills_skips_cross_source_name_conflict() {
+        let pool = setup_test_db().await;
+        sqlx::query("INSERT INTO roles (id, name) VALUES (?1, ?2)")
+            .bind("role-1")
+            .bind("产品经理")
+            .execute(&pool)
+            .await
+            .unwrap();
+        skills::create_skill(
+            &pool,
+            "writer",
+            "内部写作助手",
+            "managed/writer/SKILL.md",
+            "custom-writer-hash",
+        )
+        .await
+        .unwrap();
+        let project = tempdir().unwrap();
+        let home = tempdir().unwrap();
+
+        let project_dir = project
+            .path()
+            .join(".opencode")
+            .join("skills")
+            .join("daily-review");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        std::fs::write(
+            project_dir.join(SKILL_FILE_NAME),
+            skill_content("daily-review", "日复盘助手"),
+        )
+        .unwrap();
+        let global_dir = home
+            .path()
+            .join(".config")
+            .join("opencode")
+            .join("skills")
+            .join("writer");
+        std::fs::create_dir_all(&global_dir).unwrap();
+        std::fs::write(
+            global_dir.join(SKILL_FILE_NAME),
+            skill_content("writer", "外部写作助手"),
+        )
+        .unwrap();
+
+        let result = discover_opencode_skills(&pool, "role-1", project.path(), home.path())
+            .await
+            .unwrap();
+
+        assert_eq!(result.items.len(), 1);
+        assert_eq!(result.items[0].name, "daily-review");
+        assert_eq!(result.skipped.total, 1);
+        assert!(result.skipped.reasons[0].contains("已被另一来源占用"));
+    }
+
+    #[tokio::test]
+    async fn scan_opencode_root_keeps_database_failures_explicit() {
+        let pool = setup_test_db().await;
+        let root = tempdir().unwrap();
+        pool.close().await;
+        let mut items = Vec::new();
+        let mut reasons = Vec::new();
+
+        let error = scan_opencode_root(&pool, root.path(), "项目级", &[], &mut items, &mut reasons)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, AppError::DbError(_)));
     }
 
     #[tokio::test]

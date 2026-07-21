@@ -1236,7 +1236,18 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
 
 function toFriendlyError(error: unknown, fallback: string) {
   if (error == null) return fallback;
-  const text = typeof error === 'string' ? error : (JSON.stringify(error) ?? String(error));
+  const validationError = typeof error === 'object'
+    && 'ValidationError' in error
+    && typeof error.ValidationError === 'string'
+    ? error.ValidationError
+    : null;
+  const text = validationError ?? (typeof error === 'string' ? error : (JSON.stringify(error) ?? String(error)));
+  if (text.includes('需要先启用 find-skills')) {
+    return '需要先启用 find-skills 才能发现可用 Skill';
+  }
+  if (text.includes('已被另一来源占用')) {
+    return '存在同名但来源不同的 Skill，请检查已导入的 Skill';
+  }
   if (text.includes('frontmatter') || text.includes('SKILL.md')) {
     return 'SKILL.md 解析失败，请检查 frontmatter 中的 name 和 description';
   }

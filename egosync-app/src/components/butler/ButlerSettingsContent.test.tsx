@@ -390,6 +390,18 @@ describe('ButlerSettingsContent', () => {
     expect(screen.getByRole('button', { name: '导入' })).toBeInTheDocument();
   });
 
+  it('发现 opencode Skill 失败时展示安全的后端校验提示', async () => {
+    vi.mocked(skillService.discoverOpencode).mockRejectedValueOnce({
+      ValidationError: '需要先启用 find-skills 才能发现可用 Skill',
+    });
+
+    render(<ButlerSettingsContent />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '发现 opencode Skill' }));
+
+    expect(await screen.findByText('需要先启用 find-skills 才能发现可用 Skill')).toBeInTheDocument();
+  });
+
   it('管家未启用 find-skills 时发现 opencode Skill 只显示启用入口且不扫描', async () => {
     vi.mocked(appService.getButlerSkills).mockResolvedValue({
       findSkills: false,

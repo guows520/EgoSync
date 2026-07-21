@@ -824,6 +824,50 @@ describe('SettingsTab role CRUD actions', () => {
     expect(mockedSkillService.discoverOpencode).not.toHaveBeenCalled();
   });
 
+  it('发现 opencode Skill 成功但无结果时展示已扫描提示并恢复按钮', async () => {
+    const enabledRole: Role = {
+      ...baseRole,
+      skillsConfig: '{"findSkills":true}',
+    };
+
+    render(<SettingsTab role={enabledRole} activeRoleCount={2} />);
+
+    expect(screen.queryByText('已扫描项目级与全局 Skill 目录，未发现 opencode Skill。')).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: '发现 opencode Skill' }));
+
+    expect(await screen.findByText('已扫描项目级与全局 Skill 目录，未发现 opencode Skill。')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '发现 opencode Skill' })).toHaveTextContent('发现');
+  });
+
+  it('切换角色时忽略旧角色尚未完成的 opencode 扫描响应', async () => {
+    let resolveDiscovery!: (result: { items: []; skipped: { total: number; reasons: string[] } }) => void;
+    vi.mocked(skillService.discoverOpencode).mockReturnValueOnce(new Promise(resolve => {
+      resolveDiscovery = resolve;
+    }));
+
+    const enabledRole: Role = {
+      ...baseRole,
+      skillsConfig: '{"findSkills":true}',
+    };
+    const nextRole: Role = {
+      ...secondRole,
+      skillsConfig: '{"findSkills":true}',
+    };
+    const { rerender } = render(<SettingsTab role={enabledRole} activeRoleCount={2} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '发现 opencode Skill' }));
+    await waitFor(() => expect(skillService.discoverOpencode).toHaveBeenCalledWith('role-1'));
+
+    rerender(<SettingsTab role={nextRole} activeRoleCount={2} />);
+    await waitFor(() => expect(screen.getByRole('button', { name: '发现 opencode Skill' })).not.toBeDisabled());
+
+    await act(async () => {
+      resolveDiscovery({ items: [], skipped: { total: 0, reasons: [] } });
+    });
+
+    expect(screen.queryByText('已扫描项目级与全局 Skill 目录，未发现 opencode Skill。')).not.toBeInTheDocument();
+  });
+
   it('发现 opencode Skill 失败时展示安全的后端校验提示', async () => {
     vi.mocked(skillService.discoverOpencode).mockRejectedValueOnce({
       ValidationError: 'Skill 名称 writer 已被另一来源占用（custom）',
@@ -834,6 +878,7 @@ describe('SettingsTab role CRUD actions', () => {
     fireEvent.click(await screen.findByRole('button', { name: '发现 opencode Skill' }));
 
     expect(await screen.findByText('存在同名但来源不同的 Skill，请检查已导入的 Skill')).toBeInTheDocument();
+    expect(screen.queryByText('已扫描项目级与全局 Skill 目录，未发现 opencode Skill。')).not.toBeInTheDocument();
   });
 
   it('启用 find-skills 后展示 opencode 扫描结果和跳过摘要，并可导入到当前角色', async () => {
@@ -892,6 +937,7 @@ describe('SettingsTab role CRUD actions', () => {
     expect(screen.getByText('全局')).toBeInTheDocument();
     expect(screen.getByText('已跳过 1 个无效 Skill：')).toBeInTheDocument();
     expect(screen.getByText('缺少 SKILL.md 的条目已跳过')).toBeInTheDocument();
+    expect(screen.queryByText('已扫描项目级与全局 Skill 目录，未发现 opencode Skill。')).not.toBeInTheDocument();
     expect(screen.getByTestId('opencode-skill-description-hash-writer')).toHaveClass('line-clamp-2');
     fireEvent.click(screen.getByRole('button', { name: /收起/ }));
     expect(screen.queryByText('writer')).not.toBeInTheDocument();

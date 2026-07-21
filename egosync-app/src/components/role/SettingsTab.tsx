@@ -61,6 +61,7 @@ export function SettingsTab({
   const [isOpencodeExpanded, setIsOpencodeExpanded] = useState(false);
   const [needsFindSkillsPrompt, setNeedsFindSkillsPrompt] = useState(false);
   const [isDiscoveringOpencode, setIsDiscoveringOpencode] = useState(false);
+  const [hasDiscoveredOpencode, setHasDiscoveredOpencode] = useState(false);
   const [importingOpencodePath, setImportingOpencodePath] = useState('');
   const [removingOpencodeId, setRemovingOpencodeId] = useState('');
   const [pendingSkillContent, setPendingSkillContent] = useState('');
@@ -118,6 +119,7 @@ export function SettingsTab({
     setIsOpencodeExpanded(false);
     setNeedsFindSkillsPrompt(false);
     setIsDiscoveringOpencode(false);
+    setHasDiscoveredOpencode(false);
     setImportingOpencodePath('');
     setRemovingOpencodeId('');
     setPendingSkillContent('');
@@ -373,10 +375,12 @@ export function SettingsTab({
   };
 
   const handleDiscoverOpencode = async () => {
+    const roleId = role.id;
     setError('');
     setSettingsSavedMessage('');
     setOpencodeSkills([]);
     setOpencodeSkipped([]);
+    setHasDiscoveredOpencode(false);
     setNeedsFindSkillsPrompt(false);
     if (!skills.findSkills) {
       setNeedsFindSkillsPrompt(true);
@@ -384,16 +388,20 @@ export function SettingsTab({
     }
     setIsDiscoveringOpencode(true);
     try {
-      const result = await skillService.discoverOpencode(role.id);
+      const result = await skillService.discoverOpencode(roleId);
+      if (activeRoleIdRef.current !== roleId) return;
+      setHasDiscoveredOpencode(true);
       setOpencodeSkills(result.items);
       setIsOpencodeExpanded(result.items.length > 0);
       // 跳过摘要由独立的 opencodeSkipped 区块承载（见下方 UI），不复用
       // settingsSavedMessage，避免随后导入操作的结果提示把跳过信息覆盖掉。
       setOpencodeSkipped(result.skipped.reasons);
     } catch (e) {
-      setError(toFriendlyError(e, '发现 opencode Skill 失败，请稍后重试'));
+      if (activeRoleIdRef.current === roleId) {
+        setError(toFriendlyError(e, '发现 opencode Skill 失败，请稍后重试'));
+      }
     } finally {
-      setIsDiscoveringOpencode(false);
+      if (activeRoleIdRef.current === roleId) setIsDiscoveringOpencode(false);
     }
   };
 
@@ -707,6 +715,11 @@ export function SettingsTab({
                 {opencodeSkipped.length > 5 && (
                   <div className="mt-1 text-amber-600">…另有 {opencodeSkipped.length - 5} 项已跳过</div>
                 )}
+              </div>
+            )}
+            {hasDiscoveredOpencode && opencodeSkills.length === 0 && opencodeSkipped.length === 0 && (
+              <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[12.5px] text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                已扫描项目级与全局 Skill 目录，未发现 opencode Skill。
               </div>
             )}
             {opencodeSkills.length > 0 && (

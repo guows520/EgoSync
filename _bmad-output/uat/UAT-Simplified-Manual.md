@@ -714,6 +714,7 @@
 
 阶段 E：
 - 扫描结果列表展示 Skill 的 name、description、来源位置、sourceType=opencode
+- 若扫描成功但没有新 Skill，显示「已扫描项目级与全局 Skill 目录，未发现 opencode Skill。」
 - 无效项不进入可导入列表，有友好中文跳过摘要
 - 导入成功后可立即启用
 - 重启后导入状态与启用状态均保留

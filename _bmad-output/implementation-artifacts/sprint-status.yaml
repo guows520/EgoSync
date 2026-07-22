@@ -1,5 +1,5 @@
 # generated: 2026-05-21
-# last_updated: 2026-06-27
+# last_updated: 2026-07-22
 # project: 探索 (EgoSync)
 # project_key: NOKEY
 # tracking_system: file-system
@@ -22,6 +22,7 @@
 #   - in-progress: Developer actively working on implementation
 #   - review: Ready for code review (via Dev's code-review workflow)
 #   - done: Story completed
+#   - deferred-v2: Deferred to a later product version (project-specific extension)
 #
 # Retrospective Status:
 #   - optional: Can be completed but not required
@@ -35,7 +36,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-21
-last_updated: 2026-06-29T19:30:00+08:00
+last_updated: 2026-07-22T15:42:00+08:00
 project: "探索 (EgoSync)"
 project_key: NOKEY
 tracking_system: file-system
@@ -143,10 +144,49 @@ development_status:
   # ============================================================
   # Epic 8: 跨平台分发与 V1 加固 (Cross-Platform Distribution & V1 Hardening)
   # ============================================================
-  epic-8: in-progress
+  epic-8: done
   8-1-github-actions-ci-build: done
-  8-2-e2e-test-core-journeys: in-progress
+  8-2-e2e-test-core-journeys: done
   8-3-wcag-accessibility-audit: done
   8-4-performance-benchmark: done
-  8-5-release-auto-publish: ready-for-dev
+  8-5-release-auto-publish: done
   epic-8-retrospective: optional
+
+  # ============================================================
+  # Epic 9: 管家与角色能力配置体验
+  # ============================================================
+  epic-9: backlog
+  9-1-explicit-enabled-skill-invocation: backlog
+  9-2-butler-settings-group-collapse: backlog
+  9-3-butler-mcp-server-configuration: backlog
+  9-4-role-settings-group-collapse: backlog
+  9-5-role-information-group-save: backlog
+  9-6-role-goal-create-edit: backlog
+  epic-9-retrospective: optional
+
+  # ============================================================
+  # Epic 10: 管家全局洞察
+  # ============================================================
+  epic-10: backlog
+  10-1-all-role-butler-dashboard-statistics: backlog
+  10-2-dashboard-role-filter: backlog
+  epic-10-retrospective: optional
+
+  # ============================================================
+  # Epic 11: 日常交互与内容呈现完善
+  # ============================================================
+  epic-11: backlog
+  11-1-auto-close-task-time-picker: backlog
+  11-2-standard-markdown-table-rendering: backlog
+  epic-11-retrospective: optional
+
+  # ============================================================
+  # Epic 12: 一致的产品体验与首次启动
+  # ============================================================
+  epic-12: backlog
+  12-1-unified-product-visible-name: backlog
+  12-2-dark-mode-suggestion-dialog-navigation: backlog
+  12-3-chinese-default-first-launch: backlog
+  epic-12-retrospective: optional
+
+

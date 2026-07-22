@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="egosync-logo-purple-top" x1="49" y1="32" x2="15" y2="32" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#A78BFA" />
+      <stop offset="1" stop-color="#8B5CF6" />
+    </linearGradient>
+    <linearGradient id="egosync-logo-purple-bottom" x1="15" y1="32" x2="49" y2="32" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8B5CF6" />
+      <stop offset="1" stop-color="#6D5CE7" />
+    </linearGradient>
+  </defs>
+  <g transform="translate(0 64) scale(1 -1)">
+    <g transform="rotate(90 32 32)">
+      <path d="M32 4.5 57 18.75v26.5L32 59.5 7 45.25v-26.5L32 4.5Z" fill="#26215C" />
+  <path d="M32 4.5 57 18.75v26.5L32 59.5 7 45.25v-26.5L32 4.5Z" stroke="#8B5CF6" stroke-opacity=".35" stroke-width="1.5" />
+      <g transform="rotate(180 32 32)">
+          <path d="M18 32c0-10 6-17 14-17s14 7 14 17" stroke="url(#egosync-logo-purple-top)" stroke-width="5.5" stroke-linecap="round" />
+  <path d="M46 32c0 10-6 17-14 17s-14-7-14-17" stroke="url(#egosync-logo-purple-bottom)" stroke-width="5.5" stroke-linecap="round" />
+  <path d="M0 0 6 11H-6Z" transform="translate(46 28)" fill="url(#egosync-logo-purple-top)" stroke="#26215C" stroke-width="1.25" stroke-linejoin="round" />
+  <path d="M0 0 6 11H-6Z" transform="translate(18 36) rotate(180)" fill="url(#egosync-logo-purple-bottom)" stroke="#26215C" stroke-width="1.25" stroke-linejoin="round" />
+      </g>
+      <circle cx="32" cy="32" r="5.5" fill="#4C3D72" />
+  <circle cx="32" cy="32" r="2.25" fill="#8B5CF6" />
+    </g>
+  </g>
+</svg>

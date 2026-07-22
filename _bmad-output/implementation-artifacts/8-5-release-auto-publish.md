@@ -4,7 +4,7 @@ baseline_commit: e87cf00
 
 # Story 8.5: Release 自动发布与版本管理
 
-Status: in-progress
+Status: done
 
 ## Story
 

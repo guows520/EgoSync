@@ -4,7 +4,7 @@ baseline_commit: 77d329b68ff3f770e834dafe8ff169ed9cbdcef9
 
 # Story 8.2: E2E 测试套件覆盖核心用户旅程
 
-Status: in-progress
+Status: done
 
 ## Story
 

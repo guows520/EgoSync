@@ -27,7 +27,7 @@ export function TitleBar() {
       className="h-9 shrink-0 flex items-center justify-between px-3 bg-[#F1F3F5] dark:bg-slate-800 select-none"
     >
       <div className="flex items-center gap-1.5 pointer-events-none">
-        <Logo size={24} />
+        <Logo size={30} />
         <span className="text-[13px] font-medium text-slate-600 dark:text-slate-300">EgoSync</span>
       </div>
       <div className="flex items-center">

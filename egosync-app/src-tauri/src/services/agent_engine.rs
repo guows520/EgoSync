@@ -1888,6 +1888,26 @@ async fn build_role_system_prompt(
         }
     }
 
+    let mcp_server_lines = match crate::db::mcp_servers::role_enabled_mcp_lines(main_pool, &role.id).await {
+        Ok(lines) => lines,
+        Err(error) => {
+            tracing::warn!(
+                role_id = %role.id,
+                error = ?error,
+                "读取角色 MCP Server 绑定失败，按无可用 MCP Server 构建角色 prompt"
+            );
+            Vec::new()
+        }
+    };
+    sections.push(if mcp_server_lines.is_empty() {
+        "[MCP Server 使用边界]\n当前角色未绑定任何可用的外部 MCP Server。\n不要声明、推荐或调用外部 MCP 工具；如果用户请求依赖外部 MCP 的能力，应如实说明当前角色没有该能力。".to_string()
+    } else {
+        format!(
+            "[MCP Server 使用边界]\n当前角色绑定的外部 MCP Server 如下：\n{}\n仅在确实需要时调用列表中的 MCP Server；不要声明或调用未列出的 MCP Server。",
+            mcp_server_lines.join("\n")
+        )
+    });
+
     let memory_summary = build_role_memory_summary(main_pool, &role.id).await?;
     if !memory_summary.is_empty() {
         sections.push(memory_summary);
@@ -6271,6 +6291,14 @@ mod tests {
             .execute(&pool)
             .await
             .expect("failed to create skill role bindings table");
+        sqlx::raw_sql(include_str!("../../migrations/011_mcp_servers.sql"))
+            .execute(&pool)
+            .await
+            .expect("failed to create MCP servers table");
+        sqlx::raw_sql(include_str!("../../migrations/012_mcp_server_standard_types.sql"))
+            .execute(&pool)
+            .await
+            .expect("failed to apply MCP server standard types migration");
         sqlx::raw_sql(include_str!("../../migrations/013_tasks.sql"))
             .execute(&pool)
             .await
@@ -6678,6 +6706,81 @@ mod tests {
             system.content.contains("分身"),
             "角色 prompt 必须明确是用户的分身"
         );
+    }
+
+    #[tokio::test]
+    async fn test_build_role_messages_declares_no_mcp_server_for_unbound_role() {
+        let main_pool = setup_test_main_pool().await;
+        let conv_pool = setup_test_conv_pool().await;
+        let role = crate::db::roles::create_role(
+            &main_pool,
+            &CreateRoleInput {
+                name: "无 MCP 角色".to_string(),
+                icon: None,
+                color: None,
+                goal: Some("只处理内部事项".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+        let conv = crate::db::conversations::create_conversation(&conv_pool, Some(&role.id))
+            .await
+            .unwrap();
+
+        let msgs = build_role_messages(&conv_pool, &main_pool, &conv.id, &role.id, "查询天气")
+            .await
+            .unwrap();
+        let system = &msgs.first().unwrap().content;
+
+        assert!(system.contains("[MCP Server 使用边界]"));
+        assert!(system.contains("当前角色未绑定任何可用的外部 MCP Server"));
+        assert!(system.contains("不要声明、推荐或调用外部 MCP 工具"));
+    }
+
+    #[tokio::test]
+    async fn test_build_role_messages_declares_only_role_bound_mcp_servers() {
+        let main_pool = setup_test_main_pool().await;
+        let conv_pool = setup_test_conv_pool().await;
+        let role = crate::db::roles::create_role(
+            &main_pool,
+            &CreateRoleInput {
+                name: "天气角色".to_string(),
+                icon: None,
+                color: None,
+                goal: Some("查询天气".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO mcp_servers
+             (id, name, server_type, command_or_url, env_refs, description, enabled, created_at, updated_at)
+             VALUES ('weather', '天气服务', 'sse', 'https://example.com', '{}', '提供天气查询', 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+        )
+        .execute(&main_pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO role_mcp_server_bindings (server_id, role_id, created_at)
+             VALUES ('weather', ?1, '2026-01-01T00:00:00Z')",
+        )
+        .bind(&role.id)
+        .execute(&main_pool)
+        .await
+        .unwrap();
+        let conv = crate::db::conversations::create_conversation(&conv_pool, Some(&role.id))
+            .await
+            .unwrap();
+
+        let msgs = build_role_messages(&conv_pool, &main_pool, &conv.id, &role.id, "查询天气")
+            .await
+            .unwrap();
+        let system = &msgs.first().unwrap().content;
+
+        assert!(system.contains("[MCP Server 使用边界]"));
+        assert!(system.contains("天气服务"));
+        assert!(system.contains("提供天气查询"));
+        assert!(system.contains("不要声明或调用未列出的 MCP Server"));
     }
 
     #[tokio::test]

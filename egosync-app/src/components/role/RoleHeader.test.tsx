@@ -45,6 +45,13 @@ describe('RoleHeader', () => {
     expect(onToggleTab).toHaveBeenNthCalledWith(3, 'settings');
   });
 
+  it('选中和未选中的页签均包含深色模式样式', () => {
+    render(<RoleHeader role={baseRole} openTab="tasks" onToggleTab={vi.fn()} />);
+
+    expect(screen.getByRole('button', { name: /任务/ })).toHaveClass('dark:bg-slate-700');
+    expect(screen.getByRole('button', { name: /记忆/ })).toHaveClass('dark:text-slate-400', 'dark:hover:bg-slate-700/60');
+  });
+
   /// AC-5: active tab 着色必须用 role.color (hex) 注入 inline style，
   /// 而不是依赖已废弃的 `role.text` Tailwind class —— 否则真实数据角色
   /// 永远拿不到品牌色，全部退回灰色，违反 Epic 1 的 mock 收敛纪律。

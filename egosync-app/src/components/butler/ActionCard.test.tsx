@@ -118,6 +118,18 @@ describe('ActionCard', () => {
     });
   });
 
+  it('建议卡片及拒绝原因控件包含深色模式样式', () => {
+    render(<ActionCard suggestion={makeSuggestion()} onConfirm={vi.fn()} onReject={vi.fn()} onDismiss={vi.fn()} />);
+
+    expect(screen.getByRole('article')).toHaveClass('dark:bg-slate-800', 'dark:border-slate-700');
+    expect(screen.getByText('建议标题')).toHaveClass('dark:text-slate-100');
+
+    fireEvent.click(screen.getByRole('button', { name: '拒绝' }));
+    expect(screen.getByText('拒绝原因：')).toHaveClass('dark:text-slate-300');
+    fireEvent.click(screen.getByRole('button', { name: '其他' }));
+    expect(screen.getByPlaceholderText('输入具体原因（可选）')).toHaveClass('dark:bg-slate-900', 'dark:text-slate-100');
+  });
+
   it('无障碍：role=article 和 aria-label 正确', () => {
     render(<ActionCard suggestion={makeSuggestion()} onConfirm={vi.fn()} onReject={vi.fn()} onDismiss={vi.fn()} />);
     const article = screen.getByRole('article');

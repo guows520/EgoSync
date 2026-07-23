@@ -13,6 +13,7 @@ interface AddRoleModalProps {
 
 export function AddRoleModal({ onClose, onAdd }: AddRoleModalProps) {
   const [name, setName] = useState('');
+  const [goal, setGoal] = useState('');
   const [iconId, setIconId] = useState(DEFAULT_ICON_ID);
   const [colorHex, setColorHex] = useState(DEFAULT_COLOR_HEX);
   const [isCreating, setIsCreating] = useState(false);
@@ -31,6 +32,7 @@ export function AddRoleModal({ onClose, onAdd }: AddRoleModalProps) {
         name: trimmed,
         icon: iconId,
         color: colorHex,
+        goal: goal.trim() || undefined,
       });
       onAdd(role);
     } catch (e) {
@@ -54,6 +56,12 @@ export function AddRoleModal({ onClose, onAdd }: AddRoleModalProps) {
           <div>
             <label htmlFor="add-role-name" className="block text-[13px] font-medium text-slate-700 mb-1.5">角色名称</label>
             <input id="add-role-name" type="text" value={name} onChange={e => setName(e.target.value)} placeholder="例如：健身教练、投资者..." className="w-full bg-white border border-slate-200 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none" />
+          </div>
+
+          <div>
+            <label htmlFor="add-role-goal" className="block text-[13px] font-medium text-slate-700 dark:text-slate-300 mb-1.5">目标</label>
+            <textarea id="add-role-goal" value={goal} onChange={e => setGoal(e.target.value)} placeholder="描述这个角色长期负责或要达成的方向..." rows={3} className="w-full resize-none rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-[14px] outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100" />
+            <p className="mt-1.5 text-[12px] text-slate-400 dark:text-slate-500">可选，创建后仍可在角色信息中修改。</p>
           </div>
 
           <div>

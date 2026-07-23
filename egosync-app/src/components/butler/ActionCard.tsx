@@ -29,9 +29,9 @@ const PRIORITY_LABELS: Record<string, string> = {
 };
 
 const PRIORITY_COLORS: Record<string, string> = {
-  high: 'bg-red-50 text-red-600',
-  medium: 'bg-amber-50 text-amber-600',
-  low: 'bg-slate-100 text-slate-500',
+  high: 'bg-red-50 text-red-600 dark:bg-red-950/50 dark:text-red-300',
+  medium: 'bg-amber-50 text-amber-600 dark:bg-amber-950/50 dark:text-amber-300',
+  low: 'bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-300',
 };
 
 function formatRelativeTime(iso: string): string {
@@ -137,12 +137,12 @@ export function ActionCard({ suggestion, onConfirm, onReject, onDismiss, confirm
       role="article"
       aria-label={`${suggestion.title} - ${suggestion.roleName}`}
       className={cn(
-        "bg-white border border-slate-200 rounded-[10px] p-4 transition-all duration-200",
+        "bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-[10px] p-4 transition-all duration-200",
         "hover:shadow-[0_4px_12px_rgba(0,0,0,0.08)] hover:-translate-y-px",
         "motion-reduce:transition-none motion-reduce:hover:translate-y-0",
         isActioned && "opacity-50 motion-reduce:opacity-100",
-        status === 'confirmed' && "border-indigo-300",
-        status === 'rejected' && "border-slate-300",
+        status === 'confirmed' && "border-indigo-300 dark:border-indigo-500",
+        status === 'rejected' && "border-slate-300 dark:border-slate-600",
       )}
     >
       <div className="flex items-start justify-between gap-3">
@@ -158,13 +158,13 @@ export function ActionCard({ suggestion, onConfirm, onReject, onDismiss, confirm
           </span>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 flex-wrap">
-              <h3 className="font-medium text-[14px] text-slate-800">{suggestion.title}</h3>
+              <h3 className="font-medium text-[14px] text-slate-800 dark:text-slate-100">{suggestion.title}</h3>
               <span className={cn("shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium", priorityColor)}>
                 {priorityLabel}
               </span>
             </div>
-            {!hideDescription && <p className="text-[12px] text-slate-500 mt-1">{suggestion.content}</p>}
-            <div className="flex items-center gap-2 mt-2 text-[11px] text-slate-400">
+            {!hideDescription && <p className="text-[12px] text-slate-500 dark:text-slate-300 mt-1">{suggestion.content}</p>}
+            <div className="flex items-center gap-2 mt-2 text-[11px] text-slate-400 dark:text-slate-500">
               <span className="font-medium" style={{ color: suggestion.roleColor }}>{suggestion.roleName}</span>
               {relativeTime && (
                 <>
@@ -177,21 +177,21 @@ export function ActionCard({ suggestion, onConfirm, onReject, onDismiss, confirm
         </div>
 
         {status === 'confirmed' && (
-          <div className="shrink-0 w-7 h-7 rounded-full bg-indigo-100 flex items-center justify-center">
-            <Check size={16} className="text-indigo-600" />
+          <div className="shrink-0 w-7 h-7 rounded-full bg-indigo-100 dark:bg-indigo-950/60 flex items-center justify-center">
+            <Check size={16} className="text-indigo-600 dark:text-indigo-300" />
           </div>
         )}
         {status === 'rejected' && (
           <div className="shrink-0 flex items-center gap-1.5">
             {selectedReason && (
-              <span className="text-[11px] text-slate-400">
+              <span className="text-[11px] text-slate-400 dark:text-slate-500">
                 {selectedReason === 'other' && otherReason.trim()
                   ? otherReason.trim()
                   : REJECT_REASONS.find(r => r.value === selectedReason)?.label}
               </span>
             )}
-            <div className="w-7 h-7 rounded-full bg-slate-100 flex items-center justify-center">
-              <X size={16} className="text-slate-400" />
+            <div className="w-7 h-7 rounded-full bg-slate-100 dark:bg-slate-700 flex items-center justify-center">
+              <X size={16} className="text-slate-400 dark:text-slate-300" />
             </div>
           </div>
         )}
@@ -202,7 +202,7 @@ export function ActionCard({ suggestion, onConfirm, onReject, onDismiss, confirm
           <button
             type="button"
             onClick={handleRejectClick}
-            className="px-3 py-1.5 rounded-lg text-[13px] font-medium text-slate-500 border border-slate-200 hover:bg-slate-50 hover:text-slate-700 transition-colors motion-reduce:transition-none"
+            className="px-3 py-1.5 rounded-lg text-[13px] font-medium text-slate-500 dark:text-slate-300 border border-slate-200 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700 hover:text-slate-700 dark:hover:text-slate-100 transition-colors motion-reduce:transition-none"
           >
             {rejectLabel}
           </button>
@@ -217,8 +217,8 @@ export function ActionCard({ suggestion, onConfirm, onReject, onDismiss, confirm
       )}
 
       {showRejectionReasons && status === 'pending' && (
-        <div className="mt-3 pt-3 border-t border-slate-100">
-          <p className="text-[12px] text-slate-500 mb-2">拒绝原因：</p>
+        <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-700">
+          <p className="text-[12px] text-slate-500 dark:text-slate-300 mb-2">拒绝原因：</p>
           <div className="flex gap-2 flex-wrap">
             {REJECT_REASONS.map(reason => (
               <button
@@ -228,8 +228,8 @@ export function ActionCard({ suggestion, onConfirm, onReject, onDismiss, confirm
                 className={cn(
                   "px-2.5 py-1 rounded-lg text-[12px] font-medium border transition-colors motion-reduce:transition-none",
                   showOtherInput && reason.value === 'other'
-                    ? "bg-indigo-50 border-indigo-300 text-indigo-600"
-                    : "text-slate-600 bg-slate-50 border-slate-200 hover:bg-slate-100 hover:text-slate-800",
+                    ? "bg-indigo-50 dark:bg-indigo-950/60 border-indigo-300 dark:border-indigo-500 text-indigo-600 dark:text-indigo-300"
+                    : "text-slate-600 dark:text-slate-300 bg-slate-50 dark:bg-slate-700 border-slate-200 dark:border-slate-600 hover:bg-slate-100 dark:hover:bg-slate-600 hover:text-slate-800 dark:hover:text-slate-100",
                 )}
               >
                 {reason.label}
@@ -243,12 +243,12 @@ export function ActionCard({ suggestion, onConfirm, onReject, onDismiss, confirm
                 value={otherReason}
                 onChange={e => setOtherReason(e.target.value)}
                 placeholder="输入具体原因（可选）"
-                className="flex-1 px-3 py-1.5 rounded-lg text-[12px] border border-slate-200 focus:outline-none focus:border-indigo-300"
+                className="flex-1 px-3 py-1.5 rounded-lg text-[12px] bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 border border-slate-200 dark:border-slate-600 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:border-indigo-300 dark:focus:border-indigo-500"
               />
               <button
                 type="button"
                 onClick={handleOtherSubmit}
-                className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-slate-700 text-white hover:bg-slate-800 transition-colors motion-reduce:transition-none"
+                className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-slate-700 dark:bg-indigo-600 text-white hover:bg-slate-800 dark:hover:bg-indigo-700 transition-colors motion-reduce:transition-none"
               >
                 提交
               </button>

@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Sparkles, Target, X } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { CalendarClock, Sparkles, Target, X } from 'lucide-react';
 import { Modal } from '../layout/Modal';
 import type { CreateTaskInput, Task, TaskQuadrant, UpdateTaskInput } from '../../types/task';
 import type { Role } from '../../types/role';
@@ -39,12 +39,64 @@ export function TaskModal({ scope, roles = [], task, onClose, onSave }: TaskModa
     task?.quadrant ?? AUTO_QUADRANT,
   );
   const [deadline, setDeadline] = useState(task?.deadline ? isoToDatetimeLocal(task.deadline) : '');
+  const [isDeadlinePickerOpen, setIsDeadlinePickerOpen] = useState(false);
+  const [draftDeadlineDate, setDraftDeadlineDate] = useState('');
+  const [draftDeadlineHour, setDraftDeadlineHour] = useState('');
+  const [draftDeadlineMinute, setDraftDeadlineMinute] = useState('');
+  const deadlinePickerRef = useRef<HTMLDivElement>(null);
   const [isBigRock, setIsBigRock] = useState(task?.isBigRock ?? false);
   const [ownerValue, setOwnerValue] = useState(scope.ownerType === 'role' ? scope.roleId : 'butler');
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState('');
 
   const isTitleBlank = title.trim().length === 0;
+
+  useEffect(() => {
+    if (!isDeadlinePickerOpen) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!deadlinePickerRef.current?.contains(event.target as Node)) {
+        setIsDeadlinePickerOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setIsDeadlinePickerOpen(false);
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isDeadlinePickerOpen]);
+
+  const openDeadlinePicker = () => {
+    const [date = '', time = ''] = deadline.split('T');
+    const [hour = '', minute = ''] = time.split(':');
+    setDraftDeadlineDate(date);
+    setDraftDeadlineHour(hour);
+    setDraftDeadlineMinute(minute);
+    setIsDeadlinePickerOpen(true);
+  };
+
+  const updateDeadlineDraft = (date: string, hour: string, minute: string) => {
+    setDraftDeadlineDate(date);
+    setDraftDeadlineHour(hour);
+    setDraftDeadlineMinute(minute);
+    if (date && hour && minute) {
+      setDeadline(`${date}T${hour}:${minute}`);
+      setIsDeadlinePickerOpen(false);
+    }
+  };
+
+  const clearDeadline = () => {
+    setDeadline('');
+    setDraftDeadlineDate('');
+    setDraftDeadlineHour('');
+    setDraftDeadlineMinute('');
+    setIsDeadlinePickerOpen(false);
+  };
 
   const handleSubmit = async () => {
     const trimmedTitle = title.trim();
@@ -155,15 +207,74 @@ export function TaskModal({ scope, roles = [], task, onClose, onSave }: TaskModa
                 </p>
               )}
             </div>
-            <div>
+            <div ref={deadlinePickerRef} className="relative">
               <label htmlFor="task-deadline" className="block text-[13px] font-medium text-slate-700 mb-1.5">截止时间</label>
-              <input
-                id="task-deadline"
-                type="datetime-local"
-                value={deadline}
-                onChange={event => setDeadline(event.target.value)}
-                className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-[13px] focus:ring-2 focus:ring-indigo-500/20 outline-none text-slate-600"
-              />
+              <div className="flex gap-2">
+                <button
+                  id="task-deadline"
+                  type="button"
+                  aria-haspopup="dialog"
+                  aria-expanded={isDeadlinePickerOpen}
+                  onClick={openDeadlinePicker}
+                  className="min-w-0 flex-1 flex items-center gap-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-600 rounded-lg px-3 py-2 text-[13px] text-left text-slate-600 dark:text-slate-200 focus:ring-2 focus:ring-indigo-500/20 outline-none"
+                >
+                  <CalendarClock size={15} className="shrink-0 text-slate-400" />
+                  <span className="truncate">{deadline ? deadline.replace('T', ' ') : '选择日期和时间'}</span>
+                </button>
+                {deadline && (
+                  <button
+                    type="button"
+                    aria-label="清空截止时间"
+                    onClick={clearDeadline}
+                    className="shrink-0 rounded-lg border border-slate-200 dark:border-slate-600 px-2 text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700"
+                  >
+                    <X size={15} />
+                  </button>
+                )}
+              </div>
+              {isDeadlinePickerOpen && (
+                <div
+                  role="dialog"
+                  aria-label="选择截止时间"
+                  className="absolute right-0 z-30 mt-2 w-[320px] rounded-xl border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 p-3 shadow-lg"
+                >
+                  <div className="grid grid-cols-[1fr_76px_76px] gap-2">
+                    <input
+                      type="date"
+                      aria-label="截止日期"
+                      value={draftDeadlineDate}
+                      onChange={event => updateDeadlineDraft(event.target.value, draftDeadlineHour, draftDeadlineMinute)}
+                      className="min-w-0 rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 px-2 py-2 text-[12px] text-slate-700 dark:text-slate-200 outline-none focus:border-indigo-400"
+                    />
+                    <select
+                      aria-label="截止小时"
+                      value={draftDeadlineHour}
+                      onChange={event => updateDeadlineDraft(draftDeadlineDate, event.target.value, draftDeadlineMinute)}
+                      className="rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 px-2 py-2 text-[12px] text-slate-700 dark:text-slate-200 outline-none focus:border-indigo-400"
+                    >
+                      <option value="" disabled>小时</option>
+                      {Array.from({ length: 24 }, (_, hour) => String(hour).padStart(2, '0')).map(hour => (
+                        <option key={hour} value={hour}>{hour} 时</option>
+                      ))}
+                    </select>
+                    <select
+                      aria-label="截止分钟"
+                      value={draftDeadlineMinute}
+                      onChange={event => updateDeadlineDraft(draftDeadlineDate, draftDeadlineHour, event.target.value)}
+                      className="rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 px-2 py-2 text-[12px] text-slate-700 dark:text-slate-200 outline-none focus:border-indigo-400"
+                    >
+                      <option value="" disabled>分钟</option>
+                      {Array.from({ length: 60 }, (_, minute) => String(minute).padStart(2, '0')).map(minute => (
+                        <option key={minute} value={minute}>{minute} 分</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="mt-2 flex items-center justify-between gap-3">
+                    <p className="text-[11px] text-slate-400 dark:text-slate-500">选择日期、小时和分钟后自动关闭</p>
+                    <button type="button" aria-label="取消时间选择" onClick={() => setIsDeadlinePickerOpen(false)} className="text-[11px] font-medium text-slate-500 dark:text-slate-300 hover:text-slate-700 dark:hover:text-slate-100">取消</button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 

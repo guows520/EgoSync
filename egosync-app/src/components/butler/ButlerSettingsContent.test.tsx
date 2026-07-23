@@ -89,6 +89,7 @@ describe('ButlerSettingsContent', () => {
   beforeEach(() => {
     vi.useRealTimers();
     vi.clearAllMocks();
+    localStorage.clear();
     vi.mocked(appService.getButlerSkills).mockResolvedValue({
       findSkills: true,
       skillCreator: false,
@@ -115,6 +116,30 @@ describe('ButlerSettingsContent', () => {
       bigrockReminderDay: '1',
       bigrockReminderTime: '09:00',
     });
+  });
+
+  it('支持全部折叠、全部展开并持久化管家设置分组', () => {
+    const { unmount } = render(<ButlerSettingsContent archivedRoles={[{ ...baseRole, status: 'archived', archivedAt: '2026-07-01T00:00:00Z' }]} />);
+    const sectionNames = ['如何称呼您', '您的个人使命宣言', 'Skill 配置', '晨间简报时间', '周复盘时间', '大石头规划提醒时间', '已归档角色'];
+
+    fireEvent.click(screen.getByRole('button', { name: '全部折叠' }));
+    sectionNames.forEach(name => expect(screen.getByRole('button', { name })).toHaveAttribute('aria-expanded', 'false'));
+    expect(JSON.parse(localStorage.getItem('egosync-butler-settings-sections') ?? '{}')).toEqual({
+      identity: false,
+      mission: false,
+      skills: false,
+      briefing: false,
+      review: false,
+      bigrock: false,
+      archived: false,
+    });
+
+    unmount();
+    render(<ButlerSettingsContent archivedRoles={[{ ...baseRole, status: 'archived', archivedAt: '2026-07-01T00:00:00Z' }]} />);
+    sectionNames.forEach(name => expect(screen.getByRole('button', { name })).toHaveAttribute('aria-expanded', 'false'));
+
+    fireEvent.click(screen.getByRole('button', { name: '全部展开' }));
+    sectionNames.forEach(name => expect(screen.getByRole('button', { name })).toHaveAttribute('aria-expanded', 'true'));
   });
 
   it('展示并持久化管家 Skill 配置', async () => {
@@ -364,7 +389,7 @@ describe('ButlerSettingsContent', () => {
     expect(screen.getByTestId('opencode-skill-description-hash-writer')).toHaveClass('line-clamp-2');
     fireEvent.click(screen.getByRole('button', { name: /收起/ }));
     expect(screen.queryByText('writer')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /展开/ }));
+    fireEvent.click(screen.getByRole('button', { name: /发现 1 个 opencode Skill.*展开/ }));
     expect(screen.getByText('writer')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '导入' }));
 

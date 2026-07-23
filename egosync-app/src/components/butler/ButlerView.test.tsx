@@ -37,6 +37,32 @@ vi.mock('./ButlerWorkspacePanel', () => ({
 }));
 
 describe('ButlerView memory reference navigation', () => {
+  it('显示数字分身管家文案并为顶部页签提供深色模式样式', () => {
+    render(
+      <ButlerView
+        roles={[]}
+        archivedRoles={[]}
+        onRestoreRole={vi.fn()}
+        onViewChange={vi.fn()}
+        onUpdateRole={vi.fn()}
+        onRoleSourceNavigation={vi.fn()}
+        sourceNavigationTarget={null}
+        onSourceNavigationHandled={vi.fn()}
+        onOpenTask={vi.fn()}
+        onTasksApiReady={vi.fn()}
+        knockNotifications={[]}
+        onDismissKnock={vi.fn()}
+        chatRefreshTrigger={0}
+      />,
+    );
+
+    expect(screen.getByText('数字分身管家')).toBeInTheDocument();
+    const dashboardButton = screen.getByRole('button', { name: /仪表盘/ });
+    expect(dashboardButton).toHaveClass('dark:text-slate-400', 'dark:hover:bg-slate-700/60');
+    fireEvent.click(dashboardButton);
+    expect(dashboardButton).toHaveClass('dark:bg-slate-700', 'dark:text-indigo-300');
+  });
+
   it('点击聊天中的记忆引用后打开记忆侧栏并传递目标 ID，定位完成后清理目标', () => {
     render(
       <ButlerView

@@ -28,6 +28,13 @@ function sampleTask(overrides: Partial<Task> = {}): Task {
   };
 }
 
+function chooseDeadline(date: string, hour: string, minute: string) {
+  fireEvent.click(screen.getByLabelText('截止时间'));
+  fireEvent.change(screen.getByLabelText('截止日期'), { target: { value: date } });
+  fireEvent.change(screen.getByLabelText('截止小时'), { target: { value: hour } });
+  fireEvent.change(screen.getByLabelText('截止分钟'), { target: { value: minute } });
+}
+
 describe('TaskModal', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -41,7 +48,8 @@ describe('TaskModal', () => {
 
     fireEvent.change(screen.getByLabelText('任务内容'), { target: { value: '准备 Q3 OKR 规划' } });
     fireEvent.change(screen.getByLabelText('四象限分类'), { target: { value: 'Q1' } });
-    fireEvent.change(screen.getByLabelText('截止时间'), { target: { value: '2026-06-30T10:00' } });
+    chooseDeadline('2026-06-30', '10', '00');
+    expect(screen.queryByRole('dialog', { name: '选择截止时间' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByLabelText('标记为本周大石头'));
     fireEvent.click(screen.getByRole('button', { name: '保存任务' }));
 
@@ -140,6 +148,48 @@ describe('TaskModal', () => {
     });
   });
 
+  it('选择日期、小时和分钟后自动关闭时间选择弹窗', () => {
+    render(<TaskModal scope={scope} onClose={vi.fn()} onSave={vi.fn()} />);
+
+    fireEvent.click(screen.getByLabelText('截止时间'));
+    expect(screen.getByRole('dialog', { name: '选择截止时间' })).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('截止日期'), { target: { value: '2026-08-01' } });
+    fireEvent.change(screen.getByLabelText('截止小时'), { target: { value: '00' } });
+    expect(screen.getByRole('dialog', { name: '选择截止时间' })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('截止分钟'), { target: { value: '00' } });
+
+    expect(screen.queryByRole('dialog', { name: '选择截止时间' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('截止时间')).toHaveTextContent('2026-08-01 00:00');
+  });
+
+  it('取消时间选择时不写入未完成的草稿', () => {
+    render(<TaskModal scope={scope} onClose={vi.fn()} onSave={vi.fn()} />);
+
+    fireEvent.click(screen.getByLabelText('截止时间'));
+    fireEvent.change(screen.getByLabelText('截止日期'), { target: { value: '2026-08-01' } });
+    fireEvent.click(screen.getByRole('button', { name: '取消时间选择' }));
+
+    expect(screen.queryByRole('dialog', { name: '选择截止时间' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('截止时间')).toHaveTextContent('选择日期和时间');
+  });
+
+  it('重新打开已有截止时间时保留日期、小时和分钟', () => {
+    render(
+      <TaskModal
+        scope={scope}
+        onClose={vi.fn()}
+        onSave={vi.fn()}
+        task={sampleTask({ deadline: '2026-06-30T23:59:00Z' })}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText('截止时间'));
+    expect(screen.getByLabelText('截止日期')).toHaveValue('2026-06-30');
+    expect(screen.getByLabelText('截止小时')).toHaveValue('23');
+    expect(screen.getByLabelText('截止分钟')).toHaveValue('59');
+  });
+
   it('编辑任务时清空截止时间会提交 null', async () => {
     const onSave = vi.fn().mockResolvedValue(undefined);
 
@@ -152,7 +202,7 @@ describe('TaskModal', () => {
       />,
     );
 
-    fireEvent.change(screen.getByLabelText('截止时间'), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: '清空截止时间' }));
     fireEvent.click(screen.getByRole('button', { name: '保存任务' }));
 
     // 仅清空截止时间、未动 quadrant：payload 不应包含 quadrant

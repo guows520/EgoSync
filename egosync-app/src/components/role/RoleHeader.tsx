@@ -31,7 +31,7 @@ export function RoleHeader({ role, openTab, onToggleTab }: RoleHeaderProps) {
         onClick={() => onToggleTab(tab)}
         className={cn(
           'flex items-center gap-1.5 px-3 py-2 rounded-lg text-[13px] font-medium transition-all',
-          isActive ? 'bg-white shadow-sm' : 'text-slate-500 hover:bg-white/50',
+          isActive ? 'bg-white dark:bg-slate-700 shadow-sm' : 'text-slate-500 dark:text-slate-400 hover:bg-white/50 dark:hover:bg-slate-700/60',
         )}
         style={isActive ? { color: roleColor } : undefined}
       >
@@ -58,13 +58,13 @@ export function RoleHeader({ role, openTab, onToggleTab }: RoleHeaderProps) {
               {role.goal}
             </span>
           )}
-          <div className="w-[120px] h-[6px] bg-slate-200/80 rounded-full overflow-hidden">
+          <div className="w-[120px] h-[6px] bg-slate-200/80 dark:bg-slate-700 rounded-full overflow-hidden">
             <div
               className="h-full bg-emerald-500 rounded-full transition-all duration-1000"
               style={{ width: `${role.energy}%` }}
             />
           </div>
-          <span className="text-[11px] text-slate-500 font-medium">{role.energy}% 能量</span>
+          <span className="text-[11px] text-slate-500 dark:text-slate-400 font-medium">{role.energy}% 能量</span>
         </div>
       </div>
 

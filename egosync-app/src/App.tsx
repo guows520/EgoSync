@@ -5,7 +5,6 @@ import { Sidebar } from './components/layout/Sidebar';
 import { TitleBar } from './components/layout/TitleBar';
 import { ButlerView } from './components/butler/ButlerView';
 import { RoleView } from './components/role/RoleView';
-import { GroupedSettingsDemo } from './components/role/GroupedSettingsDemo';
 import { OnboardingView } from './components/onboarding/OnboardingView';
 import { GlobalSettingsModal } from './components/settings/GlobalSettingsModal';
 import { WeeklyReviewModal } from './components/modals/WeeklyReviewModal';
@@ -362,7 +361,6 @@ export default function App() {
           theme={theme}
           onToggleTheme={toggleTheme}
           onEditRole={(id: string) => { setCurrentView(id); setRoleInitialTab('settings'); setIsSettingsOpen(false); }}
-          onOpenRoleSettingsDemo={() => setCurrentView('role-settings-demo')}
           isNotifOpen={isNotifOpen}
           onToggleNotif={() => setIsNotifOpen(v => !v)}
           unreadCount={alertUnreadCount}
@@ -379,7 +377,6 @@ export default function App() {
           {isLoadingRoles ? null : (
           <>
           {currentView === 'onboard' && <OnboardingView onComplete={handleOnboardingComplete} onOpenSettings={() => setIsSettingsOpen(true)} />}
-          {currentView === 'role-settings-demo' && <GroupedSettingsDemo />}
           {currentView === 'butler' && (
             <ButlerView
               roles={roles}

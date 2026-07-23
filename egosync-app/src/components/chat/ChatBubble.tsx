@@ -1,5 +1,6 @@
 import { useState, Fragment, memo, type AnchorHTMLAttributes, type ReactNode } from 'react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { cn } from '../../lib/utils';
 import { Home, ChevronRight, type LucideIcon } from 'lucide-react';
 import type { ChatMessage, ExecutionTraceBlock, StreamPayload } from '../../types/chat';
@@ -271,6 +272,7 @@ export function ChatBubble({
             ) : (
               <div className="prose prose-sm prose-slate dark:prose-invert max-w-none">
                 <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
                   urlTransform={value => value.startsWith(memoryLinkScheme) ? value : defaultUrlTransform(value)}
                   components={{
                     a: ({ href, children }) => (
@@ -282,6 +284,15 @@ export function ChatBubble({
                     li: ({ children }) => <li>{renderMemoryReferences(children, onMemoryReferenceClick)}</li>,
                     strong: ({ children }) => <strong>{renderMemoryReferences(children, onMemoryReferenceClick)}</strong>,
                     em: ({ children }) => <em>{renderMemoryReferences(children, onMemoryReferenceClick)}</em>,
+                    table: ({ children }) => (
+                      <div className="my-4 max-w-full overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
+                        <table className="m-0 w-full min-w-max border-collapse text-left">{children}</table>
+                      </div>
+                    ),
+                    thead: ({ children }) => <thead className="bg-slate-100 dark:bg-slate-800">{children}</thead>,
+                    tr: ({ children }) => <tr className="border-b border-slate-200 last:border-b-0 dark:border-slate-700">{children}</tr>,
+                    th: ({ children }) => <th className="whitespace-nowrap px-3 py-2 font-semibold text-slate-700 dark:text-slate-200">{children}</th>,
+                    td: ({ children }) => <td className="px-3 py-2 align-top text-slate-600 dark:text-slate-300">{children}</td>,
                   }}
                 >
                   {message.content}

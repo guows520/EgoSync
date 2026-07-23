@@ -175,7 +175,7 @@ export function OnboardingView({ onComplete, onOpenSettings }: OnboardingViewPro
         id: `onboard-fallback-${Date.now()}`,
         conversationId: '',
         role: 'assistant',
-        content: '你好，我是你的分身管家。很高兴为你服务！聊聊你最近在忙什么？',
+        content: '你好，我是你的数字分身管家。很高兴为你服务！聊聊你最近在忙什么？',
         thinkingContent: '',
         isComplete: true,
         createdAt: new Date().toISOString(),
@@ -303,7 +303,7 @@ export function OnboardingView({ onComplete, onOpenSettings }: OnboardingViewPro
           <div className="w-[46px] h-[46px] rounded-xl bg-slate-800 dark:bg-indigo-600 text-white flex items-center justify-center shadow-sm">
             <Home size={24} strokeWidth={2} />
           </div>
-          <h2 className="font-semibold text-lg leading-tight text-slate-800 dark:text-slate-100">分身管家</h2>
+          <h2 className="font-semibold text-lg leading-tight text-slate-800 dark:text-slate-100">数字分身管家</h2>
         </div>
       </header>
 

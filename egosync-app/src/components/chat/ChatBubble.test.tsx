@@ -200,3 +200,38 @@ describe('ChatBubble assistant identity', () => {
     expect(screen.queryByText(/"tool":"bash"/)).not.toBeInTheDocument();
   });
 });
+
+describe('ChatBubble GFM 表格', () => {
+  it('将标准 GFM 表格渲染为语义化表格并保留中文、emoji、粗体和链接', () => {
+    const { container } = render(
+      <ChatBubble
+        message={{
+          ...assistantMsg,
+          content: '| 城市 | 国家 | 特色 | 链接 |\n| --- | --- | --- | --- |\n| **成都** | 🇨🇳 中国 | 熊猫 | [详情](https://example.com) |',
+        }}
+      />,
+    );
+
+    expect(screen.getByRole('table')).toBeInTheDocument();
+    expect(container.querySelector('thead')).toBeInTheDocument();
+    expect(container.querySelector('tbody')).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: '城市' })).toBeInTheDocument();
+    expect(screen.getByText('成都').tagName).toBe('STRONG');
+    expect(screen.getByText('🇨🇳 中国')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '详情' })).toHaveAttribute('href', 'https://example.com');
+  });
+
+  it('代码块中的管道内容保持代码，不生成表格', () => {
+    render(<ChatBubble message={{ ...assistantMsg, content: '```markdown\n| A | B |\n| --- | --- |\n| 1 | 2 |\n```' }} />);
+
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
+    expect(screen.getByText(/\| A \| B \|/)).toBeInTheDocument();
+  });
+
+  it('TAB 分隔文本不做非标准表格转换', () => {
+    render(<ChatBubble message={{ ...assistantMsg, content: '城市\t国家\n成都\t中国' }} />);
+
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
+    expect(screen.getByText(/城市/)).toBeInTheDocument();
+  });
+});

@@ -125,6 +125,7 @@ describe('SettingsTab role CRUD actions', () => {
   beforeEach(() => {
     vi.useRealTimers();
     vi.clearAllMocks();
+    localStorage.clear();
     tauriEventHandlers.skillRegistryUpdated = undefined;
     vi.mocked(skillService.listRegistry).mockResolvedValue([]);
     vi.mocked(skillService.listForRole).mockResolvedValue([]);
@@ -170,7 +171,7 @@ describe('SettingsTab role CRUD actions', () => {
     fireEvent.change(screen.getByLabelText('角色个性描述'), { target: { value: '简洁专业，先判断优先级再给建议' } });
     fireEvent.click(screen.getByTitle('学习'));
     fireEvent.click(screen.getByText('翠绿'));
-    fireEvent.click(screen.getByRole('button', { name: '保存更改' }));
+    fireEvent.click(screen.getByRole('button', { name: '保存角色信息' }));
 
     await waitFor(() => {
       expect(roleService.update).toHaveBeenCalledWith('role-1', {
@@ -941,7 +942,7 @@ describe('SettingsTab role CRUD actions', () => {
     expect(screen.getByTestId('opencode-skill-description-hash-writer')).toHaveClass('line-clamp-2');
     fireEvent.click(screen.getByRole('button', { name: /收起/ }));
     expect(screen.queryByText('writer')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /展开/ }));
+    fireEvent.click(screen.getByRole('button', { name: /发现 1 个 opencode Skill.*展开/ }));
     expect(screen.getByText('writer')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '导入' }));
 
@@ -1004,7 +1005,7 @@ describe('SettingsTab role CRUD actions', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: '发现 opencode Skill' }));
 
-    expect(await screen.findByText('writer')).toBeInTheDocument();
+    expect((await screen.findAllByText('writer')).length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: '导入' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '取消导入' })).not.toBeInTheDocument();
   });
@@ -1034,6 +1035,54 @@ describe('SettingsTab role CRUD actions', () => {
     });
     expect(onUpdateRole).toHaveBeenCalledWith(updatedProactivityRole);
     expect(await screen.findByText('主动性级别已保存')).toBeInTheDocument();
+  });
+
+
+  it('支持单独折叠角色设置分组并持久化状态', () => {
+    const { unmount } = render(<SettingsTab role={baseRole} activeRoleCount={2} />);
+    const profileHeader = screen.getByRole('button', { name: '角色信息' });
+
+    expect(profileHeader).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.change(screen.getByLabelText('名称'), { target: { value: '未保存的新名称' } });
+    fireEvent.click(profileHeader);
+    expect(profileHeader).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(profileHeader);
+    expect(screen.getByLabelText('名称')).toHaveValue('未保存的新名称');
+    fireEvent.click(profileHeader);
+    expect(JSON.parse(localStorage.getItem('egosync-role-settings-sections') ?? '{}')).toMatchObject({ profile: false });
+
+    unmount();
+    render(<SettingsTab role={baseRole} activeRoleCount={2} />);
+    expect(screen.getByRole('button', { name: '角色信息' })).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('损坏的角色折叠状态会安全回退为全部展开', () => {
+    localStorage.setItem('egosync-role-settings-sections', '{broken-json');
+    render(<SettingsTab role={baseRole} activeRoleCount={2} />);
+
+    ['角色信息', '主动性级别', 'Skill 配置', 'MCP Server配置'].forEach(name => {
+      expect(screen.getByRole('button', { name })).toHaveAttribute('aria-expanded', 'true');
+    });
+  });
+
+  it('支持全部折叠和全部展开角色设置分组', () => {
+    render(<SettingsTab role={baseRole} activeRoleCount={2} />);
+    const sectionNames = ['角色信息', '主动性级别', 'Skill 配置', 'MCP Server配置'];
+
+    fireEvent.click(screen.getByRole('button', { name: '全部折叠' }));
+    sectionNames.forEach(name => expect(screen.getByRole('button', { name })).toHaveAttribute('aria-expanded', 'false'));
+
+    fireEvent.click(screen.getByRole('button', { name: '全部展开' }));
+    sectionNames.forEach(name => expect(screen.getByRole('button', { name })).toHaveAttribute('aria-expanded', 'true'));
+  });
+
+  it('角色信息独立保存并显示新的 MCP 配置文案', async () => {
+    render(<SettingsTab role={baseRole} activeRoleCount={2} />);
+    expect(screen.getByRole('button', { name: '保存角色信息' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '保存更改' })).not.toBeInTheDocument();
+    expect(screen.getByText('MCP Server配置')).toBeInTheDocument();
+    expect(screen.queryByText('外部 MCP 工具')).not.toBeInTheDocument();
+    expect(screen.getByText('Skill 配置').compareDocumentPosition(screen.getByText('自定义 Skill')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
 });

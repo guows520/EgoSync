@@ -1,9 +1,9 @@
 import { useState, useRef, useEffect } from 'react';
-import { Home, Plus, Moon, Sun, Settings as SettingsIcon, Pencil, Archive, Trash2, Bell, FlaskConical } from 'lucide-react';
+import { Home, Plus, Moon, Sun, Settings as SettingsIcon, Pencil, Archive, Trash2, Bell } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { RoleSidebarIcon } from './RoleSidebarIcon';
 
-export function Sidebar({ roles, currentView, onViewChange, isSettingsOpen, onOpenSettings, onCloseSettings, onAddRole, onArchiveRole, onDeleteRole, theme, onToggleTheme, onEditRole, onOpenRoleSettingsDemo, isNotifOpen, onToggleNotif, unreadCount = 0, whisperUnread = 0 }: any) {
+export function Sidebar({ roles, currentView, onViewChange, isSettingsOpen, onOpenSettings, onCloseSettings, onAddRole, onArchiveRole, onDeleteRole, theme, onToggleTheme, onEditRole, isNotifOpen, onToggleNotif, unreadCount = 0, whisperUnread = 0 }: any) {
   const handleNav = (view: string) => {
     onViewChange(view);
     onCloseSettings();
@@ -107,9 +107,6 @@ export function Sidebar({ roles, currentView, onViewChange, isSettingsOpen, onOp
         </button>
         <button onClick={onOpenSettings} title="设置" aria-label="设置" className={cn("w-11 h-11 rounded-xl flex items-center justify-center transition-colors", isSettingsOpen ? "bg-indigo-600 text-white shadow-lg shadow-indigo-200 dark:shadow-indigo-900/50" : "text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 hover:text-slate-700 dark:hover:text-slate-200")}>
           <SettingsIcon size={22} />
-        </button>
-        <button onClick={onOpenRoleSettingsDemo} title="角色设置 Demo" aria-label="角色设置 Demo" data-testid="role-settings-demo-nav" className={cn("w-11 h-11 rounded-xl flex items-center justify-center transition-colors", currentView === 'role-settings-demo' ? "bg-indigo-600 text-white shadow-lg shadow-indigo-200 dark:shadow-indigo-900/50" : "text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200")}>
-          <FlaskConical size={21} />
         </button>
       </div>
 

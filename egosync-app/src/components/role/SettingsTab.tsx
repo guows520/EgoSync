@@ -25,6 +25,16 @@ type SkillKey = 'findSkills' | 'skillCreator';
 const MIN_ACTIVE_ROLE_MESSAGE = '至少保留一个角色';
 const BUTLER_SCOPE_ID = '__butler__';
 const MESSAGE_TIMEOUT_MS = 1500;
+const ROLE_SECTION_IDS = ['profile', 'proactivity', 'skills', 'mcp'] as const;
+type RoleSectionId = typeof ROLE_SECTION_IDS[number];
+const ROLE_STORAGE_KEY = 'egosync-role-settings-sections';
+const readRoleSections = (): Record<RoleSectionId, boolean> => {
+  const defaults = Object.fromEntries(ROLE_SECTION_IDS.map(id => [id, true])) as Record<RoleSectionId, boolean>;
+  try {
+    const stored = localStorage.getItem(ROLE_STORAGE_KEY);
+    return stored ? { ...defaults, ...JSON.parse(stored) } : defaults;
+  } catch { return defaults; }
+};
 const DEFAULT_SKILLS: RoleSkillsConfig = { findSkills: false, skillCreator: false, enabledSkillIds: [] };
 const SKILL_OPTIONS: Array<{ key: SkillKey; title: string; source: string; description: string }> = [
   {
@@ -46,6 +56,7 @@ export function SettingsTab({
   activeRoles,
   onUpdateRole,
 }: SettingsTabProps) {
+  const [openSections, setOpenSections] = useState<Record<RoleSectionId, boolean>>(readRoleSections);
   const [roleName, setRoleName] = useState(role.name);
   const [roleGoal, setRoleGoal] = useState(role.goal);
   const [rolePersonalityPrompt, setRolePersonalityPrompt] = useState(role.personalityPrompt);
@@ -545,10 +556,27 @@ export function SettingsTab({
     }
   };
 
+  useEffect(() => {
+    localStorage.setItem(ROLE_STORAGE_KEY, JSON.stringify(openSections));
+  }, [openSections]);
+
+  const setAllSections = (open: boolean) => setOpenSections(Object.fromEntries(ROLE_SECTION_IDS.map(id => [id, open])) as Record<RoleSectionId, boolean>);
+  const toggleSection = (id: RoleSectionId) => setOpenSections(prev => ({ ...prev, [id]: !prev[id] }));
+  const sectionClass = (id: RoleSectionId, base = '') => cn(base, !openSections[id] && '[&>*:not(:first-child)]:hidden');
+  const sectionHeader = (id: RoleSectionId, title: string) => (
+    <button type="button" aria-expanded={openSections[id]} onClick={() => toggleSection(id)} className="mb-3 flex w-full items-center justify-between rounded-lg text-left text-[14px] font-semibold text-slate-800 outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/40 dark:text-slate-100">
+      <span>{title}</span>{openSections[id] ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+    </button>
+  );
+
   return (
     <div className="space-y-8">
-      <div>
-        <label className="text-[14px] font-semibold text-slate-800 dark:text-slate-100 block mb-3">角色信息</label>
+      <div className="flex justify-end gap-2">
+        <button type="button" onClick={() => setAllSections(true)} className="rounded-lg border border-slate-200 px-3 py-1.5 text-[12px] font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">全部展开</button>
+        <button type="button" onClick={() => setAllSections(false)} className="rounded-lg border border-slate-200 px-3 py-1.5 text-[12px] font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">全部折叠</button>
+      </div>
+      <div className={sectionClass('profile')}>
+        {sectionHeader('profile', '角色信息')}
         <div className="space-y-4">
           <div>
             <label htmlFor="role-name" className="block text-[13px] font-medium text-slate-600 dark:text-slate-300 mb-1.5">名称</label>
@@ -626,11 +654,14 @@ export function SettingsTab({
               <div>学习者：好奇探索，偏启发式提问，鼓励持续尝试。</div>
             </div>
           </div>
+          <button type="button" onClick={handleSave} disabled={isSaving} className={cn('mt-4 inline-flex items-center gap-2 rounded-lg border px-3.5 py-2 text-[12.5px] font-medium transition-colors disabled:opacity-60', saved ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300' : 'border-slate-200 text-slate-600 hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-600 dark:border-slate-700 dark:text-slate-300 dark:hover:border-indigo-700 dark:hover:bg-indigo-900/30')}>
+            {saved ? <><Check size={16} /> 已保存</> : isSaving ? '保存中...' : '保存角色信息'}
+          </button>
         </div>
       </div>
 
-      <div className="pt-6 border-t border-slate-200/80 dark:border-slate-700/80">
-        <label className="text-[14px] font-semibold text-slate-800 dark:text-slate-100 block mb-3">主动性级别</label>
+      <div className={sectionClass('proactivity', 'pt-6 border-t border-slate-200/80 dark:border-slate-700/80')}>
+        {sectionHeader('proactivity', '主动性级别')}
         <ProactivityToggle
           level={proactivityLevel}
           onChange={handleProactivityChange}
@@ -639,8 +670,8 @@ export function SettingsTab({
         <p className="text-[12px] text-slate-400 dark:text-slate-500 mt-2.5 leading-relaxed">V1 仅保存角色主动性级别；实际主动建议会在后续主动循环中生效。</p>
       </div>
 
-      <div className="pt-6 border-t border-slate-200/80 dark:border-slate-700/80">
-        <label className="text-[14px] font-semibold text-slate-800 dark:text-slate-100 block mb-3">Skill 配置</label>
+      <div className={sectionClass('skills', 'pt-6 border-t border-slate-200/80 dark:border-slate-700/80')}>
+        {sectionHeader('skills', 'Skill 配置')}
         <div className="space-y-3">
           {SKILL_OPTIONS.map(option => {
             const enabled = skills[option.key];
@@ -782,88 +813,6 @@ export function SettingsTab({
             )}
           </div>
 
-          <div className="pt-6 border-t border-slate-200/80 dark:border-slate-700/80">
-            <label className="text-[14px] font-semibold text-slate-800 dark:text-slate-100 block mb-3">外部 MCP 工具</label>
-            <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-4 shadow-sm">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                <div>
-                  <div className="text-[14.5px] font-medium text-slate-800 dark:text-slate-100">当前角色可用 MCP server</div>
-                  <p className="mt-1 text-[12.5px] leading-relaxed text-slate-500 dark:text-slate-400">这里只展示已为当前角色启用的 MCP；全局未绑定的 server 不会出现在角色能力中。</p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setIsMcpPickerOpen(prev => !prev)}
-                  disabled={isLoadingMcpServers}
-                  className="inline-flex shrink-0 items-center justify-center rounded-lg border border-indigo-200 bg-indigo-50 dark:bg-indigo-900/30 px-3 py-2 text-[12px] font-medium text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  添加 MCP server
-                </button>
-              </div>
-
-              <div className="mt-3 space-y-2">
-                {isLoadingMcpServers && <div className="text-[12.5px] text-slate-400 dark:text-slate-500">正在加载 MCP server...</div>}
-                {!isLoadingMcpServers && roleMcpServers.length === 0 && <div className="text-[12.5px] text-slate-400 dark:text-slate-500">当前角色暂无 MCP server。</div>}
-                {roleMcpServers.map(server => (
-                  <div key={server.id} className="rounded-lg border border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className={cn('w-2.5 h-2.5 rounded-full', server.enabled ? 'bg-emerald-500' : 'bg-slate-300')} />
-                          <span className="break-words text-[13.5px] font-medium text-slate-800 dark:text-slate-100">{server.name}</span>
-                          <span className="rounded-full border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-0.5 text-[11px] font-medium text-slate-500 dark:text-slate-400">{mcpServerTypeLabel(server.serverType)}</span>
-                          {!server.enabled && <span className="rounded-full border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-0.5 text-[11px] font-medium text-slate-500 dark:text-slate-400">已停用</span>}
-                        </div>
-                        <p className="mt-1.5 break-words text-[12px] leading-relaxed text-slate-500 dark:text-slate-400">{server.description || server.commandOrUrl}</p>
-                      </div>
-                      <button
-                        type="button"
-                        aria-label={`移除 ${server.name}`}
-                        onClick={() => handleRemoveMcpFromRole(server.id)}
-                        disabled={pendingMcpId !== null}
-                        className="shrink-0 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 text-[12px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {pendingMcpId === server.id ? '移除中...' : '移除'}
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {isMcpPickerOpen && (
-                <div className="mt-3 rounded-lg border border-indigo-100 dark:border-indigo-700 bg-indigo-50 dark:bg-indigo-900/30 px-3 py-3">
-                  <input
-                    type="text"
-                    value={mcpSearch}
-                    onChange={e => setMcpSearch(e.target.value)}
-                    placeholder="搜索 MCP server"
-                    className="w-full rounded-lg border border-indigo-100 dark:border-indigo-700 bg-white dark:bg-slate-800 px-3 py-2 text-[13px] outline-none focus:border-indigo-300 focus:ring-2 focus:ring-indigo-500/20"
-                  />
-                  <div className="mt-2 space-y-2">
-                    {filteredAvailableMcpServers.length === 0 ? (
-                      <div className="text-[12.5px] text-slate-500 dark:text-slate-400">没有可添加的 MCP server</div>
-                    ) : filteredAvailableMcpServers.map(server => (
-                      <div key={server.id} className="flex items-start justify-between gap-3 rounded-lg border border-indigo-100 dark:border-indigo-700 bg-white dark:bg-slate-800 px-3 py-2">
-                        <div className="min-w-0">
-                          <div className="break-words text-[13.5px] font-medium text-slate-800 dark:text-slate-100">{server.name}</div>
-                          <div className="mt-1 break-words text-[12px] text-slate-500 dark:text-slate-400">{server.description || server.commandOrUrl}</div>
-                        </div>
-                        <button
-                          type="button"
-                          aria-label={`添加 ${server.name}`}
-                          onClick={() => handleAddMcpToRole(server.id)}
-                          disabled={pendingMcpId !== null}
-                          className="shrink-0 rounded-lg bg-indigo-600 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          {pendingMcpId === server.id ? '添加中...' : '添加'}
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-
           <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-4 shadow-sm">
             <div className="mb-4 space-y-3">
               <div className="min-w-0">
@@ -997,6 +946,88 @@ export function SettingsTab({
           </div>
         </div>
       </div>
+      <div className={sectionClass('mcp', 'pt-6 border-t border-slate-200/80 dark:border-slate-700/80')}>
+        {sectionHeader('mcp', 'MCP Server配置')}
+        <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-4 shadow-sm">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <div className="text-[14.5px] font-medium text-slate-800 dark:text-slate-100">当前角色可用 MCP server</div>
+              <p className="mt-1 text-[12.5px] leading-relaxed text-slate-500 dark:text-slate-400">这里只展示已为当前角色启用的 MCP；全局未绑定的 server 不会出现在角色能力中。</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsMcpPickerOpen(prev => !prev)}
+              disabled={isLoadingMcpServers}
+              className="inline-flex shrink-0 items-center justify-center rounded-lg border border-indigo-200 bg-indigo-50 dark:bg-indigo-900/30 px-3 py-2 text-[12px] font-medium text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              添加 MCP server
+            </button>
+          </div>
+
+          <div className="mt-3 space-y-2">
+            {isLoadingMcpServers && <div className="text-[12.5px] text-slate-400 dark:text-slate-500">正在加载 MCP server...</div>}
+            {!isLoadingMcpServers && roleMcpServers.length === 0 && <div className="text-[12.5px] text-slate-400 dark:text-slate-500">当前角色暂无 MCP server。</div>}
+            {roleMcpServers.map(server => (
+              <div key={server.id} className="rounded-lg border border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className={cn('w-2.5 h-2.5 rounded-full', server.enabled ? 'bg-emerald-500' : 'bg-slate-300')} />
+                      <span className="break-words text-[13.5px] font-medium text-slate-800 dark:text-slate-100">{server.name}</span>
+                      <span className="rounded-full border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-0.5 text-[11px] font-medium text-slate-500 dark:text-slate-400">{mcpServerTypeLabel(server.serverType)}</span>
+                      {!server.enabled && <span className="rounded-full border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-0.5 text-[11px] font-medium text-slate-500 dark:text-slate-400">已停用</span>}
+                    </div>
+                    <p className="mt-1.5 break-words text-[12px] leading-relaxed text-slate-500 dark:text-slate-400">{server.description || server.commandOrUrl}</p>
+                  </div>
+                  <button
+                    type="button"
+                    aria-label={`移除 ${server.name}`}
+                    onClick={() => handleRemoveMcpFromRole(server.id)}
+                    disabled={pendingMcpId !== null}
+                    className="shrink-0 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 text-[12px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {pendingMcpId === server.id ? '移除中...' : '移除'}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {isMcpPickerOpen && (
+            <div className="mt-3 rounded-lg border border-indigo-100 dark:border-indigo-700 bg-indigo-50 dark:bg-indigo-900/30 px-3 py-3">
+              <input
+                type="text"
+                value={mcpSearch}
+                onChange={e => setMcpSearch(e.target.value)}
+                placeholder="搜索 MCP server"
+                className="w-full rounded-lg border border-indigo-100 dark:border-indigo-700 bg-white dark:bg-slate-800 px-3 py-2 text-[13px] outline-none focus:border-indigo-300 focus:ring-2 focus:ring-indigo-500/20"
+              />
+              <div className="mt-2 space-y-2">
+                {filteredAvailableMcpServers.length === 0 ? (
+                  <div className="text-[12.5px] text-slate-500 dark:text-slate-400">没有可添加的 MCP server</div>
+                ) : filteredAvailableMcpServers.map(server => (
+                  <div key={server.id} className="flex items-start justify-between gap-3 rounded-lg border border-indigo-100 dark:border-indigo-700 bg-white dark:bg-slate-800 px-3 py-2">
+                    <div className="min-w-0">
+                      <div className="break-words text-[13.5px] font-medium text-slate-800 dark:text-slate-100">{server.name}</div>
+                      <div className="mt-1 break-words text-[12px] text-slate-500 dark:text-slate-400">{server.description || server.commandOrUrl}</div>
+                    </div>
+                    <button
+                      type="button"
+                      aria-label={`添加 ${server.name}`}
+                      onClick={() => handleAddMcpToRole(server.id)}
+                      disabled={pendingMcpId !== null}
+                      className="shrink-0 rounded-lg bg-indigo-600 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {pendingMcpId === server.id ? '添加中...' : '添加'}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
 
       <div className="pt-6 border-t border-slate-200/80 dark:border-slate-700/80">
         {settingsSavedMessage && (
@@ -1009,9 +1040,6 @@ export function SettingsTab({
             <AlertCircle size={14} /> {error}
           </div>
         )}
-        <button onClick={handleSave} disabled={isSaving} className={cn('w-full py-3 rounded-xl text-[14px] font-medium transition-all flex items-center justify-center gap-2 disabled:opacity-60', saved ? 'bg-emerald-600 text-white' : 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm')}>
-          {saved ? <><Check size={16} /> 已保存</> : isSaving ? '保存中...' : '保存更改'}
-        </button>
       </div>
 
       {deleteSkillTarget && (

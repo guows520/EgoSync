@@ -18,6 +18,16 @@ type ButlerSkillKey = 'findSkills' | 'skillCreator';
 const DEFAULT_SKILLS: ButlerSkillsState = { findSkills: true, skillCreator: false, enabledSkillIds: [] };
 const BUTLER_SCOPE_ID = '__butler__';
 const MESSAGE_TIMEOUT_MS = 1500;
+const BUTLER_SECTION_IDS = ['identity', 'mission', 'skills', 'briefing', 'review', 'bigrock', 'archived'] as const;
+type ButlerSectionId = typeof BUTLER_SECTION_IDS[number];
+const BUTLER_STORAGE_KEY = 'egosync-butler-settings-sections';
+const readButlerSections = (): Record<ButlerSectionId, boolean> => {
+  const defaults = Object.fromEntries(BUTLER_SECTION_IDS.map(id => [id, true])) as Record<ButlerSectionId, boolean>;
+  try {
+    const stored = localStorage.getItem(BUTLER_STORAGE_KEY);
+    return stored ? { ...defaults, ...JSON.parse(stored) } : defaults;
+  } catch { return defaults; }
+};
 const SKILL_OPTIONS: Array<{ key: ButlerSkillKey; title: string; source: string; description: string }> = [
   {
     key: 'findSkills',
@@ -41,6 +51,7 @@ interface ButlerSettingsContentProps {
 }
 
 export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], onRestoreRole, onUpdateRole }: ButlerSettingsContentProps) {
+  const [openSections, setOpenSections] = useState<Record<ButlerSectionId, boolean>>(readButlerSections);
   const [mission, setMission] = useState('');
   const [missionFormat, setMissionFormat] = useState<'free' | 'structured'>('free');
   const [structuredMission, setStructuredMission] = useState('');
@@ -491,15 +502,32 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
     }
   };
 
+  useEffect(() => {
+    localStorage.setItem(BUTLER_STORAGE_KEY, JSON.stringify(openSections));
+  }, [openSections]);
+
+  const setAllSections = (open: boolean) => setOpenSections(Object.fromEntries(BUTLER_SECTION_IDS.map(id => [id, open])) as Record<ButlerSectionId, boolean>);
+  const toggleSection = (id: ButlerSectionId) => setOpenSections(prev => ({ ...prev, [id]: !prev[id] }));
+  const sectionClass = (id: ButlerSectionId, base = '') => cn(base, !openSections[id] && '[&>*:not(:first-child)]:hidden');
+  const sectionHeader = (id: ButlerSectionId, title: string) => (
+    <button type="button" aria-expanded={openSections[id]} onClick={() => toggleSection(id)} className="mb-3 flex w-full items-center justify-between rounded-lg text-left text-[14px] font-semibold text-slate-800 outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/40 dark:text-slate-100">
+      <span>{title}</span>{openSections[id] ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+    </button>
+  );
+
   return (
     <div className="space-y-8">
-      <div>
-        <label className="text-[14px] font-semibold text-slate-800 dark:text-slate-100 block mb-3">如何称呼您</label>
+      <div className="flex justify-end gap-2">
+        <button type="button" onClick={() => setAllSections(true)} className="rounded-lg border border-slate-200 px-3 py-1.5 text-[12px] font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">全部展开</button>
+        <button type="button" onClick={() => setAllSections(false)} className="rounded-lg border border-slate-200 px-3 py-1.5 text-[12px] font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">全部折叠</button>
+      </div>
+      <div className={sectionClass('identity')}>
+        {sectionHeader('identity', '如何称呼您')}
         <input type="text" defaultValue="boss" className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none" />
         <p className="text-[12px] text-slate-400 dark:text-slate-500 mt-2 leading-relaxed">管家在对话中称呼您的方式。</p>
       </div>
-      <div className="pt-6 border-t border-slate-200/80">
-        <label className="text-[14px] font-semibold text-slate-800 dark:text-slate-100 block mb-3">您的个人使命宣言</label>
+      <div className={sectionClass('mission', 'pt-6 border-t border-slate-200/80 dark:border-slate-700/80')}>
+        {sectionHeader('mission', '您的个人使命宣言')}
         <div className="flex gap-2 mb-3">
           <button
             type="button"
@@ -607,8 +635,8 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
           )}
         </div>
       </div>
-      <div className="pt-6 border-t border-slate-200/80">
-        <label className="text-[14px] font-semibold text-slate-800 dark:text-slate-100 block mb-3">Skill 配置</label>
+      <div className={sectionClass('skills', 'pt-6 border-t border-slate-200/80 dark:border-slate-700/80')}>
+        {sectionHeader('skills', 'Skill 配置')}
         {isLoadingButlerSkills ? (
           <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-4 py-3 text-[13px] text-slate-500 dark:text-slate-400 shadow-sm">正在加载 Skill 配置...</div>
         ) : (
@@ -897,8 +925,8 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
           </div>
         )}
       </div>
-      <div className="pt-6 border-t border-slate-200/80">
-        <label className="text-[14px] font-semibold text-slate-800 dark:text-slate-100 block mb-3">晨间简报时间</label>
+      <div className={sectionClass('briefing', 'pt-6 border-t border-slate-200/80 dark:border-slate-700/80')}>
+        {sectionHeader('briefing', '晨间简报时间')}
         <input
           type="time"
           value={briefingTime}
@@ -919,8 +947,8 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
         />
         <p className="text-[12px] text-slate-400 dark:text-slate-500 mt-2 leading-relaxed">每天推送晨间简报的时间。</p>
       </div>
-      <div className="pt-6 border-t border-slate-200/80">
-        <label className="text-[14px] font-semibold text-slate-800 dark:text-slate-100 block mb-3">周复盘时间</label>
+      <div className={sectionClass('review', 'pt-6 border-t border-slate-200/80 dark:border-slate-700/80')}>
+        {sectionHeader('review', '周复盘时间')}
         <div className="flex gap-3">
           <select value={reviewDay} onChange={async (e) => {
             const value = e.target.value;
@@ -955,8 +983,8 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
         </div>
         <p className="text-[12px] text-slate-400 dark:text-slate-500 mt-2 leading-relaxed">每周触发周复盘的时间。</p>
       </div>
-      <div className="pt-6 border-t border-slate-200/80">
-        <label className="text-[14px] font-semibold text-slate-800 dark:text-slate-100 block mb-3">大石头规划提醒时间</label>
+      <div className={sectionClass('bigrock', 'pt-6 border-t border-slate-200/80 dark:border-slate-700/80')}>
+        {sectionHeader('bigrock', '大石头规划提醒时间')}
         <div className="flex gap-3">
           <select value={bigrockReminderDay} onChange={async (e) => {
             const value = e.target.value;
@@ -993,7 +1021,7 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
 
       {archivedRoles.length > 0 && (
         <div className="pt-6 border-t border-slate-200/80">
-          <label className="text-[14px] font-semibold text-slate-800 dark:text-slate-100 block mb-3">已归档角色</label>
+          {sectionHeader('archived', '已归档角色')}
           <div className="space-y-2.5">
             {archivedRoles.map((role: any) => {
               const Icon = getRoleIconComponent(role.icon);

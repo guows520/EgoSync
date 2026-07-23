@@ -2547,6 +2547,7 @@ async fn try_run_opencode_stream(
     let mut final_text = String::new();
     let mut completed_response: Option<crate::models::agent::OpencodeCompletedMessage> = None;
     let mut send_result_observed = false;
+    let mut user_visible_error_appended = false;
     let mut delegate_workers: Vec<tokio::task::JoinHandle<()>> = Vec::new();
     let delegate_lock = Arc::new(Mutex::new(()));
 
@@ -2897,7 +2898,20 @@ async fn try_run_opencode_stream(
                             .and_then(|m| m.as_str())
                             .unwrap_or("opencode session error");
                         let friendly = format!("抱歉，Agent 引擎返回错误：{}", summarize_error(detail));
-                        accumulated_text.push_str(&friendly);
+                        let error_message_id = final_message_id.as_deref();
+                        if final_message_id.is_some() {
+                            final_text.push_str(&friendly);
+                        } else {
+                            accumulated_text.push_str(&friendly);
+                        }
+                        emit_stream_token(
+                            app_handle,
+                            conversation_id,
+                            error_message_id,
+                            &friendly,
+                            false,
+                        );
+                        user_visible_error_appended = true;
                         completed = true;
                         break;
                     }
@@ -2926,6 +2940,14 @@ async fn try_run_opencode_stream(
                         } else {
                             accumulated_text.push_str(&friendly);
                         }
+                        emit_stream_token(
+                            app_handle,
+                            conversation_id,
+                            final_message_id.as_deref(),
+                            &friendly,
+                            false,
+                        );
+                        user_visible_error_appended = true;
                         false
                     }
                     Ok(Ok(response)) => {
@@ -3050,14 +3072,23 @@ async fn try_run_opencode_stream(
                     sessions.remove(conversation_id);
                     return Err(OpencodeStreamAttemptError::Fatal(e));
                 }
-                let friendly = format!(
-                    "\n\n抱歉，Agent 引擎返回错误：{}",
-                    summarize_error(&e.to_string())
-                );
-                if final_message_id.is_some() {
-                    final_text.push_str(&friendly);
-                } else {
-                    accumulated_text.push_str(&friendly);
+                if !user_visible_error_appended {
+                    let friendly = format!(
+                        "\n\n抱歉，Agent 引擎返回错误：{}",
+                        summarize_error(&e.to_string())
+                    );
+                    if final_message_id.is_some() {
+                        final_text.push_str(&friendly);
+                    } else {
+                        accumulated_text.push_str(&friendly);
+                    }
+                    emit_stream_token(
+                        app_handle,
+                        conversation_id,
+                        final_message_id.as_deref(),
+                        &friendly,
+                        false,
+                    );
                 }
             }
             Ok(Err(_)) | Err(_) => {}

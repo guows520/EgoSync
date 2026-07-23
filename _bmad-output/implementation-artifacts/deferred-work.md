@@ -202,3 +202,7 @@ All items resolved in the same session:
 - **OpenCode 运行时刷新并发协调（HIGH）**：上一轮同批未提交改动使用全局待刷新布尔标记；两个消息流并发进入或已有 stream 正在运行时，sidecar 重启可能与请求交错。需单独明确“活动 stream 是否允许被中断”的产品语义，再设计进程级互斥/共享刷新任务与并发集成测试。
 - **Skill registry 事件异步响应过期（MEDIUM）**：`SettingsTab` 与 `App` 的事件刷新未使用请求序号或取消保护，快速切换角色或连续事件时可能由旧响应覆盖新状态。应在独立状态一致性修复中统一处理。
 - **Skill 全局删除原子性（MEDIUM）**：后端 registry、角色绑定/配置和 Agent 配置同步跨多个步骤，异常时可能形成部分成功。该路径为本次前端修复前已存在，需单独评估数据库事务边界与配置文件补偿策略。
+
+## Deferred from: code review of fix-agent-stream-error-duplicate (2026-07-23)
+
+- **Agent Engine 定向测试存在既有 Butler prompt 断言失败（测试门禁）**：`cargo test agent_engine` 运行 110 项时 109 通过、1 失败；失败项 `services::agent_engine::tests::test_build_butler_system_prompt_omits_disabled_meta_skills` 在 `agent_engine.rs:6922` 仍断言旧提示词包含“你是 EgoSync 的分身管家”。本次补丁未修改该 prompt 构建或断言区域，且新增代码已通过编译及 `test_sse_error_maps_to_done_payload` 精确测试；应另行校准 Butler prompt 契约与历史断言。

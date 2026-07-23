@@ -1711,6 +1711,42 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
     resolveFirstHistoryRefresh();
   });
 
+  /// 错误收尾必须补齐流式内容；否则 done 生成的本地前缀消息无法与完整历史消息去重，
+  /// 用户会误以为同一执行步骤被启动了两次。
+  it('部分输出后发生 Agent 错误时只保留一个完整助手气泡', async () => {
+    const getStreamHandler = captureStreamHandler();
+    const preface = '好的，立即开始执行。先检查环境再生成 PDF。';
+    const errorText = '抱歉，Agent 引擎返回错误：模型服务暂时不可用';
+    const completeText = `${preface}\n\n${errorText}`;
+    vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
+    const userMessage = chatMessage({ id: 'pdf-request', content: '获取以下文档的最后5页' });
+    vi.mocked(chatService.getHistory)
+      .mockResolvedValueOnce([userMessage])
+      .mockResolvedValueOnce([
+        userMessage,
+        chatMessage({ id: 'persisted-agent-error', role: 'assistant', content: completeText }),
+      ]);
+
+    const { container } = render(<ChatStream role={null} />);
+    await waitFor(() => expect(chatService.getHistory).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      const handler = getStreamHandler();
+      handler({ conversationId: 'conv-butler', token: preface, done: false, thinking: false });
+      handler({ conversationId: 'conv-butler', token: `\n\n${errorText}`, done: false, thinking: false });
+      handler({ conversationId: 'conv-butler', token: '', done: true, thinking: false });
+    });
+
+    await waitFor(() => expect(chatService.getHistory).toHaveBeenCalledTimes(2));
+    await waitFor(() => {
+      const assistantBubble = screen.getByTestId('chat-message-persisted-agent-error');
+      expect(within(assistantBubble).getByText(preface)).toBeInTheDocument();
+      expect(within(assistantBubble).getByText(errorText)).toBeInTheDocument();
+      expect(container.querySelectorAll('[data-testid^="chat-message-"]')).toHaveLength(2);
+      expect(container.querySelector('[data-testid^="chat-message-__completed__"]')).toBeNull();
+    });
+  });
+
   it('最终气泡不显示已记录为执行过程的开场说明', async () => {
     const getStreamHandler = captureStreamHandler();
     vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);

@@ -1,6 +1,6 @@
 # Story 9.1: 管家与角色设置分组支持折叠和批量展开
 
-Status: review
+Status: done
 
 ## Story
 

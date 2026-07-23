@@ -37,6 +37,14 @@ pub async fn skill_list_all_role_skills(
 }
 
 #[tauri::command]
+pub async fn skill_list_enabled_for_scope(
+    role_id: Option<String>,
+    pool: State<'_, DbPool>,
+) -> Result<Vec<SkillRegistryEntry>, AppError> {
+    crate::services::skill_registry::list_enabled(&pool, role_id.as_deref()).await
+}
+
+#[tauri::command]
 pub async fn skill_pick_custom_directory() -> Result<PickCustomSkillDirectoryResult, AppError> {
     let selected = tauri::async_runtime::spawn_blocking(|| rfd::FileDialog::new().pick_folder())
         .await

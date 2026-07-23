@@ -5,6 +5,7 @@ import { chatService } from '../../services/chatService';
 import { useTauriEvent } from '../../hooks/useTauriEvent';
 import type { ChatMessage, StreamPayload } from '../../types/chat';
 import type { Role } from '../../types/role';
+import type { SkillRegistryEntry } from '../../types/skill';
 
 vi.mock('../../services/chatService', () => ({
   chatService: {
@@ -24,6 +25,12 @@ vi.mock('../../services/chatService', () => ({
 
 vi.mock('../../hooks/useTauriEvent', () => ({
   useTauriEvent: vi.fn(),
+}));
+
+vi.mock('../../services/skillService', () => ({
+  skillService: {
+    listEnabledForScope: vi.fn().mockResolvedValue([]),
+  },
 }));
 
 const butlerConv = {
@@ -2041,5 +2048,49 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
 
     await waitFor(() => expect(screen.getByText('旧消息')).toBeInTheDocument());
     expect(screen.getByText('新消息')).toBeInTheDocument();
+  });
+});
+
+describe('ChatStream Skill 选择 (Story 10.1)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.mocked(chatService.getHistory).mockResolvedValue([]);
+    vi.mocked(chatService.listConversations).mockResolvedValue([]);
+    vi.mocked(chatService.getMessageProcessEvents).mockResolvedValue([]);
+    vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
+    vi.mocked(chatService.getRoleConversation).mockResolvedValue(roleConv);
+  });
+
+  /// AC-1: 角色切换时调用 listEnabledForScope 加载候选 Skill
+  it('角色切换时调用 listEnabledForScope 加载候选', async () => {
+    const { skillService } = await import('../../services/skillService');
+    vi.mocked(skillService.listEnabledForScope).mockResolvedValue([]);
+
+    render(<ChatStream role={baseRole} />);
+    await waitFor(() => expect(skillService.listEnabledForScope).toHaveBeenCalledWith('role-1'));
+  });
+
+  /// AC-3: 选中 Skill 后发送消息携带 selectedSkillId
+  it('选中 Skill 后 sendMessage 携带 selectedSkillId', async () => {
+    const { skillService } = await import('../../services/skillService');
+    const mockSkill: SkillRegistryEntry = {
+      id: 'skill-ppt', name: 'ppt-generation', description: '生成PPT',
+      sourceType: 'opencode', managedPath: '', contentHash: '', createdAt: '', updatedAt: '',
+    };
+    vi.mocked(skillService.listEnabledForScope).mockResolvedValue([mockSkill]);
+    vi.mocked(chatService.sendMessage).mockResolvedValue(chatMessage({ id: 'user-1', content: '帮我生成PPT' }));
+
+    render(<ChatStream role={null} />);
+    await waitFor(() => expect(chatService.getButlerConversation).toHaveBeenCalled());
+
+    const input = await screen.findByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...');
+    fireEvent.change(input, { target: { value: '@' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    fireEvent.change(input, { target: { value: '帮我生成季度汇报' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => expect(chatService.sendMessage).toHaveBeenCalled());
+    const callArgs = vi.mocked(chatService.sendMessage).mock.calls[0][0];
+    expect(callArgs.selectedSkillId).toBe('skill-ppt');
   });
 });

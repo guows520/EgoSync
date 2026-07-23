@@ -125,6 +125,11 @@ _本文件包含 AI Agent 在本项目中实现代码时必须遵循的关键规
 - 集成测试公共模块：`tests/common/mod.rs`
 - 测试命令：`cd egosync-app/src-tauri && cargo test`
 - SQLx 测试：使用 sqlx test fixtures
+- **Windows `cargo test` 环境问题（STATUS_ENTRYPOINT_NOT_FOUND）**：
+  - 原因：Tauri 默认启用 `common-controls-v6` feature，该 feature 依赖 Windows manifest 中的 Common-Controls 入口点。`tauri-build` 通过 `tauri-winres` → `embed-resource` 的 `compile()` 只将 manifest 链接到主二进制，**不链接到测试二进制**，导致测试进程启动时找不到入口点（exit code: 0xc0000139）。这是 Tauri 2.x 的已知 issue（[tauri#13419](https://github.com/tauri-apps/tauri/issues/13419)）
+  - 解决方案：`Cargo.toml` 中 `tauri = { version = "2", default-features = false, features = ["wry", "compression", "x11"] }`，禁用 `common-controls-v6` 和 `dynamic-acl`
+  - 影响评估：本应用 UI 全部在 WebView2 中渲染，不使用 Windows 原生控件，无系统托盘图标，禁用 `common-controls-v6` 对运行时行为无影响
+  - 注意：如果未来添加系统托盘图标（tray icon），可能需要重新启用 `common-controls-v6`
 
 **E2E 测试 (V1 必需):**
 - 使用 Tauri driver (WebDriver 协议)

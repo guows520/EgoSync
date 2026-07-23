@@ -13,6 +13,15 @@ pub enum AppError {
     KeyringError(String),
     #[error("Sidecar error: {0}")]
     SidecarError(String),
+    /// Story 10.1: 指定的 Skill 在 Registry 中不存在（已被删除或 ID 错误）。
+    #[error("Skill not found: {0}")]
+    SkillNotFound(String),
+    /// Story 10.1: Skill 存在但未添加到当前 Agent 作用域（管家/角色未绑定）。
+    #[error("Skill not added to scope: {0}")]
+    SkillNotAddedToScope(String),
+    /// Story 10.1: Skill 已添加到作用域但被关闭（不在 enabledSkillIds 中）。
+    #[error("Skill disabled: {0}")]
+    SkillDisabled(String),
 }
 
 impl serde::Serialize for AppError {
@@ -29,6 +38,9 @@ impl serde::Serialize for AppError {
             AppError::ValidationError(msg) => map.serialize_entry("ValidationError", msg)?,
             AppError::KeyringError(msg) => map.serialize_entry("KeyringError", msg)?,
             AppError::SidecarError(msg) => map.serialize_entry("SidecarError", msg)?,
+            AppError::SkillNotFound(msg) => map.serialize_entry("SkillNotFound", msg)?,
+            AppError::SkillNotAddedToScope(msg) => map.serialize_entry("SkillNotAddedToScope", msg)?,
+            AppError::SkillDisabled(msg) => map.serialize_entry("SkillDisabled", msg)?,
         }
         map.end()
     }
@@ -55,6 +67,9 @@ mod tests {
             AppError::ValidationError("x".into()),
             AppError::KeyringError("x".into()),
             AppError::SidecarError("x".into()),
+            AppError::SkillNotFound("x".into()),
+            AppError::SkillNotAddedToScope("x".into()),
+            AppError::SkillDisabled("x".into()),
         ];
         for err in cases {
             let json = serde_json::to_string(&err).expect("serialize should succeed");

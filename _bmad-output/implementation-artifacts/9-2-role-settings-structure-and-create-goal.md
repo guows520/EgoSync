@@ -1,6 +1,6 @@
 # Story 9.2: 角色设置结构优化并在新建角色时填写目标
 
-Status: review
+Status: done
 
 ## Story
 

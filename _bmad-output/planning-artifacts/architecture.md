@@ -1,10 +1,13 @@
 ---
 stepsCompleted: [1, 2, 3, 4, 5, 6, 7, 8]
+baselineStepsCompleted: [1, 2, 3, 4, 5, 6, 7, 8]
 inputDocuments: ['prd-egosync.md', 'ux-design-specification.md', 'brainstorming-session-2026-05-18-1000.md', 'egosync-app/src/App.tsx']
 workflowType: 'architecture'
 lastStep: 8
 status: 'complete'
-completedAt: '2026-05-25'
+baselineCompletedAt: '2026-05-25'
+updated: '2026-07-23'
+completedAt: '2026-07-23'
 project_name: '探索'
 user_name: 'boss'
 date: '2026-05-25'
@@ -1174,3 +1177,747 @@ npx tauri init
 # 实现 agent_bridge.rs (HTTP client → opencode API)
 # 验证: 应用启动后opencode server可访问，退出后进程清理
 ```
+
+---
+
+## Incremental Project Context Analysis — FR-37～FR-39
+
+### Requirements Overview
+
+本次增量在既有 `React → Tauri/Rust → opencode` 三层架构上补充三个横切能力，而不是重新设计 Skill、Dashboard 或 MCP 子系统。
+
+**FR-37：对话级 Skill 选择**
+
+- 管家与每个角色已经分别维护 Skill 配置和启用状态。
+- 当前 Agent 的可用 Skill 集合只能包含其已添加且已启用的 Skill，不能继承或合并其他 Agent 的配置。
+- `@Skill` 是请求级选择，不得修改长期 Skill 配置。
+- 未指定 `@Skill` 时，保留现有 Agent 自动发现和按需加载行为。
+- 不存在、未添加或未启用的 Skill 必须在任务进入 Agent Runtime 前被拒绝。
+
+**FR-38：仪表盘聚合统计**
+
+- 统一返回任务总数、结构化记忆条目数、对话会话数和待处理任务数。
+- 查询维度支持全部、管家、单个角色以及时间范围，两个维度可组合。
+- 任务与记忆按 `created_at`；对话会话按 `started_at`。
+- 对话按会话计数，不按消息数计数。
+- 待处理任务先按 `created_at` 纳入查询范围，再按查询时未完成状态计数，并满足 `pendingTaskCount <= taskCount`。
+
+**FR-39：MCP Server 运行时管理**
+
+- MCP Server 的 `enabled` 状态与角色绑定是两个独立配置维度。
+- 切换 Server 启用状态不得修改角色绑定；角色绑定变化不得修改 Server 状态。
+- 关闭的 Server 不得投影到 Agent Runtime；重新启用后恢复投影。
+- 创建、编辑、删除、启用/关闭和角色绑定变化后，后续会话必须使用最新运行时配置。
+- 当前代码已有 MCP 配置同步、运行时刷新入口及 `OpencodeMcpScopeLock`，增量方案应复用这些边界。
+
+### Non-Functional Requirements
+
+- **本地优先**：统计、Skill 配置解析和 MCP 状态管理不得依赖云服务。
+- **分层通信**：React 只经 Tauri IPC；Command 只做参数解析；业务规则在 Rust Service；数据访问在 DB 层。
+- **任务快照一致性**：Skill/MCP 可用集合必须在任务启动前形成快照，流式执行开始后不改变本次上下文。
+- **运行时一致性**：数据库配置、`opencode.json` 配置投影和运行中的 opencode 状态必须有明确同步结果。
+- **安全性**：`@Skill` 不得绕过启用校验；MCP 密钥继续使用 keyring 或环境变量引用；关闭的 Server 不得因旧配置残留继续暴露工具。
+- **可审计性**：显式 Skill、统计筛选条件及 MCP 刷新结果均应可追踪。
+- **显式失败**：不得在数据库更新成功、运行时刷新失败时静默宣称完整成功。
+
+### Scale & Complexity
+
+- Primary domain: Tauri full-stack desktop application with React/TypeScript, Rust and opencode sidecar.
+- Overall complexity: High.
+- Increment complexity: Medium-high due to request-time context composition, cross-domain aggregation and runtime configuration projection.
+- Data complexity: Tasks and memories live in EgoSync-owned stores, while conversation sessions have a separate conversation/opencode boundary that must remain behind an adapter.
+- Concurrency complexity: MCP mutations and runtime refresh require serialization; Skill configuration needs snapshot semantics between validation and task start.
+- Multi-tenancy/regulatory scope: None for V1; all data remains local.
+
+预计本次需要新增或明确以下组件边界：
+
+- Agent Skill Resolver
+- Task Context Builder
+- Skill Audit Metadata
+- Dashboard Query DTO
+- Dashboard Aggregation Service
+- Conversation Session Repository/Adapter
+- MCP Configuration Projection
+- MCP Runtime Refresh Coordinator
+- MCP Scope Resolver
+- Runtime Refresh Result
+
+### Technical Constraints & Dependencies
+
+1. 复用当前管家和角色的独立 Skill 配置，不建立全局继承模型。
+2. Agent 身份必须由后端可信上下文解析，前端不能直接提交未经验证的可用 Skill 集合。
+3. Skill 长期配置与任务级选择使用不同语义和数据结构。
+4. 仪表盘必须通过统一 Tauri Command 返回聚合 DTO，前端不得直接访问 SQLite 或 opencode。
+5. 对话会话统计需沿用现有会话数据边界，通过 Repository/Adapter 接入聚合服务。
+6. MCP `enabled` 字段、角色绑定、CRUD、`AgentConfigService` 和运行时刷新链路均优先复用。
+7. `opencode.json` 只能由 `AgentConfigService` 程序化维护。
+8. MCP 变更与运行时刷新沿用现有锁和 Sidecar/Session 管理边界。
+9. 不指定 `@Skill` 的路径必须保持现有自动发现行为。
+10. 配置持久化与运行时刷新之间的部分失败必须有明确恢复策略。
+
+### Cross-Cutting Concerns Identified
+
+1. **Agent 身份解析**：Skill 和 MCP 可用集合都以当前 Agent 身份为作用域。
+2. **持久化配置与任务快照分离**：长期允许集合与本次显式选择不能相互写回。
+3. **上下文注入时机**：所有显式选择在 Agent Runtime 调用前验证并冻结。
+4. **跨数据源统计**：Dashboard Service 屏蔽任务、记忆和会话来源差异。
+5. **统一筛选语义**：四项指标必须共享同一个 Agent/时间查询快照。
+6. **配置事实与运行时投影**：数据库是事实来源，`opencode.json` 是投影，sidecar 是运行状态。
+7. **MCP 状态与绑定解耦**：有效工具集合是 Server 启用状态与 Agent 绑定范围的交集。
+8. **并发和幂等**：连续 MCP 变更必须串行或可合并，重复刷新不能残留或复制工具。
+9. **审计和可解释性**：显式 Skill、统计条件和 MCP 刷新失败均可追踪。
+## Incremental Starter Template Evaluation — FR-37～FR-39
+
+### Primary Technology Domain
+
+本项目是现有的 Tauri 桌面端棕地应用：React 18 + TypeScript/Vite 前端、Tauri 2/Rust 后端、SQLite/SQLx 本地数据层，以及 opencode sidecar Agent Runtime。本轮是增量架构设计，不重新初始化项目。
+
+### Technical Preferences Already Established
+
+- React 只负责展示和交互，不直接访问数据库或 opencode。
+- 所有前端业务操作通过 Tauri IPC。
+- Rust Command 层只做参数解析并调用 Service；业务规则位于 Service；数据访问位于 DB/Repository。
+- opencode API 统一通过 AgentBridge；`opencode.json` 统一由 AgentConfigService 程序化维护。
+- IPC/JSON 使用 camelCase，Rust 与数据库使用 snake_case。
+- 保持本地优先，不增加云端服务或新的后台守护进程。
+- 除非现有 hooks 无法承载复杂度，否则不新增全局前端状态库。
+
+### Starter Options Considered
+
+1. **重新使用 create-tauri-app 创建项目：拒绝。** 当前 Tauri、React、Rust、SQLite 和 opencode 基础集成已完成，重建会引入无关迁移和回归风险。
+2. **新增独立本地 HTTP 聚合服务：拒绝。** Dashboard、Skill 和 MCP 均属于现有 Rust 编排层职责，Tauri IPC 已满足通信需要。
+3. **在现有 EgoSync 代码库中增量实现：选择。** 复用 Skill 配置、Dashboard Service、MCP CRUD、AgentConfigService 和 Runtime 刷新机制，仅补充必要领域对象、DTO、查询和上下文组装逻辑。
+
+### Selected Starter
+
+**Existing EgoSync Tauri codebase — surgical incremental extension**
+
+本轮不执行项目初始化，不生成新应用骨架。
+
+### Baseline Verification Commands
+
+```powershell
+cd egosync-app
+npm install
+npm run build
+
+cd src-tauri
+cargo check
+cargo test
+```
+
+这些命令仅验证现有基线，不代表重建或依赖升级。
+
+### Architectural Decisions Preserved
+
+- 前端继续使用 React 18 + TypeScript/Vite。
+- 后端继续使用 Rust 2021 + Tokio、Tauri 2 和 SQLite/SQLx。
+- Agent Runtime 继续使用 opencode sidecar。
+- 对话会话继续尊重现有独立数据边界，不为统计新增数据副本。
+- 通信保持 React → Tauri IPC → Rust Service，以及 Rust → AgentBridge/AgentConfigService → opencode。
+- 测试保持 Vitest/Testing Library、Cargo tests 和现有 E2E 体系。
+
+### Dependency Decision
+
+本次不升级 React、Tauri、Vite、SQLx 或 reqwest。Vite 升级属于独立构建系统维护事项，不与 FR-37～FR-39 捆绑。
+
+### Consequence for Implementation
+
+- Skill：扩展 Agent 请求上下文组装，不新建 Skill 执行引擎。
+- Dashboard：扩展现有 Dashboard Command/Service/Repository，不新增本地服务。
+- MCP：扩展现有 MCP mutation、AgentConfigService 和 Runtime refresh，不新增第二套同步器。
+## Incremental Core Architectural Decisions — FR-37～FR-39
+
+### FR-37：Skill 可用集合与原生任务调用
+
+**决策：使用 opencode v1.15.10 原生 Session Command API，不建立自定义 Prompt 注入协议。**
+
+#### 请求与可用集合
+
+- `ChatRequest` 墅加可选字段 `selectedSkillId`；前端 `@Skill` 仅作为结构化选择交互，发送时从任务正文中移除选择标记。
+- 前端只提交 EgoSync Skill Registry ID，不得直接提交 opencode command name。
+- 当前 Agent 作用域由后端可信上下文解析：无 `roleId` 为管家，有 `roleId` 为指定角色。
+- 管家可用集合取其 `enabledSkillIds`；角色可用集合取该角色自己的 `enabledSkillIds`。二者相互独立，不继承、不合并。
+- 后端通过统一 `SkillAvailabilityService` 执行 `list_enabled(scope)` 与 `resolve_enabled(scope, skill_id)`；解析条件为 Skill 存在、已添加且在当前作用域启用。
+- 任务启动前形成不可变的 Skill 选择快照；任务执行期间的配置变化不影响本次调用。
+
+#### opencode 格式转换
+
+现有 `SkillRegistryEntry` 已提供 `id` 与 `name`，其中 `name` 对应 Skill `SKILL.md` frontmatter name。opencode v1.15.10 会以该 name 注册原生 Command，因此无需增加映射表：
+
+```text
+selectedSkillId
+  → SkillRegistryEntry.id
+  → SkillRegistryEntry.name
+  → opencode command
+```
+
+指定 Skill 时，新增最小 `AgentBridge::send_command(...)` 封装并调用：
+
+```http
+POST /session/{sessionId}/command
+Content-Type: application/json
+
+{
+  "agent": "<resolved-agent-name>",
+  "command": "<skill-frontmatter-name>",
+  "arguments": "<normalized-user-content>"
+}
+```
+
+未指定 Skill 时继续使用现有 `POST /session/{sessionId}/message` 路径。Command 内部进入 opencode 的标准 prompt 执行流程，因此继续复用现有全局 SSE 订阅、流式事件处理、取消、消息持久化和 completed-message fallback。
+
+#### 安全与失败语义
+
+- 后端校验是授权边界；不得仅依赖前端候选列表或 opencode Command 注册表。
+- 不存在、未添加或未启用分别返回明确领域错误；不得调用 Runtime。
+- Registry 中存在但 Runtime 找不到 Command 时返回 `SkillRuntimeOutOfSync`，记录审计信息，不静默改走普通 Prompt。
+- Skill 执行错误保留 opencode 原始错误语义并进入现有消息过程事件审计。
+- V1 每条消息最多显式指定一个 Skill；多 Skill 编排不在本轮范围。
+
+#### 明确排除
+
+- 不使用自定义 `[EGOSYNC_TASK_SKILL]` 等 Prompt 协议。
+- 不向前端暴露或传输完整 Skill 内容。
+- 不为单次任务临时修改 `opencode.json`。
+- 不允许前端提交任意 Command 名称。
+- 不在 Skill 失败时静默降级。
+
+**职责边界：EgoSync 负责作用域、启用状态、身份校验与格式转换；opencode 负责 Skill 内容展开和原生执行。**
+
+### FR-38：仪表盘统计聚合接口
+
+**决策：保留现有角色状态接口，新增独立 `dashboard_get_metrics` 聚合接口。**
+
+#### API 与 DTO
+
+现有 `dashboard_get_status` 继续返回角色状态卡，不修改 `DashboardStatus[]` 契约。新增：
+
+```rust
+dashboard_get_metrics(
+    query: DashboardMetricsQuery,
+    pool: DbPool,
+    conv_pool: ConversationsPool,
+) -> Result<DashboardMetrics, AppError>
+```
+
+查询作用域使用显式 tagged union：`all`、`butler`、`role { roleId }`；时间范围为可空的 `{ startAt, endAt }`。`null` 表示全部时间，指定范围统一使用 RFC 3339 半开区间 `[startAt, endAt)`，且必须满足 `startAt < endAt`。前端负责根据用户本地日历边界换算绝对时间点。
+
+返回 DTO：
+
+```text
+DashboardMetrics {
+  taskCount: i64,
+  memoryCount: i64,
+  conversationCount: i64,
+  pendingTaskCount: i64,
+  generatedAt: RFC3339
+}
+```
+
+#### 指标语义
+
+| 指标 | 数据源 | 时间字段 | 条件 |
+|---|---|---|---|
+| `taskCount` | 主库 `tasks` | `created_at` | `deleted_at IS NULL` |
+| `memoryCount` | 主库 `memories` | `created_at` | 无 |
+| `conversationCount` | `ConversationsPool` | `started_at` | 按会话计数，不按消息计数 |
+| `pendingTaskCount` | 主库 `tasks` | `created_at` | `deleted_at IS NULL AND is_completed = 0` |
+
+待处理任务定义为“在筛选时间内创建、查询执行时仍未完成”，因此必须满足 `pendingTaskCount <= taskCount`，不使用 `completed_at` 回溯历史时点状态。
+
+#### 作用域映射
+
+- `all`：不加 Agent 条件，统计全部非删除业务记录；不依赖活跃角色列表，避免角色停用后历史数据从总数消失。
+- `butler`：任务使用 `owner_type = 'butler' AND role_id IS NULL`；记忆和会话使用 `role_id IS NULL`。
+- `role`：任务使用 `owner_type = 'role' AND role_id = :role_id`；记忆和会话使用相同 `role_id`。后端验证角色存在，前端默认只展示活跃角色作为筛选项。
+
+#### 聚合与一致性
+
+新增 `DashboardAggregationService`：主库通过单个 SQL statement 返回任务总数、记忆数和待处理任务数；会话计数通过 Conversations Repository/Adapter 查询。两部分可用 `tokio::try_join!` 并行执行，复用同一规范化查询快照。
+
+由于主库与 ConversationsPool 是独立 SQLite 数据库，本轮承诺同一请求的近实时一致性，不承诺跨数据库事务级原子快照；不 attach 数据库、不复制会话数据、不建立统计缓存或物化视图。
+
+#### 失败策略
+
+新指标接口采用全有或全无：任一数据源失败则整个请求返回错误，不使用零值掩盖失败。前端首次失败显示错误；已有成功数据刷新失败时保留上一次结果并显示更新失败状态。
+
+成功日志仅记录规范化筛选条件、生成时间与耗时；失败日志额外记录失败数据源，不记录任务、记忆或会话正文。本轮不新增查询审计表。
+
+#### 性能策略
+
+不预先添加猜测性索引。实现后使用实际数据和 `EXPLAIN QUERY PLAN` 验证；仅在出现证据充分的扫描瓶颈时，增加与作用域和时间字段匹配的最小组合索引。
+
+### FR-39：管家 MCP 绑定能力
+
+**决策：采用最小增量方案，管家仿照角色现有 MCP 处理逻辑增加独立绑定能力，角色实现保持不变。**
+
+#### 有效集合与职责边界
+
+```text
+管家有效 MCP = 管家已绑定 Server ∩ enabled Server
+角色有效 MCP = 维持现有角色实现
+```
+
+`McpServer.enabled` 继续表示 Server 启停状态；管家绑定只表示管家选择使用哪些 Server。Server 关闭时不删除既有绑定，重新启用后原绑定自动恢复有效。管家绑定与所有角色绑定相互独立。
+
+#### 数据与接口
+
+新增独立 `butler_mcp_servers` 关联表，不迁移现有角色绑定表、不引入通用 Agent 绑定模型，也不使用虚拟角色 ID。增加与角色现有接口对称的 Repository、Service、Tauri Command 和前端 API：
+
+```text
+list_mcp_servers_for_butler
+list_mcp_servers_available_for_butler
+add_mcp_server_to_butler
+remove_mcp_server_from_butler
+```
+
+绑定规则沿用角色当前行为：关闭的 Server 不能新增绑定；已绑定 Server 被关闭后保留绑定，但不进入管家有效集合。
+
+#### Agent 配置与界面
+
+新增 `butler_enabled_mcp_lines()`，按“管家绑定且 enabled”生成管家 MCP 能力说明，并扩展 `build_butler_entry_with_skills(...)` 及其现有同步路径。角色的 `build_agent_entry_with_skills_and_mcp(...)`、`role_enabled_mcp_lines()`、角色绑定 Service 和数据库逻辑不变。
+
+管家设置界面增加已绑定列表、可添加列表、添加和移除操作，交互遵循角色现有 MCP 设置。仅在能够保持外科手术式修改时复用现有 UI，不为本需求重构角色组件。
+
+#### Runtime 与明确排除
+
+管家绑定变化沿用现有 Agent 配置同步方式；MCP Server 的新增、编辑、启用和关闭继续走现有 Runtime 刷新逻辑。本轮不新增 `McpRuntimeCoordinator`、Agent Permission 投影、Runtime revision、通用 Availability Resolver 或新的并发锁。
+
+以下现有行为明确保持不变：
+
+- 不修改角色 MCP 授权和绑定逻辑。
+- 不重构或删除 `sync_mcp_scope_for_role()`。
+- 不改变 `add_to_role()` 对关闭 Server 的校验。
+- 不处理按作用域改写全局 MCP 配置可能产生的角色并发覆盖问题。
+- 不建立管家与角色统一的 MCP 权限框架。
+
+Agent Permission 隔离和 MCP Runtime/角色绑定解耦不纳入本轮实现，作为后续技术债候选项，避免与当前角色范式并存形成第二套机制。
+
+#### 验收约束
+
+- 管家可以查看、添加和移除自己的 MCP 绑定。
+- 管家只能获得已绑定且 enabled 的 MCP 能力。
+- 关闭 Server 后管家绑定保留，重新启用后自动恢复有效。
+- 管家绑定变化不改变任何角色绑定，角色绑定变化不改变管家绑定。
+- 现有角色 MCP 行为及其测试保持不变。
+
+## Implementation Patterns Addendum — FR-37～FR-39
+
+### Skill 选择与原生调用模式
+
+#### 前端选择状态
+
+`@Skill` 只是一种前端交互形式，不作为后端解析协议。前端必须将选择结果保存为结构化字段：
+
+```typescript
+interface ChatSubmitInput {
+  content: string;
+  selectedSkillId: string | null;
+}
+```
+
+- `selectedSkillId` 保存 Skill Registry ID，不保存展示名或 OpenCode command name。
+- `@Skill` 展示标签不是 `content` 的组成部分；删除标签时同时清空 `selectedSkillId`。
+- V1 每条消息最多指定一个 Skill。
+- 候选列表只显示当前管家或角色已绑定且 enabled 的 Skill。
+
+#### 后端解析与路径分流
+
+后端统一执行：
+
+```text
+selectedSkillId
+→ 查询 SkillRegistryEntry
+→ 校验属于当前管家或角色且 enabled
+→ 读取 SkillRegistryEntry.name
+→ 转换为 OpenCode command
+```
+
+前端不得提交 OpenCode command name；后端不得通过展示名或聊天文本中的 `@xxx` 执行 Skill。消息分流集中在 AgentBridge 或其直接上层：未选择 Skill 使用 `/message`，已选择 Skill 使用 `/command`。Skill 校验或执行失败时直接返回错误，不得静默降级到普通消息；两条路径复用相同的会话身份解析、流式事件和取消处理。
+
+当前 Agent 身份必须由后端根据 conversation/session 解析，普通消息与 Skill command 使用同一套 Agent 映射函数，前端不得任意指定 Agent。
+
+### Dashboard Metrics 查询模式
+
+#### Scope 与时间 DTO
+
+前端统一使用可辨识联合类型：
+
+```typescript
+type DashboardMetricsScope =
+  | { type: 'all' }
+  | { type: 'butler' }
+  | { type: 'role'; roleId: string };
+
+interface DashboardMetricsQuery {
+  scope: DashboardMetricsScope;
+  startAt: string | null;
+  endAt: string | null;
+}
+```
+
+Rust 使用 `#[serde(tag = "type", rename_all = "camelCase")]` 的对应 enum。禁止用 `roleId = null`、`"all"` 或 `"butler"` 表示不同作用域。
+
+时间校验和规范化只在聚合 Service 实现一次：两个边界均为空表示全部时间；两个边界均存在表示 RFC 3339 半开区间 `[startAt, endAt)`；仅存在一个边界或 `startAt >= endAt` 返回 ValidationError。Repository 不自行解释本地时区、自然日或闭区间。
+
+#### 指标与失败一致性
+
+`taskCount` 和 `pendingTaskCount` 必须复用同一个任务作用域、删除状态和时间谓词，后者只额外增加 `is_completed = 0`，保证 `pendingTaskCount <= taskCount`。`conversationCount` 始终按 conversation/session 记录计数，不得按消息计数。
+
+返回值使用数值字段和 RFC 3339 `generatedAt`。任一数据源失败时整个请求失败，不返回部分 DTO，也不使用 `0` 掩盖错误；前端可保留上次成功结果，但必须显示刷新失败状态。
+
+### 管家 MCP 绑定模式
+
+#### 数据库与 Repository 命名
+
+新增表固定命名为 `butler_mcp_servers`，字段遵循现有 snake_case 规范。不新增通用 `agent_mcp_bindings`、scope 字段、虚拟 Butler role ID 或管家专属 enabled 字段。
+
+Repository 与现有角色实现严格对称：
+
+```rust
+list_mcp_servers_for_butler(...)
+list_available_mcp_servers_for_butler(...)
+add_mcp_server_to_butler(...)
+remove_mcp_server_from_butler(...)
+```
+
+排序、Server 不存在、重复绑定、移除不存在绑定和级联删除语义均匹配角色对应函数；本轮不抽取通用 Agent MCP Repository。
+
+#### Tauri Command 与 Service
+
+Command 使用现有域前缀：
+
+```rust
+mcp_server_list_for_butler
+mcp_server_list_available_for_butler
+mcp_server_add_to_butler
+mcp_server_remove_from_butler
+```
+
+Command 只解析参数并调用 Service，不直接执行 SQL、修改配置或实现 Sidecar 刷新。管家添加/移除绑定沿用角色当前的校验、Agent 配置同步、`OpencodeMcpScopeLock`、Sidecar 和 Session 刷新调用顺序，不新增第二套刷新机制。
+
+新增 `butler_enabled_mcp_lines(...)`，按管家绑定集合过滤 enabled Server 并生成能力说明，语义匹配 `role_enabled_mcp_lines(...)`。除编译适配外，不改变 `role_enabled_mcp_lines(...)`、`add_to_role(...)`、`remove_from_role(...)` 或 `sync_mcp_scope_for_role(...)` 的行为。
+
+### 数据主权一致性
+
+新增 `butler_mcp_servers` 后必须同步检查数据导出、导入、全量销毁、Server 删除级联和测试数据库初始化。导出结构与角色 MCP 绑定保持同类风格，但使用独立集合，不能把管家伪装成角色。
+
+### 测试一致性模式
+
+Skill 测试必须覆盖作用域与 enabled 校验、message/command 分流、Registry name 转换、无 Runtime 调用的拒绝路径及禁止静默降级。
+
+Dashboard 测试必须覆盖三种作用域、半开区间、会话而非消息计数、删除过滤、`pendingTaskCount <= taskCount` 以及任一数据源失败时整体失败。
+
+管家 MCP 测试必须覆盖管家与角色绑定隔离、关闭 Server 的新增绑定限制、既有绑定保留与重新启用恢复、配置同步，以及现有角色测试不变。测试名称描述业务意图而非单纯返回值。
+
+### 增量变更边界
+
+所有开发 Agent 必须：
+
+1. 优先扩展现有同类 Service、Repository 和 AgentConfig 路径。
+2. 不创建第二套消息流、Runtime 刷新或错误包装机制。
+3. 不借管家 MCP 功能重构角色 MCP。
+4. 不引入通用 Agent MCP 权限模型。
+5. 不使用 Prompt 文本执行可由结构化字段完成的确定性路由。
+6. 新增 Tauri Command 时同步增加前端 Service、TypeScript DTO 和注册入口。
+7. 新增数据库表时同步检查 migration、导入导出、销毁和测试初始化。
+8. 任一步骤失败必须显式返回，禁止记录日志后继续宣称成功。
+
+**禁止模式：**
+
+- 从聊天正文正则解析 `@Skill` 作为唯一选择依据。
+- 前端直接发送 OpenCode command name。
+- Skill command 失败后自动改发普通消息。
+- 使用 `roleId = "butler"` 表示管家。
+- 给 `butler_mcp_servers` 增加独立 enabled 字段。
+- 为管家 MCP 新建 Runtime Coordinator。
+- 顺手重构现有角色 MCP 绑定。
+- 将消息数量作为 `conversationCount`。
+- 用零值掩盖统计数据源失败。
+
+## Project Structure Addendum — FR-37～FR-39
+
+### 增量目录结构
+
+标记：`[M]` 修改现有文件；`[N]` 新增文件；`[U]` 仅验证且不改变既有行为。
+
+```text
+egosync-app/
+├── src/
+│   ├── components/
+│   │   ├── chat/
+│   │   │   ├── ChatInput.tsx                         [M] @Skill 选择器和结构化提交
+│   │   │   ├── ChatInput.test.tsx                    [M] 选择、清除、禁用状态测试
+│   │   │   ├── ChatInput.a11y.test.tsx               [M] 候选列表键盘与读屏测试
+│   │   │   ├── ChatStream.tsx                        [M] 持有 selectedSkillId 并提交
+│   │   │   └── ChatStream.test.tsx                   [M] message/command 分流测试
+│   │   ├── butler/
+│   │   │   ├── DashboardTab.tsx                      [M] 指标卡、时间与角色筛选
+│   │   │   ├── DashboardTab.test.tsx                 [M] 指标、筛选、失败状态测试
+│   │   │   ├── DashboardTab.a11y.test.tsx            [M] 指标和筛选可访问性
+│   │   │   ├── ButlerSettingsContent.tsx             [M] 管家 MCP 绑定管理
+│   │   │   └── ButlerSettingsContent.test.tsx        [M] 管家绑定交互测试
+│   │   └── role/
+│   │       ├── SettingsTab.tsx                        [U] 角色 MCP/Skill 行为不变
+│   │       └── SettingsTab.test.tsx                   [U] 角色回归测试
+│   ├── hooks/
+│   │   ├── useDashboard.ts                            [M] 状态指标和筛选加载
+│   │   └── useDashboard.test.ts                       [M] 刷新与旧数据保留测试
+│   ├── services/
+│   │   ├── chatService.ts                             [M] 传递 selectedSkillId
+│   │   ├── dashboardService.ts                        [M] 新增 getMetrics(query)
+│   │   ├── skillService.ts                            [M] 当前作用域候选 Skill
+│   │   └── mcpService.ts                              [M] 管家绑定四个接口
+│   └── types/
+│       ├── chat.ts                                    [M] ChatRequest.selectedSkillId
+│       ├── dashboard.ts                               [M] Metrics Query/Scope/Result
+│       ├── skill.ts                                   [U/M] 复用 Registry DTO
+│       └── mcp.ts                                     [U] 复用 McpServer DTO
+├── src-tauri/
+│   ├── migrations/
+│   │   └── 028_butler_mcp_servers.sql                 [N] 管家 MCP 关联表
+│   └── src/
+│       ├── commands/
+│       │   ├── chat.rs                                [M] 接收 selectedSkillId
+│       │   ├── dashboard.rs                           [M] dashboard_get_metrics
+│       │   ├── mcp.rs                                 [M] 管家绑定 Commands
+│       │   ├── skill.rs                               [M] 必要的作用域候选查询
+│       │   └── mod.rs                                 [M] 仅在模块导出需要时更新
+│       ├── db/
+│       │   ├── skill_bindings.rs                      [U/M] 复用作用域绑定查询
+│       │   ├── skills.rs                              [U/M] 复用 enabled 查询
+│       │   ├── tasks.rs                               [M] 任务指标聚合
+│       │   ├── memories.rs                            [M] 记忆数量聚合
+│       │   ├── conversations.rs                       [M] 会话数量聚合
+│       │   └── mcp_servers.rs                         [M] 管家绑定 CRUD
+│       ├── models/
+│       │   ├── chat.rs                                [M] selected_skill_id
+│       │   ├── dashboard.rs                           [M] Query/Scope/Metrics DTO
+│       │   ├── skill.rs                               [U] 复用 SkillRegistryEntry
+│       │   ├── mcp.rs                                 [U] 复用 McpServer
+│       │   └── mod.rs                                 [M] 仅在新增导出需要时更新
+│       ├── services/
+│       │   ├── agent_bridge.rs                        [M] 原生 send_command
+│       │   ├── agent_engine.rs                        [M] 统一会话执行流程
+│       │   ├── skill_registry.rs                      [M] Skill 作用域与 enabled 校验
+│       │   ├── dashboard_service.rs                   [M] 跨库聚合
+│       │   ├── mcp_server.rs                          [M] 管家绑定 Service
+│       │   ├── agent_config.rs                        [M] 管家 Agent MCP 能力说明
+│       │   └── data_export.rs                         [M] 管家绑定导入导出
+│       └── lib.rs                                     [M] 注册新增 Tauri Commands
+└── tests/e2e/specs/
+    ├── butler-conversation.spec.ts                    [M] @Skill 管家主路径
+    └── role-crud.spec.ts                              [U/M] 必要角色回归场景
+```
+
+### 架构边界
+
+#### FR-37：Skill 原生调用
+
+```text
+ChatInput → ChatStream → chatService → chat_send_message
+→ skill_registry 校验 → agent_engine
+→ agent_bridge.send_command → OpenCode /session/{id}/command
+```
+
+`ChatInput` 只负责候选展示和选择；`ChatStream` 持有 `selectedSkillId`；`skill_registry` 负责绑定、enabled 和 Registry name 校验；`agent_engine` 复用当前会话、流式事件和完成回退；`agent_bridge` 只转换已校验参数并发送 HTTP。UI 不决定 OpenCode command，AgentBridge 不查询绑定数据库。Onboarding 的普通消息因 `selectedSkillId` 可空而保持原行为。
+
+#### FR-38：仪表盘统计
+
+```text
+DashboardTab → useDashboard → dashboardService.getMetrics
+→ dashboard_get_metrics → DashboardAggregationService
+├── tasks/memories：主 DbPool
+└── conversations：ConversationsPool
+```
+
+UI 管理筛选和展示；Hook 管理查询、刷新、loading/error 和旧结果保留；Command 仅反序列化参数；`dashboard_service.rs` 是 scope 和时间规范化的唯一位置；DB 模块只执行已规范化的统计 SQL。现有 `dashboard_get_status` 继续只负责角色状态卡。
+
+#### FR-39：管家 MCP 绑定
+
+```text
+ButlerSettingsContent → mcpService
+→ mcp_server_*_for_butler → mcp_server Service
+→ mcp_servers DB → agent_config 管家同步
+→ 现有 Runtime/Session 刷新路径
+```
+
+管家 UI 和 Service 与角色接口对称；DB 管理 `butler_mcp_servers`；`agent_config.rs` 只扩展管家 MCP 能力说明；`data_export.rs` 完成数据主权闭环。角色 `SettingsTab` 和角色 MCP 后端路径是回归边界，不属于本轮重构范围。
+
+### 数据边界
+
+主 `DbPool` 继续保存 Skill、绑定、MCP Server、管家/角色 MCP 绑定、任务和记忆。`conversations` 与 `messages` 继续位于独立 `ConversationsPool`。
+
+`DashboardAggregationService` 可以同时读取两个连接池，但不得跨库写入、复制会话数据或让前端分别调用多个计数接口自行聚合；不承诺跨数据库事务级快照。
+
+### Tauri IPC 边界
+
+新增 IPC：
+
+```text
+dashboard_get_metrics
+mcp_server_list_for_butler
+mcp_server_list_available_for_butler
+mcp_server_add_to_butler
+mcp_server_remove_from_butler
+```
+
+修改现有 `chat_send_message` 的 `ChatRequest`，增加可空 `selectedSkillId`。每个新增 Command 必须在 Rust Command、`lib.rs generate_handler!`、前端 Service、TypeScript DTO 和测试中闭环。
+
+### 数据库迁移与备份边界
+
+`028_butler_mcp_servers.sql` 只创建管家绑定表、Server 外键、级联删除及必要最小约束，不修改角色 MCP 表。新增表后同步更新 `data_export.rs` 的 JSON 导出/导入、SQLite 恢复清单、数据销毁清单和回滚测试。
+
+### 需求到文件映射
+
+| 需求 | 前端位置 | 后端位置 |
+|---|---|---|
+| 管家/角色 `@Skill` | `ChatInput.tsx`, `ChatStream.tsx` | `chat.rs`, `skill_registry.rs`, `agent_engine.rs`, `agent_bridge.rs` |
+| Skill 有效集合 | `skillService.ts` | `skills.rs`, `skill_bindings.rs`, `skill_registry.rs` |
+| 仪表盘四项指标 | `DashboardTab.tsx`, `useDashboard.ts` | `dashboard.rs`, `dashboard_service.rs`, 三个 DB 模块 |
+| 时间和角色筛选 | `DashboardTab.tsx`, `dashboard.ts` | `models/dashboard.rs`, `dashboard_service.rs` |
+| 管家 MCP 绑定 | `ButlerSettingsContent.tsx`, `mcpService.ts` | migration 028、`mcp_servers.rs`, `mcp_server.rs`, `agent_config.rs` |
+| MCP 数据导入导出 | 无新增页面 | `data_export.rs` |
+| Tauri 注册 | 前端 Service | `lib.rs` |
+
+### 禁止跨越的边界
+
+- UI 不直接聚合多个数据库计数结果。
+- Command 层不写 SQL 或 OpenCode 配置。
+- DB 层不调用 Sidecar、AgentConfig 或发送 Tauri Event。
+- AgentBridge 不查询 Skill 绑定，SkillRegistry 不发送 HTTP。
+- Dashboard Service 不读取任务、记忆或会话正文。
+- 管家 MCP 代码不改变角色 MCP 业务语义。
+- 不为三项需求新增平行的通用框架或目录层级。
+
+## Architecture Validation Results — FR-37～FR-39
+
+本次验证覆盖架构文档、需求和当前代码结构的一致性；尚未修改业务代码，也未运行 Cargo、Vitest 或 E2E，结论仅表示架构已具备实施指导能力，不表示功能测试通过。
+
+### Coherence Validation
+
+| 检查项 | 结果 | 说明 |
+|---|---|---|
+| FR-37 与 Skill Registry | 通过 | 复用 Registry、绑定和 enabled 状态，不创建新 Skill 引擎 |
+| FR-37 与 opencode | 通过 | Registry name 转为原生 command，普通消息路径不变 |
+| FR-38 与现有 Dashboard | 通过 | 保留 `dashboard_get_status`，新增独立 Metrics 接口 |
+| FR-38 与双数据库边界 | 通过 | 主库统计任务/记忆，`ConversationsPool` 统计会话 |
+| FR-39 与现有角色 MCP | 通过 | 管家新增独立绑定，角色业务逻辑保持不变 |
+| FR-39 与最小改动原则 | 通过 | 不增加 Permission 模型、Runtime Coordinator 或通用绑定框架 |
+| 数据主权 | 通过 | 新管家绑定表纳入导入、导出、销毁和恢复 |
+| 命名与目录规范 | 通过 | DTO、Command、Migration 和前端 Service 遵循既有规范 |
+
+新增实现模式与既有 camelCase/snake_case、薄 Command、Service/DB 分层、co-located tests 和显式错误规范一致。实际代码已经存在 Chat、Dashboard、MCP 三条必要扩展入口，仅需新增 `028_butler_mcp_servers.sql`，其余为现有文件的外科手术式扩展。
+
+### Requirements Coverage
+
+#### FR-37
+
+已覆盖管家和角色 `@Skill` 选择、当前 Agent 已绑定且 enabled 的候选集合、请求级 `selectedSkillId`、后端授权校验、Registry name 到 opencode command 转换、普通 `/message` 保持以及禁止失败静默降级。
+
+#### FR-38
+
+已覆盖任务数、记忆数、对话会话数、待处理任务数、all/butler/role 作用域、RFC 3339 半开时间区间、组合筛选、共享任务谓词及跨数据库全有或全无失败策略。
+
+#### FR-39
+
+已覆盖现有 Server CRUD/测试/启停、管家独立绑定、绑定与 enabled 交集、关闭时保留绑定、重新启用恢复、管家和角色绑定隔离、现有 Runtime 刷新复用以及数据导入导出闭环。
+
+### Gap Analysis
+
+**Critical Gaps：无。**
+
+#### Minor Gap 1：PRD FR-39 文本同步
+
+当前 PRD FR-39 重点仍是 MCP Server enabled 状态与角色绑定独立，尚未明确最新架构增加的管家绑定。最新用户决策优先于旧表述，但在生成 Story 前应在 PRD 增加：
+
+- 管家可添加和移除自己的 MCP Server 绑定。
+- 管家绑定与所有角色绑定相互独立。
+- 管家只能使用已绑定且 enabled 的 Server。
+- 关闭 Server 保留管家绑定，重新启用后恢复有效。
+
+#### Minor Gap 2：管家新增路径的失败语义
+
+角色现有失败语义本轮不修改。新增管家绑定路径沿用角色的调用顺序，但 DB、AgentConfig 或现有 Runtime 刷新失败时必须返回错误，不得静默成功。若数据库绑定已保存但后续刷新失败，错误应明确表示“绑定已保存，但 Agent 配置刷新失败”。本轮不增加跨数据库/配置文件事务或自动回滚机制。
+
+#### Deferred Technical Debt
+
+以下事项经过明确选择，不属于本轮缺口：
+
+- 角色 MCP 改用 Agent Permission。
+- 按对话改写全局 MCP 配置的并发覆盖问题。
+- 通用管家/角色 MCP Binding 模型。
+- MCP Runtime revision 和自动 reconciliation。
+- 跨主库与会话库的事务级统计快照。
+- 仪表盘物化统计或缓存。
+- 多 Skill 同时指定与编排。
+
+实施 Agent 不得顺手处理上述技术债。
+
+### Implementation Readiness
+
+建议顺序：
+
+1. 同步 PRD FR-39 的管家绑定验收条件。
+2. 增加共享 DTO 和数据库 Migration。
+3. 完成 FR-37 后端及前端垂直链路。
+4. 完成 FR-38 Repository、聚合 Service、Command、Hook 和 UI。
+5. 完成 FR-39 管家绑定、AgentConfig、UI 和数据导入导出。
+6. 运行完整 Rust、前端和 E2E 验证。
+
+### Architecture Completeness Checklist
+
+**Requirements Analysis**
+
+- [x] Project context thoroughly analyzed
+- [x] Scale and complexity assessed
+- [x] Technical constraints identified
+- [x] Cross-cutting concerns mapped
+
+**Architectural Decisions**
+
+- [x] Critical decisions documented with fixed technology versions
+- [x] Technology stack fully specified
+- [x] Integration patterns defined
+- [x] Performance considerations addressed
+
+**Implementation Patterns**
+
+- [x] Naming conventions established
+- [x] Structure patterns defined
+- [x] Communication patterns specified
+- [x] Process patterns documented
+
+**Project Structure**
+
+- [x] Complete incremental directory structure defined
+- [x] Component boundaries established
+- [x] Integration points mapped
+- [x] Requirements-to-structure mapping complete
+
+### Architecture Readiness Assessment
+
+**Overall Status：READY WITH MINOR GAPS**
+
+**Confidence Level：medium**
+
+**Key Strengths：**
+
+- 三项需求均复用现有架构入口，没有增加平行框架。
+- Skill 使用 opencode 原生 command，而非自定义 Prompt 协议。
+- Dashboard 指标口径和跨库边界清晰。
+- 管家 MCP 使用独立关联表，不污染角色模型。
+- 实现边界明确限制了无关角色 MCP 重构。
+- 测试与数据主权要求已映射到具体文件。
+
+**Remaining Actions Before Story Implementation：**
+
+1. 更新 PRD FR-39 的管家绑定描述和验收条件。
+2. 在 Story 中明确管家配置同步失败的返回语义。
+3. 实施后运行基线和新增测试；当前验证不代表测试已通过。
+
+**Implementation Handoff：**
+
+实施 Agent 必须遵守本文决策、增量实现模式、文件边界和明确排除项。首要动作是同步 PRD FR-39，然后创建或更新 Epics/Stories，再按 FR-37、FR-38、FR-39 分别实施垂直切片。
+

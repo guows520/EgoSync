@@ -44,6 +44,85 @@ pub async fn list_all_role_skills(pool: &SqlitePool) -> Result<Vec<SkillRegistry
     filter_registry_by_ids(pool, &skill_ids).await
 }
 
+/// Story 10.1: 解析当前 Agent 作用域下指定 Skill 是否存在、已添加且启用。
+/// `role_id = None` 表示管家作用域；`role_id = Some` 表示指定角色作用域。
+/// 失败时返回明确领域错误（`SkillNotFound` / `SkillNotAddedToScope` / `SkillDisabled`），
+/// 不进入 Agent Runtime（AC-3, AC-4）。
+pub async fn resolve_enabled(
+    pool: &SqlitePool,
+    role_id: Option<&str>,
+    skill_id: &str,
+) -> Result<SkillRegistryEntry, AppError> {
+    let entry = skills::get_skill(pool, skill_id)
+        .await
+        .map_err(|e| match e {
+            AppError::NotFound(_) => AppError::SkillNotFound(skill_id.to_string()),
+            other => other,
+        })?;
+
+    let enabled_ids = match role_id {
+        None => crate::services::butler_config::get_butler_skills(pool)
+            .await
+            .map_err(|e| AppError::DbError(format!("读取管家 Skill 配置失败: {}", e)))?
+            .enabled_skill_ids,
+        Some(rid) => {
+            // 先验证角色已添加该 Skill（绑定表）
+            let bound_ids = crate::db::skill_bindings::skill_ids_for_role(pool, rid)
+                .await
+                .map_err(|e| AppError::DbError(format!("查询角色 Skill 绑定失败: {}", e)))?;
+            if !bound_ids.iter().any(|id| id == skill_id) {
+                return Err(AppError::SkillNotAddedToScope(format!(
+                    "Skill {} 未添加到角色 {}",
+                    skill_id, rid
+                )));
+            }
+            // 再验证该 Skill 在角色 enabledSkillIds 中
+            let role = crate::db::roles::get_role(pool, rid)
+                .await
+                .map_err(|e| AppError::DbError(format!("查询角色失败: {}", e)))?;
+            crate::services::role_config::enabled_skill_ids_from_config(&role.skills_config)
+        }
+    };
+
+    if !enabled_ids.iter().any(|id| id == skill_id) {
+        return Err(AppError::SkillDisabled(format!(
+            "Skill {} 未在当前作用域启用",
+            skill_id
+        )));
+    }
+    Ok(entry)
+}
+
+/// Story 10.1: 返回当前 Agent 作用域下已添加且启用的 Skill 列表（AC-1）。
+/// 管家分支返回 `butler.enabled_skill_ids` 对应的 Skill；角色分支返回
+/// 角色绑定与 `enabledSkillIds` 交集对应的 Skill。前端候选查询复用此方法，
+/// 不自行拼装集合（后端是授权边界）。
+pub async fn list_enabled(
+    pool: &SqlitePool,
+    role_id: Option<&str>,
+) -> Result<Vec<SkillRegistryEntry>, AppError> {
+    let enabled_ids = match role_id {
+        None => crate::services::butler_config::get_butler_skills(pool)
+            .await
+            .map_err(|e| AppError::DbError(format!("读取管家 Skill 配置失败: {}", e)))?
+            .enabled_skill_ids,
+        Some(rid) => {
+            let role = crate::db::roles::get_role(pool, rid)
+                .await
+                .map_err(|e| AppError::DbError(format!("查询角色失败: {}", e)))?;
+            let enabled = crate::services::role_config::enabled_skill_ids_from_config(&role.skills_config);
+            let bound_ids = crate::db::skill_bindings::skill_ids_for_role(pool, rid)
+                .await
+                .map_err(|e| AppError::DbError(format!("查询角色 Skill 绑定失败: {}", e)))?;
+            enabled
+                .into_iter()
+                .filter(|id| bound_ids.iter().any(|b| b == id))
+                .collect::<Vec<_>>()
+        }
+    };
+    filter_registry_by_ids(pool, &enabled_ids).await
+}
+
 async fn filter_registry_by_ids(
     pool: &SqlitePool,
     skill_ids: &[String],
@@ -1749,5 +1828,339 @@ mod tests {
 
         assert!(matches!(result, Err(AppError::ValidationError(_))));
         assert_eq!(skills::list_skills(&pool).await.unwrap().len(), 0);
+    }
+
+    // ----- Story 10.1: SkillAvailabilityService 作用域校验 -----
+
+    /// WHY: AC-1 候选集合隔离 — 管家与角色必须各自读取自己的配置，
+    /// 不合并对方的作用域。若 list_enabled 把管家与角色的 enabled 集合合并，
+    /// 用户会在管家对话中看到角色专属 Skill，破坏可信授权边界。
+    #[tokio::test]
+    async fn list_enabled_isolates_butler_and_role_scopes() {
+        let pool = setup_test_db().await;
+        sqlx::query("INSERT INTO roles (id, name) VALUES (?1, ?2)")
+            .bind("role-1")
+            .bind("产品经理")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let butler_skill = skills::create_skill(
+            &pool,
+            "butler-only-skill",
+            "管家专属",
+            "managed/butler-only-skill/SKILL.md",
+            "hash-butler",
+        )
+        .await
+        .unwrap();
+        let role_skill = skills::create_skill(
+            &pool,
+            "role-only-skill",
+            "角色专属",
+            "managed/role-only-skill/SKILL.md",
+            "hash-role",
+        )
+        .await
+        .unwrap();
+
+        // 管家启用 butler_skill，不启用 role_skill
+        crate::services::butler_config::set_butler_skills_config(
+            &pool,
+            &crate::models::role::ButlerSkillsConfig {
+                find_skills: true,
+                skill_creator: false,
+                enabled_skill_ids: vec![butler_skill.id.clone()],
+            },
+        )
+        .await
+        .unwrap();
+
+        // 角色绑定并启用 role_skill，不绑定 butler_skill
+        crate::db::skill_bindings::replace_bindings(
+            &pool,
+            &role_skill.id,
+            false,
+            &["role-1".to_string()],
+        )
+        .await
+        .unwrap();
+        enable_skill_for_owner(&pool, &role_skill.id, "role-1")
+            .await
+            .unwrap();
+
+        let butler_enabled = list_enabled(&pool, None).await.unwrap();
+        let role_enabled = list_enabled(&pool, Some("role-1")).await.unwrap();
+
+        // 管家候选只含 butler_skill，不含角色专属 Skill
+        assert_eq!(butler_enabled.len(), 1);
+        assert_eq!(butler_enabled[0].id, butler_skill.id);
+
+        // 角色候选只含 role_skill，不含管家专属 Skill
+        assert_eq!(role_enabled.len(), 1);
+        assert_eq!(role_enabled[0].id, role_skill.id);
+    }
+
+    /// WHY: AC-4 失效竞态拒绝 — Skill 不存在时必须在进入 Runtime 前被拒绝，
+    /// 否则会向 opencode 发送一个不存在的 command name，产生不可控错误。
+    #[tokio::test]
+    async fn resolve_enabled_returns_skill_not_found_for_missing_skill() {
+        let pool = setup_test_db().await;
+        let err = resolve_enabled(&pool, None, "nonexistent-skill")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AppError::SkillNotFound(_)));
+    }
+
+    /// WHY: AC-4 — 角色未绑定该 Skill 时拒绝（Skill 存在但未添加到作用域）。
+    /// 这防止用户通过手动构造请求调用角色未授权的 Skill。
+    #[tokio::test]
+    async fn resolve_enabled_returns_not_added_to_scope_for_unbound_role_skill() {
+        let pool = setup_test_db().await;
+        sqlx::query("INSERT INTO roles (id, name) VALUES (?1, ?2)")
+            .bind("role-1")
+            .bind("产品经理")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let skill = skills::create_skill(
+            &pool,
+            "unbound-skill",
+            "未绑定",
+            "managed/unbound-skill/SKILL.md",
+            "hash-unbound",
+        )
+        .await
+        .unwrap();
+        // 不调用 replace_bindings，角色未绑定该 Skill
+
+        let err = resolve_enabled(&pool, Some("role-1"), &skill.id)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AppError::SkillNotAddedToScope(_)));
+    }
+
+    /// WHY: AC-4 — Skill 已绑定到角色但未在 enabledSkillIds 中（被关闭）时拒绝。
+    /// 这覆盖"选择后、发送前被关闭"的竞态：用户前端看到的是旧候选快照，
+    /// 后端必须基于当前配置重新校验，拒绝已禁用的 Skill。
+    #[tokio::test]
+    async fn resolve_enabled_returns_disabled_for_bound_but_disabled_role_skill() {
+        let pool = setup_test_db().await;
+        sqlx::query("INSERT INTO roles (id, name) VALUES (?1, ?2)")
+            .bind("role-1")
+            .bind("产品经理")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let skill = skills::create_skill(
+            &pool,
+            "bound-disabled-skill",
+            "已绑定但禁用",
+            "managed/bound-disabled-skill/SKILL.md",
+            "hash-bound-disabled",
+        )
+        .await
+        .unwrap();
+        // 绑定但不启用
+        crate::db::skill_bindings::replace_bindings(
+            &pool,
+            &skill.id,
+            false,
+            &["role-1".to_string()],
+        )
+        .await
+        .unwrap();
+
+        let err = resolve_enabled(&pool, Some("role-1"), &skill.id)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AppError::SkillDisabled(_)));
+    }
+
+    /// WHY: AC-4 — 管家作用域下 Skill 未在 enabled_skill_ids 中时拒绝。
+    /// 管家没有单独的绑定表，enabled_skill_ids 即"已添加且启用"的单一来源。
+    #[tokio::test]
+    async fn resolve_enabled_returns_disabled_for_butler_unenabled_skill() {
+        let pool = setup_test_db().await;
+        let skill = skills::create_skill(
+            &pool,
+            "butler-disabled",
+            "管家未启用",
+            "managed/butler-disabled/SKILL.md",
+            "hash-butler-disabled",
+        )
+        .await
+        .unwrap();
+        // 管家 enabled_skill_ids 为空（默认）
+
+        let err = resolve_enabled(&pool, None, &skill.id)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AppError::SkillDisabled(_)));
+    }
+
+    /// WHY: AC-3 — 有效选择（存在、已添加、已启用）必须返回 SkillRegistryEntry，
+    /// 供 agent_engine 取 name 调用 opencode command。这是唯一进入 Runtime 的路径。
+    #[tokio::test]
+    async fn resolve_enabled_returns_entry_for_valid_butler_skill() {
+        let pool = setup_test_db().await;
+        let skill = skills::create_skill(
+            &pool,
+            "butler-active",
+            "管家启用中",
+            "managed/butler-active/SKILL.md",
+            "hash-butler-active",
+        )
+        .await
+        .unwrap();
+        crate::services::butler_config::set_butler_skills_config(
+            &pool,
+            &crate::models::role::ButlerSkillsConfig {
+                find_skills: true,
+                skill_creator: false,
+                enabled_skill_ids: vec![skill.id.clone()],
+            },
+        )
+        .await
+        .unwrap();
+
+        let resolved = resolve_enabled(&pool, None, &skill.id).await.unwrap();
+        assert_eq!(resolved.id, skill.id);
+        assert_eq!(resolved.name, "butler-active");
+    }
+
+    /// WHY: AC-3 — 角色有效选择（绑定 + 启用）必须返回 entry。
+    #[tokio::test]
+    async fn resolve_enabled_returns_entry_for_valid_role_skill() {
+        let pool = setup_test_db().await;
+        sqlx::query("INSERT INTO roles (id, name) VALUES (?1, ?2)")
+            .bind("role-1")
+            .bind("产品经理")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let skill = skills::create_skill(
+            &pool,
+            "role-active",
+            "角色启用中",
+            "managed/role-active/SKILL.md",
+            "hash-role-active",
+        )
+        .await
+        .unwrap();
+        enable_skill_for_owner(&pool, &skill.id, "role-1")
+            .await
+            .unwrap();
+
+        let resolved = resolve_enabled(&pool, Some("role-1"), &skill.id)
+            .await
+            .unwrap();
+        assert_eq!(resolved.id, skill.id);
+        assert_eq!(resolved.name, "role-active");
+    }
+
+    /// WHY: AC-1 — list_enabled 对角色返回"已绑定且启用"的交集，
+    /// 仅绑定未启用或仅启用未绑定的 Skill 都不应出现，避免前端展示不可用候选。
+    #[tokio::test]
+    async fn list_enabled_for_role_returns_intersection_of_bound_and_enabled() {
+        let pool = setup_test_db().await;
+        sqlx::query("INSERT INTO roles (id, name) VALUES (?1, ?2)")
+            .bind("role-1")
+            .bind("产品经理")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let bound_enabled = skills::create_skill(
+            &pool,
+            "bound-enabled",
+            "绑定且启用",
+            "managed/bound-enabled/SKILL.md",
+            "hash-be",
+        )
+        .await
+        .unwrap();
+        let bound_only = skills::create_skill(
+            &pool,
+            "bound-only",
+            "仅绑定",
+            "managed/bound-only/SKILL.md",
+            "hash-bo",
+        )
+        .await
+        .unwrap();
+        let enabled_only = skills::create_skill(
+            &pool,
+            "enabled-only",
+            "仅启用",
+            "managed/enabled-only/SKILL.md",
+            "hash-eo",
+        )
+        .await
+        .unwrap();
+
+        // bound_enabled: 绑定 + 启用
+        crate::db::skill_bindings::replace_bindings(
+            &pool,
+            &bound_enabled.id,
+            false,
+            &["role-1".to_string()],
+        )
+        .await
+        .unwrap();
+        enable_skill_for_owner(&pool, &bound_enabled.id, "role-1")
+            .await
+            .unwrap();
+
+        // bound_only: 仅绑定，不启用
+        crate::db::skill_bindings::replace_bindings(
+            &pool,
+            &bound_only.id,
+            false,
+            &["role-1".to_string()],
+        )
+        .await
+        .unwrap();
+
+        // enabled_only: 仅启用（写入 enabledSkillIds），不绑定。
+        // 注意：必须追加到现有 enabled_skill_ids，而非覆盖，否则
+        // enable_skill_for_owner 之前写入的 bound_enabled 会被丢掉。
+        let role = crate::db::roles::get_role(&pool, "role-1").await.unwrap();
+        let mut config = crate::services::role_config::skills_from_config(&role.skills_config);
+        let mut existing = config.enabled_skill_ids.unwrap_or_default();
+        existing.push(enabled_only.id.clone());
+        config.enabled_skill_ids = Some(existing);
+        let raw = crate::services::role_config::normalize_skills_config_with_existing(
+            &role.skills_config,
+            &config,
+        )
+        .unwrap();
+        crate::db::roles::set_role_skills_config_raw(&pool, "role-1", &raw)
+            .await
+            .unwrap();
+
+        let enabled = list_enabled(&pool, Some("role-1")).await.unwrap();
+        let ids: Vec<_> = enabled.iter().map(|e| e.id.as_str()).collect();
+        assert!(ids.contains(&bound_enabled.id.as_str()));
+        assert!(!ids.contains(&bound_only.id.as_str()));
+        assert!(!ids.contains(&enabled_only.id.as_str()));
+    }
+
+    /// WHY: AC-1 — 当前 Agent 无可用 Skill 时 list_enabled 返回空集合，
+    /// 前端据此展示明确空状态（AC-2），而非错误。
+    #[tokio::test]
+    async fn list_enabled_returns_empty_when_no_skills_configured() {
+        let pool = setup_test_db().await;
+        let butler = list_enabled(&pool, None).await.unwrap();
+        assert!(butler.is_empty());
+
+        sqlx::query("INSERT INTO roles (id, name) VALUES (?1, ?2)")
+            .bind("role-1")
+            .bind("产品经理")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let role = list_enabled(&pool, Some("role-1")).await.unwrap();
+        assert!(role.is_empty());
     }
 }

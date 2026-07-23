@@ -219,6 +219,20 @@ pub async fn chat_send_message(
     agent_config: State<'_, AgentConfigService>,
     app_handle: tauri::AppHandle,
 ) -> Result<Message, AppError> {
+    // Explicit Skill validation is a command-level gate: no conversation, lock,
+    // runtime, session, or subscription side effect may happen before it succeeds.
+    let selected_skill = match request.selected_skill_id.as_deref() {
+        Some(skill_id) => Some(
+            crate::services::skill_registry::resolve_enabled(
+                &main_pool,
+                request.role_id.as_deref(),
+                skill_id,
+            )
+            .await?,
+        ),
+        None => None,
+    };
+
     // --- Resolve effective onboarding_step ---
     // If the frontend says this is onboarding (step > 0), trust it and remember.
     // If the frontend sends 0 but we already know this conversation is onboarding, use stored step + 1.
@@ -362,6 +376,7 @@ pub async fn chat_send_message(
     let role_id_for_stream = request.role_id.clone();
     let user_message_id_for_stream = user_msg.id.clone();
     let working_directory_for_stream = request.working_directory.clone();
+    let selected_skill_for_stream = selected_skill;
 
     tokio::spawn(async move {
         let result = agent_engine::run_stream(
@@ -380,6 +395,7 @@ pub async fn chat_send_message(
             event_router_clone,
             delegate_bridge_clone,
             working_directory_for_stream,
+            selected_skill_for_stream,
         )
         .await;
 

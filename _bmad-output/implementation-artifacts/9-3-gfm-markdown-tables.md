@@ -1,6 +1,6 @@
 # Story 9.3: 对话消息正确渲染标准 GFM Markdown 表格
 
-Status: review
+Status: done
 
 ## Story
 

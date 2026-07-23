@@ -29,6 +29,8 @@ export interface ChatRequest {
   content: string;
   workingDirectory?: string;
   onboardingStep?: number;
+  /** Story 10.1: 用户通过 `@Skill` 显式指定本轮任务使用的 Skill Registry ID。 */
+  selectedSkillId?: string;
 }
 
 export interface MessageProcessEvent {

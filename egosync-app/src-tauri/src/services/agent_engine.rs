@@ -2316,6 +2316,7 @@ async fn try_run_opencode_stream(
     delegate_bridge: crate::services::delegate_bridge::DelegateBridge,
     already_retried_mcp_session: bool,
     already_retried_skill_load: bool,
+    selected_skill: Option<&crate::models::skill::SkillRegistryEntry>,
 ) -> Result<(), OpencodeStreamAttemptError> {
     let disabled_message = if let Some(rid) = role_id {
         crate::db::roles::get_role(main_pool, rid)
@@ -2467,11 +2468,51 @@ async fn try_run_opencode_stream(
     // the completed message as JSON). Live tokens stream via the event bus;
     // the returned body is retained as a fallback when events miss final text.
     let agent_key = opencode_agent_key(role_id);
+
+    // The command resolved this immutable snapshot before any runtime side effect.
+    // Retries reuse it and therefore cannot observe a different registry/config state.
+    if let Some(entry) = selected_skill {
+        if !already_retried_mcp_session && !already_retried_skill_load {
+            persist_and_emit_process_event(
+                app_handle,
+                conv_pool,
+                conversation_id,
+                assistant_message_id,
+                &session_id,
+                &ProcessEventCandidate {
+                    event_type: "tool".to_string(),
+                    tool_name: Some("skill".to_string()),
+                    status: Some("completed".to_string()),
+                    summary: format!("显式使用 Skill：{}", entry.name),
+                    raw_json: serde_json::json!({
+                        "input": { "name": entry.name },
+                        "skillId": entry.id,
+                        "skillName": entry.name,
+                        "scope": role_id.unwrap_or("butler"),
+                        "source": "explicit"
+                    }),
+                },
+                working_directory,
+            )
+            .await;
+        }
+        tracing::info!(skill_id = %entry.id, skill_name = %entry.name, scope = ?role_id,
+            "explicit Skill snapshot accepted; using send_command");
+    }
+
     let bridge = agent_bridge.clone();
     let send_session_id = session_id.clone();
+    let command_skill_name = selected_skill.map(|entry| entry.name.clone());
+    let command_arguments = user_message.to_string();
     let (result_tx, mut result_rx) = tokio::sync::oneshot::channel();
     tokio::spawn(async move {
-        let result = bridge.send_message(&send_session_id, &content, &agent_key).await;
+        let result = if let Some(skill_name) = command_skill_name {
+            bridge
+                .send_command(&send_session_id, &agent_key, &skill_name, &command_arguments)
+                .await
+        } else {
+            bridge.send_message(&send_session_id, &content, &agent_key).await
+        };
         let _ = result_tx.send(result);
     });
 
@@ -3159,6 +3200,8 @@ pub async fn run_stream(
     event_router: Arc<crate::services::event_router::EventRouter>,
     delegate_bridge: crate::services::delegate_bridge::DelegateBridge,
     working_directory: Option<String>,
+    // Story 10.1: 用户显式指定的 Skill Registry ID，None 走普通消息路径（AC-6）
+    selected_skill: Option<crate::models::skill::SkillRegistryEntry>,
 ) -> Result<(), AppError> {
     // onboarding 直接走 LLM provider，跳过 opencode stream。
     // opencode stream 用的是管家 agent 配置（butler system prompt），
@@ -3186,6 +3229,7 @@ pub async fn run_stream(
                 delegate_bridge.clone(),
                 already_retried_mcp_session,
                 already_retried_skill_load,
+                selected_skill.as_ref(),
             )
             .await;
 
@@ -3241,6 +3285,22 @@ pub async fn run_stream(
                     break;
                 }
                 Err(OpencodeStreamAttemptError::Fatal(e)) => {
+                    if selected_skill.is_some() {
+                        let friendly = format!(
+                            "指定的 Skill 执行失败，未降级为普通对话：{}",
+                            summarize_error(&e.to_string())
+                        );
+                        conversations::update_message_content(
+                            &conv_pool,
+                            &assistant_message_id,
+                            &friendly,
+                        )
+                        .await?;
+                        conversations::mark_message_complete(&conv_pool, &assistant_message_id).await?;
+                        emit_stream_token(&app_handle, &conversation_id, Some(&assistant_message_id), &friendly, false);
+                        emit_stream_done(&app_handle, &conversation_id, Some(&assistant_message_id));
+                        return Ok(());
+                    }
                     tracing::warn!(
                         "opencode stream unavailable, falling back to LlmProvider: {}",
                         e

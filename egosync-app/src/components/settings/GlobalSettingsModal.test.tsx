@@ -60,18 +60,18 @@ describe('GlobalSettingsModal', () => {
     vi.mocked(mcpService.list).mockResolvedValue([]);
   });
 
-  it('展示 MCP 工具标签入口并预留全局管理区块', async () => {
+  it('展示 MCP Server 标签入口并预留全局管理区块', async () => {
     render(
       <GlobalSettingsModal
         onClose={vi.fn()}
       />
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'MCP 工具' }));
+    fireEvent.click(screen.getByRole('button', { name: 'MCP Server' }));
 
-    expect(screen.getByRole('button', { name: 'MCP 工具' })).toBeInTheDocument();
-    expect(screen.getByText('MCP 工具配置')).toBeInTheDocument();
-    expect(screen.getByText(/这是外部工具接入，不是 EgoSync 内部 create_role\/delegate 工具/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'MCP Server' })).toBeInTheDocument();
+    expect(screen.getByText('MCP Server配置')).toBeInTheDocument();
+    expect(screen.queryByText(/这是外部工具接入/)).not.toBeInTheDocument();
   });
 
   it('MCP 保存失败时保留 Error 实例中的具体错误消息', async () => {
@@ -79,7 +79,7 @@ describe('GlobalSettingsModal', () => {
 
     render(<GlobalSettingsModal onClose={vi.fn()} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'MCP 工具' }));
+    fireEvent.click(screen.getByRole('button', { name: 'MCP Server' }));
     fireEvent.click(await screen.findByRole('button', { name: '添加 MCP server' }));
     fireEvent.click(screen.getByRole('button', { name: '保存 MCP server' }));
 
@@ -92,7 +92,7 @@ describe('GlobalSettingsModal', () => {
 
     render(<GlobalSettingsModal onClose={vi.fn()} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'MCP 工具' }));
+    fireEvent.click(screen.getByRole('button', { name: 'MCP Server' }));
     fireEvent.click(await screen.findByRole('button', { name: '删除' }));
 
     expect(mcpService.delete).not.toHaveBeenCalled();
@@ -111,7 +111,7 @@ describe('GlobalSettingsModal', () => {
 
     render(<GlobalSettingsModal onClose={vi.fn()} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'MCP 工具' }));
+    fireEvent.click(screen.getByRole('button', { name: 'MCP Server' }));
     const toggle = await screen.findByRole('switch', { name: '停用 天气查询' });
 
     expect(toggle).toHaveAttribute('aria-checked', 'true');
@@ -130,7 +130,7 @@ describe('GlobalSettingsModal', () => {
 
     render(<GlobalSettingsModal onClose={vi.fn()} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'MCP 工具' }));
+    fireEvent.click(screen.getByRole('button', { name: 'MCP Server' }));
     fireEvent.click(await screen.findByRole('button', { name: '编辑' }));
 
     expect(screen.queryByRole('checkbox', { name: '启用' })).not.toBeInTheDocument();
@@ -142,7 +142,7 @@ describe('GlobalSettingsModal', () => {
 
     render(<GlobalSettingsModal onClose={onClose} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'MCP 工具' }));
+    fireEvent.click(screen.getByRole('button', { name: 'MCP Server' }));
     fireEvent.click(await screen.findByRole('button', { name: '编辑' }));
     fireEvent.click(screen.getByLabelText('返回 MCP 工具列表'));
 
@@ -154,7 +154,7 @@ describe('GlobalSettingsModal', () => {
   it('支持从标准 mcpServers JSON 导入 MCP server 配置并填充表单', async () => {
     render(<GlobalSettingsModal onClose={vi.fn()} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'MCP 工具' }));
+    fireEvent.click(screen.getByRole('button', { name: 'MCP Server' }));
     fireEvent.click(await screen.findByRole('button', { name: '添加 MCP server' }));
     fireEvent.change(screen.getByLabelText('MCP JSON'), {
       target: {
@@ -178,7 +178,7 @@ describe('GlobalSettingsModal', () => {
   it('支持从 JSON 导入 MCP server 配置并填充表单', async () => {
     render(<GlobalSettingsModal onClose={vi.fn()} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'MCP 工具' }));
+    fireEvent.click(screen.getByRole('button', { name: 'MCP Server' }));
     fireEvent.click(await screen.findByRole('button', { name: '添加 MCP server' }));
     fireEvent.change(screen.getByLabelText('MCP JSON'), {
       target: {
@@ -204,7 +204,7 @@ describe('GlobalSettingsModal', () => {
 
     render(<GlobalSettingsModal onClose={vi.fn()} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'MCP 工具' }));
+    fireEvent.click(screen.getByRole('button', { name: 'MCP Server' }));
 
     expect(await screen.findByText('描述：暂无描述')).toBeInTheDocument();
   });
@@ -215,7 +215,7 @@ describe('GlobalSettingsModal', () => {
 
     render(<GlobalSettingsModal onClose={vi.fn()} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'MCP 工具' }));
+    fireEvent.click(screen.getByRole('button', { name: 'MCP Server' }));
     fireEvent.click(await screen.findByRole('button', { name: '测试连接' }));
 
     const testingButton = await screen.findByRole('button', { name: '' });

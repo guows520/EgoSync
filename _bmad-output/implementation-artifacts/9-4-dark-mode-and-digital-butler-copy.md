@@ -1,6 +1,6 @@
 # Story 9.4: 补齐局部深色模式并统一“数字分身管家”文案
 
-Status: review
+Status: done
 
 ## Story
 

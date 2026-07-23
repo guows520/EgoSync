@@ -1,6 +1,6 @@
 # Story 9.5: 任务时间选择完成后自动收起并将 Windows 安装包默认语言设为中文
 
-Status: review
+Status: done
 
 ## Story
 

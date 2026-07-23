@@ -552,13 +552,13 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
             <h2 className="text-[16px] font-semibold text-slate-800 dark:text-slate-100">全局设置</h2>
           </div>
           <button onClick={() => { setTab('llm'); setIsEditing(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'llm' ? "bg-white dark:bg-slate-900 text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-700/50")}>模型服务配置</button>
-          <button onClick={() => { setTab('mcp'); setIsEditing(false); setIsEditingMcp(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'mcp' ? "bg-white dark:bg-slate-900 text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-700/50")}>MCP 工具</button>
+          <button onClick={() => { setTab('mcp'); setIsEditing(false); setIsEditingMcp(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'mcp' ? "bg-white dark:bg-slate-900 text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-700/50")}>MCP Server</button>
           <button onClick={() => { setTab('scheduler'); setIsEditing(false); setIsEditingMcp(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'scheduler' ? "bg-white dark:bg-slate-900 text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-700/50")}>调度时间</button>
           <button onClick={() => { setTab('data'); setIsEditing(false); setIsEditingMcp(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'data' ? "bg-white dark:bg-slate-900 text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-700/50")}>数据与隐私</button>
         </div>
         <div className="flex-1 p-10 overflow-y-auto">
           <div className="flex justify-between items-center mb-8">
-            <h3 className="text-[24px] font-semibold text-slate-800 dark:text-slate-100">{tab === 'llm' ? 'LLM Provider 配置' : tab === 'mcp' ? 'MCP 工具配置' : tab === 'scheduler' ? '调度时间配置' : '数据与隐私'}</h3>
+            <h3 className="text-[24px] font-semibold text-slate-800 dark:text-slate-100">{tab === 'llm' ? 'LLM Provider 配置' : tab === 'mcp' ? 'MCP Server配置' : tab === 'scheduler' ? '调度时间配置' : '数据与隐私'}</h3>
             <button
               onClick={() => {
                 if (tab === 'mcp' && isEditingMcp) {
@@ -699,10 +699,6 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
 
           {tab === 'mcp' && (
             <div className="space-y-6">
-              <div className="bg-amber-50 border border-amber-100 rounded-xl p-4 text-[13px] text-amber-800 leading-relaxed">
-                这是外部工具接入，不是 EgoSync 内部 create_role/delegate 工具。secret 只能填写 env: 引用，不会明文写入数据库、opencode.json 或日志。
-              </div>
-
               {mcpError && (
                 <div className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-[13px] text-red-600 flex items-center gap-2">
                   <AlertCircle size={14} /> {mcpError}

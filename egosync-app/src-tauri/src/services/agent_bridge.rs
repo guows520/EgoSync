@@ -160,6 +160,44 @@ impl AgentBridge {
         Ok(value.and_then(|value| OpencodeCompletedMessage::from_value(&value)))
     }
 
+    /// Trigger a skill command on a session. opencode's POST /session/{id}/command
+    /// invokes a named command (registered by a SKILL.md) with the given arguments.
+    /// Like `send_message`, it is synchronous and returns the completed message;
+    /// streaming tokens arrive via the global SSE subscription.
+    pub async fn send_command(
+        &self,
+        session_id: &str,
+        agent: &str,
+        command: &str,
+        arguments: &str,
+    ) -> Result<Option<OpencodeCompletedMessage>, AppError> {
+        let url = format!("{}/session/{}/command", self.base_url, session_id);
+        let body = serde_json::json!({
+            "agent": agent,
+            "command": command,
+            "arguments": arguments
+        });
+
+        let resp = self
+            .http_client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| AppError::SidecarError(format!("send_command request failed: {}", e)))?;
+
+        let resp = Self::ensure_success_with_body(resp).await?;
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| AppError::SidecarError(format!("send_command body read failed: {}", e)))?;
+        if body.trim().is_empty() {
+            return Ok(None);
+        }
+        let value = serde_json::from_str::<serde_json::Value>(&body).ok();
+        Ok(value.and_then(|value| OpencodeCompletedMessage::from_value(&value)))
+    }
+
     /// Subscribe to opencode's global event stream (`GET /event`) as SSE.
     /// Each event JSON `{ type, properties }` is forwarded as a BusEvent
     /// until the stream closes or `tx` is dropped.
@@ -461,5 +499,31 @@ mod tests {
         // This guards against accidentally swallowing server-side failures.
         let result = AgentBridge::check_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR);
         assert!(matches!(result, Err(AppError::SidecarError(_))));
+    }
+
+    #[test]
+    fn test_send_command_request_body_format() {
+        // WHY: AC-3 — send_command 必须发送 { agent, command, arguments } 三字段 JSON。
+        // opencode v1.15.10 的 /session/{id}/command 端点依赖此精确格式来路由到
+        // 对应的 SKILL.md 注册的 command。字段缺失或多余都会导致 command 不被识别。
+        let body = serde_json::json!({
+            "agent": "butler",
+            "command": "ppt-generation",
+            "arguments": "帮我生成一份季度汇报"
+        });
+        let obj = body.as_object().unwrap();
+        assert_eq!(obj.len(), 3, "body must have exactly 3 fields");
+        assert_eq!(obj["agent"], "butler");
+        assert_eq!(obj["command"], "ppt-generation");
+        assert_eq!(obj["arguments"], "帮我生成一份季度汇报");
+    }
+
+    #[test]
+    fn test_send_command_url_construction() {
+        // WHY: AC-3 — send_command 的 URL 必须是 POST /session/{id}/command，
+        // 与 send_message 的 /session/{id}/message 区分，确保 opencode 路由正确。
+        let bridge = AgentBridge::new(4096);
+        let url = format!("{}/session/{}/command", bridge.base_url(), "sess-123");
+        assert_eq!(url, "http://127.0.0.1:4096/session/sess-123/command");
     }
 }

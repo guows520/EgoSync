@@ -1,5 +1,5 @@
 # generated: 2026-05-21
-# last_updated: 2026-06-27
+# last_updated: 2026-07-23T16:30:00+08:00
 # project: 探索 (EgoSync)
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-21
-last_updated: 2026-07-22T22:21:00+08:00
+last_updated: 2026-07-23T16:35:15+08:00
 project: "探索 (EgoSync)"
 project_key: NOKEY
 tracking_system: file-system
@@ -148,17 +148,32 @@ development_status:
   8-2-e2e-test-core-journeys: in-progress
   8-3-wcag-accessibility-audit: done
   8-4-performance-benchmark: done
-  8-5-release-auto-publish: ready-for-dev
+  8-5-release-auto-publish: done
   epic-8-retrospective: optional
 
   # ============================================================
   # Epic 9: 设置、显示与 Windows 体验加固
   # ============================================================
-  epic-9: in-progress
-  9-1-settings-groups-collapse-expand: review
-  9-2-role-settings-structure-and-create-goal: review
-  9-3-gfm-markdown-tables: review
-  9-4-dark-mode-and-digital-butler-copy: review
-  9-5-task-time-picker-and-windows-installer-chinese: review
+  epic-9: done
+  9-1-settings-groups-collapse-expand: done
+  9-2-role-settings-structure-and-create-goal: done
+  9-3-gfm-markdown-tables: done
+  9-4-dark-mode-and-digital-butler-copy: done
+  9-5-task-time-picker-and-windows-installer-chinese: done
   epic-9-retrospective: optional
+
+  # ============================================================
+  # Epic 10: 可控的 Agent 能力调用与工具管理
+  # ============================================================
+  epic-10: in-progress
+  10-1-select-and-use-specified-skill-for-current-task: in-progress
+  10-2-manage-and-restore-butler-mcp-server-bindings: backlog
+  epic-10-retrospective: optional
+
+  # ============================================================
+  # Epic 11: 可筛选的跨 Agent 活动洞察
+  # ============================================================
+  epic-11: backlog
+  11-1-view-and-filter-cross-agent-activity-statistics: backlog
+  epic-11-retrospective: optional
 

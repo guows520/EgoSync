@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, Fragment } from 'react';
 import { FolderOpen, Home } from 'lucide-react';
 import { chatService } from '../../services/chatService';
+import { skillService } from '../../services/skillService';
 import { useTauriEvent } from '../../hooks/useTauriEvent';
 import { ChatBubble, ExecutionTrace } from './ChatBubble';
 import { ChatInput } from './ChatInput';
@@ -10,6 +11,7 @@ import { TaskDecompositionCard } from '../butler/TaskDecompositionCard';
 import { getRoleIconComponent, normalizeColorHex } from '../../lib/roleIcons';
 import type { ChatMessage, StreamPayload, Conversation, TitleUpdatedPayload, SourceNavigationTarget, MessageProcessEvent, ExecutionTraceBlock, ExecutionTraceDetail } from '../../types/chat';
 import type { Role } from '../../types/role';
+import type { SkillRegistryEntry } from '../../types/skill';
 import type { SuggestionWithRole } from '../../types/suggestion';
 import type { TaskDecompositionProposal } from '../../types/taskDecomposition';
 
@@ -547,6 +549,10 @@ export function ChatStream({
   const [sourceNavigationNotice, setSourceNavigationNotice] = useState<string | null>(null);
   const [pendingScrollMessageId, setPendingScrollMessageId] = useState<string | null>(null);
   const [workingDirectory, setWorkingDirectory] = useState<string | null>(null);
+  // Story 10.1: Skill 选择状态
+  const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const [availableSkills, setAvailableSkills] = useState<SkillRegistryEntry[]>([]);
   const [processEventsByMessageId, setProcessEventsByMessageId] = useState<Record<string, MessageProcessEvent[]>>({});
   const [suppressedProcessMessageIds, setSuppressedProcessMessageIds] = useState<Set<string>>(() => new Set());
   const processEventsRequestRef = useRef<Record<string, number>>({});
@@ -978,8 +984,31 @@ export function ChatStream({
     }
   }, [loadMessageProcessEvents, messages, processEventsByMessageId, suppressedProcessMessageIds]);
 
-  const handleSend = async (content: string) => {
-    if (!conversation) return;
+  // Story 10.1: 角色切换时重新加载候选 Skill
+  useEffect(() => {
+    let cancelled = false;
+    setSelectedSkillId(null);
+    setAvailableSkills([]);
+    const loadSkills = async () => {
+      try {
+        const skills = await skillService.listEnabledForScope(roleId ?? undefined);
+        if (!cancelled) {
+          setAvailableSkills(skills);
+        }
+      } catch (e) {
+        console.error('加载候选 Skill 失败:', e);
+        if (!cancelled) {
+          setAvailableSkills([]);
+        }
+      }
+    };
+    void loadSkills();
+    return () => { cancelled = true; };
+  }, [roleId]);
+
+  const handleSend = async (content: string): Promise<boolean> => {
+    if (!conversation) return false;
+    setSendError(null);
 
     setIsStreaming(true);
     setIsInputLocked(true);
@@ -1011,24 +1040,28 @@ export function ChatStream({
         roleId: roleId ?? undefined,
         content,
         workingDirectory: workingDirectory ?? undefined,
+        selectedSkillId: selectedSkillId ?? undefined,
       });
 
       if (userMsg.role === 'assistant') {
-        if (streamGenerationRef.current !== sendGeneration) return;
+        if (streamGenerationRef.current !== sendGeneration) return true;
         setMessages(prev => [...prev.filter(m => m.id !== localUserMessageId), userMsg]);
         setIsStreaming(false);
         setIsInputLocked(false);
-        return;
+        return true;
       }
 
       setMessages(prev => prev.map(m => m.id === localUserMessageId ? userMsg : m));
+      return true;
     } catch (e) {
       console.error('发送消息失败:', e);
+      setSendError(e instanceof Error ? e.message : String(e));
       setMessages(prev => prev.filter(m => m.id !== localUserMessageId));
       if (streamGenerationRef.current === sendGeneration) {
         setIsStreaming(false);
         setIsInputLocked(false);
       }
+      return false;
     }
   };
 
@@ -1207,7 +1240,13 @@ export function ChatStream({
             disabled={isInputLocked || !conversation}
             useRoleAccent={Boolean(role)}
             placeholder={role ? `跟 ${role.name} 说点什么...` : undefined}
+            availableSkills={availableSkills}
+            selectedSkillId={selectedSkillId}
+            onSelectedSkillChange={setSelectedSkillId}
           />
+          {sendError && (
+            <div role="alert" className="text-sm text-red-600 dark:text-red-400">{sendError}</div>
+          )}
           <div className="flex items-center gap-2 pl-1 text-[11px] text-slate-400 dark:text-slate-500">
             <button
               type="button"

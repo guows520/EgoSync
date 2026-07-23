@@ -1,5 +1,9 @@
 # Deferred Work
 
+## Deferred from: code review of Epic 9 (9-5-task-time-picker) (2026-07-22)
+
+- **TaskModal deadline 时区处理为"本地时间当作 UTC"（既有行为，非本次引入）**：`TaskModal.tsx:26-32` 的 `datetimeLocalToIso` 直接给本地 `datetime-local` 值追加 `:00Z`（视为 UTC），`isoToDatetimeLocal` 简单剥离时区后缀。经 `git show HEAD` 确认这两个转换函数在本次改动前已存在且完全未变，Story 9.5 仅替换了选择器 UI，deadline 数据契约保持不变（满足 9-5 AC-4）。已完成取证调查（见 `investigations/task-deadline-timezone-investigation.md`）：唯一确定性消费方是"临期升 Q1"后台任务，按 UTC 日末字符串（日粒度）比较，实际影响为 UTC 日界偏移（非均匀提前 8 小时），其余 now 比较逻辑不碰 deadline。**2026-07-22 用户决策：影响小、暂不修复，延后单独排期**；未来推荐方案 A（deadline 明确为本地墙钟，后端阈值改用本地日期）。
+
 ## Deferred from: code review of 8-4-performance-benchmark (2026-06-29)
 
 - **硬编码魔法字符串**：`app.rs` 中 `"perf-test"`、`"fact"`、`"perf-test-conv"` 等硬编码字符串分散多处。属测试代码，可接受；若后续扩展可提取为常量。

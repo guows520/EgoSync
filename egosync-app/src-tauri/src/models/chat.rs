@@ -87,4 +87,8 @@ pub struct ChatRequest {
     pub working_directory: Option<String>,
     #[serde(default)]
     pub onboarding_step: u8,
+    /// Story 10.1: 用户通过 `@Skill` 显式指定本轮任务使用的 Skill Registry ID。
+    /// 未指定时为 None，走现有 `/message` 路径（AC-6）。
+    #[serde(default)]
+    pub selected_skill_id: Option<String>,
 }

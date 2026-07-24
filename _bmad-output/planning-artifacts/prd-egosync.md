@@ -2,7 +2,7 @@
 title: EgoSync
 status: final
 created: 2026-05-18
-updated: 2026-07-23
+updated: 2026-07-24
 ---
 
 # PRD: EgoSync
@@ -15,6 +15,8 @@ updated: 2026-07-23
 **2026-07-22更新**：新增§4.13 Skill指定、管家统计与MCP管理（FR-37至FR-39）。本次变更以当前代码中的管家/角色独立Skill配置、Skill启用状态和MCP Server实体状态为基准，补充对话中的@Skill指定、仪表盘统计筛选及MCP Server启用/关闭需求。
 
 **2026-07-23更新**：依据已定稿架构补充FR-39的管家MCP Server独立绑定需求。管家和角色分别维护自己的绑定；管家仅能使用自己已绑定且处于启用状态的Server，关闭Server时保留绑定，重新启用后恢复可用。
+
+**2026-07-24更新**：依据已落地的统一可选 Skill 模型细化 FR-37：候选同时覆盖已导入/注册并在当前作用域启用的 Registry Skill（含 custom 与 OpenCode 来源）和已启用的内置元 Skill；仅发现但尚未导入的 OpenCode 生态 Skill 不进入候选。
 
 ## 1. Vision
 
@@ -553,12 +555,14 @@ Tauri后端负责opencode server的完整生命周期管理：应用启动时自
 
 #### FR-37: 对话中@Skill指定
 
-管家和角色的对话输入均支持通过@指定 Skill，用户可在当前 Agent 可用的 Skill 范围内选择本轮任务使用的 Skill。可选列表必须基于当前 Agent 已添加且已启用的 Skill 配置；管家与角色分别使用自己的配置，不共享启用状态。用户输入不存在、未添加或已关闭的 Skill 时，系统不得调用该 Skill，并给出明确提示。 `[ASSUMPTION: @Skill指定只影响当前任务，不改变Skill的长期启用状态]`
+管家和角色的对话输入均支持通过@指定 Skill，用户可在当前 Agent 可用的 Skill 范围内选择本轮任务使用的 Skill。可选集合由后端按当前 Agent 作用域统一生成，包括已导入/注册且在当前作用域启用的 Registry Skill（来源可为 custom 或 OpenCode）以及当前作用域启用的内置元 Skill（`find-skills`、`skill-creator`）；仅被发现但尚未导入 Registry 的 OpenCode 生态 Skill 不进入候选。管家与角色分别使用自己的配置，不共享启用状态。用户提交不存在、未导入/添加或已关闭的 Skill 时，系统不得调用该 Skill，并给出明确提示。 `[ASSUMPTION: @Skill指定只影响当前任务，不改变Skill的长期启用状态]`
 
 **Consequences (testable):**
 - 管家和角色输入框均支持@Skill触发的 Skill 选择/补全
-- 补全列表只展示当前 Agent 已添加且启用的 Skill
+- 补全列表只展示当前 Agent 可选集合：已导入/注册并启用的 Registry Skill，以及已启用的 `find-skills` / `skill-creator` 元 Skill
+- 仅发现但尚未导入的 OpenCode 生态 Skill 不出现在补全列表；导入并启用后可作为 Registry Skill 出现
 - 同一 Skill 在管家启用、在角色关闭时，管家可以选择，角色不可选择
+- 当前作用域的 Skill 配置变化时，已挂载的对话候选列表自动刷新；已选项失效时清除该选择
 - 用户指定 Skill 后，当前任务执行上下文包含该 Skill，且可审计实际使用的 Skill
 - 指定未启用或未配置的 Skill 时，不发生对应 Skill 调用，并提示用户启用或添加
 - 不使用@指定时，现有 Agent 自动发现和按需加载行为保持不变

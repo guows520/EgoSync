@@ -62,6 +62,14 @@ pub async fn list_available_servers_for_role(
     db::list_available_mcp_servers_for_role(pool, role_id).await
 }
 
+pub async fn list_servers_for_butler(pool: &SqlitePool) -> Result<Vec<McpServer>, AppError> {
+    db::list_mcp_servers_for_butler(pool).await
+}
+
+pub async fn list_available_servers_for_butler(pool: &SqlitePool) -> Result<Vec<McpServer>, AppError> {
+    db::list_available_mcp_servers_for_butler(pool).await
+}
+
 pub async fn create_server(
     pool: &SqlitePool,
     agent_config: &AgentConfigService,
@@ -403,6 +411,30 @@ pub async fn remove_from_role(
     Ok(())
 }
 
+pub async fn add_to_butler(
+    pool: &SqlitePool,
+    agent_config: &AgentConfigService,
+    server_id: &str,
+) -> Result<(), AppError> {
+    let server = db::get_mcp_server(pool, server_id).await?;
+    if !server.enabled {
+        return Err(AppError::ValidationError("该 MCP server 已全局停用，不能添加到管家".to_string()));
+    }
+    db::add_mcp_server_to_butler(pool, server_id).await?;
+    sync_butler_agent(pool, agent_config).await?;
+    Ok(())
+}
+
+pub async fn remove_from_butler(
+    pool: &SqlitePool,
+    agent_config: &AgentConfigService,
+    server_id: &str,
+) -> Result<(), AppError> {
+    db::remove_mcp_server_from_butler(pool, server_id).await?;
+    sync_butler_agent(pool, agent_config).await?;
+    Ok(())
+}
+
 pub async fn role_mcp_prompt_map(
     pool: &SqlitePool,
 ) -> Result<HashMap<String, Vec<String>>, AppError> {
@@ -434,7 +466,7 @@ pub async fn sync_mcp_scope_for_role(
 ) -> Result<(), AppError> {
     let servers = match role_id {
         Some(role_id) => db::list_mcp_servers_for_role(pool, role_id).await?,
-        None => db::list_mcp_servers(pool).await?,
+        None => db::list_mcp_servers_for_butler(pool).await?,
     };
     agent_config.sync_external_mcp_servers(&servers)
 }
@@ -445,7 +477,7 @@ pub async fn mcp_scope_key_for_role(
 ) -> Result<String, AppError> {
     let mut servers = match role_id {
         Some(role_id) => db::list_mcp_servers_for_role(pool, role_id).await?,
-        None => db::list_mcp_servers(pool).await?,
+        None => db::list_mcp_servers_for_butler(pool).await?,
     }
     .into_iter()
     .filter(|server| server.enabled)
@@ -495,13 +527,24 @@ async fn sync_role_agent(pool: &SqlitePool, agent_config: &AgentConfigService, r
     }
 }
 
+pub async fn sync_butler_agent(
+    pool: &SqlitePool,
+    agent_config: &AgentConfigService,
+) -> Result<(), AppError> {
+    let butler_skills = crate::services::butler_config::get_butler_skills(pool).await?;
+    let registry = crate::db::skills::list_skills(pool).await?;
+    let mcp_lines = db::butler_enabled_mcp_lines(pool).await?;
+    agent_config.sync_butler_skills_with_registry_and_mcp(&butler_skills, &registry, &mcp_lines)
+}
+
 pub async fn sync_all_role_agents(pool: &SqlitePool, agent_config: &AgentConfigService) {
     let result: Result<(), AppError> = (|| async {
         let roles = crate::db::roles::list_all_roles(pool).await?;
-        let registry = crate::db::skills::list_skills(pool).await.unwrap_or_default();
+        let registry = crate::db::skills::list_skills(pool).await?;
         let butler_skills = crate::services::butler_config::get_butler_skills(pool).await?;
         let mcp_prompts = role_mcp_prompt_map(pool).await?;
-        agent_config.full_sync_with_skills_and_mcp(&roles, &butler_skills, &registry, &mcp_prompts)
+        let butler_mcp_lines = db::butler_enabled_mcp_lines(pool).await?;
+        agent_config.full_sync_with_skills_and_mcp(&roles, &butler_skills, &registry, &mcp_prompts, &butler_mcp_lines)
     })()
     .await;
     if let Err(e) = result {
@@ -760,6 +803,26 @@ mod tests {
                 created_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00Z',
                 PRIMARY KEY (server_id, role_id)
             );
+            CREATE TABLE butler_mcp_servers (
+                server_id TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00Z',
+                PRIMARY KEY (server_id)
+            );
+            CREATE TABLE app_settings (
+                key TEXT PRIMARY KEY NOT NULL,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00Z'
+            );
+            CREATE TABLE skills (
+                id TEXT PRIMARY KEY NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                source_type TEXT NOT NULL,
+                managed_path TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00Z',
+                updated_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00Z'
+            );
             INSERT INTO roles (id, name) VALUES ('role-1', '产品经理');",
         )
         .execute(&pool)
@@ -780,6 +843,7 @@ mod tests {
         db::add_mcp_server_to_role(&pool, "role-1", "calendar")
             .await
             .unwrap();
+        db::add_mcp_server_to_butler(&pool, "calendar").await.unwrap();
 
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("opencode.json");
@@ -799,11 +863,11 @@ mod tests {
             .await
             .unwrap();
 
-        let global = agent_config.load().unwrap();
-        assert!(global["mcp"].get("日历").is_some());
-        assert!(global["mcp"].get("calendar").is_none());
-        assert!(global["mcp"].get("邮件").is_some());
-        assert!(global["mcp"].get("mail").is_none());
+        let butler = agent_config.load().unwrap();
+        assert!(butler["mcp"].get("日历").is_some());
+        assert!(butler["mcp"].get("calendar").is_none());
+        assert!(butler["mcp"].get("邮件").is_none());
+        assert!(butler["mcp"].get("mail").is_none());
     }
 
     #[tokio::test]
@@ -1096,8 +1160,8 @@ mod tests {
         assert_eq!(lines, vec!["- 天气（SSE）：查询天气"]);
     }
 
-    #[test]
-    fn command_mcp_uses_opencode_command_array_and_environment() {
+    #[tokio::test]
+    async fn command_mcp_uses_opencode_command_array_and_environment() {
         let server = McpServer {
             id: "mcp-local".to_string(),
             name: "文件系统".to_string(),
@@ -1115,5 +1179,56 @@ mod tests {
         assert_eq!(config["command"], json!(["npx", "-y", "@modelcontextprotocol/server-filesystem"]));
         assert_eq!(config["environment"]["ROOT"], "{env:FILES_ROOT}");
         assert!(config.get("env").is_none());
+    }
+
+    #[tokio::test]
+    async fn add_to_butler_rejects_disabled_server() {
+        let pool = setup_test_db().await;
+        let mut server = test_server_record("disabled-srv", "已停用服务");
+        server.enabled = false;
+        db::insert_mcp_server(&pool, &server).await.unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let agent_config = AgentConfigService::new(dir.path().join("opencode.json"));
+
+        let result = add_to_butler(&pool, &agent_config, "disabled-srv").await;
+        assert!(matches!(result, Err(AppError::ValidationError(msg)) if msg.contains("已全局停用")));
+
+        let bound = db::list_mcp_servers_for_butler(&pool).await.unwrap();
+        assert_eq!(bound.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn add_to_butler_does_not_affect_role_bindings() {
+        let pool = setup_test_db().await;
+        db::insert_mcp_server(&pool, &test_server_record("shared", "共享服务")).await.unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let agent_config = AgentConfigService::new(dir.path().join("opencode.json"));
+
+        add_to_butler(&pool, &agent_config, "shared").await.unwrap();
+
+        let butler_bound = db::list_mcp_servers_for_butler(&pool).await.unwrap();
+        let role_bound = db::list_mcp_servers_for_role(&pool, "role-1").await.unwrap();
+        assert_eq!(butler_bound.len(), 1);
+        assert_eq!(role_bound.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn remove_from_butler_does_not_affect_role_bindings() {
+        let pool = setup_test_db().await;
+        db::insert_mcp_server(&pool, &test_server_record("shared", "共享服务")).await.unwrap();
+        db::add_mcp_server_to_butler(&pool, "shared").await.unwrap();
+        db::add_mcp_server_to_role(&pool, "role-1", "shared").await.unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let agent_config = AgentConfigService::new(dir.path().join("opencode.json"));
+
+        remove_from_butler(&pool, &agent_config, "shared").await.unwrap();
+
+        let butler_bound = db::list_mcp_servers_for_butler(&pool).await.unwrap();
+        let role_bound = db::list_mcp_servers_for_role(&pool, "role-1").await.unwrap();
+        assert_eq!(butler_bound.len(), 0);
+        assert_eq!(role_bound.len(), 1);
     }
 }

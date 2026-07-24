@@ -505,6 +505,14 @@ impl AgentConfigService {
         skills: &ButlerSkillsConfig,
         registry: &[SkillRegistryEntry],
     ) -> Value {
+        Self::build_butler_entry_with_skills_and_mcp(skills, registry, &[])
+    }
+
+    pub fn build_butler_entry_with_skills_and_mcp(
+        skills: &ButlerSkillsConfig,
+        registry: &[SkillRegistryEntry],
+        mcp_lines: &[String],
+    ) -> Value {
         let skills_config = crate::services::butler_config::skills_config_json(skills);
         let static_prompt = r#"你是数字分身管家，用户的私人助理和生活协调者。
 你的语调稳重、可靠、有温度，像一位值得信赖的英式管家。
@@ -558,6 +566,12 @@ impl AgentConfigService {
         }
         let custom_skill_lines = Self::custom_skill_lines(&skills.enabled_skill_ids, registry);
         Self::push_custom_skill_prompt(&mut prompt_parts, &custom_skill_lines);
+        if !mcp_lines.is_empty() {
+            prompt_parts.push(format!(
+                "[外部 MCP 工具]\n{}\n只能使用以上为管家启用的外部 MCP server；不要声明或调用未启用的外部工具。",
+                mcp_lines.join("\n")
+            ));
+        }
         prompt_parts.push(PLAIN_MESSAGE_CONFIRMATION_RULE.to_string());
         let permission = Self::parse_permissions(&skills_config, registry);
 
@@ -577,6 +591,15 @@ impl AgentConfigService {
         skills: &ButlerSkillsConfig,
         registry: &[SkillRegistryEntry],
     ) -> Result<(), AppError> {
+        self.sync_butler_skills_with_registry_and_mcp(skills, registry, &[])
+    }
+
+    pub fn sync_butler_skills_with_registry_and_mcp(
+        &self,
+        skills: &ButlerSkillsConfig,
+        registry: &[SkillRegistryEntry],
+        mcp_lines: &[String],
+    ) -> Result<(), AppError> {
         let mut config = self.load()?;
         let agents = config.as_object_mut().and_then(|o| {
             o.entry("agent")
@@ -588,7 +611,7 @@ impl AgentConfigService {
                 "opencode.json agent 段格式异常".to_string(),
             ));
         };
-        agents.insert(BUTLER_KEY.to_string(), Self::build_butler_entry_with_skills(skills, registry));
+        agents.insert(BUTLER_KEY.to_string(), Self::build_butler_entry_with_skills_and_mcp(skills, registry, mcp_lines));
         self.save(&config)
     }
 
@@ -797,6 +820,7 @@ impl AgentConfigService {
             butler_skills,
             registry,
             &std::collections::HashMap::new(),
+            &[],
         )
     }
 
@@ -806,6 +830,7 @@ impl AgentConfigService {
         butler_skills: &ButlerSkillsConfig,
         registry: &[SkillRegistryEntry],
         role_mcp_prompts: &std::collections::HashMap<String, Vec<String>>,
+        butler_mcp_lines: &[String],
     ) -> Result<(), AppError> {
         let mut config = self.load()?;
         let root = config
@@ -816,7 +841,7 @@ impl AgentConfigService {
 
         agents.insert(
             BUTLER_KEY.to_string(),
-            Self::build_butler_entry_with_skills(butler_skills, registry),
+            Self::build_butler_entry_with_skills_and_mcp(butler_skills, registry, butler_mcp_lines),
         );
 
         for role in roles {
@@ -1949,5 +1974,63 @@ mod tests {
         assert!(config["agent"]["role-r1"].is_object());
         // Provider section also present
         assert_eq!(config["model"], "anthropic/claude-sonnet-4-20250514");
+    }
+
+    // ── butler MCP prompt ─────────────────────────────────────────
+
+    #[test]
+    fn build_butler_entry_with_mcp_includes_mcp_section() {
+        let entry = AgentConfigService::build_butler_entry_with_skills_and_mcp(
+            &ButlerSkillsConfig {
+                find_skills: false,
+                skill_creator: false,
+                enabled_skill_ids: Vec::new(),
+            },
+            &[],
+            &["- 日历（SSE）：读取日历".to_string()],
+        );
+        let prompt = entry["prompt"].as_str().unwrap();
+        assert!(prompt.contains("[外部 MCP 工具]"));
+        assert!(prompt.contains("日历"));
+        assert!(prompt.contains("只能使用以上为管家启用的外部 MCP server"));
+    }
+
+    #[test]
+    fn build_butler_entry_without_mcp_omits_mcp_section() {
+        let entry = AgentConfigService::build_butler_entry_with_skills_and_mcp(
+            &ButlerSkillsConfig {
+                find_skills: false,
+                skill_creator: false,
+                enabled_skill_ids: Vec::new(),
+            },
+            &[],
+            &[],
+        );
+        let prompt = entry["prompt"].as_str().unwrap();
+        assert!(!prompt.contains("[外部 MCP 工具]"));
+    }
+
+    #[test]
+    fn full_sync_with_skills_and_mcp_includes_butler_mcp_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let svc = AgentConfigService::new(dir.path().join("opencode.json"));
+
+        svc.full_sync_with_skills_and_mcp(
+            &[],
+            &ButlerSkillsConfig {
+                find_skills: false,
+                skill_creator: false,
+                enabled_skill_ids: Vec::new(),
+            },
+            &[],
+            &std::collections::HashMap::new(),
+            &["- 日历（SSE）：读取日历".to_string()],
+        )
+        .unwrap();
+
+        let config = svc.load().unwrap();
+        let prompt = config["agent"]["butler"]["prompt"].as_str().unwrap();
+        assert!(prompt.contains("[外部 MCP 工具]"));
+        assert!(prompt.contains("日历"));
     }
 }

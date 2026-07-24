@@ -372,7 +372,12 @@ impl DelegateBridge {
                 Err(error) => Err(error),
             },
             DelegateSessionContext::Butler { .. } => match crate::services::butler_config::get_butler_skills(&self.main_pool).await {
-                Ok(skills) => agent_config.sync_butler_skills_with_registry(&skills, &registry),
+                Ok(skills) => {
+                    match crate::db::mcp_servers::butler_enabled_mcp_lines(&self.main_pool).await {
+                        Ok(mcp_lines) => agent_config.sync_butler_skills_with_registry_and_mcp(&skills, &registry, &mcp_lines),
+                        Err(error) => Err(error),
+                    }
+                }
                 Err(error) => Err(error),
             },
         }};

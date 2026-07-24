@@ -169,6 +169,64 @@ pub async fn role_enabled_mcp_lines(pool: &SqlitePool, role_id: &str) -> Result<
         .collect())
 }
 
+pub async fn list_mcp_servers_for_butler(pool: &SqlitePool) -> Result<Vec<McpServer>, AppError> {
+    sqlx::query_as::<_, McpServer>(&format!(
+        "SELECT {} FROM mcp_servers
+         INNER JOIN butler_mcp_servers ON butler_mcp_servers.server_id = mcp_servers.id
+         ORDER BY butler_mcp_servers.created_at ASC",
+        prefixed_columns()
+    ))
+    .fetch_all(pool)
+    .await
+    .map_err(|e| AppError::DbError(format!("查询管家 MCP server 失败: {}", e)))
+}
+
+pub async fn list_available_mcp_servers_for_butler(pool: &SqlitePool) -> Result<Vec<McpServer>, AppError> {
+    sqlx::query_as::<_, McpServer>(&format!(
+        "SELECT {} FROM mcp_servers
+         WHERE enabled = 1
+           AND id NOT IN (SELECT server_id FROM butler_mcp_servers)
+         ORDER BY created_at ASC",
+        MCP_SELECT_COLUMNS
+    ))
+    .fetch_all(pool)
+    .await
+    .map_err(|e| AppError::DbError(format!("查询管家可添加 MCP server 失败: {}", e)))
+}
+
+pub async fn add_mcp_server_to_butler(pool: &SqlitePool, server_id: &str) -> Result<(), AppError> {
+    get_mcp_server(pool, server_id).await?;
+    let now = crate::db::settings::chrono_now_pub();
+    sqlx::query(
+        "INSERT OR IGNORE INTO butler_mcp_servers (server_id, created_at)
+         VALUES (?1, ?2)",
+    )
+    .bind(server_id)
+    .bind(now)
+    .execute(pool)
+    .await
+    .map_err(|e| AppError::DbError(format!("添加管家 MCP server 失败: {}", e)))?;
+    Ok(())
+}
+
+pub async fn remove_mcp_server_from_butler(pool: &SqlitePool, server_id: &str) -> Result<(), AppError> {
+    sqlx::query("DELETE FROM butler_mcp_servers WHERE server_id = ?1")
+        .bind(server_id)
+        .execute(pool)
+        .await
+        .map_err(|e| AppError::DbError(format!("移除管家 MCP server 失败: {}", e)))?;
+    Ok(())
+}
+
+pub async fn butler_enabled_mcp_lines(pool: &SqlitePool) -> Result<Vec<String>, AppError> {
+    let servers = list_mcp_servers_for_butler(pool).await?;
+    Ok(servers
+        .into_iter()
+        .filter(|server| server.enabled)
+        .map(|server| format!("- {}（{}）：{}", server.name, crate::services::mcp_server::mcp_server_type_label(&server.server_type), server.description))
+        .collect())
+}
+
 fn prefixed_columns() -> String {
     MCP_SELECT_COLUMNS
         .split(", ")
@@ -222,6 +280,11 @@ mod tests {
                 created_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00Z',
                 PRIMARY KEY (server_id, role_id)
             );
+            CREATE TABLE butler_mcp_servers (
+                server_id TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00Z',
+                PRIMARY KEY (server_id)
+            );
             INSERT INTO roles (id, name) VALUES ('role-1', '产品经理');",
         )
         .execute(&pool)
@@ -269,5 +332,85 @@ mod tests {
         assert_eq!(bound.len(), 1);
         assert!(!bound[0].enabled);
         assert!(available.iter().all(|server| server.id != "mcp-disabled"));
+    }
+
+    #[tokio::test]
+    async fn butler_binding_list_returns_bound_servers() {
+        let pool = setup_test_db().await;
+        insert_mcp_server(&pool, &server("mcp-1", true)).await.unwrap();
+        insert_mcp_server(&pool, &server("mcp-2", true)).await.unwrap();
+        add_mcp_server_to_butler(&pool, "mcp-1").await.unwrap();
+
+        let bound = list_mcp_servers_for_butler(&pool).await.unwrap();
+        assert_eq!(bound.len(), 1);
+        assert_eq!(bound[0].id, "mcp-1");
+    }
+
+    #[tokio::test]
+    async fn butler_available_excludes_bound_and_disabled() {
+        let pool = setup_test_db().await;
+        insert_mcp_server(&pool, &server("mcp-1", true)).await.unwrap();
+        insert_mcp_server(&pool, &server("mcp-2", true)).await.unwrap();
+        insert_mcp_server(&pool, &server("mcp-3", false)).await.unwrap();
+        add_mcp_server_to_butler(&pool, "mcp-1").await.unwrap();
+
+        let available = list_available_mcp_servers_for_butler(&pool).await.unwrap();
+        assert_eq!(available.len(), 1);
+        assert_eq!(available[0].id, "mcp-2");
+    }
+
+    #[tokio::test]
+    async fn butler_add_is_idempotent() {
+        let pool = setup_test_db().await;
+        insert_mcp_server(&pool, &server("mcp-1", true)).await.unwrap();
+        add_mcp_server_to_butler(&pool, "mcp-1").await.unwrap();
+        add_mcp_server_to_butler(&pool, "mcp-1").await.unwrap();
+
+        let bound = list_mcp_servers_for_butler(&pool).await.unwrap();
+        assert_eq!(bound.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn butler_remove_is_idempotent() {
+        let pool = setup_test_db().await;
+        insert_mcp_server(&pool, &server("mcp-1", true)).await.unwrap();
+        add_mcp_server_to_butler(&pool, "mcp-1").await.unwrap();
+        remove_mcp_server_from_butler(&pool, "mcp-1").await.unwrap();
+        remove_mcp_server_from_butler(&pool, "mcp-1").await.unwrap();
+
+        let bound = list_mcp_servers_for_butler(&pool).await.unwrap();
+        assert_eq!(bound.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn butler_enabled_mcp_lines_only_returns_enabled_bound() {
+        let pool = setup_test_db().await;
+        insert_mcp_server(&pool, &server("mcp-on", true)).await.unwrap();
+        insert_mcp_server(&pool, &server("mcp-off", false)).await.unwrap();
+        add_mcp_server_to_butler(&pool, "mcp-on").await.unwrap();
+        add_mcp_server_to_butler(&pool, "mcp-off").await.unwrap();
+
+        let lines = butler_enabled_mcp_lines(&pool).await.unwrap();
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("日历"));
+    }
+
+    #[tokio::test]
+    async fn butler_and_role_bindings_are_independent() {
+        let pool = setup_test_db().await;
+        insert_mcp_server(&pool, &server("mcp-1", true)).await.unwrap();
+        add_mcp_server_to_butler(&pool, "mcp-1").await.unwrap();
+        add_mcp_server_to_role(&pool, "role-1", "mcp-1").await.unwrap();
+
+        let butler_bound = list_mcp_servers_for_butler(&pool).await.unwrap();
+        let role_bound = list_mcp_servers_for_role(&pool, "role-1").await.unwrap();
+        assert_eq!(butler_bound.len(), 1);
+        assert_eq!(role_bound.len(), 1);
+
+        remove_mcp_server_from_butler(&pool, "mcp-1").await.unwrap();
+        let butler_after = list_mcp_servers_for_butler(&pool).await.unwrap();
+        let role_after = list_mcp_servers_for_role(&pool, "role-1").await.unwrap();
+        assert_eq!(butler_after.len(), 0);
+        assert_eq!(role_after.len(), 1);
     }
 }

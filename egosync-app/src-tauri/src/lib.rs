@@ -143,28 +143,28 @@ pub fn run() {
                 };
                 let role_mcp_prompts = tauri::async_runtime::block_on(async {
                     services::mcp_server::role_mcp_prompt_map(pool_ref).await
-                })
-                .unwrap_or_else(|e| {
-                    tracing::warn!("Failed to load role MCP bindings for opencode sync: {}", e);
-                    std::collections::HashMap::new()
+                });
+                let butler_mcp_lines = tauri::async_runtime::block_on(async {
+                    db::mcp_servers::butler_enabled_mcp_lines(pool_ref).await
                 });
                 tauri::async_runtime::block_on(async {
                     services::mcp_server::sync_enabled_mcp_to_opencode(pool_ref, &agent_config).await;
                 });
-                match all_roles {
-                    Ok(roles) => {
+                match (all_roles, role_mcp_prompts, butler_mcp_lines) {
+                    (Ok(roles), Ok(role_mcp_prompts), Ok(butler_mcp_lines)) => {
                         if let Err(e) = agent_config.full_sync_with_skills_and_mcp(
                             &roles,
                             &butler_skills,
                             &skill_registry,
                             &role_mcp_prompts,
+                            &butler_mcp_lines,
                         ) {
                             tracing::warn!("opencode.json full sync failed (degraded): {}", e);
                         }
                     }
-                    Err(e) => {
-                        tracing::warn!("Failed to load roles for opencode sync: {}", e);
-                    }
+                    (Err(e), _, _) => tracing::warn!("Failed to load roles for opencode sync: {}", e),
+                    (_, Err(e), _) => tracing::warn!("Failed to load role MCP bindings for opencode sync: {}", e),
+                    (_, _, Err(e)) => tracing::warn!("Failed to load butler MCP bindings for opencode sync: {}", e),
                 }
             }
             app.manage(agent_config);
@@ -351,6 +351,11 @@ pub fn run() {
             commands::mcp::mcp_server_test,
             commands::mcp::mcp_server_add_to_role,
             commands::mcp::mcp_server_remove_from_role,
+            commands::mcp::mcp_server_list_for_butler,
+            commands::mcp::mcp_server_list_available_for_butler,
+            commands::mcp::mcp_server_add_to_butler,
+            commands::mcp::mcp_server_remove_from_butler,
+            commands::mcp::mcp_server_refresh_butler_runtime,
             commands::skill::skill_list_registry,
             commands::skill::skill_list_for_role,
             commands::skill::skill_list_all_role_skills,

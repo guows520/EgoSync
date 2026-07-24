@@ -11,4 +11,9 @@ export const mcpService = {
   test: (id: string) => invoke<void>('mcp_server_test', { id }),
   addToRole: (roleId: string, serverId: string) => invoke<void>('mcp_server_add_to_role', { roleId, serverId }),
   removeFromRole: (roleId: string, serverId: string) => invoke<void>('mcp_server_remove_from_role', { roleId, serverId }),
+  listForButler: () => invoke<McpServer[]>('mcp_server_list_for_butler'),
+  listAvailableForButler: () => invoke<McpServer[]>('mcp_server_list_available_for_butler'),
+  addToButler: (serverId: string) => invoke<void>('mcp_server_add_to_butler', { serverId }),
+  removeFromButler: (serverId: string) => invoke<void>('mcp_server_remove_from_butler', { serverId }),
+  refreshButlerRuntime: () => invoke<void>('mcp_server_refresh_butler_runtime'),
 };

@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-21
-last_updated: 2026-07-23T16:35:15+08:00
+last_updated: 2026-07-24
 project: "探索 (EgoSync)"
 project_key: NOKEY
 tracking_system: file-system
@@ -167,7 +167,7 @@ development_status:
   # ============================================================
   epic-10: in-progress
   10-1-select-and-use-specified-skill-for-current-task: in-progress
-  10-2-manage-and-restore-butler-mcp-server-bindings: backlog
+  10-2-manage-and-restore-butler-mcp-server-bindings: done
   epic-10-retrospective: optional
 
   # ============================================================

@@ -1593,9 +1593,10 @@ mcp_server_list_for_butler
 mcp_server_list_available_for_butler
 mcp_server_add_to_butler
 mcp_server_remove_from_butler
+mcp_server_refresh_butler_runtime
 ```
 
-Command 只解析参数并调用 Service，不直接执行 SQL、修改配置或实现 Sidecar 刷新。管家添加/移除绑定沿用角色当前的校验、Agent 配置同步、`OpencodeMcpScopeLock`、Sidecar 和 Session 刷新调用顺序，不新增第二套刷新机制。
+Command 只解析参数并调用 Service，不直接执行 SQL、修改配置或实现 Sidecar 刷新。管家添加/移除绑定沿用角色当前的校验、Agent 配置同步、`OpencodeMcpScopeLock`、Sidecar 和 Session 刷新调用顺序。管家绑定操作使用 `refresh_opencode_runtime()`（返回 `Result` 的刷新变体）而非 `refresh_opencode_runtime_after_mcp_change()`（吞掉错误的角色变体），以便在部分失败时向前端返回明确错误。`saved_butler_runtime_error()` 将已持久化但刷新失败的情况包装为 `ValidationError`，前端据此区分"配置未保存"与"配置已保存但 Runtime 未刷新"两种失败，并提供"仅重试刷新"入口（`mcp_server_refresh_butler_runtime`）。`sync_butler_agent` 为 `pub` 并返回 `Result<(), AppError>`，不再吞掉配置投影错误。管家 Skill 更新（`app_update_butler_skills`）同样参与 `OpencodeMcpScopeLock`，防止与绑定变更并发覆盖 `opencode.json`。
 
 新增 `butler_enabled_mcp_lines(...)`，按管家绑定集合过滤 enabled Server 并生成能力说明，语义匹配 `role_enabled_mcp_lines(...)`。除编译适配外，不改变 `role_enabled_mcp_lines(...)`、`add_to_role(...)`、`remove_from_role(...)` 或 `sync_mcp_scope_for_role(...)` 的行为。
 
@@ -1668,7 +1669,7 @@ egosync-app/
 │   │   ├── chatService.ts                             [M] 传递 selectedSkillId
 │   │   ├── dashboardService.ts                        [M] 新增 getMetrics(query)
 │   │   ├── skillService.ts                            [M] 当前作用域候选 Skill
-│   │   └── mcpService.ts                              [M] 管家绑定四个接口
+│   │   └── mcpService.ts                              [M] 管家绑定五个接口（含 refreshButlerRuntime）
 │   └── types/
 │       ├── chat.ts                                    [M] ChatRequest.selectedSkillId
 │       ├── dashboard.ts                               [M] Metrics Query/Scope/Result
@@ -1761,6 +1762,7 @@ mcp_server_list_for_butler
 mcp_server_list_available_for_butler
 mcp_server_add_to_butler
 mcp_server_remove_from_butler
+mcp_server_refresh_butler_runtime
 ```
 
 修改现有 `chat_send_message` 的 `ChatRequest`，增加可空 `selectedSkillId`。每个新增 Command 必须在 Rust Command、`lib.rs generate_handler!`、前端 Service、TypeScript DTO 和测试中闭环。

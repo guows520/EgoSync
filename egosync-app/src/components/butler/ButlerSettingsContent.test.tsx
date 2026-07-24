@@ -6,8 +6,10 @@ import { scheduleService } from '../../services/scheduleService';
 import { missionService } from '../../services/missionService';
 import { roleService } from '../../services/roleService';
 import { skillService } from '../../services/skillService';
+import { mcpService } from '../../services/mcpService';
 import type { Role } from '../../types/role';
 import type { SkillRegistryEntry } from '../../types/skill';
+import type { McpServer } from '../../types/mcp';
 
 vi.mock('../../services/appService', () => ({
   appService: {
@@ -49,6 +51,16 @@ vi.mock('../../services/missionService', () => ({
     update: vi.fn(),
     inferValues: vi.fn(),
     checkInferenceEligibility: vi.fn(),
+  },
+}));
+
+vi.mock('../../services/mcpService', () => ({
+  mcpService: {
+    listForButler: vi.fn(),
+    listAvailableForButler: vi.fn(),
+    addToButler: vi.fn(),
+    removeFromButler: vi.fn(),
+    refreshButlerRuntime: vi.fn(),
   },
 }));
 
@@ -117,11 +129,14 @@ describe('ButlerSettingsContent', () => {
       bigrockReminderDay: '1',
       bigrockReminderTime: '09:00',
     });
+    vi.mocked(mcpService.listForButler).mockResolvedValue([]);
+    vi.mocked(mcpService.listAvailableForButler).mockResolvedValue([]);
+    vi.mocked(mcpService.refreshButlerRuntime).mockResolvedValue(undefined);
   });
 
   it('支持全部折叠、全部展开并持久化管家设置分组', () => {
     const { unmount } = render(<ButlerSettingsContent archivedRoles={[{ ...baseRole, status: 'archived', archivedAt: '2026-07-01T00:00:00Z' }]} />);
-    const sectionNames = ['如何称呼您', '您的个人使命宣言', 'Skill 配置', '晨间简报时间', '周复盘时间', '大石头规划提醒时间', '已归档角色'];
+    const sectionNames = ['如何称呼您', '您的个人使命宣言', 'Skill 配置', 'MCP Server 配置', '晨间简报时间', '周复盘时间', '大石头规划提醒时间', '已归档角色'];
 
     fireEvent.click(screen.getByRole('button', { name: '全部折叠' }));
     sectionNames.forEach(name => expect(screen.getByRole('button', { name })).toHaveAttribute('aria-expanded', 'false'));
@@ -129,6 +144,7 @@ describe('ButlerSettingsContent', () => {
       identity: false,
       mission: false,
       skills: false,
+      mcp: false,
       briefing: false,
       review: false,
       bigrock: false,
@@ -783,6 +799,178 @@ describe('ButlerSettingsContent', () => {
       await waitFor(() => {
         expect(scheduleService.updateSchedule).toHaveBeenCalledWith({ briefingTime: '06:00' });
       });
+    });
+  });
+
+  describe('MCP Server 配置', () => {
+    const boundServer: McpServer = {
+      id: 'mcp-calendar',
+      name: '日历',
+      serverType: 'sse',
+      commandOrUrl: 'https://cal.example/sse',
+      envRefs: '{}',
+      description: '读取日历事件',
+      enabled: true,
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+    };
+    const availableServer: McpServer = {
+      id: 'mcp-mail',
+      name: '邮件',
+      serverType: 'stdio',
+      commandOrUrl: 'npx -y @mcp/mail-server',
+      envRefs: '{}',
+      description: '发送和读取邮件',
+      enabled: true,
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+    };
+
+    it('加载时显示已绑定和可添加的 MCP Server 列表', async () => {
+      vi.mocked(mcpService.listForButler).mockResolvedValue([boundServer]);
+      vi.mocked(mcpService.listAvailableForButler).mockResolvedValue([availableServer]);
+
+      render(<ButlerSettingsContent />);
+
+      expect(await screen.findByText('日历')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: '添加 MCP server' }));
+      expect(await screen.findByText('邮件')).toBeInTheDocument();
+      expect(screen.queryByText('已停用搜索')).not.toBeInTheDocument();
+    });
+
+    it('点击添加按钮调用 addToButler 并刷新列表', async () => {
+      vi.mocked(mcpService.listForButler)
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([availableServer]);
+      vi.mocked(mcpService.listAvailableForButler)
+        .mockResolvedValueOnce([availableServer])
+        .mockResolvedValueOnce([]);
+      vi.mocked(mcpService.addToButler).mockResolvedValue(undefined);
+
+      render(<ButlerSettingsContent />);
+
+      fireEvent.click(await screen.findByRole('button', { name: '添加 MCP server' }));
+      const addBtn = await screen.findByRole('button', { name: '添加 邮件' });
+      fireEvent.click(addBtn);
+
+      await waitFor(() => {
+        expect(mcpService.addToButler).toHaveBeenCalledWith('mcp-mail');
+      });
+      await waitFor(() => {
+        expect(mcpService.listForButler).toHaveBeenCalledTimes(2);
+        expect(mcpService.listAvailableForButler).toHaveBeenCalledTimes(2);
+      });
+    });
+
+    it('点击移除按钮调用 removeFromButler 并刷新列表', async () => {
+      vi.mocked(mcpService.listForButler)
+        .mockResolvedValueOnce([boundServer])
+        .mockResolvedValueOnce([]);
+      vi.mocked(mcpService.listAvailableForButler)
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([boundServer]);
+      vi.mocked(mcpService.removeFromButler).mockResolvedValue(undefined);
+
+      render(<ButlerSettingsContent />);
+
+      const removeBtn = await screen.findByRole('button', { name: '移除 日历' });
+      fireEvent.click(removeBtn);
+
+      await waitFor(() => {
+        expect(mcpService.removeFromButler).toHaveBeenCalledWith('mcp-calendar');
+      });
+      await waitFor(() => {
+        expect(mcpService.listForButler).toHaveBeenCalledTimes(2);
+      });
+    });
+
+    it('搜索框过滤可添加列表', async () => {
+      const otherServer: McpServer = {
+        id: 'mcp-weather',
+        name: '天气',
+        serverType: 'sse',
+        commandOrUrl: 'https://weather.example/sse',
+        envRefs: '{}',
+        description: '查询天气',
+        enabled: true,
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      };
+      vi.mocked(mcpService.listAvailableForButler).mockResolvedValue([availableServer, otherServer]);
+
+      render(<ButlerSettingsContent />);
+
+      fireEvent.click(await screen.findByRole('button', { name: '添加 MCP server' }));
+      expect(await screen.findByText('邮件')).toBeInTheDocument();
+      expect(screen.getByText('天气')).toBeInTheDocument();
+
+      const searchInput = screen.getByPlaceholderText('搜索 MCP server');
+      fireEvent.change(searchInput, { target: { value: '邮件' } });
+
+      expect(screen.getByText('邮件')).toBeInTheDocument();
+      expect(screen.queryByText('天气')).not.toBeInTheDocument();
+    });
+
+    it('添加失败时显示错误提示', async () => {
+      vi.mocked(mcpService.listAvailableForButler).mockResolvedValue([availableServer]);
+      vi.mocked(mcpService.addToButler).mockRejectedValueOnce({
+        ValidationError: '该 MCP server 已全局停用，不能添加到管家',
+      });
+
+      render(<ButlerSettingsContent />);
+
+      fireEvent.click(await screen.findByRole('button', { name: '添加 MCP server' }));
+      const addBtn = await screen.findByRole('button', { name: '添加 邮件' });
+      fireEvent.click(addBtn);
+
+      expect(await screen.findByText('该 MCP server 已全局停用，不能添加到管家')).toBeInTheDocument();
+    });
+
+    it('持久化失败时明确提示配置未保存', async () => {
+      vi.mocked(mcpService.listAvailableForButler).mockResolvedValue([availableServer]);
+      vi.mocked(mcpService.addToButler).mockRejectedValueOnce(new Error('database locked'));
+      render(<ButlerSettingsContent />);
+      fireEvent.click(await screen.findByRole('button', { name: '添加 MCP server' }));
+      fireEvent.click(await screen.findByRole('button', { name: '添加 邮件' }));
+      expect(await screen.findByText('MCP server 添加失败，配置未保存，请稍后重试')).toBeInTheDocument();
+    });
+
+    it('运行时刷新失败时提示部分成功并允许重试', async () => {
+      vi.mocked(mcpService.listAvailableForButler).mockResolvedValue([availableServer]);
+      vi.mocked(mcpService.addToButler).mockRejectedValueOnce({
+        ValidationError: '配置已保存，但 Agent Runtime 尚未刷新：restart failed',
+      });
+      render(<ButlerSettingsContent />);
+      fireEvent.click(await screen.findByRole('button', { name: '添加 MCP server' }));
+      fireEvent.click(await screen.findByRole('button', { name: '添加 邮件' }));
+      expect(await screen.findByText('配置已保存，但 Agent Runtime 尚未刷新')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: '重试刷新' }));
+      await waitFor(() => expect(mcpService.refreshButlerRuntime).toHaveBeenCalled());
+      expect(await screen.findByText('Agent Runtime 已刷新')).toBeInTheDocument();
+    });
+
+    it('保存成功但列表刷新失败时不误报保存失败', async () => {
+      vi.mocked(mcpService.listAvailableForButler).mockResolvedValue([availableServer]);
+      vi.mocked(mcpService.listForButler)
+        .mockResolvedValueOnce([])
+        .mockRejectedValueOnce(new Error('reload failed'));
+      vi.mocked(mcpService.addToButler).mockResolvedValue(undefined);
+      render(<ButlerSettingsContent />);
+      fireEvent.click(await screen.findByRole('button', { name: '添加 MCP server' }));
+      fireEvent.click(await screen.findByRole('button', { name: '添加 邮件' }));
+      expect(await screen.findByText('MCP server 已添加，但列表刷新失败，请稍后重试')).toBeInTheDocument();
+    });
+
+    it('已关闭 Server 不在可添加列表中', async () => {
+      // 后端 listAvailableForButler 已过滤 enabled=false 的 Server，
+      // 前端只渲染后端返回的结果，此处验证前端不额外添加已关闭 Server。
+      vi.mocked(mcpService.listAvailableForButler).mockResolvedValue([availableServer]);
+
+      render(<ButlerSettingsContent />);
+
+      fireEvent.click(await screen.findByRole('button', { name: '添加 MCP server' }));
+      expect(await screen.findByText('邮件')).toBeInTheDocument();
+      expect(screen.queryByText('已停用搜索')).not.toBeInTheDocument();
     });
   });
 });

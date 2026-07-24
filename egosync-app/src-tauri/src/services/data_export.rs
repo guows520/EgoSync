@@ -52,6 +52,8 @@ pub struct ExportData {
     pub big_rock_protection_reminders: Vec<serde_json::Value>,
     pub forgotten_memory_sources: Vec<serde_json::Value>,
     pub role_mcp_server_bindings: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub butler_mcp_servers: Vec<serde_json::Value>,
     pub conversations: Vec<Conversation>,
     pub messages: Vec<Message>,
     pub exported_at: String,
@@ -271,6 +273,25 @@ async fn query_role_mcp_server_bindings(pool: &DbPool) -> Result<Vec<serde_json:
         .collect())
 }
 
+async fn query_butler_mcp_servers(pool: &DbPool) -> Result<Vec<serde_json::Value>, AppError> {
+    let rows = sqlx::query(
+        "SELECT server_id, created_at FROM butler_mcp_servers ORDER BY server_id ASC",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| AppError::DbError(format!("查询管家 MCP 绑定失败: {}", e)))?;
+
+    Ok(rows
+        .iter()
+        .map(|row| {
+            serde_json::json!({
+                "serverId": row.get::<String, _>("server_id"),
+                "createdAt": row.get::<String, _>("created_at"),
+            })
+        })
+        .collect())
+}
+
 pub async fn gather_export_data(
     pool: &DbPool,
     conv_pool: &ConversationsPool,
@@ -293,6 +314,7 @@ pub async fn gather_export_data(
     let big_rock_protection_reminders = query_big_rock_protection_reminders(pool).await?;
     let forgotten_memory_sources = query_forgotten_memory_sources(pool).await?;
     let role_mcp_server_bindings = query_role_mcp_server_bindings(pool).await?;
+    let butler_mcp_servers = query_butler_mcp_servers(pool).await?;
     let conversations = conversations::list_all_conversations(conv_pool).await?;
     let messages = conversations::list_all_messages(conv_pool).await?;
 
@@ -315,6 +337,7 @@ pub async fn gather_export_data(
         big_rock_protection_reminders,
         forgotten_memory_sources,
         role_mcp_server_bindings,
+        butler_mcp_servers,
         conversations,
         messages,
         exported_at: crate::db::settings::chrono_now_pub(),
@@ -713,6 +736,7 @@ const MAIN_DB_TABLES: &[&str] = &[
     "app_settings",
     "mcp_servers",
     "role_mcp_server_bindings",
+    "butler_mcp_servers",
     "skills",
     "skill_role_bindings",
 ];
@@ -933,6 +957,18 @@ pub async fn import_json_data(
         .map_err(|e| AppError::DbError(format!("插入 role_mcp_server_bindings 失败: {}", e)))?;
     }
 
+    // butler_mcp_servers
+    for b in &data.butler_mcp_servers {
+        let server_id = json_req_str(b, "serverId", "butler_mcp_servers")?;
+        let created_at = json_req_str(b, "createdAt", "butler_mcp_servers")?;
+        sqlx::query(
+            "INSERT OR IGNORE INTO butler_mcp_servers (server_id, created_at) VALUES (?1, ?2)",
+        )
+        .bind(server_id).bind(created_at)
+        .execute(&mut *tx).await
+        .map_err(|e| AppError::DbError(format!("插入 butler_mcp_servers 失败: {}", e)))?;
+    }
+
     // skills
     for s in &data.skills {
         let id = json_req_str(s, "id", "skills")?;
@@ -1114,8 +1150,18 @@ pub async fn import_sqlite_data(
         .map_err(|e| AppError::DbError(format!("ATTACH 主库失败: {}", e)))?;
 
     let copy_result: Result<(i64, i64, i64), AppError> = async {
+        let has_butler_mcp_servers: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM imported.sqlite_master WHERE type = 'table' AND name = 'butler_mcp_servers')",
+        )
+        .fetch_one(&mut *conn)
+        .await
+        .map_err(|e| AppError::DbError(format!("校验导入表 butler_mcp_servers 失败: {}", e)))?;
+
         // 结构校验：导入库必须包含所有目标表，否则视为不兼容存档
         for table in MAIN_DB_TABLES {
+            if *table == "butler_mcp_servers" && !has_butler_mcp_servers {
+                continue;
+            }
             let exists: Option<String> = sqlx::query_scalar(
                 "SELECT name FROM imported.sqlite_master WHERE type = 'table' AND name = ?1",
             )
@@ -1140,6 +1186,9 @@ pub async fn import_sqlite_data(
                 .execute(&mut *conn)
                 .await
                 .map_err(|e| AppError::DbError(format!("清空表 {} 失败: {}", table, e)))?;
+            if *table == "butler_mcp_servers" && !has_butler_mcp_servers {
+                continue;
+            }
             sqlx::query(&format!("INSERT INTO {} SELECT * FROM imported.{}", table, table))
                 .execute(&mut *conn)
                 .await
@@ -1434,6 +1483,7 @@ mod tests {
             big_rock_protection_reminders: vec![],
             forgotten_memory_sources: vec![],
             role_mcp_server_bindings: vec![],
+            butler_mcp_servers: vec![],
             conversations: vec![],
             messages: vec![],
             exported_at: "2026-01-01T00:00:00Z".to_string(),
@@ -1517,6 +1567,7 @@ mod tests {
             big_rock_protection_reminders: vec![],
             forgotten_memory_sources: vec![],
             role_mcp_server_bindings: vec![],
+            butler_mcp_servers: vec![],
             conversations: vec![],
             messages: vec![],
             exported_at: "2026-01-01T00:00:00Z".to_string(),
@@ -1608,6 +1659,7 @@ mod tests {
             big_rock_protection_reminders: vec![],
             forgotten_memory_sources: vec![],
             role_mcp_server_bindings: vec![],
+            butler_mcp_servers: vec![],
             conversations: vec![conv],
             messages: vec![msg1, msg2],
             exported_at: "2026-01-01T00:00:00Z".to_string(),
@@ -1643,6 +1695,7 @@ mod tests {
             big_rock_protection_reminders: vec![],
             forgotten_memory_sources: vec![],
             role_mcp_server_bindings: vec![],
+            butler_mcp_servers: vec![],
             conversations: vec![],
             messages: vec![],
             exported_at: "2026-01-01T00:00:00Z".to_string(),
@@ -2042,6 +2095,7 @@ mod tests {
             mcp_servers: vec![], skills: vec![], skill_bindings: vec![],
             q2_reminders: vec![], big_rock_protection_reminders: vec![],
             forgotten_memory_sources: vec![], role_mcp_server_bindings: vec![],
+            butler_mcp_servers: vec![],
             conversations: vec![], messages: vec![],
             exported_at: "2026-01-01T00:00:00Z".to_string(),
             export_version: "99.0".to_string(),
@@ -2147,6 +2201,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn import_legacy_sqlite_without_butler_mcp_servers_succeeds() {
+        let (dir, pool, conv_pool) = setup_destroy_test_db().await;
+        let backup_main = dir.path().join("legacy.db");
+        sqlx::query(&format!("VACUUM INTO '{}'", backup_main.to_string_lossy()))
+            .execute(&pool).await.expect("vacuum legacy db");
+
+        let backup_url = format!("sqlite:{}?mode=rw", backup_main.display());
+        let backup_pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .connect(&backup_url).await.expect("open legacy db");
+        sqlx::query("DROP TABLE butler_mcp_servers")
+            .execute(&backup_pool).await.expect("drop new table from legacy db");
+        backup_pool.close().await;
+
+        let result = import_sqlite_data(&pool, &conv_pool, &backup_main).await;
+        assert!(result.is_ok(), "legacy SQLite archives remain importable: {:?}", result);
+        let binding_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM butler_mcp_servers")
+            .fetch_one(&pool).await.expect("count butler bindings");
+        assert_eq!(binding_count, 0);
+    }
+
+    #[tokio::test]
     async fn import_sqlite_data_rejects_incompatible_schema() {
         let (dir, pool, conv_pool) = setup_destroy_test_db().await;
 
@@ -2205,5 +2280,95 @@ mod tests {
         assert!(json.contains("\"memoriesCount\""));
         assert!(json.contains("\"conversationsCount\""));
         assert!(json.contains("\"messagesCount\""));
+    }
+
+    #[tokio::test]
+    async fn export_import_preserves_butler_mcp_servers() {
+        let (dir, pool, conv_pool) = setup_destroy_test_db().await;
+
+        // 插入 MCP server 和管家绑定
+        sqlx::query("INSERT INTO mcp_servers (id, name, server_type, command_or_url, env_refs, description, enabled, created_at, updated_at) VALUES ('mcp-butler-1', '日历', 'sse', 'https://cal.example/sse', '{}', '读取日历', 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO butler_mcp_servers (server_id, created_at) VALUES ('mcp-butler-1', '2026-01-01T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+
+        // 导出
+        let export_data = gather_export_data(&pool, &conv_pool).await.expect("gather export data");
+        assert_eq!(export_data.butler_mcp_servers.len(), 1);
+        assert_eq!(export_data.butler_mcp_servers[0]["serverId"], "mcp-butler-1");
+
+        let json = serde_json::to_string_pretty(&export_data).expect("serialize");
+        let json_path = dir.path().join("export_butler.json");
+        std::fs::write(&json_path, json).expect("write json");
+
+        // 销毁
+        let app_data_dir = dir.path().join("app_data");
+        std::fs::create_dir_all(&app_data_dir).expect("create app_data dir");
+        destroy_all_data(&pool, &conv_pool, &app_data_dir).await.expect("destroy");
+
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM butler_mcp_servers")
+            .fetch_one(&pool).await.expect("count");
+        assert_eq!(count, 0);
+
+        // 导入
+        import_json_data(&pool, &conv_pool, &json_path).await.expect("import");
+
+        let restored: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM butler_mcp_servers")
+            .fetch_one(&pool).await.expect("count after import");
+        assert_eq!(restored, 1);
+    }
+
+    #[tokio::test]
+    async fn import_old_export_without_butler_mcp_servers_field_succeeds() {
+        let (dir, pool, conv_pool) = setup_destroy_test_db().await;
+
+        // 构造旧版本 JSON（缺少 butlerMcpServers 字段）
+        let old_json = serde_json::json!({
+            "roles": [],
+            "tasks": [],
+            "memories": [],
+            "suggestions": [],
+            "notifications": [],
+            "mission": null,
+            "conflicts": [],
+            "briefings": [],
+            "weeklyReviews": [],
+            "llmConfigs": [],
+            "appSettings": [],
+            "mcpServers": [],
+            "skills": [],
+            "skillBindings": [],
+            "q2Reminders": [],
+            "bigRockProtectionReminders": [],
+            "forgottenMemorySources": [],
+            "roleMcpServerBindings": [],
+            "conversations": [],
+            "messages": [],
+            "exportedAt": "2026-01-01T00:00:00Z",
+            "exportVersion": "1.0"
+        });
+        let json_path = dir.path().join("old_export.json");
+        std::fs::write(&json_path, serde_json::to_string_pretty(&old_json).unwrap()).unwrap();
+
+        let result = import_json_data(&pool, &conv_pool, &json_path).await;
+        assert!(result.is_ok(), "旧版本 JSON 导入应成功（serde default 兜底）");
+    }
+
+    #[tokio::test]
+    async fn destroy_all_data_clears_butler_mcp_servers() {
+        let (dir, pool, conv_pool) = setup_destroy_test_db().await;
+
+        sqlx::query("INSERT INTO mcp_servers (id, name, server_type, command_or_url, env_refs, description, enabled, created_at, updated_at) VALUES ('mcp-x', '测试', 'sse', 'https://x.example/sse', '{}', '', 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO butler_mcp_servers (server_id, created_at) VALUES ('mcp-x', '2026-01-01T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+
+        let app_data_dir = dir.path().join("app_data");
+        std::fs::create_dir_all(&app_data_dir).expect("create app_data dir");
+        destroy_all_data(&pool, &conv_pool, &app_data_dir).await.expect("destroy");
+
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM butler_mcp_servers")
+            .fetch_one(&pool).await.expect("count");
+        assert_eq!(count, 0);
     }
 }

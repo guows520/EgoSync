@@ -5,6 +5,7 @@ use tauri::State;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
 
+use crate::commands::chat::OpencodeMcpScopeLock;
 use crate::db::app_settings;
 use crate::db::pool::DbPool;
 use crate::db::settings;
@@ -45,12 +46,13 @@ pub async fn app_update_butler_skills(
     input: UpdateRoleSkillsInput,
     pool: State<'_, DbPool>,
     agent_config: State<'_, AgentConfigService>,
+    mcp_scope_lock: State<'_, OpencodeMcpScopeLock>,
 ) -> Result<ButlerSkillsConfig, AppError> {
+    let _guard = mcp_scope_lock.0.lock().await;
     let skills = crate::services::butler_config::set_butler_skills(&pool, &input).await?;
-    let registry = crate::db::skills::list_skills(&pool).await.unwrap_or_default();
-    if let Err(e) = agent_config.sync_butler_skills_with_registry(&skills, &registry) {
-        tracing::warn!("opencode sync (butler_update_skills) failed: {}", e);
-    }
+    let registry = crate::db::skills::list_skills(&pool).await?;
+    let mcp_lines = crate::db::mcp_servers::butler_enabled_mcp_lines(&pool).await?;
+    agent_config.sync_butler_skills_with_registry_and_mcp(&skills, &registry, &mcp_lines)?;
     Ok(skills)
 }
 

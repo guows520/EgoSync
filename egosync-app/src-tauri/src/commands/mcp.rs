@@ -93,6 +93,20 @@ pub async fn mcp_server_test(
 }
 
 #[tauri::command]
+pub async fn mcp_server_list_for_butler(
+    pool: State<'_, DbPool>,
+) -> Result<Vec<McpServer>, AppError> {
+    crate::services::mcp_server::list_servers_for_butler(&pool).await
+}
+
+#[tauri::command]
+pub async fn mcp_server_list_available_for_butler(
+    pool: State<'_, DbPool>,
+) -> Result<Vec<McpServer>, AppError> {
+    crate::services::mcp_server::list_available_servers_for_butler(&pool).await
+}
+
+#[tauri::command]
 pub async fn mcp_server_add_to_role(
     role_id: String,
     server_id: String,
@@ -123,6 +137,60 @@ pub async fn mcp_server_remove_from_role(
         .await?;
     refresh_opencode_runtime_after_mcp_change(&sidecar, &opencode_sessions).await;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn mcp_server_add_to_butler(
+    server_id: String,
+    pool: State<'_, DbPool>,
+    agent_config: State<'_, AgentConfigService>,
+    mcp_scope_lock: State<'_, OpencodeMcpScopeLock>,
+    sidecar: State<'_, Arc<Mutex<SidecarManager>>>,
+    opencode_sessions: State<'_, OpencodeSessions>,
+) -> Result<(), AppError> {
+    let _guard = mcp_scope_lock.0.lock().await;
+    crate::services::mcp_server::add_to_butler(&pool, &agent_config, &server_id)
+        .await
+        .map_err(saved_butler_runtime_error)?;
+    refresh_opencode_runtime(&sidecar, &opencode_sessions)
+        .await
+        .map_err(saved_butler_runtime_error)
+}
+
+#[tauri::command]
+pub async fn mcp_server_remove_from_butler(
+    server_id: String,
+    pool: State<'_, DbPool>,
+    agent_config: State<'_, AgentConfigService>,
+    mcp_scope_lock: State<'_, OpencodeMcpScopeLock>,
+    sidecar: State<'_, Arc<Mutex<SidecarManager>>>,
+    opencode_sessions: State<'_, OpencodeSessions>,
+) -> Result<(), AppError> {
+    let _guard = mcp_scope_lock.0.lock().await;
+    crate::services::mcp_server::remove_from_butler(&pool, &agent_config, &server_id)
+        .await
+        .map_err(saved_butler_runtime_error)?;
+    refresh_opencode_runtime(&sidecar, &opencode_sessions)
+        .await
+        .map_err(saved_butler_runtime_error)
+}
+
+#[tauri::command]
+pub async fn mcp_server_refresh_butler_runtime(
+    pool: State<'_, DbPool>,
+    agent_config: State<'_, AgentConfigService>,
+    mcp_scope_lock: State<'_, OpencodeMcpScopeLock>,
+    sidecar: State<'_, Arc<Mutex<SidecarManager>>>,
+    opencode_sessions: State<'_, OpencodeSessions>,
+) -> Result<(), AppError> {
+    let _guard = mcp_scope_lock.0.lock().await;
+    crate::services::mcp_server::sync_butler_agent(&pool, &agent_config).await?;
+    refresh_opencode_runtime(&sidecar, &opencode_sessions).await
+}
+
+fn saved_butler_runtime_error(error: AppError) -> AppError {
+    tracing::warn!("butler MCP binding saved but runtime refresh failed: {}", error);
+    AppError::ValidationError(format!("配置已保存，但 Agent Runtime 尚未刷新：{}", error))
 }
 
 pub(crate) async fn refresh_opencode_runtime(
@@ -160,6 +228,8 @@ mod tests {
             "mcp_server_test",
             "mcp_server_add_to_role",
             "mcp_server_remove_from_role",
+            "mcp_server_add_to_butler",
+            "mcp_server_remove_from_butler",
         ] {
             let start = source
                 .find(&format!("pub async fn {}", command))
@@ -178,8 +248,13 @@ mod tests {
                 "{} must receive opencode session cache state so stale sessions are cleared after restart",
                 command
             );
+            let refresh_call = if command.ends_with("_butler") {
+                "refresh_opencode_runtime(&sidecar, &opencode_sessions)"
+            } else {
+                "refresh_opencode_runtime_after_mcp_change(&sidecar, &opencode_sessions"
+            };
             assert!(
-                body.contains("refresh_opencode_runtime_after_mcp_change(&sidecar, &opencode_sessions"),
+                body.contains(refresh_call),
                 "{} must refresh opencode runtime and clear stale session cache after MCP config changes",
                 command
             );

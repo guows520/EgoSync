@@ -133,11 +133,22 @@ async fn sync_all_agents_with_mcp(
     registry: &[crate::models::skill::SkillRegistryEntry],
     action: &str,
 ) -> bool {
-    let mcp_prompts = crate::services::mcp_server::role_mcp_prompt_map(pool)
-        .await
-        .unwrap_or_default();
+    let mcp_prompts = match crate::services::mcp_server::role_mcp_prompt_map(pool).await {
+        Ok(prompts) => prompts,
+        Err(e) => {
+            tracing::warn!("load role MCP bindings after {} failed: {}", action, e);
+            return false;
+        }
+    };
+    let butler_mcp_lines = match crate::db::mcp_servers::butler_enabled_mcp_lines(pool).await {
+        Ok(lines) => lines,
+        Err(e) => {
+            tracing::warn!("load butler MCP bindings after {} failed: {}", action, e);
+            return false;
+        }
+    };
     if let Err(e) =
-        agent_config.full_sync_with_skills_and_mcp(roles, butler_skills, registry, &mcp_prompts)
+        agent_config.full_sync_with_skills_and_mcp(roles, butler_skills, registry, &mcp_prompts, &butler_mcp_lines)
     {
         tracing::warn!("opencode sync after {} failed: {}", action, e);
         return false;

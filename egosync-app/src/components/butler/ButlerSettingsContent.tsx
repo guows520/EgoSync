@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { AlertCircle, Check, ChevronDown, ChevronUp, Loader2, Pencil, Plus, Trash2, Upload, X } from 'lucide-react';
 import { getRoleIconComponent, normalizeColorHex } from '../../lib/roleIcons';
 import { cn } from '../../lib/utils';
@@ -7,9 +7,11 @@ import { scheduleService } from '../../services/scheduleService';
 import { missionService } from '../../services/missionService';
 import { roleService } from '../../services/roleService';
 import { skillService } from '../../services/skillService';
+import { mcpService } from '../../services/mcpService';
 import type { ButlerSkillsConfig, Role } from '../../types/role';
 import type { OpencodeSkillCandidate, SkillImportPreview, SkillRegistryEntry } from '../../types/skill';
 import type { InferredValues, InferenceEligibility } from '../../types/mission';
+import type { McpServer } from '../../types/mcp';
 
 type ButlerSkillsState = ButlerSkillsConfig;
 
@@ -18,7 +20,7 @@ type ButlerSkillKey = 'findSkills' | 'skillCreator';
 const DEFAULT_SKILLS: ButlerSkillsState = { findSkills: true, skillCreator: false, enabledSkillIds: [] };
 const BUTLER_SCOPE_ID = '__butler__';
 const MESSAGE_TIMEOUT_MS = 1500;
-const BUTLER_SECTION_IDS = ['identity', 'mission', 'skills', 'briefing', 'review', 'bigrock', 'archived'] as const;
+const BUTLER_SECTION_IDS = ['identity', 'mission', 'skills', 'mcp', 'briefing', 'review', 'bigrock', 'archived'] as const;
 type ButlerSectionId = typeof BUTLER_SECTION_IDS[number];
 const BUTLER_STORAGE_KEY = 'egosync-butler-settings-sections';
 const readButlerSections = (): Record<ButlerSectionId, boolean> => {
@@ -99,6 +101,14 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
   const [inferenceEligibility, setInferenceEligibility] = useState<InferenceEligibility | null>(null);
   const [isInferenceModalOpen, setIsInferenceModalOpen] = useState(false);
   const [editableSummary, setEditableSummary] = useState('');
+  const [butlerMcpServers, setButlerMcpServers] = useState<McpServer[]>([]);
+  const [availableButlerMcpServers, setAvailableButlerMcpServers] = useState<McpServer[]>([]);
+  const [isLoadingButlerMcpServers, setIsLoadingButlerMcpServers] = useState(false);
+  const [isButlerMcpPickerOpen, setIsButlerMcpPickerOpen] = useState(false);
+  const [butlerMcpSearch, setButlerMcpSearch] = useState('');
+  const [pendingButlerMcpId, setPendingButlerMcpId] = useState<string | null>(null);
+  const [butlerRuntimeRefreshNeeded, setButlerRuntimeRefreshNeeded] = useState(false);
+  const [isRefreshingButlerRuntime, setIsRefreshingButlerRuntime] = useState(false);
 
   // Escape 关闭内联 Modal
   useEffect(() => {
@@ -510,6 +520,123 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
       setError('删除自定义 Skill 失败，请稍后重试');
     } finally {
       setPendingSkill(null);
+    }
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    setIsLoadingButlerMcpServers(true);
+    Promise.all([
+      mcpService.listForButler(),
+      mcpService.listAvailableForButler(),
+    ])
+      .then(([bound, available]) => {
+        if (!cancelled) {
+          setButlerMcpServers(bound);
+          setAvailableButlerMcpServers(available);
+        }
+      })
+      .catch(e => {
+        if (!cancelled) setError(toFriendlyError(e, 'MCP server 列表加载失败，请稍后重试'));
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoadingButlerMcpServers(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const filteredAvailableButlerMcpServers = useMemo(() => {
+    const query = butlerMcpSearch.trim().toLowerCase();
+    if (!query) return availableButlerMcpServers;
+    return availableButlerMcpServers.filter(server =>
+      server.name.toLowerCase().includes(query) ||
+      server.description.toLowerCase().includes(query) ||
+      server.commandOrUrl.toLowerCase().includes(query)
+    );
+  }, [availableButlerMcpServers, butlerMcpSearch]);
+
+  const refreshButlerMcpServers = async () => {
+    const [bound, available] = await Promise.all([
+      mcpService.listForButler(),
+      mcpService.listAvailableForButler(),
+    ]);
+    setButlerMcpServers(bound);
+    setAvailableButlerMcpServers(available);
+  };
+
+  const handleAddMcpToButler = async (serverId: string) => {
+    setPendingButlerMcpId(serverId);
+    setError('');
+    setSettingsSavedMessage('');
+    try {
+      await mcpService.addToButler(serverId);
+    } catch (e) {
+      if (isButlerRuntimePartialFailure(e)) {
+        setButlerRuntimeRefreshNeeded(true);
+        setError('配置已保存，但 Agent Runtime 尚未刷新');
+        await refreshButlerMcpServers().catch(() => undefined);
+      } else {
+        setError(toFriendlyError(e, 'MCP server 添加失败，配置未保存，请稍后重试'));
+      }
+      setPendingButlerMcpId(null);
+      return;
+    }
+    setButlerRuntimeRefreshNeeded(false);
+    setButlerMcpSearch('');
+    setIsButlerMcpPickerOpen(false);
+    try {
+      await refreshButlerMcpServers();
+      setSettingsSavedMessage('MCP server 已添加');
+      setTimeout(() => setSettingsSavedMessage(''), MESSAGE_TIMEOUT_MS);
+    } catch {
+      setError('MCP server 已添加，但列表刷新失败，请稍后重试');
+    } finally {
+      setPendingButlerMcpId(null);
+    }
+  };
+
+  const handleRemoveMcpFromButler = async (serverId: string) => {
+    setPendingButlerMcpId(serverId);
+    setError('');
+    setSettingsSavedMessage('');
+    try {
+      await mcpService.removeFromButler(serverId);
+    } catch (e) {
+      if (isButlerRuntimePartialFailure(e)) {
+        setButlerRuntimeRefreshNeeded(true);
+        setError('配置已保存，但 Agent Runtime 尚未刷新');
+        await refreshButlerMcpServers().catch(() => undefined);
+      } else {
+        setError(toFriendlyError(e, 'MCP server 移除失败，配置未保存，请稍后重试'));
+      }
+      setPendingButlerMcpId(null);
+      return;
+    }
+    setButlerRuntimeRefreshNeeded(false);
+    try {
+      await refreshButlerMcpServers();
+      setSettingsSavedMessage('MCP server 已移除');
+      setTimeout(() => setSettingsSavedMessage(''), MESSAGE_TIMEOUT_MS);
+    } catch {
+      setError('MCP server 已移除，但列表刷新失败，请稍后重试');
+    } finally {
+      setPendingButlerMcpId(null);
+    }
+  };
+
+  const handleRetryButlerRuntime = async () => {
+    setIsRefreshingButlerRuntime(true);
+    try {
+      await mcpService.refreshButlerRuntime();
+      setButlerRuntimeRefreshNeeded(false);
+      setError('');
+      setSettingsSavedMessage('Agent Runtime 已刷新');
+    } catch (e) {
+      setError(toFriendlyError(e, 'Agent Runtime 刷新失败，请稍后重试'));
+    } finally {
+      setIsRefreshingButlerRuntime(false);
     }
   };
 
@@ -932,9 +1059,95 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
         )}
         {error && (
           <div className="mt-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-[13px] text-red-600 flex items-center gap-2">
-            <AlertCircle size={14} /> {error}
+            <AlertCircle size={14} /> <span className="flex-1">{error}</span>
+            {butlerRuntimeRefreshNeeded && (
+              <button type="button" onClick={handleRetryButlerRuntime} disabled={isRefreshingButlerRuntime} className="font-medium underline disabled:opacity-60">
+                {isRefreshingButlerRuntime ? '重试中...' : '重试刷新'}
+              </button>
+            )}
           </div>
         )}
+      </div>
+      <div className={sectionClass('mcp', 'pt-6 border-t border-slate-200/80 dark:border-slate-700/80')}>
+        {sectionHeader('mcp', 'MCP Server 配置')}
+        <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-4 shadow-sm">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <div className="text-[14.5px] font-medium text-slate-800 dark:text-slate-100">管家可用 MCP server</div>
+              <p className="mt-1 text-[12.5px] leading-relaxed text-slate-500 dark:text-slate-400">这里只展示已为管家启用的 MCP；全局未绑定的 server 不会出现在管家能力中。</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsButlerMcpPickerOpen(prev => !prev)}
+              disabled={isLoadingButlerMcpServers}
+              className="inline-flex shrink-0 items-center justify-center rounded-lg border border-indigo-200 bg-indigo-50 dark:bg-indigo-900/30 px-3 py-2 text-[12px] font-medium text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              添加 MCP server
+            </button>
+          </div>
+
+          <div className="mt-3 space-y-2">
+            {isLoadingButlerMcpServers && <div className="text-[12.5px] text-slate-400 dark:text-slate-500">正在加载 MCP server...</div>}
+            {!isLoadingButlerMcpServers && butlerMcpServers.length === 0 && <div className="text-[12.5px] text-slate-400 dark:text-slate-500">管家暂无 MCP server。</div>}
+            {butlerMcpServers.map(server => (
+              <div key={server.id} className="rounded-lg border border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className={cn('w-2.5 h-2.5 rounded-full', server.enabled ? 'bg-emerald-500' : 'bg-slate-300')} />
+                      <span className="break-words text-[13.5px] font-medium text-slate-800 dark:text-slate-100">{server.name}</span>
+                      <span className="rounded-full border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-0.5 text-[11px] font-medium text-slate-500 dark:text-slate-400">{mcpServerTypeLabel(server.serverType)}</span>
+                      {!server.enabled && <span className="rounded-full border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-0.5 text-[11px] font-medium text-slate-500 dark:text-slate-400">已停用</span>}
+                    </div>
+                    <p className="mt-1.5 break-words text-[12px] leading-relaxed text-slate-500 dark:text-slate-400">{server.description || server.commandOrUrl}</p>
+                  </div>
+                  <button
+                    type="button"
+                    aria-label={`移除 ${server.name}`}
+                    onClick={() => handleRemoveMcpFromButler(server.id)}
+                    disabled={pendingButlerMcpId !== null}
+                    className="shrink-0 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 text-[12px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {pendingButlerMcpId === server.id ? '移除中...' : '移除'}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {isButlerMcpPickerOpen && (
+            <div className="mt-3 rounded-lg border border-indigo-100 dark:border-indigo-700 bg-indigo-50 dark:bg-indigo-900/30 px-3 py-3">
+              <input
+                type="text"
+                value={butlerMcpSearch}
+                onChange={e => setButlerMcpSearch(e.target.value)}
+                placeholder="搜索 MCP server"
+                className="w-full rounded-lg border border-indigo-100 dark:border-indigo-700 bg-white dark:bg-slate-800 px-3 py-2 text-[13px] outline-none focus:border-indigo-300 focus:ring-2 focus:ring-indigo-500/20"
+              />
+              <div className="mt-2 space-y-2">
+                {filteredAvailableButlerMcpServers.length === 0 ? (
+                  <div className="text-[12.5px] text-slate-500 dark:text-slate-400">没有可添加的 MCP server</div>
+                ) : filteredAvailableButlerMcpServers.map(server => (
+                  <div key={server.id} className="flex items-start justify-between gap-3 rounded-lg border border-indigo-100 dark:border-indigo-700 bg-white dark:bg-slate-800 px-3 py-2">
+                    <div className="min-w-0">
+                      <div className="break-words text-[13.5px] font-medium text-slate-800 dark:text-slate-100">{server.name}</div>
+                      <div className="mt-1 break-words text-[12px] text-slate-500 dark:text-slate-400">{server.description || server.commandOrUrl}</div>
+                    </div>
+                    <button
+                      type="button"
+                      aria-label={`添加 ${server.name}`}
+                      onClick={() => handleAddMcpToButler(server.id)}
+                      disabled={pendingButlerMcpId !== null}
+                      className="shrink-0 rounded-lg bg-indigo-600 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {pendingButlerMcpId === server.id ? '添加中...' : '添加'}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
       <div className={sectionClass('briefing', 'pt-6 border-t border-slate-200/80 dark:border-slate-700/80')}>
         {sectionHeader('briefing', '晨间简报时间')}
@@ -1273,6 +1486,16 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
   );
 }
 
+function mcpServerTypeLabel(value: string) {
+  if (value === 'streamable_http') return 'Streamable HTTP';
+  if (value === 'stdio' || value === 'command') return 'stdio';
+  return 'SSE';
+}
+
+function isButlerRuntimePartialFailure(error: unknown) {
+  return JSON.stringify(error ?? '').includes('配置已保存，但 Agent Runtime 尚未刷新');
+}
+
 function toFriendlyError(error: unknown, fallback: string) {
   if (error == null) return fallback;
   const validationError = typeof error === 'object'
@@ -1289,6 +1512,9 @@ function toFriendlyError(error: unknown, fallback: string) {
   }
   if (text.includes('frontmatter') || text.includes('SKILL.md')) {
     return 'SKILL.md 解析失败，请检查 frontmatter 中的 name 和 description';
+  }
+  if (text.includes('已全局停用')) {
+    return text;
   }
   return fallback;
 }

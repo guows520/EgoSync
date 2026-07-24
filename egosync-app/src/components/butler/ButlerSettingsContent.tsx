@@ -87,6 +87,13 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
   const [bigrockReminderDay, setBigrockReminderDay] = useState('1');
   const [bigrockReminderTime, setBigrockReminderTime] = useState('09:00');
   const [error, setError] = useState('');
+  const notifySkillScopeUpdated = async (scopeKind: 'role' | 'butler' | 'all', ownerId: string | null) => {
+    try {
+      await skillService.notifyScopeUpdated({ scopeKind, ownerId });
+    } catch (e) {
+      setError(toFriendlyError(e, 'Skill 已更新，但聊天候选刷新失败，请切换页面或稍后重试'));
+    }
+  };
   const [inferredValues, setInferredValues] = useState<InferredValues | null>(null);
   const [isInferring, setIsInferring] = useState(false);
   const [inferenceEligibility, setInferenceEligibility] = useState<InferenceEligibility | null>(null);
@@ -283,6 +290,7 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
     try {
       const savedSkills = await appService.updateButlerSkills(nextSkills);
       setSkills({ ...DEFAULT_SKILLS, ...savedSkills, enabledSkillIds: savedSkills.enabledSkillIds ?? [] });
+      await notifySkillScopeUpdated('butler', null);
       setSettingsSavedMessage('Skill 配置已保存');
       setTimeout(() => setSettingsSavedMessage(''), MESSAGE_TIMEOUT_MS);
     } catch {
@@ -348,6 +356,7 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
       });
       const items = await skillService.listAllRoleSkills();
       setRegistrySkills(items);
+      await notifySkillScopeUpdated('all', null);
       if (result.entry) {
         setSkills(prev => ({
           ...prev,
@@ -380,6 +389,7 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
     setSettingsSavedMessage('');
     try {
       await skillService.removeFromRole(skillId, BUTLER_SCOPE_ID);
+      await notifySkillScopeUpdated('butler', null);
       const items = await skillService.listAllRoleSkills();
       setRegistrySkills(items);
       setSkills(prev => ({
@@ -431,6 +441,7 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
       });
       const items = await skillService.listAllRoleSkills();
       setRegistrySkills(items);
+      await notifySkillScopeUpdated('all', null);
       if (result.entry) {
         const entry = result.entry;
         const refreshedRoles = await roleService.list();

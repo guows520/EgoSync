@@ -8,7 +8,7 @@ use crate::models::skill::{
     DiscoverOpencodeSkillsResult, ImportCustomSkillInput, ImportCustomSkillResult,
     ImportOpencodeSkillInput, ImportOpencodeSkillResult, OpencodeSkillCandidate,
     OpencodeSkillSkippedSummary, PreviewCustomSkillInput, SkillDuplicateInfo, SkillImportPreview,
-    SkillRegistryEntry, SkillRoleScope, BUTLER_SCOPE_ID, SOURCE_TYPE_CUSTOM, SOURCE_TYPE_OPENCODE,
+    SkillRegistryEntry, SelectableSkill, SkillRoleScope, BUTLER_SCOPE_ID, SOURCE_TYPE_CUSTOM, SOURCE_TYPE_OPENCODE,
 };
 
 const SKILL_FILE_NAME: &str = "SKILL.md";
@@ -93,7 +93,107 @@ pub async fn resolve_enabled(
     Ok(entry)
 }
 
-/// Story 10.1: 返回当前 Agent 作用域下已添加且启用的 Skill 列表（AC-1）。
+const META_FIND_SKILLS_KEY: &str = "meta:find-skills";
+const META_SKILL_CREATOR_KEY: &str = "meta:skill-creator";
+
+fn registry_selectable(entry: SkillRegistryEntry) -> SelectableSkill {
+    SelectableSkill {
+        key: format!("registry:{}", entry.id),
+        name: entry.name,
+        description: entry.description,
+        kind: "registry".to_string(),
+        source_type: entry.source_type,
+    }
+}
+
+fn meta_selectable(key: &str, name: &str, description: &str) -> SelectableSkill {
+    SelectableSkill {
+        key: key.to_string(),
+        name: name.to_string(),
+        description: description.to_string(),
+        kind: "meta".to_string(),
+        source_type: "meta".to_string(),
+    }
+}
+
+async fn scope_meta_flags(pool: &SqlitePool, role_id: Option<&str>) -> Result<(bool, bool), AppError> {
+    match role_id {
+        None => {
+            let skills = crate::services::butler_config::get_butler_skills(pool)
+                .await
+                .map_err(|e| AppError::DbError(format!("读取管家 Skill 配置失败: {}", e)))?;
+            Ok((skills.find_skills, skills.skill_creator))
+        }
+        Some(rid) => {
+            let role = crate::db::roles::get_role(pool, rid)
+                .await
+                .map_err(|e| AppError::DbError(format!("查询角色失败: {}", e)))?;
+            let skills = crate::services::role_config::skills_from_config(&role.skills_config);
+            Ok((skills.find_skills, skills.skill_creator))
+        }
+    }
+}
+
+pub async fn list_selectable(
+    pool: &SqlitePool,
+    role_id: Option<&str>,
+) -> Result<Vec<SelectableSkill>, AppError> {
+    let mut items = list_enabled(pool, role_id)
+        .await?
+        .into_iter()
+        .map(registry_selectable)
+        .collect::<Vec<_>>();
+    let (find_skills, skill_creator) = scope_meta_flags(pool, role_id).await?;
+    if find_skills {
+        items.push(meta_selectable(
+            META_FIND_SKILLS_KEY,
+            "find-skills",
+            "发现并推荐适合当前任务的 Skill。",
+        ));
+    }
+    if skill_creator {
+        items.push(meta_selectable(
+            META_SKILL_CREATOR_KEY,
+            "skill-creator",
+            "创建或扩展当前 Agent 需要的新 Skill。",
+        ));
+    }
+    Ok(items)
+}
+
+pub async fn resolve_selectable(
+    pool: &SqlitePool,
+    role_id: Option<&str>,
+    key: &str,
+) -> Result<SelectableSkill, AppError> {
+    if let Some(skill_id) = key.strip_prefix("registry:") {
+        if skill_id.is_empty() {
+            return Err(AppError::SkillNotFound(key.to_string()));
+        }
+        return resolve_enabled(pool, role_id, skill_id).await.map(registry_selectable);
+    }
+
+    let (find_skills, skill_creator) = scope_meta_flags(pool, role_id).await?;
+    match key {
+        META_FIND_SKILLS_KEY if find_skills => Ok(meta_selectable(
+            META_FIND_SKILLS_KEY,
+            "find-skills",
+            "发现并推荐适合当前任务的 Skill。",
+        )),
+        META_SKILL_CREATOR_KEY if skill_creator => Ok(meta_selectable(
+            META_SKILL_CREATOR_KEY,
+            "skill-creator",
+            "创建或扩展当前 Agent 需要的新 Skill。",
+        )),
+        META_FIND_SKILLS_KEY | META_SKILL_CREATOR_KEY => Err(AppError::SkillDisabled(format!(
+            "Skill {} 未在当前作用域启用",
+            key
+        ))),
+        _ => Err(AppError::SkillNotFound(key.to_string())),
+    }
+}
+
+// Story 10.1: 返回当前 Agent 作用域下已添加且启用的 Skill 列表（AC-1）。
 /// 管家分支返回 `butler.enabled_skill_ids` 对应的 Skill；角色分支返回
 /// 角色绑定与 `enabledSkillIds` 交集对应的 Skill。前端候选查询复用此方法，
 /// 不自行拼装集合（后端是授权边界）。
@@ -2163,4 +2263,76 @@ mod tests {
         let role = list_enabled(&pool, Some("role-1")).await.unwrap();
         assert!(role.is_empty());
     }
+
+    /// WHY: `@` 候选必须由同一后端授权模型同时组合普通 registry Skill 与已启用 meta Skill，
+    /// 否则前端即使显示 meta 项也会与发送时权限真源分叉。
+    #[tokio::test]
+    async fn list_selectable_combines_registry_and_enabled_meta_for_current_scope() {
+        let pool = setup_test_db().await;
+        let skill = skills::create_skill(
+            &pool,
+            "butler-report",
+            "管家报告",
+            "managed/butler-report/SKILL.md",
+            "hash-butler-report",
+        )
+        .await
+        .unwrap();
+        crate::services::butler_config::set_butler_skills_config(
+            &pool,
+            &crate::models::role::ButlerSkillsConfig {
+                find_skills: true,
+                skill_creator: false,
+                enabled_skill_ids: vec![skill.id.clone()],
+            },
+        )
+        .await
+        .unwrap();
+
+        let items = list_selectable(&pool, None).await.unwrap();
+        assert!(items.iter().any(|item| item.key == format!("registry:{}", skill.id)));
+        assert!(items.iter().any(|item| item.key == META_FIND_SKILLS_KEY));
+        assert!(!items.iter().any(|item| item.key == META_SKILL_CREATOR_KEY));
+    }
+
+    /// WHY: 候选列表不是授权边界；配置在选择后被关闭时，统一 key 必须在 Runtime 调用前重新拒绝。
+    #[tokio::test]
+    async fn resolve_selectable_authorizes_registry_and_meta_keys_against_current_scope() {
+        let pool = setup_test_db().await;
+        let skill = skills::create_skill(
+            &pool,
+            "butler-report",
+            "管家报告",
+            "managed/butler-report/SKILL.md",
+            "hash-butler-report",
+        )
+        .await
+        .unwrap();
+        crate::services::butler_config::set_butler_skills_config(
+            &pool,
+            &crate::models::role::ButlerSkillsConfig {
+                find_skills: true,
+                skill_creator: false,
+                enabled_skill_ids: vec![skill.id.clone()],
+            },
+        )
+        .await
+        .unwrap();
+
+        let registry = resolve_selectable(&pool, None, &format!("registry:{}", skill.id))
+            .await
+            .unwrap();
+        assert_eq!(registry.name, "butler-report");
+        let meta = resolve_selectable(&pool, None, META_FIND_SKILLS_KEY).await.unwrap();
+        assert_eq!(meta.name, "find-skills");
+        assert!(matches!(
+            resolve_selectable(&pool, None, META_SKILL_CREATOR_KEY).await.unwrap_err(),
+            AppError::SkillDisabled(_)
+        ));
+        assert!(matches!(
+            resolve_selectable(&pool, None, "meta:forged").await.unwrap_err(),
+            AppError::SkillNotFound(_)
+        ));
+    }
+
 }

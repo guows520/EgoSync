@@ -2316,7 +2316,7 @@ async fn try_run_opencode_stream(
     delegate_bridge: crate::services::delegate_bridge::DelegateBridge,
     already_retried_mcp_session: bool,
     already_retried_skill_load: bool,
-    selected_skill: Option<&crate::models::skill::SkillRegistryEntry>,
+    selected_skill: Option<&crate::models::skill::SelectableSkill>,
 ) -> Result<(), OpencodeStreamAttemptError> {
     let disabled_message = if let Some(rid) = role_id {
         crate::db::roles::get_role(main_pool, rid)
@@ -2486,7 +2486,7 @@ async fn try_run_opencode_stream(
                     summary: format!("显式使用 Skill：{}", entry.name),
                     raw_json: serde_json::json!({
                         "input": { "name": entry.name },
-                        "skillId": entry.id,
+                        "skillKey": entry.key,
                         "skillName": entry.name,
                         "scope": role_id.unwrap_or("butler"),
                         "source": "explicit"
@@ -2496,7 +2496,7 @@ async fn try_run_opencode_stream(
             )
             .await;
         }
-        tracing::info!(skill_id = %entry.id, skill_name = %entry.name, scope = ?role_id,
+        tracing::info!(skill_key = %entry.key, skill_name = %entry.name, scope = ?role_id,
             "explicit Skill snapshot accepted; using send_command");
     }
 
@@ -3231,8 +3231,8 @@ pub async fn run_stream(
     event_router: Arc<crate::services::event_router::EventRouter>,
     delegate_bridge: crate::services::delegate_bridge::DelegateBridge,
     working_directory: Option<String>,
-    // Story 10.1: 用户显式指定的 Skill Registry ID，None 走普通消息路径（AC-6）
-    selected_skill: Option<crate::models::skill::SkillRegistryEntry>,
+    // Story 10.1: 用户显式指定并已授权解析的 Skill，None 走普通消息路径（AC-6）
+    selected_skill: Option<crate::models::skill::SelectableSkill>,
 ) -> Result<(), AppError> {
     // onboarding 直接走 LLM provider，跳过 opencode stream。
     // opencode stream 用的是管家 agent 配置（butler system prompt），

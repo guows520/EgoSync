@@ -94,6 +94,13 @@ export function SettingsTab({
   const [pendingMcpId, setPendingMcpId] = useState<string | null>(null);
   const [settingsSavedMessage, setSettingsSavedMessage] = useState('');
   const [error, setError] = useState('');
+  const notifySkillScopeUpdated = async (scopeKind: 'role' | 'butler' | 'all', ownerId: string | null) => {
+    try {
+      await skillService.notifyScopeUpdated({ scopeKind, ownerId });
+    } catch (e) {
+      setError(toFriendlyError(e, 'Skill 已更新，但聊天候选刷新失败，请切换页面或稍后重试'));
+    }
+  };
   const activeRoleIdRef = useRef(role.id);
 
   useEffect(() => {
@@ -265,6 +272,7 @@ export function SettingsTab({
     setSettingsSavedMessage('');
     try {
       await skillService.delete(skillId);
+      await notifySkillScopeUpdated('all', null);
     } catch (e) {
       setError(toFriendlyError(e, '删除自定义 Skill 失败，请稍后重试'));
       setPendingSkill(null);
@@ -312,6 +320,7 @@ export function SettingsTab({
       });
       onUpdateRole?.(updated);
       setSkills(parseSkillsConfig(updated.skillsConfig));
+      await notifySkillScopeUpdated('role', role.id);
       setSettingsSavedMessage('Skill 配置已保存');
       setTimeout(() => setSettingsSavedMessage(''), MESSAGE_TIMEOUT_MS);
       return true;
@@ -362,6 +371,7 @@ export function SettingsTab({
       });
       const items = await skillService.listForRole(role.id);
       setRegistrySkills(items);
+      await notifySkillScopeUpdated('all', null);
       if (result.entry) {
         const refreshedRoles = await roleService.list();
         refreshedRoles.forEach(item => onUpdateRole?.(item));
@@ -438,6 +448,7 @@ export function SettingsTab({
       });
       const items = await skillService.listForRole(role.id);
       setRegistrySkills(items);
+      await notifySkillScopeUpdated('all', null);
       if (result.entry) {
         const refreshedRoles = await roleService.list();
         refreshedRoles.forEach(item => onUpdateRole?.(item));
@@ -474,6 +485,7 @@ export function SettingsTab({
     setSettingsSavedMessage('');
     try {
       await skillService.removeFromRole(skillId, role.id);
+      await notifySkillScopeUpdated('role', role.id);
       const items = await skillService.listForRole(role.id);
       setRegistrySkills(items);
       const refreshedRoles = await roleService.list();

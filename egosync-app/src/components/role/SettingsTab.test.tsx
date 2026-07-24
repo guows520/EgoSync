@@ -30,6 +30,7 @@ vi.mock('../../services/roleService', () => ({
 
 vi.mock('../../services/skillService', () => ({
   skillService: {
+    notifyScopeUpdated: vi.fn().mockResolvedValue(undefined),
     listRegistry: vi.fn(),
     listForRole: vi.fn(),
     pickCustomDirectory: vi.fn(),
@@ -574,6 +575,7 @@ describe('SettingsTab role CRUD actions', () => {
     expect(onUpdateRole).toHaveBeenCalledWith(refreshedRole);
     expect(onUpdateRole).toHaveBeenCalledWith(secondRole);
     expect(await screen.findByText('自定义 Skill 已删除')).toBeInTheDocument();
+    expect(skillService.notifyScopeUpdated).toHaveBeenCalledWith({ scopeKind: 'all', ownerId: null });
   });
 
   it('自定义 Skill 删除失败时保留列表且不显示成功提示', async () => {
@@ -680,6 +682,7 @@ describe('SettingsTab role CRUD actions', () => {
         roleScope: { allRoles: false, roleIds: ['role-1', '__butler__'] },
       });
     });
+    expect(skillService.notifyScopeUpdated).toHaveBeenCalledWith({ scopeKind: 'all', ownerId: null });
   });
 
   it('自定义 Skill 描述不使用原生 title，并提供受限宽度的悬浮全文', async () => {

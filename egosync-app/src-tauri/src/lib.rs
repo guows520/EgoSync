@@ -354,7 +354,7 @@ pub fn run() {
             commands::skill::skill_list_registry,
             commands::skill::skill_list_for_role,
             commands::skill::skill_list_all_role_skills,
-            commands::skill::skill_list_enabled_for_scope,
+            commands::skill::skill_list_selectable_for_scope,
             commands::skill::skill_pick_custom_directory,
             commands::skill::skill_preview_custom,
             commands::skill::skill_discover_opencode,

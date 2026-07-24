@@ -31,6 +31,7 @@ vi.mock('../../services/roleService', () => ({
 
 vi.mock('../../services/skillService', () => ({
   skillService: {
+    notifyScopeUpdated: vi.fn().mockResolvedValue(undefined),
     listAllRoleSkills: vi.fn(),
     pickCustomDirectory: vi.fn(),
     previewCustom: vi.fn(),
@@ -409,6 +410,7 @@ describe('ButlerSettingsContent', () => {
     await waitFor(() => {
       expect(skillService.removeFromRole).toHaveBeenCalledWith('skill-opencode', '__butler__');
     });
+    expect(skillService.notifyScopeUpdated).toHaveBeenCalledWith({ scopeKind: 'butler', ownerId: null });
     expect(await screen.findByText('opencode Skill 已取消导入')).toBeInTheDocument();
     expect(screen.getAllByText('writer').length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: /收起/ })).toBeInTheDocument();
@@ -554,6 +556,7 @@ describe('ButlerSettingsContent', () => {
         roleScope: { allRoles: false, roleIds: ['__butler__', 'role-1'] },
       });
     });
+    expect(skillService.notifyScopeUpdated).toHaveBeenCalledWith({ scopeKind: 'all', ownerId: null });
   });
 
   describe('推断价值观区域', () => {

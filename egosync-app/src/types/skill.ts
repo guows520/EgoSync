@@ -14,6 +14,22 @@ export interface SkillRegistryEntry {
   updatedAt: string;
 }
 
+
+export type SelectableSkillKey = `registry:${string}` | 'meta:find-skills' | 'meta:skill-creator';
+
+export interface SelectableSkill {
+  key: SelectableSkillKey;
+  name: string;
+  description: string;
+  kind: 'registry' | 'meta';
+  sourceType: 'custom' | 'opencode' | 'meta';
+}
+
+export interface SkillScopeUpdatedPayload {
+  scopeKind: 'role' | 'butler' | 'all';
+  ownerId: string | null;
+}
+
 export interface SkillDuplicateInfo {
   kind: 'contentHash' | 'name';
   existing: SkillRegistryEntry;

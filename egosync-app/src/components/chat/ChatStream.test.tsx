@@ -5,7 +5,7 @@ import { chatService } from '../../services/chatService';
 import { useTauriEvent } from '../../hooks/useTauriEvent';
 import type { ChatMessage, StreamPayload } from '../../types/chat';
 import type { Role } from '../../types/role';
-import type { SkillRegistryEntry } from '../../types/skill';
+import type { SelectableSkill, SkillScopeUpdatedPayload } from '../../types/skill';
 
 vi.mock('../../services/chatService', () => ({
   chatService: {
@@ -29,7 +29,7 @@ vi.mock('../../hooks/useTauriEvent', () => ({
 
 vi.mock('../../services/skillService', () => ({
   skillService: {
-    listEnabledForScope: vi.fn().mockResolvedValue([]),
+    listSelectableForScope: vi.fn().mockResolvedValue([]),
   },
 }));
 
@@ -2097,23 +2097,23 @@ describe('ChatStream Skill 选择 (Story 10.1)', () => {
     vi.mocked(chatService.getRoleConversation).mockResolvedValue(roleConv);
   });
 
-  /// AC-1: 角色切换时调用 listEnabledForScope 加载候选 Skill
-  it('角色切换时调用 listEnabledForScope 加载候选', async () => {
+  /// AC-1: 角色切换时调用 listSelectableForScope 加载候选 Skill
+  it('角色切换时调用 listSelectableForScope 加载候选', async () => {
     const { skillService } = await import('../../services/skillService');
-    vi.mocked(skillService.listEnabledForScope).mockResolvedValue([]);
+    vi.mocked(skillService.listSelectableForScope).mockResolvedValue([]);
 
     render(<ChatStream role={baseRole} />);
-    await waitFor(() => expect(skillService.listEnabledForScope).toHaveBeenCalledWith('role-1'));
+    await waitFor(() => expect(skillService.listSelectableForScope).toHaveBeenCalledWith('role-1'));
   });
 
   /// AC-3: 选中 Skill 后发送消息携带 selectedSkillId
   it('选中 Skill 后 sendMessage 携带 selectedSkillId', async () => {
     const { skillService } = await import('../../services/skillService');
-    const mockSkill: SkillRegistryEntry = {
-      id: 'skill-ppt', name: 'ppt-generation', description: '生成PPT',
-      sourceType: 'opencode', managedPath: '', contentHash: '', createdAt: '', updatedAt: '',
+    const mockSkill: SelectableSkill = {
+      key: 'registry:skill-ppt', name: 'ppt-generation', description: '生成PPT',
+      kind: 'registry', sourceType: 'opencode',
     };
-    vi.mocked(skillService.listEnabledForScope).mockResolvedValue([mockSkill]);
+    vi.mocked(skillService.listSelectableForScope).mockResolvedValue([mockSkill]);
     vi.mocked(chatService.sendMessage).mockResolvedValue(chatMessage({ id: 'user-1', content: '帮我生成PPT' }));
 
     render(<ChatStream role={null} />);
@@ -2127,6 +2127,74 @@ describe('ChatStream Skill 选择 (Story 10.1)', () => {
 
     await waitFor(() => expect(chatService.sendMessage).toHaveBeenCalled());
     const callArgs = vi.mocked(chatService.sendMessage).mock.calls[0][0];
-    expect(callArgs.selectedSkillId).toBe('skill-ppt');
+    expect(callArgs.selectedSkillId).toBe('registry:skill-ppt');
+  });
+
+  /// 候选刷新后必须清除失效选择，避免旧 key 在用户不知情时继续提交。
+  it('当前 scope 刷新移除已选 Skill 时清空选择', async () => {
+    const { skillService } = await import('../../services/skillService');
+    const mockSkill: SelectableSkill = {
+      key: 'meta:find-skills', name: 'find-skills', description: '发现 Skill',
+      kind: 'meta', sourceType: 'meta',
+    };
+    vi.mocked(skillService.listSelectableForScope).mockResolvedValueOnce([mockSkill]).mockResolvedValueOnce([]);
+    render(<ChatStream role={null} />);
+    const input = await screen.findByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...');
+    await waitFor(() => expect(skillService.listSelectableForScope).toHaveBeenCalledTimes(1));
+    fireEvent.change(input, { target: { value: '@' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(screen.getByText('find-skills')).toBeInTheDocument();
+
+    const listener = vi.mocked(useTauriEvent).mock.calls.find(call => call[0] === 'skill-scope-updated')?.[1] as ((payload: SkillScopeUpdatedPayload) => void) | undefined;
+    act(() => listener?.({ scopeKind: 'butler', ownerId: null }));
+    await waitFor(() => expect(screen.queryByText('find-skills')).not.toBeInTheDocument());
+  });
+
+  /// 当前聊天保持挂载时，只有匹配 scope 的配置通知才应刷新候选，避免跨角色污染。
+  it('all scope 更新通知会刷新当前 role 的候选 Skill', async () => {
+    const { skillService } = await import('../../services/skillService');
+    vi.mocked(skillService.listSelectableForScope).mockResolvedValue([]);
+    render(<ChatStream role={baseRole} />);
+    await waitFor(() => expect(skillService.listSelectableForScope).toHaveBeenCalledTimes(1));
+
+    const listener = vi.mocked(useTauriEvent).mock.calls.find(call => call[0] === 'skill-scope-updated')?.[1] as ((payload: SkillScopeUpdatedPayload) => void) | undefined;
+    act(() => listener?.({ scopeKind: 'all', ownerId: null }));
+    await waitFor(() => expect(skillService.listSelectableForScope).toHaveBeenCalledTimes(2));
+  });
+
+  it('候选 Skill 刷新失败时保留现有候选并显示可恢复错误', async () => {
+    const { skillService } = await import('../../services/skillService');
+    const mockSkill: SelectableSkill = {
+      key: 'meta:find-skills', name: 'find-skills', description: '发现 Skill',
+      kind: 'meta', sourceType: 'meta',
+    };
+    vi.mocked(skillService.listSelectableForScope)
+      .mockResolvedValueOnce([mockSkill])
+      .mockRejectedValueOnce(new Error('refresh failed'));
+    render(<ChatStream role={null} />);
+    const input = await screen.findByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...');
+    await waitFor(() => expect(skillService.listSelectableForScope).toHaveBeenCalledTimes(1));
+    fireEvent.change(input, { target: { value: '@' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(screen.getByText('find-skills')).toBeInTheDocument();
+
+    const listener = vi.mocked(useTauriEvent).mock.calls.find(call => call[0] === 'skill-scope-updated')?.[1] as ((payload: SkillScopeUpdatedPayload) => void) | undefined;
+    act(() => listener?.({ scopeKind: 'butler', ownerId: null }));
+    expect(await screen.findByText('加载可用 Skill 失败，请切换页面或稍后重试')).toBeInTheDocument();
+    expect(screen.getByText('find-skills')).toBeInTheDocument();
+  });
+
+  it('仅响应当前 role scope 的 Skill 更新通知', async () => {
+    const { skillService } = await import('../../services/skillService');
+    vi.mocked(skillService.listSelectableForScope).mockResolvedValue([]);
+    render(<ChatStream role={baseRole} />);
+    await waitFor(() => expect(skillService.listSelectableForScope).toHaveBeenCalledTimes(1));
+
+    const listener = vi.mocked(useTauriEvent).mock.calls.find(call => call[0] === 'skill-scope-updated')?.[1] as ((payload: SkillScopeUpdatedPayload) => void) | undefined;
+    expect(listener).toBeDefined();
+    act(() => listener?.({ scopeKind: 'role', ownerId: 'role-2' }));
+    expect(skillService.listSelectableForScope).toHaveBeenCalledTimes(1);
+    act(() => listener?.({ scopeKind: 'role', ownerId: 'role-1' }));
+    await waitFor(() => expect(skillService.listSelectableForScope).toHaveBeenCalledTimes(2));
   });
 });

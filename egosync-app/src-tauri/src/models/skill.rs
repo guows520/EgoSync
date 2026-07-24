@@ -26,6 +26,16 @@ pub struct SkillRegistryEntry {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct SelectableSkill {
+    pub key: String,
+    pub name: String,
+    pub description: String,
+    pub kind: String,
+    pub source_type: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct SkillImportPreview {
     pub name: String,
     pub description: String,

@@ -1,7 +1,7 @@
 import { useState, useRef, useMemo, useEffect } from 'react';
 import { Play, Square, X, AtSign } from 'lucide-react';
 import { cn } from '../../lib/utils';
-import type { SkillRegistryEntry } from '../../types/skill';
+import type { SelectableSkill } from '../../types/skill';
 
 interface ChatInputProps {
   onSend: (content: string) => Promise<boolean>;
@@ -10,9 +10,9 @@ interface ChatInputProps {
   disabled?: boolean;
   placeholder?: string;
   useRoleAccent?: boolean;
-  availableSkills?: SkillRegistryEntry[];
-  selectedSkillId?: string | null;
-  onSelectedSkillChange?: (skillId: string | null) => void;
+  availableSkills?: SelectableSkill[];
+  selectedSkillKey?: string | null;
+  onSelectedSkillChange?: (skillKey: string | null) => void;
 }
 
 export function ChatInput({
@@ -23,13 +23,13 @@ export function ChatInput({
   placeholder,
   useRoleAccent,
   availableSkills = [],
-  selectedSkillId,
+  selectedSkillKey,
   onSelectedSkillChange,
 }: ChatInputProps) {
   const [input, setInput] = useState('');
-  const [internalSelectedSkillId, setInternalSelectedSkillId] = useState<string | null>(null);
-  const effectiveSelectedSkillId = selectedSkillId !== undefined ? selectedSkillId : internalSelectedSkillId;
-  const selectedSkill = availableSkills.find(skill => skill.id === effectiveSelectedSkillId) ?? null;
+  const [internalSelectedSkillKey, setInternalSelectedSkillKey] = useState<string | null>(null);
+  const effectiveSelectedSkillKey = selectedSkillKey !== undefined ? selectedSkillKey : internalSelectedSkillKey;
+  const selectedSkill = availableSkills.find(skill => skill.key === effectiveSelectedSkillKey) ?? null;
   const [showSkillPicker, setShowSkillPicker] = useState(false);
   const [skillQuery, setSkillQuery] = useState('');
   const [activeIndex, setActiveIndex] = useState(0);
@@ -48,13 +48,13 @@ export function ChatInput({
   }, [showSkillPicker, filteredSkills.length]);
 
   const clearSkillSelection = () => {
-    setInternalSelectedSkillId(null);
+    setInternalSelectedSkillKey(null);
     onSelectedSkillChange?.(null);
   };
 
-  const selectSkill = (skill: SkillRegistryEntry) => {
-    setInternalSelectedSkillId(skill.id);
-    onSelectedSkillChange?.(skill.id);
+  const selectSkill = (skill: SelectableSkill) => {
+    setInternalSelectedSkillKey(skill.key);
+    onSelectedSkillChange?.(skill.key);
     setShowSkillPicker(false);
     setSkillQuery('');
     // Remove the @trigger and query from input
@@ -151,6 +151,7 @@ export function ChatInput({
         </div>
       )}
 
+      <div className="relative">
       <input
         ref={inputRef}
         type="text"
@@ -186,7 +187,7 @@ export function ChatInput({
           ) : (
             filteredSkills.map((skill, index) => (
               <div
-                key={skill.id}
+                key={skill.key}
                 id={`skill-option-${index}`}
                 role="option"
                 aria-selected={index === activeIndex}
@@ -234,6 +235,7 @@ export function ChatInput({
           <Play size={16} className="ml-0.5" fill="currentColor" />
         </button>
       )}
+      </div>
     </div>
   );
 }

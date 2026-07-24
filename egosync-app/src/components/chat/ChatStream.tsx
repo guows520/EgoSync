@@ -11,7 +11,7 @@ import { TaskDecompositionCard } from '../butler/TaskDecompositionCard';
 import { getRoleIconComponent, normalizeColorHex } from '../../lib/roleIcons';
 import type { ChatMessage, StreamPayload, Conversation, TitleUpdatedPayload, SourceNavigationTarget, MessageProcessEvent, ExecutionTraceBlock, ExecutionTraceDetail } from '../../types/chat';
 import type { Role } from '../../types/role';
-import type { SkillRegistryEntry } from '../../types/skill';
+import type { SelectableSkill, SkillScopeUpdatedPayload } from '../../types/skill';
 import type { SuggestionWithRole } from '../../types/suggestion';
 import type { TaskDecompositionProposal } from '../../types/taskDecomposition';
 
@@ -550,12 +550,14 @@ export function ChatStream({
   const [pendingScrollMessageId, setPendingScrollMessageId] = useState<string | null>(null);
   const [workingDirectory, setWorkingDirectory] = useState<string | null>(null);
   // Story 10.1: Skill 选择状态
-  const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null);
+  const [selectedSkillKey, setSelectedSkillKey] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
-  const [availableSkills, setAvailableSkills] = useState<SkillRegistryEntry[]>([]);
+  const [availableSkills, setAvailableSkills] = useState<SelectableSkill[]>([]);
+  const [skillLoadError, setSkillLoadError] = useState<string | null>(null);
   const [processEventsByMessageId, setProcessEventsByMessageId] = useState<Record<string, MessageProcessEvent[]>>({});
   const [suppressedProcessMessageIds, setSuppressedProcessMessageIds] = useState<Set<string>>(() => new Set());
   const processEventsRequestRef = useRef<Record<string, number>>({});
+  const skillLoadGenerationRef = useRef(0);
 
   const updateStreamBubbles = useCallback((updater: (prev: StreamBubbleState[]) => StreamBubbleState[]) => {
     const next = updater(streamBubblesRef.current);
@@ -984,27 +986,34 @@ export function ChatStream({
     }
   }, [loadMessageProcessEvents, messages, processEventsByMessageId, suppressedProcessMessageIds]);
 
-  // Story 10.1: 角色切换时重新加载候选 Skill
-  useEffect(() => {
-    let cancelled = false;
-    setSelectedSkillId(null);
-    setAvailableSkills([]);
-    const loadSkills = async () => {
-      try {
-        const skills = await skillService.listEnabledForScope(roleId ?? undefined);
-        if (!cancelled) {
-          setAvailableSkills(skills);
-        }
-      } catch (e) {
-        console.error('加载候选 Skill 失败:', e);
-        if (!cancelled) {
-          setAvailableSkills([]);
-        }
-      }
-    };
-    void loadSkills();
-    return () => { cancelled = true; };
+  const reloadAvailableSkills = useCallback(async () => {
+    const generation = ++skillLoadGenerationRef.current;
+    try {
+      const skills = await skillService.listSelectableForScope(roleId ?? undefined);
+      if (generation !== skillLoadGenerationRef.current) return;
+      setAvailableSkills(skills);
+      setSkillLoadError(null);
+      setSelectedSkillKey(current => current && skills.some(skill => skill.key === current) ? current : null);
+    } catch (e) {
+      console.error('加载候选 Skill 失败:', e);
+      if (generation !== skillLoadGenerationRef.current) return;
+      setSkillLoadError('加载可用 Skill 失败，请切换页面或稍后重试');
+    }
   }, [roleId]);
+
+  useEffect(() => {
+    setSelectedSkillKey(null);
+    setAvailableSkills([]);
+    void reloadAvailableSkills();
+  }, [reloadAvailableSkills]);
+
+  useTauriEvent<SkillScopeUpdatedPayload>('skill-scope-updated', (payload) => {
+    const matchesScope = payload.scopeKind === 'all' || (roleId
+      ? payload.scopeKind === 'role' && payload.ownerId === roleId
+      : payload.scopeKind === 'butler');
+    if (matchesScope) void reloadAvailableSkills();
+  }, [roleId, reloadAvailableSkills]);
+
 
   const handleSend = async (content: string): Promise<boolean> => {
     if (!conversation) return false;
@@ -1040,7 +1049,7 @@ export function ChatStream({
         roleId: roleId ?? undefined,
         content,
         workingDirectory: workingDirectory ?? undefined,
-        selectedSkillId: selectedSkillId ?? undefined,
+        selectedSkillId: selectedSkillKey ?? undefined,
       });
 
       if (userMsg.role === 'assistant') {
@@ -1241,11 +1250,11 @@ export function ChatStream({
             useRoleAccent={Boolean(role)}
             placeholder={role ? `跟 ${role.name} 说点什么...` : undefined}
             availableSkills={availableSkills}
-            selectedSkillId={selectedSkillId}
-            onSelectedSkillChange={setSelectedSkillId}
+            selectedSkillKey={selectedSkillKey}
+            onSelectedSkillChange={setSelectedSkillKey}
           />
-          {sendError && (
-            <div role="alert" className="text-sm text-red-600 dark:text-red-400">{sendError}</div>
+          {(sendError || skillLoadError) && (
+            <div role="alert" className="text-sm text-red-600 dark:text-red-400">{sendError || skillLoadError}</div>
           )}
           <div className="flex items-center gap-2 pl-1 text-[11px] text-slate-400 dark:text-slate-500">
             <button

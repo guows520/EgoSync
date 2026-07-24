@@ -9,7 +9,7 @@ use crate::error::AppError;
 use crate::models::skill::{
     DiscoverOpencodeSkillsResult, ImportCustomSkillInput, ImportCustomSkillResult,
     ImportOpencodeSkillInput, ImportOpencodeSkillResult, PickCustomSkillDirectoryResult,
-    PreviewCustomSkillInput, SkillImportPreview, SkillRegistryEntry, BUTLER_SCOPE_ID,
+    PreviewCustomSkillInput, SkillImportPreview, SkillRegistryEntry, SelectableSkill, BUTLER_SCOPE_ID,
 };
 use crate::services::agent_config::AgentConfigService;
 use crate::services::sidecar::SidecarManager;
@@ -37,11 +37,11 @@ pub async fn skill_list_all_role_skills(
 }
 
 #[tauri::command]
-pub async fn skill_list_enabled_for_scope(
+pub async fn skill_list_selectable_for_scope(
     role_id: Option<String>,
     pool: State<'_, DbPool>,
-) -> Result<Vec<SkillRegistryEntry>, AppError> {
-    crate::services::skill_registry::list_enabled(&pool, role_id.as_deref()).await
+) -> Result<Vec<SelectableSkill>, AppError> {
+    crate::services::skill_registry::list_selectable(&pool, role_id.as_deref()).await
 }
 
 #[tauri::command]

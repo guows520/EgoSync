@@ -222,11 +222,11 @@ pub async fn chat_send_message(
     // Explicit Skill validation is a command-level gate: no conversation, lock,
     // runtime, session, or subscription side effect may happen before it succeeds.
     let selected_skill = match request.selected_skill_id.as_deref() {
-        Some(skill_id) => Some(
-            crate::services::skill_registry::resolve_enabled(
+        Some(skill_key) => Some(
+            crate::services::skill_registry::resolve_selectable(
                 &main_pool,
                 request.role_id.as_deref(),
-                skill_id,
+                skill_key,
             )
             .await?,
         ),

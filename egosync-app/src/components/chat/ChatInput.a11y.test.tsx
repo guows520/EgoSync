@@ -1,11 +1,11 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ChatInput } from './ChatInput';
-import type { SkillRegistryEntry } from '../../types/skill';
+import type { SelectableSkill } from '../../types/skill';
 
-const mockSkills: SkillRegistryEntry[] = [
-  { id: 'skill-1', name: 'ppt-generation', description: '生成PPT', sourceType: 'opencode', managedPath: '', contentHash: '', createdAt: '', updatedAt: '' },
-  { id: 'skill-2', name: 'pdf-to-markdown', description: 'PDF转MD', sourceType: 'opencode', managedPath: '', contentHash: '', createdAt: '', updatedAt: '' },
+const mockSkills: SelectableSkill[] = [
+  { key: 'registry:skill-1', name: 'ppt-generation', description: '生成PPT', kind: 'registry', sourceType: 'opencode' },
+  { key: 'registry:skill-2', name: 'pdf-to-markdown', description: 'PDF转MD', kind: 'registry', sourceType: 'opencode' },
 ];
 
 describe('ChatInput 无障碍', () => {

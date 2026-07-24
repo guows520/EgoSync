@@ -1,12 +1,12 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ChatInput } from './ChatInput';
-import type { SkillRegistryEntry } from '../../types/skill';
+import type { SelectableSkill } from '../../types/skill';
 
-const mockSkills: SkillRegistryEntry[] = [
-  { id: 'skill-1', name: 'ppt-generation', description: '生成PPT', sourceType: 'opencode', managedPath: '', contentHash: '', createdAt: '', updatedAt: '' },
-  { id: 'skill-2', name: 'pdf-to-markdown', description: 'PDF转MD', sourceType: 'opencode', managedPath: '', contentHash: '', createdAt: '', updatedAt: '' },
-  { id: 'skill-3', name: 'code-review', description: '代码审查', sourceType: 'custom', managedPath: '', contentHash: '', createdAt: '', updatedAt: '' },
+const mockSkills: SelectableSkill[] = [
+  { key: 'registry:skill-1', name: 'ppt-generation', description: '生成PPT', kind: 'registry', sourceType: 'opencode' },
+  { key: 'registry:skill-2', name: 'pdf-to-markdown', description: 'PDF转MD', kind: 'registry', sourceType: 'opencode' },
+  { key: 'registry:skill-3', name: 'code-review', description: '代码审查', kind: 'registry', sourceType: 'custom' },
 ];
 
 describe('ChatInput role accent', () => {
@@ -74,7 +74,7 @@ describe('ChatInput @Skill 选择器', () => {
     const input = screen.getByRole('combobox');
     fireEvent.change(input, { target: { value: '帮我做 @' } });
     fireEvent.keyDown(input, { key: 'Enter' });
-    expect(onSelectedSkillChange).toHaveBeenCalledWith('skill-1');
+    expect(onSelectedSkillChange).toHaveBeenCalledWith('registry:skill-1');
     expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
   });
 
@@ -93,7 +93,20 @@ describe('ChatInput @Skill 选择器', () => {
     expect(screen.queryByText('ppt-generation')).not.toBeInTheDocument();
   });
 
-  /// AC-7: 发送后清空 selectedSkillId
+  /// 选中标签会增高外层容器；发送按钮必须只相对输入框定位，避免垂直错位。
+  it('Skill chip 与发送按钮分属外层和输入框定位容器', () => {
+    render(<ChatInput onSend={vi.fn()} availableSkills={mockSkills} />);
+    const input = screen.getByRole('combobox');
+    fireEvent.change(input, { target: { value: '@' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    const sendButton = screen.getByLabelText('发送');
+    const chip = screen.getByText('ppt-generation').closest('span');
+    expect(sendButton.parentElement).toContainElement(input);
+    expect(sendButton.parentElement).not.toContainElement(chip);
+  });
+
+  /// AC-7: 发送后清空 selectedSkillKey
   it('发送后清空已选 Skill', async () => {
     const onSelectedSkillChange = vi.fn();
     const onSend = vi.fn();

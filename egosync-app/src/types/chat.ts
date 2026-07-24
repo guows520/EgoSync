@@ -29,7 +29,7 @@ export interface ChatRequest {
   content: string;
   workingDirectory?: string;
   onboardingStep?: number;
-  /** Story 10.1: 用户通过 `@Skill` 显式指定本轮任务使用的 Skill Registry ID。 */
+  /** Story 10.1: 用户通过 `@Skill` 显式指定本轮任务使用的 统一 Skill key（registry/meta）。 */
   selectedSkillId?: string;
 }
 

@@ -1,6 +1,6 @@
 [package]
 name = "egosync"
-version = "0.1.1"
+version = "0.1.2"
 description = "EgoSync - Your Digital Life Coordinator"
 authors = ["EgoSync Team"]
 license = ""

@@ -9,6 +9,17 @@ const mockSkills: SelectableSkill[] = [
   { key: 'registry:skill-3', name: 'code-review', description: '代码审查', kind: 'registry', sourceType: 'custom' },
 ];
 
+describe('ChatInput focus indicator', () => {
+  /// 焦点状态只保留一层与原边框等宽的高亮，避免灰色边框、ring 和全局 outline 叠加。
+  it('uses a transparent focus border, a 1px ring, and suppresses the global focus-visible outline', () => {
+    render(<ChatInput onSend={vi.fn()} />);
+
+    const input = screen.getByRole('combobox');
+    expect(input).toHaveClass('focus:border-transparent');
+    expect(input).toHaveClass('focus:ring-1');
+    expect(input).toHaveClass('focus-visible:!outline-none');
+  });
+});
 describe('ChatInput role accent', () => {
   /// AC-1 / AC-3: 角色视图的发送入口必须使用当前角色色温变量。
   /// 否则 App 虽然更新了 CSS 变量，用户仍然看不到角色色温切换。

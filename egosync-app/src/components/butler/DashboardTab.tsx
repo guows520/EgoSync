@@ -140,7 +140,7 @@ export function DashboardTab({ onViewChange }: { onViewChange?: (view: string) =
             type="date"
             value={toDateInput(timeRange.startAt)}
             onChange={handleStartChange}
-            className="shrink-0 text-[12px] rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 py-1.5 text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+            className="w-[132px] shrink-0 text-[12px] rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1.5 text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-400"
             aria-label="开始日期"
           />
           <span className="text-[12px] text-slate-400">至</span>
@@ -148,7 +148,7 @@ export function DashboardTab({ onViewChange }: { onViewChange?: (view: string) =
             type="date"
             value={toDateInput(timeRange.endAt, true)}
             onChange={handleEndChange}
-            className="shrink-0 text-[12px] rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 py-1.5 text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+            className="w-[132px] shrink-0 text-[12px] rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1.5 text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-400"
             aria-label="结束日期"
           />
         </div>
@@ -166,14 +166,14 @@ export function DashboardTab({ onViewChange }: { onViewChange?: (view: string) =
             return (
               <div
                 key={card.label}
-                className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-3"
+                className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-2.5"
                 aria-label={card.label}
               >
                 <div className="flex min-w-0 items-center gap-2">
-                  <Icon size={20} className={cn(card.color, "shrink-0")} />
+                  <Icon size={18} className={cn(card.color, "shrink-0")} />
                   <div className="truncate text-[11px] text-slate-400 dark:text-slate-500">{card.label}</div>
                 </div>
-                <div className="mt-2 shrink-0 text-right text-[20px] font-bold text-slate-800 dark:text-slate-100">
+                <div className="mt-1.5 shrink-0 text-right text-[18px] font-bold text-slate-800 dark:text-slate-100">
                   {/* AC-13 加载期间保留上一次成功统计：仅首次加载（无缓存）时显示省略号 */}
                   {metricsLoading && metrics === null ? '…' : card.value}
                 </div>

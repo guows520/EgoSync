@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-21
-last_updated: 2026-07-24
+last_updated: 2026-07-24T17:30:00+08:00
 project: "探索 (EgoSync)"
 project_key: NOKEY
 tracking_system: file-system
@@ -166,14 +166,14 @@ development_status:
   # Epic 10: 可控的 Agent 能力调用与工具管理
   # ============================================================
   epic-10: in-progress
-  10-1-select-and-use-specified-skill-for-current-task: in-progress
+  10-1-select-and-use-specified-skill-for-current-task: done
   10-2-manage-and-restore-butler-mcp-server-bindings: done
   epic-10-retrospective: optional
 
   # ============================================================
   # Epic 11: 可筛选的跨 Agent 活动洞察
   # ============================================================
-  epic-11: backlog
-  11-1-view-and-filter-cross-agent-activity-statistics: backlog
+  epic-11: in-progress
+  11-1-view-and-filter-cross-agent-activity-statistics: done
   epic-11-retrospective: optional
 

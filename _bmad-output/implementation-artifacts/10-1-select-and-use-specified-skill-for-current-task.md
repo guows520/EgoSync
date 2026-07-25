@@ -4,7 +4,7 @@ baseline_commit: 6192a38
 
 # Story 10.1: 为当前任务选择并使用指定 Skill
 
-Status: in-progress
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 

@@ -1,4 +1,4 @@
-import { ListTodo, Clock, AlertTriangle } from 'lucide-react';
+import { ListTodo, Clock, AlertTriangle, Brain, MessageSquare } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { getRoleIconComponent, normalizeColorHex } from '../../lib/roleIcons';
 import { useDashboard } from '../../hooks/useDashboard';
@@ -28,7 +28,84 @@ function formatRelativeTime(iso: string | null): string {
 }
 
 export function DashboardTab({ onViewChange }: { onViewChange?: (view: string) => void }) {
-  const { statuses, isLoading, error } = useDashboard();
+  const {
+    statuses,
+    isLoading,
+    error,
+    metrics,
+    metricsLoading,
+    metricsError,
+    scope,
+    setScope,
+    timeRange,
+    setTimeRange,
+  } = useDashboard();
+
+  const handleScopeChange = (value: string) => {
+    if (value === 'all') {
+      setScope({ type: 'all' });
+    } else if (value === 'butler') {
+      setScope({ type: 'butler' });
+    } else {
+      setScope({ type: 'role', roleId: value });
+    }
+  };
+
+  const dateInputToIso = (value: string, dayOffset = 0): string | null => {
+    if (!value) return null;
+    const match = /^(\d{4,})-(\d{2})-(\d{2})$/.exec(value);
+    if (!match) return null;
+
+    const [, yearText, monthText, dayText] = match;
+    const year = Number(yearText);
+    const month = Number(monthText);
+    const day = Number(dayText);
+    const date = new Date(0);
+    date.setFullYear(year, month - 1, day);
+    date.setHours(0, 0, 0, 0);
+    if (
+      Number.isNaN(date.getTime())
+      || date.getFullYear() !== year
+      || date.getMonth() !== month - 1
+      || date.getDate() !== day
+    ) return null;
+
+    date.setDate(date.getDate() + dayOffset);
+    return date.toISOString();
+  };
+
+  const handleStartChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setTimeRange((prev) => ({
+      ...prev,
+      startAt: dateInputToIso(e.target.value),
+    }));
+  };
+
+  const handleEndChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setTimeRange((prev) => ({
+      ...prev,
+      endAt: dateInputToIso(e.target.value, 1),
+    }));
+  };
+
+  const scopeValue =
+    scope.type === 'all' ? 'all' : scope.type === 'butler' ? 'butler' : scope.roleId;
+
+  const toDateInput = (iso: string | null, exclusiveEnd = false): string => {
+    if (!iso) return '';
+    const date = new Date(iso);
+    if (Number.isNaN(date.getTime())) return '';
+    if (exclusiveEnd) date.setDate(date.getDate() - 1);
+    const pad = (value: number) => String(value).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  };
+
+  const metricCards = [
+    { icon: ListTodo, label: '任务总数', value: metrics?.taskCount ?? 0, color: 'text-indigo-500' },
+    { icon: Brain, label: '记忆数量', value: metrics?.memoryCount ?? 0, color: 'text-purple-500' },
+    { icon: Clock, label: '待处理任务', value: metrics?.pendingTaskCount ?? 0, color: 'text-amber-500' },
+    { icon: MessageSquare, label: '对话数量', value: metrics?.conversationCount ?? 0, color: 'text-blue-500' },
+  ];
 
   if (isLoading) {
     return <div className="text-center text-slate-400 dark:text-slate-500 text-sm py-8">加载中…</div>;
@@ -38,16 +115,82 @@ export function DashboardTab({ onViewChange }: { onViewChange?: (view: string) =
     return <div className="text-center text-red-500 text-sm py-8">{error}</div>;
   }
 
-  if (statuses.length === 0) {
-    return <div className="text-center text-slate-400 dark:text-slate-500 text-sm py-8">暂无角色数据</div>;
-  }
-
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between mb-1">
-        <h3 className="text-[12px] font-bold tracking-widest text-slate-400 dark:text-slate-500 uppercase">角色状态总览</h3>
+      <div className="space-y-3">
+        <div className="flex items-center justify-between mb-1">
+          <h3 className="text-[12px] font-bold tracking-widest text-slate-400 dark:text-slate-500 uppercase">活动统计</h3>
+        </div>
+
+        <div className="flex items-center gap-2 mb-2">
+          <select
+            value={scopeValue}
+            onChange={(e) => handleScopeChange(e.target.value)}
+            className="min-w-0 flex-1 text-[12px] rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 py-1.5 text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+            aria-label="Agent 筛选器"
+          >
+            <option value="all">全部</option>
+            <option value="butler">管家</option>
+            {statuses.map((role: DashboardStatus) => (
+              <option key={role.roleId} value={role.roleId}>{role.roleName}</option>
+            ))}
+          </select>
+
+          <input
+            type="date"
+            value={toDateInput(timeRange.startAt)}
+            onChange={handleStartChange}
+            className="shrink-0 text-[12px] rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 py-1.5 text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+            aria-label="开始日期"
+          />
+          <span className="text-[12px] text-slate-400">至</span>
+          <input
+            type="date"
+            value={toDateInput(timeRange.endAt, true)}
+            onChange={handleEndChange}
+            className="shrink-0 text-[12px] rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 py-1.5 text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+            aria-label="结束日期"
+          />
+        </div>
+
+        {metricsError && metrics === null && (
+          <div className="text-center text-red-500 text-sm py-2">{metricsError}</div>
+        )}
+        {metricsError && metrics !== null && (
+          <div className="text-center text-amber-500 text-[12px] py-1">{metricsError}（显示上一次成功数据）</div>
+        )}
+
+        <div className="grid grid-cols-2 gap-2.5" aria-label="活动指标卡区域">
+          {metricCards.map((card) => {
+            const Icon = card.icon;
+            return (
+              <div
+                key={card.label}
+                className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-3"
+                aria-label={card.label}
+              >
+                <div className="flex min-w-0 items-center gap-2">
+                  <Icon size={20} className={cn(card.color, "shrink-0")} />
+                  <div className="truncate text-[11px] text-slate-400 dark:text-slate-500">{card.label}</div>
+                </div>
+                <div className="mt-2 shrink-0 text-right text-[20px] font-bold text-slate-800 dark:text-slate-100">
+                  {/* AC-13 加载期间保留上一次成功统计：仅首次加载（无缓存）时显示省略号 */}
+                  {metricsLoading && metrics === null ? '…' : card.value}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
-      {statuses.map((role: DashboardStatus) => {
+
+      {statuses.length === 0 ? (
+        <div className="text-center text-slate-400 dark:text-slate-500 text-sm py-8">暂无角色数据</div>
+      ) : (
+        <>
+          <div className="flex items-center justify-between mb-1">
+            <h3 className="text-[12px] font-bold tracking-widest text-slate-400 dark:text-slate-500 uppercase">角色状态总览</h3>
+          </div>
+          {statuses.map((role: DashboardStatus) => {
         const energy = clampEnergy(role.energy);
         const isLow = energy < 40;
         const isUrgent = role.hasUrgent;
@@ -94,6 +237,8 @@ export function DashboardTab({ onViewChange }: { onViewChange?: (view: string) =
           </button>
         );
       })}
+        </>
+      )}
     </div>
   );
 }

@@ -1,11 +1,12 @@
 use sqlx::SqlitePool;
 
 use crate::db::conversations;
+use crate::db::memories;
 use crate::db::pool::ConversationsPool;
 use crate::db::roles;
 use crate::db::tasks;
 use crate::error::AppError;
-use crate::models::dashboard::DashboardStatus;
+use crate::models::dashboard::{DashboardMetrics, DashboardMetricsQuery, DashboardMetricsScope, DashboardStatus};
 
 pub async fn get_dashboard_status(
     pool: &SqlitePool,
@@ -70,6 +71,120 @@ pub async fn get_dashboard_status(
     Ok(statuses)
 }
 
+pub async fn get_dashboard_metrics(
+    pool: &SqlitePool,
+    conv_pool: &ConversationsPool,
+    query: DashboardMetricsQuery,
+) -> Result<DashboardMetrics, AppError> {
+    let (owner_condition, role_id) = match &query.scope {
+        DashboardMetricsScope::All => ("all", None),
+        DashboardMetricsScope::Butler => ("butler", None),
+        DashboardMetricsScope::Role { role_id } => {
+            roles::get_role(pool, role_id)
+                .await
+                .map_err(|_| AppError::ValidationError(format!("角色不存在: {}", role_id)))?;
+            ("role", Some(role_id.as_str()))
+        }
+    };
+
+    // 单次解析并规范化为 UTC（SQLite 文本比较要求统一 UTC Z 格式，AC-7/AC-9）
+    let start_normalized = query
+        .start_at
+        .as_ref()
+        .map(|s| {
+            chrono::DateTime::parse_from_rfc3339(s)
+                .map(|dt| dt.with_timezone(&chrono::Utc).format("%Y-%m-%dT%H:%M:%SZ").to_string())
+                .map_err(|_| AppError::ValidationError("startAt 无法解析为 RFC 3339 时间".to_string()))
+        })
+        .transpose()?;
+
+    let end_normalized = query
+        .end_at
+        .as_ref()
+        .map(|s| {
+            chrono::DateTime::parse_from_rfc3339(s)
+                .map(|dt| dt.with_timezone(&chrono::Utc).format("%Y-%m-%dT%H:%M:%SZ").to_string())
+                .map_err(|_| AppError::ValidationError("endAt 无法解析为 RFC 3339 时间".to_string()))
+        })
+        .transpose()?;
+
+    if let (Some(start), Some(end)) = (start_normalized.as_ref(), end_normalized.as_ref()) {
+        if start >= end {
+            return Err(AppError::ValidationError(
+                "startAt 必须早于 endAt".to_string(),
+            ));
+        }
+    }
+
+    let start_ref = start_normalized.as_deref();
+    let end_ref = end_normalized.as_deref();
+
+    let (task_count, pending_task_count, memory_count) = {
+        let pool_clone = pool.clone();
+        let oc = owner_condition.to_string();
+        let rid = role_id.map(|s| s.to_string());
+        let sa = start_ref.map(|s| s.to_string());
+        let ea = end_ref.map(|s| s.to_string());
+
+        let task_fut = {
+            let pool = pool_clone.clone();
+            let oc = oc.clone();
+            let rid = rid.clone();
+            let sa = sa.clone();
+            let ea = ea.clone();
+            async move {
+                tasks::count_tasks_for_metrics(&pool, &oc, rid.as_deref(), sa.as_deref(), ea.as_deref())
+                    .await
+            }
+        };
+
+        let memory_fut = {
+            let pool = pool_clone.clone();
+            let oc = oc.clone();
+            let rid = rid.clone();
+            let sa = sa.clone();
+            let ea = ea.clone();
+            async move {
+                memories::count_memories_for_metrics(&pool, &oc, rid.as_deref(), sa.as_deref(), ea.as_deref())
+                    .await
+            }
+        };
+
+        let ((tc, ptc), mc) = tokio::try_join!(task_fut, memory_fut)?;
+        (tc, ptc, mc)
+    };
+
+    let conversation_count = conversations::count_conversations_for_metrics(
+        conv_pool,
+        owner_condition,
+        role_id,
+        start_ref,
+        end_ref,
+    )
+    .await?;
+
+    let generated_at = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+
+    tracing::info!(
+        "仪表盘指标聚合完成: scope={}, time_range={:?}-{:?}, tasks={}, memories={}, conversations={}, pending={}",
+        owner_condition,
+        start_ref,
+        end_ref,
+        task_count,
+        memory_count,
+        conversation_count,
+        pending_task_count
+    );
+
+    Ok(DashboardMetrics {
+        task_count,
+        memory_count,
+        conversation_count,
+        pending_task_count,
+        generated_at,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,6 +243,21 @@ mod tests {
         .execute(&pool)
         .await
         .expect("failed to create tasks table");
+
+        sqlx::query(
+            "CREATE TABLE memories (
+                id TEXT PRIMARY KEY NOT NULL,
+                role_id TEXT,
+                category TEXT NOT NULL,
+                content TEXT NOT NULL,
+                source_conversation_id TEXT NOT NULL,
+                source_message_ids TEXT NOT NULL DEFAULT '[]',
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("failed to create memories table");
 
         pool
     }
@@ -255,5 +385,267 @@ mod tests {
             statuses[0].last_active_at.as_deref(),
             Some("2026-06-20T10:00:00Z")
         );
+    }
+
+    #[tokio::test]
+    async fn metrics_all_scope_aggregates_counts() {
+        let pool = setup_main_pool().await;
+        let conv_pool = setup_conv_pool().await;
+
+        sqlx::query("INSERT INTO roles (id, name) VALUES ('r1', '角色1')")
+            .execute(&pool).await.unwrap();
+
+        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('t1', 'role', 'r1', '任务1', 'Q2', 0, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('t2', 'butler', NULL, '管家任务', 'Q2', 1, '2026-06-02T00:00:00Z', '2026-06-02T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO memories (id, role_id, category, content, source_conversation_id, created_at) VALUES ('m1', NULL, 'fact', '全局记忆', 'conv-1', '2026-06-01T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO conversations (id, role_id, started_at, updated_at) VALUES ('c1', 'r1', '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')")
+            .execute(&*conv_pool).await.unwrap();
+
+        let metrics = get_dashboard_metrics(
+            &pool,
+            &conv_pool,
+            DashboardMetricsQuery {
+                scope: DashboardMetricsScope::All,
+                start_at: None,
+                end_at: None,
+            },
+        )
+        .await
+        .expect("get metrics");
+
+        assert_eq!(metrics.task_count, 2);
+        assert_eq!(metrics.pending_task_count, 1);
+        assert_eq!(metrics.memory_count, 1);
+        assert_eq!(metrics.conversation_count, 1);
+        assert!(!metrics.generated_at.is_empty());
+    }
+
+    #[tokio::test]
+    async fn metrics_butler_scope_filters_correctly() {
+        let pool = setup_main_pool().await;
+        let conv_pool = setup_conv_pool().await;
+
+        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('tb1', 'butler', NULL, '管家任务', 'Q2', 0, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('tr1', 'role', 'r1', '角色任务', 'Q2', 0, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO memories (id, role_id, category, content, source_conversation_id, created_at) VALUES ('m1', NULL, 'fact', '全局', 'conv-1', '2026-06-01T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO conversations (id, role_id, started_at, updated_at) VALUES ('c1', NULL, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')")
+            .execute(&*conv_pool).await.unwrap();
+
+        let metrics = get_dashboard_metrics(
+            &pool,
+            &conv_pool,
+            DashboardMetricsQuery {
+                scope: DashboardMetricsScope::Butler,
+                start_at: None,
+                end_at: None,
+            },
+        )
+        .await
+        .expect("get metrics");
+
+        assert_eq!(metrics.task_count, 1, "仅 butler 任务");
+        assert_eq!(metrics.memory_count, 1, "仅全局记忆");
+        assert_eq!(metrics.conversation_count, 1, "仅管家会话");
+    }
+
+    #[tokio::test]
+    async fn metrics_role_scope_filters_correctly() {
+        let pool = setup_main_pool().await;
+        let conv_pool = setup_conv_pool().await;
+
+        sqlx::query("INSERT INTO roles (id, name) VALUES ('r1', '角色1')")
+            .execute(&pool).await.unwrap();
+
+        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('t-r1', 'role', 'r1', '角色1任务', 'Q2', 0, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO memories (id, role_id, category, content, source_conversation_id, created_at) VALUES ('m-r1', 'r1', 'fact', '角色1记忆', 'conv-1', '2026-06-01T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO conversations (id, role_id, started_at, updated_at) VALUES ('c-r1', 'r1', '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')")
+            .execute(&*conv_pool).await.unwrap();
+
+        let metrics = get_dashboard_metrics(
+            &pool,
+            &conv_pool,
+            DashboardMetricsQuery {
+                scope: DashboardMetricsScope::Role { role_id: "r1".to_string() },
+                start_at: None,
+                end_at: None,
+            },
+        )
+        .await
+        .expect("get metrics");
+
+        assert_eq!(metrics.task_count, 1);
+        assert_eq!(metrics.memory_count, 1);
+        assert_eq!(metrics.conversation_count, 1);
+    }
+
+    #[tokio::test]
+    async fn metrics_role_scope_nonexistent_role_returns_validation_error() {
+        let pool = setup_main_pool().await;
+        let conv_pool = setup_conv_pool().await;
+
+        let result = get_dashboard_metrics(
+            &pool,
+            &conv_pool,
+            DashboardMetricsQuery {
+                scope: DashboardMetricsScope::Role { role_id: "nonexistent".to_string() },
+                start_at: None,
+                end_at: None,
+            },
+        )
+        .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, AppError::ValidationError(_)), "应为 ValidationError");
+    }
+
+    #[tokio::test]
+    async fn metrics_invalid_time_format_returns_validation_error() {
+        let pool = setup_main_pool().await;
+        let conv_pool = setup_conv_pool().await;
+
+        let result = get_dashboard_metrics(
+            &pool,
+            &conv_pool,
+            DashboardMetricsQuery {
+                scope: DashboardMetricsScope::All,
+                start_at: Some("not-a-date".to_string()),
+                end_at: None,
+            },
+        )
+        .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, AppError::ValidationError(_)), "应为 ValidationError");
+    }
+
+    #[tokio::test]
+    async fn metrics_start_ge_end_returns_validation_error() {
+        let pool = setup_main_pool().await;
+        let conv_pool = setup_conv_pool().await;
+
+        let result = get_dashboard_metrics(
+            &pool,
+            &conv_pool,
+            DashboardMetricsQuery {
+                scope: DashboardMetricsScope::All,
+                start_at: Some("2026-06-10T00:00:00Z".to_string()),
+                end_at: Some("2026-06-10T00:00:00Z".to_string()),
+            },
+        )
+        .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, AppError::ValidationError(_)), "start >= end 应为 ValidationError");
+    }
+
+    #[tokio::test]
+    async fn metrics_time_range_filters_half_open() {
+        let pool = setup_main_pool().await;
+        let conv_pool = setup_conv_pool().await;
+
+        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('t1', 'role', NULL, '任务1', 'Q2', 0, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('t2', 'role', NULL, '任务2', 'Q2', 0, '2026-06-05T00:00:00Z', '2026-06-05T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('t3', 'role', NULL, '任务3', 'Q2', 0, '2026-06-10T00:00:00Z', '2026-06-10T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+
+        let metrics = get_dashboard_metrics(
+            &pool,
+            &conv_pool,
+            DashboardMetricsQuery {
+                scope: DashboardMetricsScope::All,
+                start_at: Some("2026-06-01T00:00:00Z".to_string()),
+                end_at: Some("2026-06-10T00:00:00Z".to_string()),
+            },
+        )
+        .await
+        .expect("get metrics");
+
+        assert_eq!(metrics.task_count, 2, "半开区间：t3 在 end 边界外");
+    }
+
+    #[tokio::test]
+    async fn metrics_pending_le_total_invariant() {
+        let pool = setup_main_pool().await;
+        let conv_pool = setup_conv_pool().await;
+
+        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('t1', 'role', NULL, '未完成', 'Q2', 0, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('t2', 'role', NULL, '已完成', 'Q2', 1, '2026-06-02T00:00:00Z', '2026-06-02T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+
+        let metrics = get_dashboard_metrics(
+            &pool,
+            &conv_pool,
+            DashboardMetricsQuery {
+                scope: DashboardMetricsScope::All,
+                start_at: None,
+                end_at: None,
+            },
+        )
+        .await
+        .expect("get metrics");
+
+        assert!(metrics.pending_task_count <= metrics.task_count, "pending <= total 不变量");
+    }
+
+    #[tokio::test]
+    async fn metrics_main_db_failure_propagates() {
+        // AC-12：主库查询失败时整个请求失败，不返回部分默认值
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:")
+            .await
+            .expect("create empty main pool");
+        // 不创建 tasks/memories 表，查询必然失败
+        let conv_pool = setup_conv_pool().await;
+
+        let result = get_dashboard_metrics(
+            &pool,
+            &conv_pool,
+            DashboardMetricsQuery {
+                scope: DashboardMetricsScope::All,
+                start_at: None,
+                end_at: None,
+            },
+        )
+        .await;
+
+        assert!(result.is_err(), "主库失败时整个请求必须失败（AC-12）");
+    }
+
+    #[tokio::test]
+    async fn metrics_conv_db_failure_propagates() {
+        // AC-12：会话库查询失败时整个请求失败，不返回部分默认值
+        let pool = setup_main_pool().await;
+        // 不创建 conversations 表，会话查询必然失败
+        let conv_pool = ConversationsPool(
+            sqlx::SqlitePool::connect("sqlite::memory:")
+                .await
+                .expect("create empty conv pool"),
+        );
+
+        let result = get_dashboard_metrics(
+            &pool,
+            &conv_pool,
+            DashboardMetricsQuery {
+                scope: DashboardMetricsScope::All,
+                start_at: None,
+                end_at: None,
+            },
+        )
+        .await;
+
+        assert!(result.is_err(), "会话库失败时整个请求必须失败（AC-12）");
     }
 }

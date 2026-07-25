@@ -38,13 +38,14 @@ describe('DashboardTab 无障碍', () => {
     const status = makeStatus('r1', { energy: 75 });
     mockInvoke.mockImplementation((cmd: string) => {
       if (cmd === 'dashboard_get_status') return Promise.resolve([status]);
+      if (cmd === 'dashboard_get_metrics') return Promise.resolve({ taskCount: 0, memoryCount: 0, conversationCount: 0, pendingTaskCount: 0, generatedAt: '2026-07-24T10:00:00Z' });
       return Promise.resolve(null);
     });
 
     render(<DashboardTab onViewChange={vi.fn()} />);
 
     await waitFor(() => {
-      expect(screen.getByText('角色r1')).toBeInTheDocument();
+      expect(screen.getAllByText('角色r1').length).toBeGreaterThan(0);
     });
 
     const progressbar = screen.getByRole('progressbar');

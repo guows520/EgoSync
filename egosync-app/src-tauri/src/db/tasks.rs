@@ -643,6 +643,58 @@ pub async fn get_task_stats_for_roles(
     Ok(stats)
 }
 
+/// 仪表盘指标聚合：按 owner 条件和时间范围返回 (task_count, pending_task_count)
+pub async fn count_tasks_for_metrics(
+    pool: &SqlitePool,
+    owner_condition: &str,
+    role_id: Option<&str>,
+    start_at: Option<&str>,
+    end_at: Option<&str>,
+) -> Result<(i64, i64), AppError> {
+    let owner_filter = match owner_condition {
+        "all" => "1=1".to_string(),
+        "butler" => "owner_type = 'butler' AND role_id IS NULL".to_string(),
+        "role" => "owner_type = 'role' AND role_id = ?".to_string(),
+        _ => "1=1".to_string(),
+    };
+
+    let time_filter = match (start_at, end_at) {
+        (Some(_), Some(_)) => "AND created_at >= ? AND created_at < ?".to_string(),
+        (Some(_), None) => "AND created_at >= ?".to_string(),
+        (None, Some(_)) => "AND created_at < ?".to_string(),
+        (None, None) => String::new(),
+    };
+
+    let sql = format!(
+        "SELECT COUNT(*) as task_count, SUM(CASE WHEN is_completed = 0 THEN 1 ELSE 0 END) as pending_task_count
+         FROM tasks
+         WHERE deleted_at IS NULL AND {} {}",
+        owner_filter, time_filter
+    );
+
+    let mut query = sqlx::query_as::<_, (i64, Option<i64>)>(&sql);
+
+    if owner_condition == "role" {
+        if let Some(rid) = role_id {
+            query = query.bind(rid);
+        }
+    }
+
+    if let Some(start) = start_at {
+        query = query.bind(start);
+    }
+    if let Some(end) = end_at {
+        query = query.bind(end);
+    }
+
+    let (task_count, pending_task_count) = query
+        .fetch_one(pool)
+        .await
+        .map_err(|e| AppError::DbError(format!("仪表盘任务指标聚合查询失败: {}", e)))?;
+
+    Ok((task_count, pending_task_count.unwrap_or(0)))
+}
+
 fn compute_7_days_ago_threshold() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let now_secs = SystemTime::now()
@@ -2047,5 +2099,96 @@ mod tests {
             .await
             .expect("count");
         assert_eq!(count, 2, "仅 is_big_rock + 未完成 + 未删除");
+    }
+
+    #[tokio::test]
+    async fn count_tasks_for_metrics_all_scope() {
+        let pool = setup_test_db().await;
+        // role-a 任务 + butler 任务 + 已删除任务
+        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('t1', 'role', 'role-a', '任务1', 'Q2', 0, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('t2', 'role', 'role-a', '任务2', 'Q2', 1, '2026-06-02T00:00:00Z', '2026-06-02T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('t3', 'butler', NULL, '管家任务', 'Q2', 0, '2026-06-03T00:00:00Z', '2026-06-03T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at, deleted_at) VALUES ('t-del', 'role', 'role-a', '已删除', 'Q2', 0, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z', '2026-06-05T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+
+        let (total, pending) = count_tasks_for_metrics(&pool, "all", None, None, None).await.unwrap();
+        assert_eq!(total, 3, "不含已删除");
+        assert_eq!(pending, 2, "t2 已完成，其余两个未完成");
+    }
+
+    #[tokio::test]
+    async fn count_tasks_for_metrics_butler_scope() {
+        let pool = setup_test_db().await;
+        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('tb1', 'butler', NULL, '管家任务1', 'Q2', 0, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('tb2', 'butler', NULL, '管家任务2', 'Q2', 1, '2026-06-02T00:00:00Z', '2026-06-02T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('tr1', 'role', 'role-a', '角色任务', 'Q2', 0, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+
+        let (total, pending) = count_tasks_for_metrics(&pool, "butler", None, None, None).await.unwrap();
+        assert_eq!(total, 2);
+        assert_eq!(pending, 1);
+    }
+
+    #[tokio::test]
+    async fn count_tasks_for_metrics_role_scope() {
+        let pool = setup_test_db().await;
+        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('t-a1', 'role', 'role-a', '角色A任务1', 'Q2', 0, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('t-a2', 'role', 'role-a', '角色A任务2', 'Q1', 1, '2026-06-02T00:00:00Z', '2026-06-02T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('t-b1', 'role', 'role-b', '角色B任务', 'Q2', 0, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+
+        let (total, pending) = count_tasks_for_metrics(&pool, "role", Some("role-a"), None, None).await.unwrap();
+        assert_eq!(total, 2);
+        assert_eq!(pending, 1);
+    }
+
+    #[tokio::test]
+    async fn count_tasks_for_metrics_time_range_half_open() {
+        let pool = setup_test_db().await;
+        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('t1', 'role', 'role-a', '任务1', 'Q2', 0, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('t2', 'role', 'role-a', '任务2', 'Q2', 0, '2026-06-05T00:00:00Z', '2026-06-05T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('t3', 'role', 'role-a', '任务3', 'Q2', 0, '2026-06-10T00:00:00Z', '2026-06-10T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+
+        // 半开区间 [2026-06-01, 2026-06-10) — t3 在边界外
+        let (total, _) = count_tasks_for_metrics(&pool, "all", None, Some("2026-06-01T00:00:00Z"), Some("2026-06-10T00:00:00Z")).await.unwrap();
+        assert_eq!(total, 2, "半开区间：t1 和 t2 在范围内，t3 在 end 边界外");
+
+        // 仅 start_at
+        let (total, _) = count_tasks_for_metrics(&pool, "all", None, Some("2026-06-05T00:00:00Z"), None).await.unwrap();
+        assert_eq!(total, 2, "t2 和 t3 >= 06-05");
+
+        // 仅 end_at
+        let (total, _) = count_tasks_for_metrics(&pool, "all", None, None, Some("2026-06-05T00:00:00Z")).await.unwrap();
+        assert_eq!(total, 1, "仅 t1 < 06-05");
+    }
+
+    #[tokio::test]
+    async fn count_tasks_for_metrics_empty_returns_zero() {
+        let pool = setup_test_db().await;
+        let (total, pending) = count_tasks_for_metrics(&pool, "all", None, None, None).await.unwrap();
+        assert_eq!(total, 0);
+        assert_eq!(pending, 0);
+    }
+
+    #[tokio::test]
+    async fn count_tasks_for_metrics_pending_le_total() {
+        let pool = setup_test_db().await;
+        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('t1', 'role', 'role-a', '未完成', 'Q2', 0, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('t2', 'role', 'role-a', '已完成', 'Q2', 1, '2026-06-02T00:00:00Z', '2026-06-02T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+
+        let (total, pending) = count_tasks_for_metrics(&pool, "all", None, None, None).await.unwrap();
+        assert!(pending <= total, "pending_task_count <= task_count 不变量");
     }
 }

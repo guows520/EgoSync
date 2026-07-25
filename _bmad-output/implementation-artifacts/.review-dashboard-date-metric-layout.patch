@@ -1,0 +1,2030 @@
+# git status --short
+
+ M _bmad-output/implementation-artifacts/10-1-select-and-use-specified-skill-for-current-task.md
+ M _bmad-output/implementation-artifacts/sprint-status.yaml
+ M egosync-app/src-tauri/src/commands/dashboard.rs
+ M egosync-app/src-tauri/src/db/conversations.rs
+ M egosync-app/src-tauri/src/db/memories.rs
+ M egosync-app/src-tauri/src/db/tasks.rs
+ M egosync-app/src-tauri/src/lib.rs
+ M egosync-app/src-tauri/src/models/dashboard.rs
+ M egosync-app/src-tauri/src/services/dashboard_service.rs
+ M egosync-app/src/components/butler/DashboardTab.a11y.test.tsx
+ M egosync-app/src/components/butler/DashboardTab.test.tsx
+ M egosync-app/src/components/butler/DashboardTab.tsx
+ M egosync-app/src/hooks/useDashboard.test.ts
+ M egosync-app/src/hooks/useDashboard.ts
+ M egosync-app/src/services/dashboardService.ts
+ M egosync-app/src/types/dashboard.ts
+?? _bmad-output/implementation-artifacts/.review-dashboard-date-metric-layout.patch
+?? _bmad-output/implementation-artifacts/11-1-view-and-filter-cross-agent-activity-statistics.md
+?? _bmad-output/implementation-artifacts/investigations/dashboard-metric-layout-investigation.md
+?? _bmad-output/implementation-artifacts/spec-dashboard-date-metric-layout.md
+
+# tracked diff from 81885e9ceabc95a3a7ef117f78220ef0b776d6f1
+
+diff --git a/_bmad-output/implementation-artifacts/10-1-select-and-use-specified-skill-for-current-task.md b/_bmad-output/implementation-artifacts/10-1-select-and-use-specified-skill-for-current-task.md
+index 68450ca..bd97ffe 100644
+--- a/_bmad-output/implementation-artifacts/10-1-select-and-use-specified-skill-for-current-task.md
++++ b/_bmad-output/implementation-artifacts/10-1-select-and-use-specified-skill-for-current-task.md
+@@ -2,11 +2,11 @@
+ baseline_commit: 6192a38
+ ---
+ 
+ # Story 10.1: 为当前任务选择并使用指定 Skill
+ 
+-Status: in-progress
++Status: done
+ 
+ <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
+ 
+ ## Story
+ 
+diff --git a/_bmad-output/implementation-artifacts/sprint-status.yaml b/_bmad-output/implementation-artifacts/sprint-status.yaml
+index 3a14014..1d29c29 100644
+--- a/_bmad-output/implementation-artifacts/sprint-status.yaml
++++ b/_bmad-output/implementation-artifacts/sprint-status.yaml
+@@ -33,11 +33,11 @@
+ # - Stories can be worked in parallel if team capacity allows
+ # - Developer typically creates next story after previous one is 'done' to incorporate learnings
+ # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+ 
+ generated: 2026-05-21
+-last_updated: 2026-07-24
++last_updated: 2026-07-24T17:30:00+08:00
+ project: "探索 (EgoSync)"
+ project_key: NOKEY
+ tracking_system: file-system
+ story_location: "{project-root}/_bmad-output/implementation-artifacts"
+ 
+@@ -164,16 +164,16 @@ development_status:
+ 
+   # ============================================================
+   # Epic 10: 可控的 Agent 能力调用与工具管理
+   # ============================================================
+   epic-10: in-progress
+-  10-1-select-and-use-specified-skill-for-current-task: in-progress
++  10-1-select-and-use-specified-skill-for-current-task: done
+   10-2-manage-and-restore-butler-mcp-server-bindings: done
+   epic-10-retrospective: optional
+ 
+   # ============================================================
+   # Epic 11: 可筛选的跨 Agent 活动洞察
+   # ============================================================
+-  epic-11: backlog
+-  11-1-view-and-filter-cross-agent-activity-statistics: backlog
++  epic-11: in-progress
++  11-1-view-and-filter-cross-agent-activity-statistics: done
+   epic-11-retrospective: optional
+ 
+diff --git a/egosync-app/src-tauri/src/commands/dashboard.rs b/egosync-app/src-tauri/src/commands/dashboard.rs
+index 1b0eb7e..5e05888 100644
+--- a/egosync-app/src-tauri/src/commands/dashboard.rs
++++ b/egosync-app/src-tauri/src/commands/dashboard.rs
+@@ -1,14 +1,66 @@
+ use tauri::State;
+ 
+ use crate::db::pool::{ConversationsPool, DbPool};
+ use crate::error::AppError;
+-use crate::models::dashboard::DashboardStatus;
++use crate::models::dashboard::{DashboardMetrics, DashboardMetricsQuery, DashboardStatus};
+ use crate::services::dashboard_service;
+ 
+ #[tauri::command]
+ pub async fn dashboard_get_status(
+     pool: State<'_, DbPool>,
+     conv_pool: State<'_, ConversationsPool>,
+ ) -> Result<Vec<DashboardStatus>, AppError> {
+     dashboard_service::get_dashboard_status(&pool, &conv_pool).await
+ }
++
++#[tauri::command]
++pub async fn dashboard_get_metrics(
++    query: DashboardMetricsQuery,
++    pool: State<'_, DbPool>,
++    conv_pool: State<'_, ConversationsPool>,
++) -> Result<DashboardMetrics, AppError> {
++    dashboard_service::get_dashboard_metrics(&pool, &conv_pool, query).await
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::models::dashboard::{DashboardMetricsQuery, DashboardMetricsScope};
++
++    // AC-15：验证 IPC 边界参数反序列化 — tagged union 三种形态
++    #[test]
++    fn deserializes_all_scope_query() {
++        let json = r#"{"scope":{"type":"all"},"startAt":null,"endAt":null}"#;
++        let q: DashboardMetricsQuery = serde_json::from_str(json).expect("parse all scope");
++        assert!(matches!(q.scope, DashboardMetricsScope::All));
++        assert!(q.start_at.is_none());
++        assert!(q.end_at.is_none());
++    }
++
++    #[test]
++    fn deserializes_butler_scope_query() {
++        let json = r#"{"scope":{"type":"butler"},"startAt":null,"endAt":null}"#;
++        let q: DashboardMetricsQuery = serde_json::from_str(json).expect("parse butler scope");
++        assert!(matches!(q.scope, DashboardMetricsScope::Butler));
++    }
++
++    #[test]
++    fn deserializes_role_scope_query() {
++        let json = r#"{"scope":{"type":"role","roleId":"r-123"},"startAt":"2026-06-01T00:00:00Z","endAt":null}"#;
++        let q: DashboardMetricsQuery = serde_json::from_str(json).expect("parse role scope");
++        match q.scope {
++            DashboardMetricsScope::Role { role_id } => assert_eq!(role_id, "r-123"),
++            _ => panic!("应为 Role scope"),
++        }
++        assert_eq!(q.start_at.as_deref(), Some("2026-06-01T00:00:00Z"));
++        assert!(q.end_at.is_none());
++    }
++
++    // AC-15：验证错误类型可通过 serde 在 IPC 边界序列化传播
++    #[test]
++    fn validation_error_serializes_for_ipc() {
++        let err = AppError::ValidationError("startAt 必须早于 endAt".to_string());
++        let json = serde_json::to_string(&err).expect("serialize error");
++        assert!(json.contains("startAt 必须早于 endAt"));
++    }
++}
+diff --git a/egosync-app/src-tauri/src/db/conversations.rs b/egosync-app/src-tauri/src/db/conversations.rs
+index 43348b2..0366cbb 100644
+--- a/egosync-app/src-tauri/src/db/conversations.rs
++++ b/egosync-app/src-tauri/src/db/conversations.rs
+@@ -445,10 +445,60 @@ pub async fn get_last_active_for_roles(
+         .map_err(|e| AppError::DbError(format!("批量查询角色最近活跃时间失败: {}", e)))?;
+ 
+     Ok(rows.into_iter().collect())
+ }
+ 
++/// 仪表盘指标聚合：按 owner 条件和时间范围返回 conversation_count（按会话计数，不按消息）
++pub async fn count_conversations_for_metrics(
++    pool: &ConversationsPool,
++    owner_condition: &str,
++    role_id: Option<&str>,
++    start_at: Option<&str>,
++    end_at: Option<&str>,
++) -> Result<i64, AppError> {
++    let owner_filter = match owner_condition {
++        "all" => "1=1".to_string(),
++        "butler" => "role_id IS NULL".to_string(),
++        "role" => "role_id = ?".to_string(),
++        _ => "1=1".to_string(),
++    };
++
++    let time_filter = match (start_at, end_at) {
++        (Some(_), Some(_)) => "AND started_at >= ? AND started_at < ?".to_string(),
++        (Some(_), None) => "AND started_at >= ?".to_string(),
++        (None, Some(_)) => "AND started_at < ?".to_string(),
++        (None, None) => String::new(),
++    };
++
++    let sql = format!(
++        "SELECT COUNT(*) FROM conversations WHERE {} {}",
++        owner_filter, time_filter
++    );
++
++    let mut query = sqlx::query_as::<_, (i64,)>(&sql);
++
++    if owner_condition == "role" {
++        if let Some(rid) = role_id {
++            query = query.bind(rid);
++        }
++    }
++
++    if let Some(start) = start_at {
++        query = query.bind(start);
++    }
++    if let Some(end) = end_at {
++        query = query.bind(end);
++    }
++
++    let (count,) = query
++        .fetch_one(&**pool)
++        .await
++        .map_err(|e| AppError::DbError(format!("仪表盘会话指标聚合查询失败: {}", e)))?;
++
++    Ok(count)
++}
++
+ fn chrono_now() -> String {
+     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
+ }
+ 
+ #[cfg(test)]
+@@ -873,6 +923,73 @@ mod tests {
+     async fn test_get_last_active_for_roles_empty() {
+         let pool = setup_test_pool().await;
+         let map = get_last_active_for_roles(&pool, &[]).await.expect("get last active");
+         assert!(map.is_empty());
+     }
++
++    #[tokio::test]
++    async fn count_conversations_for_metrics_all_scope() {
++        let pool = setup_test_pool().await;
++        create_conversation(&pool, None).await.unwrap();
++        create_conversation(&pool, Some("role-a")).await.unwrap();
++        create_conversation(&pool, Some("role-b")).await.unwrap();
++
++        let count = count_conversations_for_metrics(&pool, "all", None, None, None).await.unwrap();
++        assert_eq!(count, 3);
++    }
++
++    #[tokio::test]
++    async fn count_conversations_for_metrics_butler_scope() {
++        let pool = setup_test_pool().await;
++        create_conversation(&pool, None).await.unwrap();
++        create_conversation(&pool, None).await.unwrap();
++        create_conversation(&pool, Some("role-a")).await.unwrap();
++
++        let count = count_conversations_for_metrics(&pool, "butler", None, None, None).await.unwrap();
++        assert_eq!(count, 2, "仅 role_id IS NULL");
++    }
++
++    #[tokio::test]
++    async fn count_conversations_for_metrics_role_scope() {
++        let pool = setup_test_pool().await;
++        create_conversation(&pool, Some("role-a")).await.unwrap();
++        create_conversation(&pool, Some("role-a")).await.unwrap();
++        create_conversation(&pool, Some("role-b")).await.unwrap();
++
++        let count = count_conversations_for_metrics(&pool, "role", Some("role-a"), None, None).await.unwrap();
++        assert_eq!(count, 2);
++    }
++
++    #[tokio::test]
++    async fn count_conversations_for_metrics_multi_messages_counts_once() {
++        let pool = setup_test_pool().await;
++        let conv = create_conversation(&pool, Some("role-a")).await.unwrap();
++        insert_message(&pool, &conv.id, "user", "消息1", true).await.unwrap();
++        insert_message(&pool, &conv.id, "assistant", "消息2", true).await.unwrap();
++        insert_message(&pool, &conv.id, "user", "消息3", true).await.unwrap();
++
++        let count = count_conversations_for_metrics(&pool, "role", Some("role-a"), None, None).await.unwrap();
++        assert_eq!(count, 1, "多消息会话只计 1（AC-2）");
++    }
++
++    #[tokio::test]
++    async fn count_conversations_for_metrics_time_range() {
++        let pool = setup_test_pool().await;
++
++        sqlx::query("INSERT INTO conversations (id, role_id, started_at, updated_at) VALUES ('c1', 'role-a', '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')")
++            .execute(&*pool).await.unwrap();
++        sqlx::query("INSERT INTO conversations (id, role_id, started_at, updated_at) VALUES ('c2', 'role-a', '2026-06-05T00:00:00Z', '2026-06-05T00:00:00Z')")
++            .execute(&*pool).await.unwrap();
++        sqlx::query("INSERT INTO conversations (id, role_id, started_at, updated_at) VALUES ('c3', 'role-a', '2026-06-10T00:00:00Z', '2026-06-10T00:00:00Z')")
++            .execute(&*pool).await.unwrap();
++
++        let count = count_conversations_for_metrics(&pool, "all", None, Some("2026-06-01T00:00:00Z"), Some("2026-06-10T00:00:00Z")).await.unwrap();
++        assert_eq!(count, 2, "半开区间：c3 在 end 边界外");
++    }
++
++    #[tokio::test]
++    async fn count_conversations_for_metrics_empty_returns_zero() {
++        let pool = setup_test_pool().await;
++        let count = count_conversations_for_metrics(&pool, "all", None, None, None).await.unwrap();
++        assert_eq!(count, 0);
++    }
+ }
+diff --git a/egosync-app/src-tauri/src/db/memories.rs b/egosync-app/src-tauri/src/db/memories.rs
+index afa839c..22b772a 100644
+--- a/egosync-app/src-tauri/src/db/memories.rs
++++ b/egosync-app/src-tauri/src/db/memories.rs
+@@ -398,10 +398,60 @@ pub async fn count_memories(
+         list_memories(pool, role_id, category, None, None).await?
+     };
+     Ok(memories.len())
+ }
+ 
++/// 仪表盘指标聚合：按 owner 条件和时间范围返回 memory_count
++pub async fn count_memories_for_metrics(
++    pool: &SqlitePool,
++    owner_condition: &str,
++    role_id: Option<&str>,
++    start_at: Option<&str>,
++    end_at: Option<&str>,
++) -> Result<i64, AppError> {
++    let owner_filter = match owner_condition {
++        "all" => "1=1".to_string(),
++        "butler" => "role_id IS NULL".to_string(),
++        "role" => "role_id = ?".to_string(),
++        _ => "1=1".to_string(),
++    };
++
++    let time_filter = match (start_at, end_at) {
++        (Some(_), Some(_)) => "AND created_at >= ? AND created_at < ?".to_string(),
++        (Some(_), None) => "AND created_at >= ?".to_string(),
++        (None, Some(_)) => "AND created_at < ?".to_string(),
++        (None, None) => String::new(),
++    };
++
++    let sql = format!(
++        "SELECT COUNT(*) FROM memories WHERE {} {}",
++        owner_filter, time_filter
++    );
++
++    let mut query = sqlx::query_as::<_, (i64,)>(&sql);
++
++    if owner_condition == "role" {
++        if let Some(rid) = role_id {
++            query = query.bind(rid);
++        }
++    }
++
++    if let Some(start) = start_at {
++        query = query.bind(start);
++    }
++    if let Some(end) = end_at {
++        query = query.bind(end);
++    }
++
++    let (count,) = query
++        .fetch_one(pool)
++        .await
++        .map_err(|e| AppError::DbError(format!("仪表盘记忆指标聚合查询失败: {}", e)))?;
++
++    Ok(count)
++}
++
+ fn dedup_memories(memories: Vec<Memory>) -> Vec<Memory> {
+     let mut seen = HashSet::new();
+     memories
+         .into_iter()
+         .filter(|memory| {
+@@ -1172,6 +1222,74 @@ mod tests {
+             .await
+             .expect("delete missing memory");
+ 
+         assert!(!deleted);
+     }
++
++    #[tokio::test]
++    async fn count_memories_for_metrics_all_scope() {
++        let pool = setup_test_db().await;
++        sqlx::query("INSERT INTO roles (id, name) VALUES ('role-1', '产品经理')")
++            .execute(&pool).await.unwrap();
++
++        sqlx::query("INSERT INTO memories (id, role_id, category, content, source_conversation_id, source_message_ids, created_at) VALUES ('m1', NULL, 'fact', '全局记忆', 'conv-1', '[]', '2026-06-01T00:00:00Z')")
++            .execute(&pool).await.unwrap();
++        sqlx::query("INSERT INTO memories (id, role_id, category, content, source_conversation_id, source_message_ids, created_at) VALUES ('m2', 'role-1', 'fact', '角色记忆', 'conv-2', '[]', '2026-06-02T00:00:00Z')")
++            .execute(&pool).await.unwrap();
++
++        let count = count_memories_for_metrics(&pool, "all", None, None, None).await.unwrap();
++        assert_eq!(count, 2);
++    }
++
++    #[tokio::test]
++    async fn count_memories_for_metrics_butler_scope() {
++        let pool = setup_test_db().await;
++        sqlx::query("INSERT INTO roles (id, name) VALUES ('role-1', '产品经理')")
++            .execute(&pool).await.unwrap();
++
++        sqlx::query("INSERT INTO memories (id, role_id, category, content, source_conversation_id, source_message_ids, created_at) VALUES ('m1', NULL, 'fact', '全局记忆', 'conv-1', '[]', '2026-06-01T00:00:00Z')")
++            .execute(&pool).await.unwrap();
++        sqlx::query("INSERT INTO memories (id, role_id, category, content, source_conversation_id, source_message_ids, created_at) VALUES ('m2', 'role-1', 'fact', '角色记忆', 'conv-2', '[]', '2026-06-02T00:00:00Z')")
++            .execute(&pool).await.unwrap();
++
++        let count = count_memories_for_metrics(&pool, "butler", None, None, None).await.unwrap();
++        assert_eq!(count, 1, "仅 role_id IS NULL");
++    }
++
++    #[tokio::test]
++    async fn count_memories_for_metrics_role_scope() {
++        let pool = setup_test_db().await;
++        sqlx::query("INSERT INTO roles (id, name) VALUES ('role-1', '产品经理')")
++            .execute(&pool).await.unwrap();
++
++        sqlx::query("INSERT INTO memories (id, role_id, category, content, source_conversation_id, source_message_ids, created_at) VALUES ('m1', NULL, 'fact', '全局', 'conv-1', '[]', '2026-06-01T00:00:00Z')")
++            .execute(&pool).await.unwrap();
++        sqlx::query("INSERT INTO memories (id, role_id, category, content, source_conversation_id, source_message_ids, created_at) VALUES ('m2', 'role-1', 'fact', '角色1', 'conv-2', '[]', '2026-06-02T00:00:00Z')")
++            .execute(&pool).await.unwrap();
++        sqlx::query("INSERT INTO memories (id, role_id, category, content, source_conversation_id, source_message_ids, created_at) VALUES ('m3', 'role-1', 'fact', '角色1-2', 'conv-3', '[]', '2026-06-03T00:00:00Z')")
++            .execute(&pool).await.unwrap();
++
++        let count = count_memories_for_metrics(&pool, "role", Some("role-1"), None, None).await.unwrap();
++        assert_eq!(count, 2);
++    }
++
++    #[tokio::test]
++    async fn count_memories_for_metrics_time_range() {
++        let pool = setup_test_db().await;
++        sqlx::query("INSERT INTO memories (id, role_id, category, content, source_conversation_id, source_message_ids, created_at) VALUES ('m1', NULL, 'fact', '记忆1', 'conv-1', '[]', '2026-06-01T00:00:00Z')")
++            .execute(&pool).await.unwrap();
++        sqlx::query("INSERT INTO memories (id, role_id, category, content, source_conversation_id, source_message_ids, created_at) VALUES ('m2', NULL, 'fact', '记忆2', 'conv-2', '[]', '2026-06-05T00:00:00Z')")
++            .execute(&pool).await.unwrap();
++        sqlx::query("INSERT INTO memories (id, role_id, category, content, source_conversation_id, source_message_ids, created_at) VALUES ('m3', NULL, 'fact', '记忆3', 'conv-3', '[]', '2026-06-10T00:00:00Z')")
++            .execute(&pool).await.unwrap();
++
++        let count = count_memories_for_metrics(&pool, "all", None, Some("2026-06-01T00:00:00Z"), Some("2026-06-10T00:00:00Z")).await.unwrap();
++        assert_eq!(count, 2, "半开区间：m3 在 end 边界外");
++    }
++
++    #[tokio::test]
++    async fn count_memories_for_metrics_empty_returns_zero() {
++        let pool = setup_test_db().await;
++        let count = count_memories_for_metrics(&pool, "all", None, None, None).await.unwrap();
++        assert_eq!(count, 0);
++    }
+ }
+diff --git a/egosync-app/src-tauri/src/db/tasks.rs b/egosync-app/src-tauri/src/db/tasks.rs
+index f567352..e12f0f4 100644
+--- a/egosync-app/src-tauri/src/db/tasks.rs
++++ b/egosync-app/src-tauri/src/db/tasks.rs
+@@ -641,10 +641,62 @@ pub async fn get_task_stats_for_roles(
+     }
+ 
+     Ok(stats)
+ }
+ 
++/// 仪表盘指标聚合：按 owner 条件和时间范围返回 (task_count, pending_task_count)
++pub async fn count_tasks_for_metrics(
++    pool: &SqlitePool,
++    owner_condition: &str,
++    role_id: Option<&str>,
++    start_at: Option<&str>,
++    end_at: Option<&str>,
++) -> Result<(i64, i64), AppError> {
++    let owner_filter = match owner_condition {
++        "all" => "1=1".to_string(),
++        "butler" => "owner_type = 'butler' AND role_id IS NULL".to_string(),
++        "role" => "owner_type = 'role' AND role_id = ?".to_string(),
++        _ => "1=1".to_string(),
++    };
++
++    let time_filter = match (start_at, end_at) {
++        (Some(_), Some(_)) => "AND created_at >= ? AND created_at < ?".to_string(),
++        (Some(_), None) => "AND created_at >= ?".to_string(),
++        (None, Some(_)) => "AND created_at < ?".to_string(),
++        (None, None) => String::new(),
++    };
++
++    let sql = format!(
++        "SELECT COUNT(*) as task_count, SUM(CASE WHEN is_completed = 0 THEN 1 ELSE 0 END) as pending_task_count
++         FROM tasks
++         WHERE deleted_at IS NULL AND {} {}",
++        owner_filter, time_filter
++    );
++
++    let mut query = sqlx::query_as::<_, (i64, Option<i64>)>(&sql);
++
++    if owner_condition == "role" {
++        if let Some(rid) = role_id {
++            query = query.bind(rid);
++        }
++    }
++
++    if let Some(start) = start_at {
++        query = query.bind(start);
++    }
++    if let Some(end) = end_at {
++        query = query.bind(end);
++    }
++
++    let (task_count, pending_task_count) = query
++        .fetch_one(pool)
++        .await
++        .map_err(|e| AppError::DbError(format!("仪表盘任务指标聚合查询失败: {}", e)))?;
++
++    Ok((task_count, pending_task_count.unwrap_or(0)))
++}
++
+ fn compute_7_days_ago_threshold() -> String {
+     use std::time::{SystemTime, UNIX_EPOCH};
+     let now_secs = SystemTime::now()
+         .duration_since(UNIX_EPOCH)
+         .unwrap_or_default()
+@@ -2046,6 +2098,97 @@ mod tests {
+         let count = count_active_big_rocks_for_role(&pool, "role-a")
+             .await
+             .expect("count");
+         assert_eq!(count, 2, "仅 is_big_rock + 未完成 + 未删除");
+     }
++
++    #[tokio::test]
++    async fn count_tasks_for_metrics_all_scope() {
++        let pool = setup_test_db().await;
++        // role-a 任务 + butler 任务 + 已删除任务
++        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('t1', 'role', 'role-a', '任务1', 'Q2', 0, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')")
++            .execute(&pool).await.unwrap();
++        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('t2', 'role', 'role-a', '任务2', 'Q2', 1, '2026-06-02T00:00:00Z', '2026-06-02T00:00:00Z')")
++            .execute(&pool).await.unwrap();
++        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('t3', 'butler', NULL, '管家任务', 'Q2', 0, '2026-06-03T00:00:00Z', '2026-06-03T00:00:00Z')")
++            .execute(&pool).await.unwrap();
++        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at, deleted_at) VALUES ('t-del', 'role', 'role-a', '已删除', 'Q2', 0, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z', '2026-06-05T00:00:00Z')")
++            .execute(&pool).await.unwrap();
++
++        let (total, pending) = count_tasks_for_metrics(&pool, "all", None, None, None).await.unwrap();
++        assert_eq!(total, 3, "不含已删除");
++        assert_eq!(pending, 2, "t2 已完成，其余两个未完成");
++    }
++
++    #[tokio::test]
++    async fn count_tasks_for_metrics_butler_scope() {
++        let pool = setup_test_db().await;
++        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('tb1', 'butler', NULL, '管家任务1', 'Q2', 0, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')")
++            .execute(&pool).await.unwrap();
++        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('tb2', 'butler', NULL, '管家任务2', 'Q2', 1, '2026-06-02T00:00:00Z', '2026-06-02T00:00:00Z')")
++            .execute(&pool).await.unwrap();
++        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('tr1', 'role', 'role-a', '角色任务', 'Q2', 0, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')")
++            .execute(&pool).await.unwrap();
++
++        let (total, pending) = count_tasks_for_metrics(&pool, "butler", None, None, None).await.unwrap();
++        assert_eq!(total, 2);
++        assert_eq!(pending, 1);
++    }
++
++    #[tokio::test]
++    async fn count_tasks_for_metrics_role_scope() {
++        let pool = setup_test_db().await;
++        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('t-a1', 'role', 'role-a', '角色A任务1', 'Q2', 0, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')")
++            .execute(&pool).await.unwrap();
++        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('t-a2', 'role', 'role-a', '角色A任务2', 'Q1', 1, '2026-06-02T00:00:00Z', '2026-06-02T00:00:00Z')")
++            .execute(&pool).await.unwrap();
++        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('t-b1', 'role', 'role-b', '角色B任务', 'Q2', 0, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')")
++            .execute(&pool).await.unwrap();
++
++        let (total, pending) = count_tasks_for_metrics(&pool, "role", Some("role-a"), None, None).await.unwrap();
++        assert_eq!(total, 2);
++        assert_eq!(pending, 1);
++    }
++
++    #[tokio::test]
++    async fn count_tasks_for_metrics_time_range_half_open() {
++        let pool = setup_test_db().await;
++        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('t1', 'role', 'role-a', '任务1', 'Q2', 0, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')")
++            .execute(&pool).await.unwrap();
++        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('t2', 'role', 'role-a', '任务2', 'Q2', 0, '2026-06-05T00:00:00Z', '2026-06-05T00:00:00Z')")
++            .execute(&pool).await.unwrap();
++        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('t3', 'role', 'role-a', '任务3', 'Q2', 0, '2026-06-10T00:00:00Z', '2026-06-10T00:00:00Z')")
++            .execute(&pool).await.unwrap();
++
++        // 半开区间 [2026-06-01, 2026-06-10) — t3 在边界外
++        let (total, _) = count_tasks_for_metrics(&pool, "all", None, Some("2026-06-01T00:00:00Z"), Some("2026-06-10T00:00:00Z")).await.unwrap();
++        assert_eq!(total, 2, "半开区间：t1 和 t2 在范围内，t3 在 end 边界外");
++
++        // 仅 start_at
++        let (total, _) = count_tasks_for_metrics(&pool, "all", None, Some("2026-06-05T00:00:00Z"), None).await.unwrap();
++        assert_eq!(total, 2, "t2 和 t3 >= 06-05");
++
++        // 仅 end_at
++        let (total, _) = count_tasks_for_metrics(&pool, "all", None, None, Some("2026-06-05T00:00:00Z")).await.unwrap();
++        assert_eq!(total, 1, "仅 t1 < 06-05");
++    }
++
++    #[tokio::test]
++    async fn count_tasks_for_metrics_empty_returns_zero() {
++        let pool = setup_test_db().await;
++        let (total, pending) = count_tasks_for_metrics(&pool, "all", None, None, None).await.unwrap();
++        assert_eq!(total, 0);
++        assert_eq!(pending, 0);
++    }
++
++    #[tokio::test]
++    async fn count_tasks_for_metrics_pending_le_total() {
++        let pool = setup_test_db().await;
++        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('t1', 'role', 'role-a', '未完成', 'Q2', 0, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')")
++            .execute(&pool).await.unwrap();
++        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('t2', 'role', 'role-a', '已完成', 'Q2', 1, '2026-06-02T00:00:00Z', '2026-06-02T00:00:00Z')")
++            .execute(&pool).await.unwrap();
++
++        let (total, pending) = count_tasks_for_metrics(&pool, "all", None, None, None).await.unwrap();
++        assert!(pending <= total, "pending_task_count <= task_count 不变量");
++    }
+ }
+diff --git a/egosync-app/src-tauri/src/lib.rs b/egosync-app/src-tauri/src/lib.rs
+index d828d78..964c808 100644
+--- a/egosync-app/src-tauri/src/lib.rs
++++ b/egosync-app/src-tauri/src/lib.rs
+@@ -388,10 +388,11 @@ pub fn run() {
+             commands::notification::notification_create,
+             commands::notification::notification_list,
+             commands::notification::notification_mark_read,
+             commands::notification::notification_count_unread,
+             commands::dashboard::dashboard_get_status,
++            commands::dashboard::dashboard_get_metrics,
+             commands::mission::mission_get,
+             commands::mission::mission_update,
+             commands::mission::mission_infer,
+             commands::mission::mission_infer_eligibility,
+             commands::briefing::briefing_get_latest,
+diff --git a/egosync-app/src-tauri/src/models/dashboard.rs b/egosync-app/src-tauri/src/models/dashboard.rs
+index f511db5..3e825bf 100644
+--- a/egosync-app/src-tauri/src/models/dashboard.rs
++++ b/egosync-app/src-tauri/src/models/dashboard.rs
+@@ -8,5 +8,32 @@ pub struct DashboardStatus {
+     pub energy: i32,
+     pub pending_tasks_count: i64,
+     pub last_active_at: Option<String>,
+     pub has_urgent: bool,
+ }
++
++#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
++#[serde(tag = "type", rename_all = "camelCase")]
++pub enum DashboardMetricsScope {
++    All,
++    Butler,
++    #[serde(rename_all = "camelCase")]
++    Role { role_id: String },
++}
++
++#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
++#[serde(rename_all = "camelCase")]
++pub struct DashboardMetricsQuery {
++    pub scope: DashboardMetricsScope,
++    pub start_at: Option<String>,
++    pub end_at: Option<String>,
++}
++
++#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
++#[serde(rename_all = "camelCase")]
++pub struct DashboardMetrics {
++    pub task_count: i64,
++    pub memory_count: i64,
++    pub conversation_count: i64,
++    pub pending_task_count: i64,
++    pub generated_at: String,
++}
+diff --git a/egosync-app/src-tauri/src/services/dashboard_service.rs b/egosync-app/src-tauri/src/services/dashboard_service.rs
+index 9820f54..477b331 100644
+--- a/egosync-app/src-tauri/src/services/dashboard_service.rs
++++ b/egosync-app/src-tauri/src/services/dashboard_service.rs
+@@ -1,13 +1,14 @@
+ use sqlx::SqlitePool;
+ 
+ use crate::db::conversations;
++use crate::db::memories;
+ use crate::db::pool::ConversationsPool;
+ use crate::db::roles;
+ use crate::db::tasks;
+ use crate::error::AppError;
+-use crate::models::dashboard::DashboardStatus;
++use crate::models::dashboard::{DashboardMetrics, DashboardMetricsQuery, DashboardMetricsScope, DashboardStatus};
+ 
+ pub async fn get_dashboard_status(
+     pool: &SqlitePool,
+     conv_pool: &ConversationsPool,
+ ) -> Result<Vec<DashboardStatus>, AppError> {
+@@ -68,10 +69,124 @@ pub async fn get_dashboard_status(
+     });
+ 
+     Ok(statuses)
+ }
+ 
++pub async fn get_dashboard_metrics(
++    pool: &SqlitePool,
++    conv_pool: &ConversationsPool,
++    query: DashboardMetricsQuery,
++) -> Result<DashboardMetrics, AppError> {
++    let (owner_condition, role_id) = match &query.scope {
++        DashboardMetricsScope::All => ("all", None),
++        DashboardMetricsScope::Butler => ("butler", None),
++        DashboardMetricsScope::Role { role_id } => {
++            roles::get_role(pool, role_id)
++                .await
++                .map_err(|_| AppError::ValidationError(format!("角色不存在: {}", role_id)))?;
++            ("role", Some(role_id.as_str()))
++        }
++    };
++
++    // 单次解析并规范化为 UTC（SQLite 文本比较要求统一 UTC Z 格式，AC-7/AC-9）
++    let start_normalized = query
++        .start_at
++        .as_ref()
++        .map(|s| {
++            chrono::DateTime::parse_from_rfc3339(s)
++                .map(|dt| dt.with_timezone(&chrono::Utc).format("%Y-%m-%dT%H:%M:%SZ").to_string())
++                .map_err(|_| AppError::ValidationError("startAt 无法解析为 RFC 3339 时间".to_string()))
++        })
++        .transpose()?;
++
++    let end_normalized = query
++        .end_at
++        .as_ref()
++        .map(|s| {
++            chrono::DateTime::parse_from_rfc3339(s)
++                .map(|dt| dt.with_timezone(&chrono::Utc).format("%Y-%m-%dT%H:%M:%SZ").to_string())
++                .map_err(|_| AppError::ValidationError("endAt 无法解析为 RFC 3339 时间".to_string()))
++        })
++        .transpose()?;
++
++    if let (Some(start), Some(end)) = (start_normalized.as_ref(), end_normalized.as_ref()) {
++        if start >= end {
++            return Err(AppError::ValidationError(
++                "startAt 必须早于 endAt".to_string(),
++            ));
++        }
++    }
++
++    let start_ref = start_normalized.as_deref();
++    let end_ref = end_normalized.as_deref();
++
++    let (task_count, pending_task_count, memory_count) = {
++        let pool_clone = pool.clone();
++        let oc = owner_condition.to_string();
++        let rid = role_id.map(|s| s.to_string());
++        let sa = start_ref.map(|s| s.to_string());
++        let ea = end_ref.map(|s| s.to_string());
++
++        let task_fut = {
++            let pool = pool_clone.clone();
++            let oc = oc.clone();
++            let rid = rid.clone();
++            let sa = sa.clone();
++            let ea = ea.clone();
++            async move {
++                tasks::count_tasks_for_metrics(&pool, &oc, rid.as_deref(), sa.as_deref(), ea.as_deref())
++                    .await
++            }
++        };
++
++        let memory_fut = {
++            let pool = pool_clone.clone();
++            let oc = oc.clone();
++            let rid = rid.clone();
++            let sa = sa.clone();
++            let ea = ea.clone();
++            async move {
++                memories::count_memories_for_metrics(&pool, &oc, rid.as_deref(), sa.as_deref(), ea.as_deref())
++                    .await
++            }
++        };
++
++        let ((tc, ptc), mc) = tokio::try_join!(task_fut, memory_fut)?;
++        (tc, ptc, mc)
++    };
++
++    let conversation_count = conversations::count_conversations_for_metrics(
++        conv_pool,
++        owner_condition,
++        role_id,
++        start_ref,
++        end_ref,
++    )
++    .await?;
++
++    let generated_at = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
++
++    tracing::info!(
++        "仪表盘指标聚合完成: scope={}, time_range={:?}-{:?}, tasks={}, memories={}, conversations={}, pending={}",
++        owner_condition,
++        start_ref,
++        end_ref,
++        task_count,
++        memory_count,
++        conversation_count,
++        pending_task_count
++    );
++
++    Ok(DashboardMetrics {
++        task_count,
++        memory_count,
++        conversation_count,
++        pending_task_count,
++        generated_at,
++    })
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+     use sqlx::sqlite::SqlitePoolOptions;
+ 
+@@ -127,10 +242,25 @@ mod tests {
+         )
+         .execute(&pool)
+         .await
+         .expect("failed to create tasks table");
+ 
++        sqlx::query(
++            "CREATE TABLE memories (
++                id TEXT PRIMARY KEY NOT NULL,
++                role_id TEXT,
++                category TEXT NOT NULL,
++                content TEXT NOT NULL,
++                source_conversation_id TEXT NOT NULL,
++                source_message_ids TEXT NOT NULL DEFAULT '[]',
++                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
++            )",
++        )
++        .execute(&pool)
++        .await
++        .expect("failed to create memories table");
++
+         pool
+     }
+ 
+     async fn setup_conv_pool() -> ConversationsPool {
+         let pool = sqlx::SqlitePool::connect("sqlite::memory:")
+@@ -254,6 +384,268 @@ mod tests {
+         assert_eq!(
+             statuses[0].last_active_at.as_deref(),
+             Some("2026-06-20T10:00:00Z")
+         );
+     }
++
++    #[tokio::test]
++    async fn metrics_all_scope_aggregates_counts() {
++        let pool = setup_main_pool().await;
++        let conv_pool = setup_conv_pool().await;
++
++        sqlx::query("INSERT INTO roles (id, name) VALUES ('r1', '角色1')")
++            .execute(&pool).await.unwrap();
++
++        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('t1', 'role', 'r1', '任务1', 'Q2', 0, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')")
++            .execute(&pool).await.unwrap();
++        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('t2', 'butler', NULL, '管家任务', 'Q2', 1, '2026-06-02T00:00:00Z', '2026-06-02T00:00:00Z')")
++            .execute(&pool).await.unwrap();
++        sqlx::query("INSERT INTO memories (id, role_id, category, content, source_conversation_id, created_at) VALUES ('m1', NULL, 'fact', '全局记忆', 'conv-1', '2026-06-01T00:00:00Z')")
++            .execute(&pool).await.unwrap();
++        sqlx::query("INSERT INTO conversations (id, role_id, started_at, updated_at) VALUES ('c1', 'r1', '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')")
++            .execute(&*conv_pool).await.unwrap();
++
++        let metrics = get_dashboard_metrics(
++            &pool,
++            &conv_pool,
++            DashboardMetricsQuery {
++                scope: DashboardMetricsScope::All,
++                start_at: None,
++                end_at: None,
++            },
++        )
++        .await
++        .expect("get metrics");
++
++        assert_eq!(metrics.task_count, 2);
++        assert_eq!(metrics.pending_task_count, 1);
++        assert_eq!(metrics.memory_count, 1);
++        assert_eq!(metrics.conversation_count, 1);
++        assert!(!metrics.generated_at.is_empty());
++    }
++
++    #[tokio::test]
++    async fn metrics_butler_scope_filters_correctly() {
++        let pool = setup_main_pool().await;
++        let conv_pool = setup_conv_pool().await;
++
++        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('tb1', 'butler', NULL, '管家任务', 'Q2', 0, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')")
++            .execute(&pool).await.unwrap();
++        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('tr1', 'role', 'r1', '角色任务', 'Q2', 0, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')")
++            .execute(&pool).await.unwrap();
++        sqlx::query("INSERT INTO memories (id, role_id, category, content, source_conversation_id, created_at) VALUES ('m1', NULL, 'fact', '全局', 'conv-1', '2026-06-01T00:00:00Z')")
++            .execute(&pool).await.unwrap();
++        sqlx::query("INSERT INTO conversations (id, role_id, started_at, updated_at) VALUES ('c1', NULL, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')")
++            .execute(&*conv_pool).await.unwrap();
++
++        let metrics = get_dashboard_metrics(
++            &pool,
++            &conv_pool,
++            DashboardMetricsQuery {
++                scope: DashboardMetricsScope::Butler,
++                start_at: None,
++                end_at: None,
++            },
++        )
++        .await
++        .expect("get metrics");
++
++        assert_eq!(metrics.task_count, 1, "仅 butler 任务");
++        assert_eq!(metrics.memory_count, 1, "仅全局记忆");
++        assert_eq!(metrics.conversation_count, 1, "仅管家会话");
++    }
++
++    #[tokio::test]
++    async fn metrics_role_scope_filters_correctly() {
++        let pool = setup_main_pool().await;
++        let conv_pool = setup_conv_pool().await;
++
++        sqlx::query("INSERT INTO roles (id, name) VALUES ('r1', '角色1')")
++            .execute(&pool).await.unwrap();
++
++        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('t-r1', 'role', 'r1', '角色1任务', 'Q2', 0, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')")
++            .execute(&pool).await.unwrap();
++        sqlx::query("INSERT INTO memories (id, role_id, category, content, source_conversation_id, created_at) VALUES ('m-r1', 'r1', 'fact', '角色1记忆', 'conv-1', '2026-06-01T00:00:00Z')")
++            .execute(&pool).await.unwrap();
++        sqlx::query("INSERT INTO conversations (id, role_id, started_at, updated_at) VALUES ('c-r1', 'r1', '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')")
++            .execute(&*conv_pool).await.unwrap();
++
++        let metrics = get_dashboard_metrics(
++            &pool,
++            &conv_pool,
++            DashboardMetricsQuery {
++                scope: DashboardMetricsScope::Role { role_id: "r1".to_string() },
++                start_at: None,
++                end_at: None,
++            },
++        )
++        .await
++        .expect("get metrics");
++
++        assert_eq!(metrics.task_count, 1);
++        assert_eq!(metrics.memory_count, 1);
++        assert_eq!(metrics.conversation_count, 1);
++    }
++
++    #[tokio::test]
++    async fn metrics_role_scope_nonexistent_role_returns_validation_error() {
++        let pool = setup_main_pool().await;
++        let conv_pool = setup_conv_pool().await;
++
++        let result = get_dashboard_metrics(
++            &pool,
++            &conv_pool,
++            DashboardMetricsQuery {
++                scope: DashboardMetricsScope::Role { role_id: "nonexistent".to_string() },
++                start_at: None,
++                end_at: None,
++            },
++        )
++        .await;
++
++        assert!(result.is_err());
++        let err = result.unwrap_err();
++        assert!(matches!(err, AppError::ValidationError(_)), "应为 ValidationError");
++    }
++
++    #[tokio::test]
++    async fn metrics_invalid_time_format_returns_validation_error() {
++        let pool = setup_main_pool().await;
++        let conv_pool = setup_conv_pool().await;
++
++        let result = get_dashboard_metrics(
++            &pool,
++            &conv_pool,
++            DashboardMetricsQuery {
++                scope: DashboardMetricsScope::All,
++                start_at: Some("not-a-date".to_string()),
++                end_at: None,
++            },
++        )
++        .await;
++
++        assert!(result.is_err());
++        let err = result.unwrap_err();
++        assert!(matches!(err, AppError::ValidationError(_)), "应为 ValidationError");
++    }
++
++    #[tokio::test]
++    async fn metrics_start_ge_end_returns_validation_error() {
++        let pool = setup_main_pool().await;
++        let conv_pool = setup_conv_pool().await;
++
++        let result = get_dashboard_metrics(
++            &pool,
++            &conv_pool,
++            DashboardMetricsQuery {
++                scope: DashboardMetricsScope::All,
++                start_at: Some("2026-06-10T00:00:00Z".to_string()),
++                end_at: Some("2026-06-10T00:00:00Z".to_string()),
++            },
++        )
++        .await;
++
++        assert!(result.is_err());
++        let err = result.unwrap_err();
++        assert!(matches!(err, AppError::ValidationError(_)), "start >= end 应为 ValidationError");
++    }
++
++    #[tokio::test]
++    async fn metrics_time_range_filters_half_open() {
++        let pool = setup_main_pool().await;
++        let conv_pool = setup_conv_pool().await;
++
++        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('t1', 'role', NULL, '任务1', 'Q2', 0, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')")
++            .execute(&pool).await.unwrap();
++        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('t2', 'role', NULL, '任务2', 'Q2', 0, '2026-06-05T00:00:00Z', '2026-06-05T00:00:00Z')")
++            .execute(&pool).await.unwrap();
++        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('t3', 'role', NULL, '任务3', 'Q2', 0, '2026-06-10T00:00:00Z', '2026-06-10T00:00:00Z')")
++            .execute(&pool).await.unwrap();
++
++        let metrics = get_dashboard_metrics(
++            &pool,
++            &conv_pool,
++            DashboardMetricsQuery {
++                scope: DashboardMetricsScope::All,
++                start_at: Some("2026-06-01T00:00:00Z".to_string()),
++                end_at: Some("2026-06-10T00:00:00Z".to_string()),
++            },
++        )
++        .await
++        .expect("get metrics");
++
++        assert_eq!(metrics.task_count, 2, "半开区间：t3 在 end 边界外");
++    }
++
++    #[tokio::test]
++    async fn metrics_pending_le_total_invariant() {
++        let pool = setup_main_pool().await;
++        let conv_pool = setup_conv_pool().await;
++
++        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('t1', 'role', NULL, '未完成', 'Q2', 0, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')")
++            .execute(&pool).await.unwrap();
++        sqlx::query("INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, created_at, updated_at) VALUES ('t2', 'role', NULL, '已完成', 'Q2', 1, '2026-06-02T00:00:00Z', '2026-06-02T00:00:00Z')")
++            .execute(&pool).await.unwrap();
++
++        let metrics = get_dashboard_metrics(
++            &pool,
++            &conv_pool,
++            DashboardMetricsQuery {
++                scope: DashboardMetricsScope::All,
++                start_at: None,
++                end_at: None,
++            },
++        )
++        .await
++        .expect("get metrics");
++
++        assert!(metrics.pending_task_count <= metrics.task_count, "pending <= total 不变量");
++    }
++
++    #[tokio::test]
++    async fn metrics_main_db_failure_propagates() {
++        // AC-12：主库查询失败时整个请求失败，不返回部分默认值
++        let pool = sqlx::SqlitePool::connect("sqlite::memory:")
++            .await
++            .expect("create empty main pool");
++        // 不创建 tasks/memories 表，查询必然失败
++        let conv_pool = setup_conv_pool().await;
++
++        let result = get_dashboard_metrics(
++            &pool,
++            &conv_pool,
++            DashboardMetricsQuery {
++                scope: DashboardMetricsScope::All,
++                start_at: None,
++                end_at: None,
++            },
++        )
++        .await;
++
++        assert!(result.is_err(), "主库失败时整个请求必须失败（AC-12）");
++    }
++
++    #[tokio::test]
++    async fn metrics_conv_db_failure_propagates() {
++        // AC-12：会话库查询失败时整个请求失败，不返回部分默认值
++        let pool = setup_main_pool().await;
++        // 不创建 conversations 表，会话查询必然失败
++        let conv_pool = ConversationsPool(
++            sqlx::SqlitePool::connect("sqlite::memory:")
++                .await
++                .expect("create empty conv pool"),
++        );
++
++        let result = get_dashboard_metrics(
++            &pool,
++            &conv_pool,
++            DashboardMetricsQuery {
++                scope: DashboardMetricsScope::All,
++                start_at: None,
++                end_at: None,
++            },
++        )
++        .await;
++
++        assert!(result.is_err(), "会话库失败时整个请求必须失败（AC-12）");
++    }
+ }
+diff --git a/egosync-app/src/components/butler/DashboardTab.a11y.test.tsx b/egosync-app/src/components/butler/DashboardTab.a11y.test.tsx
+index d2404a3..adf0883 100644
+--- a/egosync-app/src/components/butler/DashboardTab.a11y.test.tsx
++++ b/egosync-app/src/components/butler/DashboardTab.a11y.test.tsx
+@@ -36,17 +36,18 @@ describe('DashboardTab 无障碍', () => {
+ 
+   it('能量进度条应有 role="progressbar" 和 aria 属性', async () => {
+     const status = makeStatus('r1', { energy: 75 });
+     mockInvoke.mockImplementation((cmd: string) => {
+       if (cmd === 'dashboard_get_status') return Promise.resolve([status]);
++      if (cmd === 'dashboard_get_metrics') return Promise.resolve({ taskCount: 0, memoryCount: 0, conversationCount: 0, pendingTaskCount: 0, generatedAt: '2026-07-24T10:00:00Z' });
+       return Promise.resolve(null);
+     });
+ 
+     render(<DashboardTab onViewChange={vi.fn()} />);
+ 
+     await waitFor(() => {
+-      expect(screen.getByText('角色r1')).toBeInTheDocument();
++      expect(screen.getAllByText('角色r1').length).toBeGreaterThan(0);
+     });
+ 
+     const progressbar = screen.getByRole('progressbar');
+     expect(progressbar).toHaveAttribute('aria-valuenow', '75');
+     expect(progressbar).toHaveAttribute('aria-valuemin', '0');
+diff --git a/egosync-app/src/components/butler/DashboardTab.test.tsx b/egosync-app/src/components/butler/DashboardTab.test.tsx
+index 4e410a8..db4fb8e 100644
+--- a/egosync-app/src/components/butler/DashboardTab.test.tsx
++++ b/egosync-app/src/components/butler/DashboardTab.test.tsx
+@@ -1,6 +1,6 @@
+-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
++import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+ import { describe, expect, it, vi, beforeEach } from 'vitest';
+ import { DashboardTab } from './DashboardTab';
+ import type { DashboardStatus } from '../../types/dashboard';
+ 
+ vi.mock('@tauri-apps/api/core', () => ({
+@@ -28,10 +28,21 @@ function makeStatus(id: string, overrides: Partial<DashboardStatus> = {}): Dashb
+     hasUrgent: false,
+     ...overrides,
+   };
+ }
+ 
++function makeMetrics(overrides: Partial<any> = {}): any {
++  return {
++    taskCount: 10,
++    memoryCount: 5,
++    conversationCount: 3,
++    pendingTaskCount: 2,
++    generatedAt: '2026-07-24T10:00:00Z',
++    ...overrides,
++  };
++}
++
+ describe('DashboardTab', () => {
+   beforeEach(() => {
+     vi.clearAllMocks();
+   });
+ 
+@@ -42,10 +53,11 @@ describe('DashboardTab', () => {
+   });
+ 
+   it('加载失败时显示错误信息', async () => {
+     mockInvoke.mockImplementation((cmd: string) => {
+       if (cmd === 'dashboard_get_status') return Promise.reject(new Error('boom'));
++      if (cmd === 'dashboard_get_metrics') return Promise.resolve(makeMetrics());
+       return Promise.resolve(null);
+     });
+ 
+     render(<DashboardTab onViewChange={vi.fn()} />);
+ 
+@@ -55,10 +67,11 @@ describe('DashboardTab', () => {
+   });
+ 
+   it('无角色数据时显示空状态', async () => {
+     mockInvoke.mockImplementation((cmd: string) => {
+       if (cmd === 'dashboard_get_status') return Promise.resolve([]);
++      if (cmd === 'dashboard_get_metrics') return Promise.resolve(makeMetrics());
+       return Promise.resolve(null);
+     });
+ 
+     render(<DashboardTab onViewChange={vi.fn()} />);
+ 
+@@ -69,26 +82,28 @@ describe('DashboardTab', () => {
+ 
+   it('渲染角色名称、能量百分比和待办数', async () => {
+     const status = makeStatus('r1', { roleName: '产品经理', energy: 80, pendingTasksCount: 5 });
+     mockInvoke.mockImplementation((cmd: string) => {
+       if (cmd === 'dashboard_get_status') return Promise.resolve([status]);
++      if (cmd === 'dashboard_get_metrics') return Promise.resolve(makeMetrics());
+       return Promise.resolve(null);
+     });
+ 
+     render(<DashboardTab onViewChange={vi.fn()} />);
+ 
+     await waitFor(() => {
+-      expect(screen.getByText('产品经理')).toBeInTheDocument();
++      expect(screen.getAllByText('产品经理').length).toBeGreaterThan(0);
+     });
+     expect(screen.getByText('80%')).toBeInTheDocument();
+     expect(screen.getByText('5 待办')).toBeInTheDocument();
+   });
+ 
+   it('hasUrgent 为 true 时显示需关注标签', async () => {
+     const status = makeStatus('r1', { hasUrgent: true });
+     mockInvoke.mockImplementation((cmd: string) => {
+       if (cmd === 'dashboard_get_status') return Promise.resolve([status]);
++      if (cmd === 'dashboard_get_metrics') return Promise.resolve(makeMetrics());
+       return Promise.resolve(null);
+     });
+ 
+     render(<DashboardTab onViewChange={vi.fn()} />);
+ 
+@@ -99,10 +114,11 @@ describe('DashboardTab', () => {
+ 
+   it('hasUrgent 为 false 时不显示需关注标签', async () => {
+     const status = makeStatus('r1', { hasUrgent: false });
+     mockInvoke.mockImplementation((cmd: string) => {
+       if (cmd === 'dashboard_get_status') return Promise.resolve([status]);
++      if (cmd === 'dashboard_get_metrics') return Promise.resolve(makeMetrics());
+       return Promise.resolve(null);
+     });
+ 
+     render(<DashboardTab onViewChange={vi.fn()} />);
+ 
+@@ -114,32 +130,196 @@ describe('DashboardTab', () => {
+   it('点击角色卡片触发 onViewChange 并传入 roleId', async () => {
+     const onViewChange = vi.fn();
+     const status = makeStatus('r1');
+     mockInvoke.mockImplementation((cmd: string) => {
+       if (cmd === 'dashboard_get_status') return Promise.resolve([status]);
++      if (cmd === 'dashboard_get_metrics') return Promise.resolve(makeMetrics());
+       return Promise.resolve(null);
+     });
+ 
+     render(<DashboardTab onViewChange={onViewChange} />);
+ 
+     await waitFor(() => {
+-      expect(screen.getByText('角色r1')).toBeInTheDocument();
++      expect(screen.getAllByText('角色r1').length).toBeGreaterThan(0);
+     });
+ 
+-    fireEvent.click(screen.getByText('角色r1'));
++    // 点击角色状态卡按钮（不是 select 中的 option）
++    const cards = screen.getAllByText('角色r1');
++    const cardButton = cards.find(el => el.closest('button'));
++    fireEvent.click(cardButton!);
+     expect(onViewChange).toHaveBeenCalledWith('r1');
+   });
+ 
+   it('lastActiveAt 为 null 时显示暂无活动', async () => {
+     const status = makeStatus('r1', { lastActiveAt: null });
+     mockInvoke.mockImplementation((cmd: string) => {
+       if (cmd === 'dashboard_get_status') return Promise.resolve([status]);
++      if (cmd === 'dashboard_get_metrics') return Promise.resolve(makeMetrics());
+       return Promise.resolve(null);
+     });
+ 
+     render(<DashboardTab onViewChange={vi.fn()} />);
+ 
+     await waitFor(() => {
+       expect(screen.getByText('暂无活动')).toBeInTheDocument();
+     });
+   });
++
++  it('渲染四张指标卡显示对应数值', async () => {
++    const status = makeStatus('r1');
++    mockInvoke.mockImplementation((cmd: string) => {
++      if (cmd === 'dashboard_get_status') return Promise.resolve([status]);
++      if (cmd === 'dashboard_get_metrics') return Promise.resolve(makeMetrics({ taskCount: 12, memoryCount: 7, conversationCount: 4, pendingTaskCount: 3 }));
++      return Promise.resolve(null);
++    });
++
++    render(<DashboardTab onViewChange={vi.fn()} />);
++
++    await waitFor(() => {
++      expect(screen.getByText('12')).toBeInTheDocument();
++    });
++    expect(screen.getByText('7')).toBeInTheDocument();
++    expect(screen.getByText('4')).toBeInTheDocument();
++    expect(screen.getByText('3')).toBeInTheDocument();
++  });
++
++  it('指标加载中时显示省略号占位', async () => {
++    const status = makeStatus('r1');
++    let resolveMetrics: (val: any) => void = () => {};
++    mockInvoke.mockImplementation((cmd: string) => {
++      if (cmd === 'dashboard_get_status') return Promise.resolve([status]);
++      if (cmd === 'dashboard_get_metrics') return new Promise((resolve) => { resolveMetrics = resolve; });
++      return Promise.resolve(null);
++    });
++
++    render(<DashboardTab onViewChange={vi.fn()} />);
++
++    await waitFor(() => {
++      expect(screen.getAllByText('…').length).toBeGreaterThan(0);
++    });
++
++    resolveMetrics(makeMetrics());
++  });
++
++  it('指标加载失败且无缓存时显示错误信息', async () => {
++    const status = makeStatus('r1');
++    mockInvoke.mockImplementation((cmd: string) => {
++      if (cmd === 'dashboard_get_status') return Promise.resolve([status]);
++      if (cmd === 'dashboard_get_metrics') return Promise.reject(new Error('metrics boom'));
++      return Promise.resolve(null);
++    });
++
++    render(<DashboardTab onViewChange={vi.fn()} />);
++
++    await waitFor(() => {
++      expect(screen.getByText('活动统计加载失败，请稍后再试')).toBeInTheDocument();
++    });
++  });
++
++  it('渲染 Agent 筛选器下拉框', async () => {
++    const status = makeStatus('r1', { roleName: '产品经理' });
++    mockInvoke.mockImplementation((cmd: string) => {
++      if (cmd === 'dashboard_get_status') return Promise.resolve([status]);
++      if (cmd === 'dashboard_get_metrics') return Promise.resolve(makeMetrics());
++      return Promise.resolve(null);
++    });
++
++    render(<DashboardTab onViewChange={vi.fn()} />);
++
++    await waitFor(() => {
++      expect(screen.getByLabelText('Agent 筛选器')).toBeInTheDocument();
++    });
++    const select = screen.getByLabelText('Agent 筛选器') as HTMLSelectElement;
++    expect(select).toBeInTheDocument();
++    // 默认选中全部
++    expect(select.value).toBe('all');
++    // 包含全部、管家、产品经理三个选项
++    const selectOptions = within(select);
++    expect(selectOptions.getByText('全部')).toBeInTheDocument();
++    expect(selectOptions.getByText('管家')).toBeInTheDocument();
++    expect(selectOptions.getByText('产品经理')).toBeInTheDocument();
++  });
++
++  it('切换 Agent 筛选器触发重新加载', async () => {
++    const status = makeStatus('r1', { roleName: '产品经理' });
++    mockInvoke.mockImplementation((cmd: string, args: any) => {
++      if (cmd === 'dashboard_get_status') return Promise.resolve([status]);
++      if (cmd === 'dashboard_get_metrics') {
++        if (args.query.scope.type === 'butler') return Promise.resolve(makeMetrics({ taskCount: 99 }));
++        return Promise.resolve(makeMetrics({ taskCount: 10 }));
++      }
++      return Promise.resolve(null);
++    });
++
++    render(<DashboardTab onViewChange={vi.fn()} />);
++
++    await waitFor(() => {
++      expect(screen.getByText('10')).toBeInTheDocument();
++    });
++
++    const select = screen.getByLabelText('Agent 筛选器') as HTMLSelectElement;
++    fireEvent.change(select, { target: { value: 'butler' } });
++
++    await waitFor(() => {
++      expect(screen.getByText('99')).toBeInTheDocument();
++    });
++  });
++
++  it('渲染时间范围选择器', async () => {
++    const status = makeStatus('r1');
++    mockInvoke.mockImplementation((cmd: string) => {
++      if (cmd === 'dashboard_get_status') return Promise.resolve([status]);
++      if (cmd === 'dashboard_get_metrics') return Promise.resolve(makeMetrics());
++      return Promise.resolve(null);
++    });
++
++    render(<DashboardTab onViewChange={vi.fn()} />);
++
++    await waitFor(() => {
++      expect(screen.getByLabelText('开始日期')).toHaveAttribute('type', 'date');
++      expect(screen.getByLabelText('结束日期')).toHaveAttribute('type', 'date');
++    });
++  });
++
++  it('按自然日发送半开时间范围并正确回填结束日期', async () => {
++    mockInvoke.mockImplementation((cmd: string) => {
++      if (cmd === 'dashboard_get_status') return Promise.resolve([makeStatus('r1')]);
++      if (cmd === 'dashboard_get_metrics') return Promise.resolve(makeMetrics());
++      return Promise.resolve(null);
++    });
++
++    render(<DashboardTab onViewChange={vi.fn()} />);
++
++    const startInput = await screen.findByLabelText('开始日期') as HTMLInputElement;
++    const endInput = screen.getByLabelText('结束日期') as HTMLInputElement;
++    fireEvent.change(startInput, { target: { value: '2026-07-24' } });
++    fireEvent.change(endInput, { target: { value: '2026-07-24' } });
++
++    const expectedStart = new Date(2026, 6, 24).toISOString();
++    const expectedEnd = new Date(2026, 6, 25).toISOString();
++    await waitFor(() => {
++      expect(mockInvoke).toHaveBeenCalledWith('dashboard_get_metrics', {
++        query: expect.objectContaining({ startAt: expectedStart, endAt: expectedEnd }),
++      });
++    });
++    expect(endInput.value).toBe('2026-07-24');
++  });
++
++  it('按目标文案和位置渲染四项指标', async () => {
++    mockInvoke.mockImplementation((cmd: string) => {
++      if (cmd === 'dashboard_get_status') return Promise.resolve([makeStatus('r1')]);
++      if (cmd === 'dashboard_get_metrics') return Promise.resolve(makeMetrics());
++      return Promise.resolve(null);
++    });
++
++    render(<DashboardTab onViewChange={vi.fn()} />);
++
++    const region = await screen.findByLabelText('活动指标卡区域');
++    expect(Array.from(region.children).map((card) => card.getAttribute('aria-label'))).toEqual([
++      '任务总数',
++      '记忆数量',
++      '待处理任务',
++      '对话数量',
++    ]);
++  });
++
+ });
+diff --git a/egosync-app/src/components/butler/DashboardTab.tsx b/egosync-app/src/components/butler/DashboardTab.tsx
+index 3905f82..6f11bdb 100644
+--- a/egosync-app/src/components/butler/DashboardTab.tsx
++++ b/egosync-app/src/components/butler/DashboardTab.tsx
+@@ -1,6 +1,6 @@
+-import { ListTodo, Clock, AlertTriangle } from 'lucide-react';
++import { ListTodo, Clock, AlertTriangle, Brain, MessageSquare } from 'lucide-react';
+ import { cn } from '../../lib/utils';
+ import { getRoleIconComponent, normalizeColorHex } from '../../lib/roleIcons';
+ import { useDashboard } from '../../hooks/useDashboard';
+ import type { DashboardStatus } from '../../types/dashboard';
+ 
+@@ -26,30 +26,158 @@ function formatRelativeTime(iso: string | null): string {
+   if (months < 12) return `${months}个月前活跃`;
+   return `${Math.floor(months / 12)}年前活跃`;
+ }
+ 
+ export function DashboardTab({ onViewChange }: { onViewChange?: (view: string) => void }) {
+-  const { statuses, isLoading, error } = useDashboard();
++  const {
++    statuses,
++    isLoading,
++    error,
++    metrics,
++    metricsLoading,
++    metricsError,
++    scope,
++    setScope,
++    timeRange,
++    setTimeRange,
++  } = useDashboard();
++
++  const handleScopeChange = (value: string) => {
++    if (value === 'all') {
++      setScope({ type: 'all' });
++    } else if (value === 'butler') {
++      setScope({ type: 'butler' });
++    } else {
++      setScope({ type: 'role', roleId: value });
++    }
++  };
++
++  const dateInputToIso = (value: string, dayOffset = 0): string | null => {
++    if (!value) return null;
++    const [year, month, day] = value.split('-').map(Number);
++    const date = new Date(year, month - 1, day);
++    date.setDate(date.getDate() + dayOffset);
++    return date.toISOString();
++  };
++
++  const handleStartChange = (e: React.ChangeEvent<HTMLInputElement>) => {
++    setTimeRange((prev) => ({
++      ...prev,
++      startAt: dateInputToIso(e.target.value),
++    }));
++  };
++
++  const handleEndChange = (e: React.ChangeEvent<HTMLInputElement>) => {
++    setTimeRange((prev) => ({
++      ...prev,
++      endAt: dateInputToIso(e.target.value, 1),
++    }));
++  };
++
++  const scopeValue =
++    scope.type === 'all' ? 'all' : scope.type === 'butler' ? 'butler' : scope.roleId;
++
++  const toDateInput = (iso: string | null, exclusiveEnd = false): string => {
++    if (!iso) return '';
++    const date = new Date(iso);
++    if (Number.isNaN(date.getTime())) return '';
++    if (exclusiveEnd) date.setDate(date.getDate() - 1);
++    const pad = (value: number) => String(value).padStart(2, '0');
++    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
++  };
++
++  const metricCards = [
++    { icon: ListTodo, label: '任务总数', value: metrics?.taskCount ?? 0, color: 'text-indigo-500' },
++    { icon: Brain, label: '记忆数量', value: metrics?.memoryCount ?? 0, color: 'text-purple-500' },
++    { icon: Clock, label: '待处理任务', value: metrics?.pendingTaskCount ?? 0, color: 'text-amber-500' },
++    { icon: MessageSquare, label: '对话数量', value: metrics?.conversationCount ?? 0, color: 'text-blue-500' },
++  ];
+ 
+   if (isLoading) {
+     return <div className="text-center text-slate-400 dark:text-slate-500 text-sm py-8">加载中…</div>;
+   }
+ 
+   if (error) {
+     return <div className="text-center text-red-500 text-sm py-8">{error}</div>;
+   }
+ 
+-  if (statuses.length === 0) {
+-    return <div className="text-center text-slate-400 dark:text-slate-500 text-sm py-8">暂无角色数据</div>;
+-  }
+-
+   return (
+     <div className="space-y-5">
+-      <div className="flex items-center justify-between mb-1">
+-        <h3 className="text-[12px] font-bold tracking-widest text-slate-400 dark:text-slate-500 uppercase">角色状态总览</h3>
++      <div className="space-y-3">
++        <div className="flex items-center justify-between mb-1">
++          <h3 className="text-[12px] font-bold tracking-widest text-slate-400 dark:text-slate-500 uppercase">活动统计</h3>
++        </div>
++
++        <div className="flex items-center gap-2 mb-2">
++          <select
++            value={scopeValue}
++            onChange={(e) => handleScopeChange(e.target.value)}
++            className="min-w-0 flex-1 text-[12px] rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 py-1.5 text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-400"
++            aria-label="Agent 筛选器"
++          >
++            <option value="all">全部</option>
++            <option value="butler">管家</option>
++            {statuses.map((role: DashboardStatus) => (
++              <option key={role.roleId} value={role.roleId}>{role.roleName}</option>
++            ))}
++          </select>
++
++          <input
++            type="date"
++            value={toDateInput(timeRange.startAt)}
++            onChange={handleStartChange}
++            className="shrink-0 text-[12px] rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 py-1.5 text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-400"
++            aria-label="开始日期"
++          />
++          <span className="text-[12px] text-slate-400">至</span>
++          <input
++            type="date"
++            value={toDateInput(timeRange.endAt, true)}
++            onChange={handleEndChange}
++            className="shrink-0 text-[12px] rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 py-1.5 text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-400"
++            aria-label="结束日期"
++          />
++        </div>
++
++        {metricsError && metrics === null && (
++          <div className="text-center text-red-500 text-sm py-2">{metricsError}</div>
++        )}
++        {metricsError && metrics !== null && (
++          <div className="text-center text-amber-500 text-[12px] py-1">{metricsError}（显示上一次成功数据）</div>
++        )}
++
++        <div className="grid grid-cols-2 gap-2.5" aria-label="活动指标卡区域">
++          {metricCards.map((card) => {
++    const Icon = card.icon;
++            return (
++              <div
++                key={card.label}
++                className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-3"
++                aria-label={card.label}
++              >
++                <div className="flex min-w-0 items-center gap-2">
++                  <Icon size={20} className={cn(card.color, "shrink-0")} />
++                  <div className="truncate text-[11px] text-slate-400 dark:text-slate-500">{card.label}</div>
++                </div>
++                <div className="mt-2 shrink-0 text-right text-[20px] font-bold text-slate-800 dark:text-slate-100">
++                  {/* AC-13 加载期间保留上一次成功统计：仅首次加载（无缓存）时显示省略号 */}
++                  {metricsLoading && metrics === null ? '…' : card.value}
++                </div>
++              </div>
++            );
++          })}
++        </div>
+       </div>
+-      {statuses.map((role: DashboardStatus) => {
++
++      {statuses.length === 0 ? (
++        <div className="text-center text-slate-400 dark:text-slate-500 text-sm py-8">暂无角色数据</div>
++      ) : (
++        <>
++          <div className="flex items-center justify-between mb-1">
++            <h3 className="text-[12px] font-bold tracking-widest text-slate-400 dark:text-slate-500 uppercase">角色状态总览</h3>
++          </div>
++          {statuses.map((role: DashboardStatus) => {
+         const energy = clampEnergy(role.energy);
+         const isLow = energy < 40;
+         const isUrgent = role.hasUrgent;
+         const Icon = getRoleIconComponent(role.roleIcon);
+         const roleColor = normalizeColorHex(role.roleColor);
+@@ -92,8 +220,10 @@ export function DashboardTab({ onViewChange }: { onViewChange?: (view: string) =
+               </div>
+             </div>
+           </button>
+         );
+       })}
++        </>
++      )}
+     </div>
+   );
+ }
+diff --git a/egosync-app/src/hooks/useDashboard.test.ts b/egosync-app/src/hooks/useDashboard.test.ts
+index 4208912..0f8b6bc 100644
+--- a/egosync-app/src/hooks/useDashboard.test.ts
++++ b/egosync-app/src/hooks/useDashboard.test.ts
+@@ -1,6 +1,6 @@
+-import { renderHook, waitFor } from '@testing-library/react';
++import { renderHook, waitFor, act } from '@testing-library/react';
+ import { describe, expect, it, vi, beforeEach } from 'vitest';
+ import { useDashboard } from './useDashboard';
+ 
+ vi.mock('@tauri-apps/api/core', () => ({
+   invoke: vi.fn(),
+@@ -22,20 +22,34 @@ function makeStatus(id: string, overrides: Partial<any> = {}): any {
+     hasUrgent: false,
+     ...overrides,
+   };
+ }
+ 
++function makeMetrics(overrides: Partial<any> = {}): any {
++  return {
++    taskCount: 10,
++    memoryCount: 5,
++    conversationCount: 3,
++    pendingTaskCount: 2,
++    generatedAt: '2026-07-24T10:00:00Z',
++    ...overrides,
++  };
++}
++
+ describe('useDashboard', () => {
+   beforeEach(() => {
+     vi.clearAllMocks();
+   });
+ 
+   it('初始加载仪表盘状态列表', async () => {
+     mockInvoke.mockImplementation((cmd: string) => {
+       if (cmd === 'dashboard_get_status') {
+         return Promise.resolve([makeStatus('r1'), makeStatus('r2')]);
+       }
++      if (cmd === 'dashboard_get_metrics') {
++        return Promise.resolve(makeMetrics());
++      }
+       return Promise.resolve(null);
+     });
+ 
+     const { result } = renderHook(() => useDashboard());
+ 
+@@ -47,10 +61,11 @@ describe('useDashboard', () => {
+   });
+ 
+   it('加载失败时设置错误并清空列表', async () => {
+     mockInvoke.mockImplementation((cmd: string) => {
+       if (cmd === 'dashboard_get_status') return Promise.reject(new Error('boom'));
++      if (cmd === 'dashboard_get_metrics') return Promise.resolve(makeMetrics());
+       return Promise.resolve(null);
+     });
+ 
+     const { result } = renderHook(() => useDashboard());
+ 
+@@ -69,6 +84,207 @@ describe('useDashboard', () => {
+       expect(result.current.isLoading).toBe(false);
+     });
+     expect(result.current.statuses).toHaveLength(0);
+     expect(result.current.error).toBeNull();
+   });
++
++  it('初始加载活动统计指标', async () => {
++    mockInvoke.mockImplementation((cmd: string, args: any) => {
++      if (cmd === 'dashboard_get_status') return Promise.resolve([makeStatus('r1')]);
++      if (cmd === 'dashboard_get_metrics') {
++        expect(args.query.scope).toEqual({ type: 'all' });
++        return Promise.resolve(makeMetrics({ taskCount: 15, memoryCount: 8 }));
++      }
++      return Promise.resolve(null);
++    });
++
++    const { result } = renderHook(() => useDashboard());
++
++    await waitFor(() => {
++      expect(result.current.metrics).not.toBeNull();
++    });
++    expect(result.current.metrics?.taskCount).toBe(15);
++    expect(result.current.metrics?.memoryCount).toBe(8);
++    expect(result.current.metricsLoading).toBe(false);
++    expect(result.current.metricsError).toBeNull();
++  });
++
++  it('切换 scope 后重新加载指标', async () => {
++    mockInvoke.mockImplementation((cmd: string, args: any) => {
++      if (cmd === 'dashboard_get_status') return Promise.resolve([makeStatus('r1')]);
++      if (cmd === 'dashboard_get_metrics') {
++        if (args.query.scope.type === 'butler') {
++          return Promise.resolve(makeMetrics({ taskCount: 3 }));
++        }
++        return Promise.resolve(makeMetrics({ taskCount: 15 }));
++      }
++      return Promise.resolve(null);
++    });
++
++    const { result } = renderHook(() => useDashboard());
++
++    await waitFor(() => {
++      expect(result.current.metrics?.taskCount).toBe(15);
++    });
++
++    act(() => {
++      result.current.setScope({ type: 'butler' });
++    });
++
++    await waitFor(() => {
++      expect(result.current.metrics?.taskCount).toBe(3);
++    });
++  });
++
++  it('指标加载失败时设置 metricsError', async () => {
++    mockInvoke.mockImplementation((cmd: string) => {
++      if (cmd === 'dashboard_get_status') return Promise.resolve([makeStatus('r1')]);
++      if (cmd === 'dashboard_get_metrics') return Promise.reject(new Error('metrics boom'));
++      return Promise.resolve(null);
++    });
++
++    const { result } = renderHook(() => useDashboard());
++
++    await waitFor(() => {
++      expect(result.current.metricsError).toBe('活动统计加载失败，请稍后再试');
++    });
++    expect(result.current.metrics).toBeNull();
++    expect(result.current.metricsLoading).toBe(false);
++  });
++
++  it('设置时间范围后重新加载指标', async () => {
++    mockInvoke.mockImplementation((cmd: string, args: any) => {
++      if (cmd === 'dashboard_get_status') return Promise.resolve([makeStatus('r1')]);
++      if (cmd === 'dashboard_get_metrics') {
++        if (args.query.startAt) {
++          return Promise.resolve(makeMetrics({ taskCount: 5 }));
++        }
++        return Promise.resolve(makeMetrics({ taskCount: 15 }));
++      }
++      return Promise.resolve(null);
++    });
++
++    const { result } = renderHook(() => useDashboard());
++
++    await waitFor(() => {
++      expect(result.current.metrics?.taskCount).toBe(15);
++    });
++
++    act(() => {
++      result.current.setTimeRange({ startAt: '2026-06-01T00:00:00Z', endAt: null });
++    });
++
++    await waitFor(() => {
++      expect(result.current.metrics?.taskCount).toBe(5);
++    });
++  });
++
++  it('AC-13 快速切换 scope 只接受最新结果', async () => {
++    let resolveFirst: (val: any) => void = () => {};
++    let resolveSecond: (val: any) => void = () => {};
++
++    mockInvoke.mockImplementation((cmd: string, args: any) => {
++      if (cmd === 'dashboard_get_status') return Promise.resolve([makeStatus('r1')]);
++      if (cmd === 'dashboard_get_metrics') {
++        if (args.query.scope.type === 'butler') {
++          return new Promise((resolve) => { resolveSecond = resolve; });
++        }
++        return new Promise((resolve) => { resolveFirst = resolve; });
++      }
++      return Promise.resolve(null);
++    });
++
++    const { result } = renderHook(() => useDashboard());
++
++    // 等待首次 all 请求发出（未 resolve）
++    await waitFor(() => {
++      expect(result.current.metricsLoading).toBe(true);
++    });
++
++    // 快速切换到 butler
++    act(() => {
++      result.current.setScope({ type: 'butler' });
++    });
++
++    // 旧请求（all）后完成 — 不应覆盖
++    act(() => {
++      resolveFirst(makeMetrics({ taskCount: 999 }));
++    });
++
++    // 新请求（butler）完成 — 应被接受
++    act(() => {
++      resolveSecond(makeMetrics({ taskCount: 42 }));
++    });
++
++    await waitFor(() => {
++      expect(result.current.metrics?.taskCount).toBe(42);
++    });
++    expect(result.current.metrics?.taskCount).not.toBe(999);
++  });
++
++  it('AC-13 刷新失败时保留上一次成功数据', async () => {
++    let callCount = 0;
++    mockInvoke.mockImplementation((cmd: string) => {
++      if (cmd === 'dashboard_get_status') return Promise.resolve([makeStatus('r1')]);
++      if (cmd === 'dashboard_get_metrics') {
++        callCount++;
++        if (callCount === 1) {
++          return Promise.resolve(makeMetrics({ taskCount: 20 }));
++        }
++        return Promise.reject(new Error('refresh boom'));
++      }
++      return Promise.resolve(null);
++    });
++
++    const { result } = renderHook(() => useDashboard());
++
++    await waitFor(() => {
++      expect(result.current.metrics?.taskCount).toBe(20);
++    });
++
++    // 触发刷新（切换 scope）
++    act(() => {
++      result.current.setScope({ type: 'butler' });
++    });
++
++    await waitFor(() => {
++      expect(result.current.metricsError).toBe('活动统计加载失败，请稍后再试');
++    });
++    // 旧数据应保留
++    expect(result.current.metrics?.taskCount).toBe(20);
++  });
++
++  it('AC-5 归档角色回退到 all，不提交失效角色 ID', async () => {
++    const metricsCalls: any[] = [];
++    mockInvoke.mockImplementation((cmd: string, args: any) => {
++      if (cmd === 'dashboard_get_status') return Promise.resolve([makeStatus('r1')]);
++      if (cmd === 'dashboard_get_metrics') {
++        metricsCalls.push(args.query.scope);
++        return Promise.resolve(makeMetrics());
++      }
++      return Promise.resolve(null);
++    });
++
++    const { result } = renderHook(() => useDashboard());
++
++    // 等待 statuses 加载完成
++    await waitFor(() => {
++      expect(result.current.statuses).toHaveLength(1);
++    });
++
++    // 设置 scope 为不存在的角色
++    act(() => {
++      result.current.setScope({ type: 'role', roleId: 'ghost' });
++    });
++
++    // 应自动回退到 all
++    await waitFor(() => {
++      expect(result.current.scope).toEqual({ type: 'all' });
++    });
++
++    // 不应有 role ghost 的请求被提交
++    const hasGhostRequest = metricsCalls.some(
++      (s) => s.type === 'role' && s.roleId === 'ghost'
++    );
++    expect(hasGhostRequest).toBe(false);
++  });
+ });
+diff --git a/egosync-app/src/hooks/useDashboard.ts b/egosync-app/src/hooks/useDashboard.ts
+index 01cd259..9347ddf 100644
+--- a/egosync-app/src/hooks/useDashboard.ts
++++ b/egosync-app/src/hooks/useDashboard.ts
+@@ -1,30 +1,48 @@
+-import { useEffect, useState } from 'react';
++import { useEffect, useRef, useState } from 'react';
+ import { dashboardService } from '../services/dashboardService';
+-import type { DashboardStatus } from '../types/dashboard';
++import type { DashboardMetrics, DashboardMetricsScope, DashboardStatus } from '../types/dashboard';
+ 
+ const DASHBOARD_LOAD_ERROR = '仪表盘数据加载失败，请稍后再试';
++const METRICS_LOAD_ERROR = '活动统计加载失败，请稍后再试';
+ 
+ export function useDashboard() {
+   const [statuses, setStatuses] = useState<DashboardStatus[]>([]);
+   const [isLoading, setIsLoading] = useState(false);
+   const [error, setError] = useState<string | null>(null);
+ 
++  const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
++  const [metricsLoading, setMetricsLoading] = useState(false);
++  const [metricsError, setMetricsError] = useState<string | null>(null);
++  const [scope, setScope] = useState<DashboardMetricsScope>({ type: 'all' });
++  const [timeRange, setTimeRange] = useState<{ startAt: string | null; endAt: string | null }>({
++    startAt: null,
++    endAt: null,
++  });
++
++  const requestIdRef = useRef(0);
++  // 角色列表是否已完成首次加载，用于判断“失效角色回退”是否适用
++  const statusesLoadedRef = useRef(false);
++
+   useEffect(() => {
+     let cancelled = false;
+     setIsLoading(true);
+     setError(null);
+ 
+     void (async () => {
+       try {
+         const items = await dashboardService.getStatus();
+-        if (!cancelled) setStatuses(items ?? []);
++        if (!cancelled) {
++          setStatuses(items ?? []);
++          statusesLoadedRef.current = true;
++        }
+       } catch (e) {
+         console.error('加载仪表盘状态失败:', e);
+         if (!cancelled) {
+           setStatuses([]);
+           setError(DASHBOARD_LOAD_ERROR);
++          statusesLoadedRef.current = true;
+         }
+       } finally {
+         if (!cancelled) setIsLoading(false);
+       }
+     })();
+@@ -32,9 +50,61 @@ export function useDashboard() {
+     return () => {
+       cancelled = true;
+     };
+   }, []);
+ 
++  useEffect(() => {
++    // AC-5 归档角色安全回退：角色列表加载完成后，若 scope 指向的角色不在活跃列表中，回退到 all
++    if (
++      statusesLoadedRef.current &&
++      scope.type === 'role' &&
++      !statuses.some((s) => s.roleId === scope.roleId)
++    ) {
++      setScope({ type: 'all' });
++      return; // 不发送失效角色 ID 的请求
++    }
++
++    const currentRequestId = ++requestIdRef.current;
++    let cancelled = false;
++    setMetricsLoading(true);
++    setMetricsError(null);
++
++    void (async () => {
++      try {
++        const result = await dashboardService.getMetrics({ scope, ...timeRange });
++        if (!cancelled && currentRequestId === requestIdRef.current) {
++          setMetrics(result);
++        }
++      } catch (e) {
++        console.error('加载活动统计失败:', e);
++        if (!cancelled && currentRequestId === requestIdRef.current) {
++          // AC-13 失败保留旧数据：无论是否已有 metrics，都设置错误；UI 负责区分首次 vs 刷新
++          setMetricsError(METRICS_LOAD_ERROR);
++        }
++      } finally {
++        if (!cancelled && currentRequestId === requestIdRef.current) {
++          setMetricsLoading(false);
++        }
++      }
++    })();
++
++    return () => {
++      cancelled = true;
++    };
++  }, [scope, timeRange, statuses]);
++
+   const clearError = () => setError(null);
+ 
+-  return { statuses, isLoading, error, clearError };
++  return {
++    statuses,
++    isLoading,
++    error,
++    clearError,
++    metrics,
++    metricsLoading,
++    metricsError,
++    scope,
++    setScope,
++    timeRange,
++    setTimeRange,
++  };
+ }
+diff --git a/egosync-app/src/services/dashboardService.ts b/egosync-app/src/services/dashboardService.ts
+index 5ff9cc4..7c884c9 100644
+--- a/egosync-app/src/services/dashboardService.ts
++++ b/egosync-app/src/services/dashboardService.ts
+@@ -1,6 +1,8 @@
+ import { invoke } from '@tauri-apps/api/core';
+-import type { DashboardStatus } from '../types/dashboard';
++import type { DashboardMetrics, DashboardMetricsQuery, DashboardStatus } from '../types/dashboard';
+ 
+ export const dashboardService = {
+   getStatus: () => invoke<DashboardStatus[]>('dashboard_get_status'),
++  getMetrics: (query: DashboardMetricsQuery) =>
++    invoke<DashboardMetrics>('dashboard_get_metrics', { query }),
+ };
+diff --git a/egosync-app/src/types/dashboard.ts b/egosync-app/src/types/dashboard.ts
+index e2718bb..5033d82 100644
+--- a/egosync-app/src/types/dashboard.ts
++++ b/egosync-app/src/types/dashboard.ts
+@@ -6,5 +6,24 @@ export interface DashboardStatus {
+   energy: number;
+   pendingTasksCount: number;
+   lastActiveAt: string | null;
+   hasUrgent: boolean;
+ }
++
++export type DashboardMetricsScope =
++  | { type: 'all' }
++  | { type: 'butler' }
++  | { type: 'role'; roleId: string };
++
++export interface DashboardMetricsQuery {
++  scope: DashboardMetricsScope;
++  startAt: string | null;
++  endAt: string | null;
++}
++
++export interface DashboardMetrics {
++  taskCount: number;
++  memoryCount: number;
++  conversationCount: number;
++  pendingTaskCount: number;
++  generatedAt: string;
++}

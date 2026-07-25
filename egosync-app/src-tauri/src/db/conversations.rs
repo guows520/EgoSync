@@ -447,6 +447,56 @@ pub async fn get_last_active_for_roles(
     Ok(rows.into_iter().collect())
 }
 
+/// 仪表盘指标聚合：按 owner 条件和时间范围返回 conversation_count（按会话计数，不按消息）
+pub async fn count_conversations_for_metrics(
+    pool: &ConversationsPool,
+    owner_condition: &str,
+    role_id: Option<&str>,
+    start_at: Option<&str>,
+    end_at: Option<&str>,
+) -> Result<i64, AppError> {
+    let owner_filter = match owner_condition {
+        "all" => "1=1".to_string(),
+        "butler" => "role_id IS NULL".to_string(),
+        "role" => "role_id = ?".to_string(),
+        _ => "1=1".to_string(),
+    };
+
+    let time_filter = match (start_at, end_at) {
+        (Some(_), Some(_)) => "AND started_at >= ? AND started_at < ?".to_string(),
+        (Some(_), None) => "AND started_at >= ?".to_string(),
+        (None, Some(_)) => "AND started_at < ?".to_string(),
+        (None, None) => String::new(),
+    };
+
+    let sql = format!(
+        "SELECT COUNT(*) FROM conversations WHERE {} {}",
+        owner_filter, time_filter
+    );
+
+    let mut query = sqlx::query_as::<_, (i64,)>(&sql);
+
+    if owner_condition == "role" {
+        if let Some(rid) = role_id {
+            query = query.bind(rid);
+        }
+    }
+
+    if let Some(start) = start_at {
+        query = query.bind(start);
+    }
+    if let Some(end) = end_at {
+        query = query.bind(end);
+    }
+
+    let (count,) = query
+        .fetch_one(&**pool)
+        .await
+        .map_err(|e| AppError::DbError(format!("仪表盘会话指标聚合查询失败: {}", e)))?;
+
+    Ok(count)
+}
+
 fn chrono_now() -> String {
     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
@@ -874,5 +924,72 @@ mod tests {
         let pool = setup_test_pool().await;
         let map = get_last_active_for_roles(&pool, &[]).await.expect("get last active");
         assert!(map.is_empty());
+    }
+
+    #[tokio::test]
+    async fn count_conversations_for_metrics_all_scope() {
+        let pool = setup_test_pool().await;
+        create_conversation(&pool, None).await.unwrap();
+        create_conversation(&pool, Some("role-a")).await.unwrap();
+        create_conversation(&pool, Some("role-b")).await.unwrap();
+
+        let count = count_conversations_for_metrics(&pool, "all", None, None, None).await.unwrap();
+        assert_eq!(count, 3);
+    }
+
+    #[tokio::test]
+    async fn count_conversations_for_metrics_butler_scope() {
+        let pool = setup_test_pool().await;
+        create_conversation(&pool, None).await.unwrap();
+        create_conversation(&pool, None).await.unwrap();
+        create_conversation(&pool, Some("role-a")).await.unwrap();
+
+        let count = count_conversations_for_metrics(&pool, "butler", None, None, None).await.unwrap();
+        assert_eq!(count, 2, "仅 role_id IS NULL");
+    }
+
+    #[tokio::test]
+    async fn count_conversations_for_metrics_role_scope() {
+        let pool = setup_test_pool().await;
+        create_conversation(&pool, Some("role-a")).await.unwrap();
+        create_conversation(&pool, Some("role-a")).await.unwrap();
+        create_conversation(&pool, Some("role-b")).await.unwrap();
+
+        let count = count_conversations_for_metrics(&pool, "role", Some("role-a"), None, None).await.unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[tokio::test]
+    async fn count_conversations_for_metrics_multi_messages_counts_once() {
+        let pool = setup_test_pool().await;
+        let conv = create_conversation(&pool, Some("role-a")).await.unwrap();
+        insert_message(&pool, &conv.id, "user", "消息1", true).await.unwrap();
+        insert_message(&pool, &conv.id, "assistant", "消息2", true).await.unwrap();
+        insert_message(&pool, &conv.id, "user", "消息3", true).await.unwrap();
+
+        let count = count_conversations_for_metrics(&pool, "role", Some("role-a"), None, None).await.unwrap();
+        assert_eq!(count, 1, "多消息会话只计 1（AC-2）");
+    }
+
+    #[tokio::test]
+    async fn count_conversations_for_metrics_time_range() {
+        let pool = setup_test_pool().await;
+
+        sqlx::query("INSERT INTO conversations (id, role_id, started_at, updated_at) VALUES ('c1', 'role-a', '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')")
+            .execute(&*pool).await.unwrap();
+        sqlx::query("INSERT INTO conversations (id, role_id, started_at, updated_at) VALUES ('c2', 'role-a', '2026-06-05T00:00:00Z', '2026-06-05T00:00:00Z')")
+            .execute(&*pool).await.unwrap();
+        sqlx::query("INSERT INTO conversations (id, role_id, started_at, updated_at) VALUES ('c3', 'role-a', '2026-06-10T00:00:00Z', '2026-06-10T00:00:00Z')")
+            .execute(&*pool).await.unwrap();
+
+        let count = count_conversations_for_metrics(&pool, "all", None, Some("2026-06-01T00:00:00Z"), Some("2026-06-10T00:00:00Z")).await.unwrap();
+        assert_eq!(count, 2, "半开区间：c3 在 end 边界外");
+    }
+
+    #[tokio::test]
+    async fn count_conversations_for_metrics_empty_returns_zero() {
+        let pool = setup_test_pool().await;
+        let count = count_conversations_for_metrics(&pool, "all", None, None, None).await.unwrap();
+        assert_eq!(count, 0);
     }
 }

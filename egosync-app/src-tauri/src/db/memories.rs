@@ -400,6 +400,56 @@ pub async fn count_memories(
     Ok(memories.len())
 }
 
+/// 仪表盘指标聚合：按 owner 条件和时间范围返回 memory_count
+pub async fn count_memories_for_metrics(
+    pool: &SqlitePool,
+    owner_condition: &str,
+    role_id: Option<&str>,
+    start_at: Option<&str>,
+    end_at: Option<&str>,
+) -> Result<i64, AppError> {
+    let owner_filter = match owner_condition {
+        "all" => "1=1".to_string(),
+        "butler" => "role_id IS NULL".to_string(),
+        "role" => "role_id = ?".to_string(),
+        _ => "1=1".to_string(),
+    };
+
+    let time_filter = match (start_at, end_at) {
+        (Some(_), Some(_)) => "AND created_at >= ? AND created_at < ?".to_string(),
+        (Some(_), None) => "AND created_at >= ?".to_string(),
+        (None, Some(_)) => "AND created_at < ?".to_string(),
+        (None, None) => String::new(),
+    };
+
+    let sql = format!(
+        "SELECT COUNT(*) FROM memories WHERE {} {}",
+        owner_filter, time_filter
+    );
+
+    let mut query = sqlx::query_as::<_, (i64,)>(&sql);
+
+    if owner_condition == "role" {
+        if let Some(rid) = role_id {
+            query = query.bind(rid);
+        }
+    }
+
+    if let Some(start) = start_at {
+        query = query.bind(start);
+    }
+    if let Some(end) = end_at {
+        query = query.bind(end);
+    }
+
+    let (count,) = query
+        .fetch_one(pool)
+        .await
+        .map_err(|e| AppError::DbError(format!("仪表盘记忆指标聚合查询失败: {}", e)))?;
+
+    Ok(count)
+}
+
 fn dedup_memories(memories: Vec<Memory>) -> Vec<Memory> {
     let mut seen = HashSet::new();
     memories
@@ -1173,5 +1223,73 @@ mod tests {
             .expect("delete missing memory");
 
         assert!(!deleted);
+    }
+
+    #[tokio::test]
+    async fn count_memories_for_metrics_all_scope() {
+        let pool = setup_test_db().await;
+        sqlx::query("INSERT INTO roles (id, name) VALUES ('role-1', '产品经理')")
+            .execute(&pool).await.unwrap();
+
+        sqlx::query("INSERT INTO memories (id, role_id, category, content, source_conversation_id, source_message_ids, created_at) VALUES ('m1', NULL, 'fact', '全局记忆', 'conv-1', '[]', '2026-06-01T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO memories (id, role_id, category, content, source_conversation_id, source_message_ids, created_at) VALUES ('m2', 'role-1', 'fact', '角色记忆', 'conv-2', '[]', '2026-06-02T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+
+        let count = count_memories_for_metrics(&pool, "all", None, None, None).await.unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[tokio::test]
+    async fn count_memories_for_metrics_butler_scope() {
+        let pool = setup_test_db().await;
+        sqlx::query("INSERT INTO roles (id, name) VALUES ('role-1', '产品经理')")
+            .execute(&pool).await.unwrap();
+
+        sqlx::query("INSERT INTO memories (id, role_id, category, content, source_conversation_id, source_message_ids, created_at) VALUES ('m1', NULL, 'fact', '全局记忆', 'conv-1', '[]', '2026-06-01T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO memories (id, role_id, category, content, source_conversation_id, source_message_ids, created_at) VALUES ('m2', 'role-1', 'fact', '角色记忆', 'conv-2', '[]', '2026-06-02T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+
+        let count = count_memories_for_metrics(&pool, "butler", None, None, None).await.unwrap();
+        assert_eq!(count, 1, "仅 role_id IS NULL");
+    }
+
+    #[tokio::test]
+    async fn count_memories_for_metrics_role_scope() {
+        let pool = setup_test_db().await;
+        sqlx::query("INSERT INTO roles (id, name) VALUES ('role-1', '产品经理')")
+            .execute(&pool).await.unwrap();
+
+        sqlx::query("INSERT INTO memories (id, role_id, category, content, source_conversation_id, source_message_ids, created_at) VALUES ('m1', NULL, 'fact', '全局', 'conv-1', '[]', '2026-06-01T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO memories (id, role_id, category, content, source_conversation_id, source_message_ids, created_at) VALUES ('m2', 'role-1', 'fact', '角色1', 'conv-2', '[]', '2026-06-02T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO memories (id, role_id, category, content, source_conversation_id, source_message_ids, created_at) VALUES ('m3', 'role-1', 'fact', '角色1-2', 'conv-3', '[]', '2026-06-03T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+
+        let count = count_memories_for_metrics(&pool, "role", Some("role-1"), None, None).await.unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[tokio::test]
+    async fn count_memories_for_metrics_time_range() {
+        let pool = setup_test_db().await;
+        sqlx::query("INSERT INTO memories (id, role_id, category, content, source_conversation_id, source_message_ids, created_at) VALUES ('m1', NULL, 'fact', '记忆1', 'conv-1', '[]', '2026-06-01T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO memories (id, role_id, category, content, source_conversation_id, source_message_ids, created_at) VALUES ('m2', NULL, 'fact', '记忆2', 'conv-2', '[]', '2026-06-05T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO memories (id, role_id, category, content, source_conversation_id, source_message_ids, created_at) VALUES ('m3', NULL, 'fact', '记忆3', 'conv-3', '[]', '2026-06-10T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+
+        let count = count_memories_for_metrics(&pool, "all", None, Some("2026-06-01T00:00:00Z"), Some("2026-06-10T00:00:00Z")).await.unwrap();
+        assert_eq!(count, 2, "半开区间：m3 在 end 边界外");
+    }
+
+    #[tokio::test]
+    async fn count_memories_for_metrics_empty_returns_zero() {
+        let pool = setup_test_db().await;
+        let count = count_memories_for_metrics(&pool, "all", None, None, None).await.unwrap();
+        assert_eq!(count, 0);
     }
 }

@@ -1,8 +1,231 @@
-import { ListTodo, Clock, AlertTriangle, Brain, MessageSquare } from 'lucide-react';
+import { useState } from 'react';
+import type { Dispatch, SetStateAction } from 'react';
+import { ListTodo, Clock, AlertTriangle, Brain, MessageSquare, CalendarDays, ChevronDown } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { getRoleIconComponent, normalizeColorHex } from '../../lib/roleIcons';
 import { useDashboard } from '../../hooks/useDashboard';
 import type { DashboardStatus } from '../../types/dashboard';
+
+type TimeRange = {
+  startAt: string | null;
+  endAt: string | null;
+};
+
+type DatePreset = 'all' | 'recent3' | 'recent7' | 'recentMonth' | 'custom';
+
+const DATE_PRESETS: Array<{ value: DatePreset; label: string }> = [
+  { value: 'all', label: '全部日期' },
+  { value: 'recent3', label: '最近3天' },
+  { value: 'recent7', label: '最近7天' },
+  { value: 'recentMonth', label: '最近1个月' },
+  { value: 'custom', label: '自定义时间' },
+];
+
+function dateInputToIso(value: string, dayOffset = 0): string | null {
+  if (!value) return null;
+  const match = /^(\d{4,})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return null;
+
+  const [, yearText, monthText, dayText] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const date = new Date(0);
+  date.setFullYear(year, month - 1, day);
+  date.setHours(0, 0, 0, 0);
+  if (
+    Number.isNaN(date.getTime())
+    || date.getFullYear() !== year
+    || date.getMonth() !== month - 1
+    || date.getDate() !== day
+  ) return null;
+
+  date.setDate(date.getDate() + dayOffset);
+  return date.toISOString();
+}
+
+function toDateInput(iso: string | null, exclusiveEnd = false): string {
+  if (!iso) return '';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  if (exclusiveEnd) date.setDate(date.getDate() - 1);
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function getPresetTimeRange(preset: Exclude<DatePreset, 'custom'>, now = new Date()): TimeRange {
+  if (preset === 'all') return { startAt: null, endAt: null };
+
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+  const end = new Date(today);
+  end.setDate(end.getDate() + 1);
+  const start = new Date(today);
+
+  if (preset === 'recent3') {
+    start.setDate(start.getDate() - 2);
+  } else if (preset === 'recent7') {
+    start.setDate(start.getDate() - 6);
+  } else {
+    const day = start.getDate();
+    start.setDate(1);
+    start.setMonth(start.getMonth() - 1);
+    const lastDay = new Date(start.getFullYear(), start.getMonth() + 1, 0).getDate();
+    start.setDate(Math.min(day, lastDay));
+  }
+
+  return { startAt: start.toISOString(), endAt: end.toISOString() };
+}
+
+type DateRangeFilterProps = {
+  timeRange: TimeRange;
+  setTimeRange: Dispatch<SetStateAction<TimeRange>>;
+};
+
+function DateRangeFilter({ timeRange, setTimeRange }: DateRangeFilterProps) {
+  const [datePreset, setDatePreset] = useState<DatePreset>('all');
+  const [isOpen, setIsOpen] = useState(false);
+  const [isCustomEditorOpen, setIsCustomEditorOpen] = useState(false);
+  const [draftStart, setDraftStart] = useState('');
+  const [draftEnd, setDraftEnd] = useState('');
+
+  const appliedStart = toDateInput(timeRange.startAt);
+  const appliedEnd = toDateInput(timeRange.endAt, true);
+  const datePresetLabel = DATE_PRESETS.find((item) => item.value === datePreset)?.label ?? '全部日期';
+  const displayLabel = datePreset === 'custom' && appliedStart && appliedEnd
+    ? `${appliedStart} 至 ${appliedEnd}`
+    : datePresetLabel;
+  const customRangeError = draftStart && draftEnd && draftStart > draftEnd
+    ? '结束日期不能早于开始日期'
+    : '';
+
+  const openCustomEditor = () => {
+    setDraftStart(appliedStart);
+    setDraftEnd(appliedEnd);
+    setIsCustomEditorOpen(true);
+  };
+
+  const handleToggle = () => {
+    const nextOpen = !isOpen;
+    setIsOpen(nextOpen);
+    if (nextOpen && datePreset === 'custom') openCustomEditor();
+  };
+
+  const handlePresetSelect = (preset: DatePreset) => {
+    if (preset === 'custom') {
+      openCustomEditor();
+      setIsOpen(true);
+      return;
+    }
+
+    setDatePreset(preset);
+    setIsCustomEditorOpen(false);
+    setTimeRange(getPresetTimeRange(preset));
+    setIsOpen(false);
+  };
+
+  const handleCustomApply = () => {
+    if (!draftStart || !draftEnd || customRangeError) return;
+    const startAt = dateInputToIso(draftStart);
+    const endAt = dateInputToIso(draftEnd, 1);
+    if (!startAt || !endAt) return;
+
+    setDatePreset('custom');
+    setTimeRange({ startAt, endAt });
+    setIsCustomEditorOpen(false);
+    setIsOpen(false);
+  };
+
+  return (
+    <div className="relative w-[196px] shrink-0">
+      <button
+        type="button"
+        onClick={handleToggle}
+        className="flex w-full items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-left text-[12px] text-slate-700 focus:outline-none focus:ring-1 focus:ring-indigo-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+        aria-label="日期筛选"
+        aria-haspopup="dialog"
+        aria-expanded={isOpen}
+      >
+        <CalendarDays size={14} className="shrink-0 text-slate-400" />
+        <span className="min-w-0 flex-1 truncate">{displayLabel}</span>
+        <ChevronDown size={14} className="shrink-0 text-slate-400" />
+      </button>
+
+      {isOpen && (
+        <div
+          role="dialog"
+          aria-label="日期筛选选项"
+          className="absolute right-0 top-full z-20 mt-2 w-[250px] rounded-xl border border-slate-200 bg-white p-2 shadow-lg dark:border-slate-700 dark:bg-slate-800"
+        >
+          <div className="space-y-1" aria-label="日期预设选项">
+            {DATE_PRESETS.map((preset) => (
+              <button
+                key={preset.value}
+                type="button"
+                onClick={() => handlePresetSelect(preset.value)}
+                className={cn(
+                  'w-full rounded-lg px-2.5 py-1.5 text-left text-[12px] transition-colors',
+                  (datePreset === preset.value || (preset.value === 'custom' && isCustomEditorOpen))
+                    ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-950/50 dark:text-indigo-300'
+                    : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700',
+                )}
+                aria-pressed={datePreset === preset.value || (preset.value === 'custom' && isCustomEditorOpen)}
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
+
+          {isCustomEditorOpen && (
+            <div className="mt-2 space-y-2 border-t border-slate-200 pt-2 dark:border-slate-700">
+              <label className="block text-[11px] text-slate-500 dark:text-slate-400">
+                开始日期
+                <input
+                  type="date"
+                  value={draftStart}
+                  onChange={(e) => setDraftStart(e.target.value)}
+                  className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[12px] text-slate-700 focus:outline-none focus:ring-1 focus:ring-indigo-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                  aria-label="自定义开始日期"
+                />
+              </label>
+              <label className="block text-[11px] text-slate-500 dark:text-slate-400">
+                结束日期
+                <input
+                  type="date"
+                  value={draftEnd}
+                  onChange={(e) => setDraftEnd(e.target.value)}
+                  className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[12px] text-slate-700 focus:outline-none focus:ring-1 focus:ring-indigo-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                  aria-label="自定义结束日期"
+                />
+              </label>
+              {customRangeError && <div className="text-[11px] text-red-500">{customRangeError}</div>}
+              <div className="flex justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsCustomEditorOpen(false);
+                    setIsOpen(false);
+                  }}
+                  className="rounded-lg px-2.5 py-1.5 text-[12px] text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-700"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCustomApply}
+                  disabled={!draftStart || !draftEnd || Boolean(customRangeError)}
+                  className="rounded-lg bg-indigo-600 px-2.5 py-1.5 text-[12px] text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  应用日期
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function clampEnergy(value: number): number {
   if (typeof value !== 'number' || Number.isNaN(value)) return 0;
@@ -51,54 +274,8 @@ export function DashboardTab({ onViewChange }: { onViewChange?: (view: string) =
     }
   };
 
-  const dateInputToIso = (value: string, dayOffset = 0): string | null => {
-    if (!value) return null;
-    const match = /^(\d{4,})-(\d{2})-(\d{2})$/.exec(value);
-    if (!match) return null;
-
-    const [, yearText, monthText, dayText] = match;
-    const year = Number(yearText);
-    const month = Number(monthText);
-    const day = Number(dayText);
-    const date = new Date(0);
-    date.setFullYear(year, month - 1, day);
-    date.setHours(0, 0, 0, 0);
-    if (
-      Number.isNaN(date.getTime())
-      || date.getFullYear() !== year
-      || date.getMonth() !== month - 1
-      || date.getDate() !== day
-    ) return null;
-
-    date.setDate(date.getDate() + dayOffset);
-    return date.toISOString();
-  };
-
-  const handleStartChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setTimeRange((prev) => ({
-      ...prev,
-      startAt: dateInputToIso(e.target.value),
-    }));
-  };
-
-  const handleEndChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setTimeRange((prev) => ({
-      ...prev,
-      endAt: dateInputToIso(e.target.value, 1),
-    }));
-  };
-
   const scopeValue =
     scope.type === 'all' ? 'all' : scope.type === 'butler' ? 'butler' : scope.roleId;
-
-  const toDateInput = (iso: string | null, exclusiveEnd = false): string => {
-    if (!iso) return '';
-    const date = new Date(iso);
-    if (Number.isNaN(date.getTime())) return '';
-    if (exclusiveEnd) date.setDate(date.getDate() - 1);
-    const pad = (value: number) => String(value).padStart(2, '0');
-    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-  };
 
   const metricCards = [
     { icon: ListTodo, label: '任务总数', value: metrics?.taskCount ?? 0, color: 'text-indigo-500' },
@@ -136,21 +313,7 @@ export function DashboardTab({ onViewChange }: { onViewChange?: (view: string) =
             ))}
           </select>
 
-          <input
-            type="date"
-            value={toDateInput(timeRange.startAt)}
-            onChange={handleStartChange}
-            className="w-[132px] shrink-0 text-[12px] rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1.5 text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-400"
-            aria-label="开始日期"
-          />
-          <span className="text-[12px] text-slate-400">至</span>
-          <input
-            type="date"
-            value={toDateInput(timeRange.endAt, true)}
-            onChange={handleEndChange}
-            className="w-[132px] shrink-0 text-[12px] rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1.5 text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-400"
-            aria-label="结束日期"
-          />
+          <DateRangeFilter timeRange={timeRange} setTimeRange={setTimeRange} />
         </div>
 
         {metricsError && metrics === null && (

@@ -264,23 +264,7 @@ describe('DashboardTab', () => {
     });
   });
 
-  it('渲染时间范围选择器', async () => {
-    const status = makeStatus('r1');
-    mockInvoke.mockImplementation((cmd: string) => {
-      if (cmd === 'dashboard_get_status') return Promise.resolve([status]);
-      if (cmd === 'dashboard_get_metrics') return Promise.resolve(makeMetrics());
-      return Promise.resolve(null);
-    });
-
-    render(<DashboardTab onViewChange={vi.fn()} />);
-
-    await waitFor(() => {
-      expect(screen.getByLabelText('开始日期')).toHaveAttribute('type', 'date');
-      expect(screen.getByLabelText('结束日期')).toHaveAttribute('type', 'date');
-    });
-  });
-
-  it('按自然日发送半开时间范围并正确回填结束日期', async () => {
+  it('默认显示日期筛选组合控件，不直接展示两个日期输入', async () => {
     mockInvoke.mockImplementation((cmd: string) => {
       if (cmd === 'dashboard_get_status') return Promise.resolve([makeStatus('r1')]);
       if (cmd === 'dashboard_get_metrics') return Promise.resolve(makeMetrics());
@@ -289,22 +273,22 @@ describe('DashboardTab', () => {
 
     render(<DashboardTab onViewChange={vi.fn()} />);
 
-    const startInput = await screen.findByLabelText('开始日期') as HTMLInputElement;
-    const endInput = screen.getByLabelText('结束日期') as HTMLInputElement;
-    fireEvent.change(startInput, { target: { value: '2026-07-24' } });
-    fireEvent.change(endInput, { target: { value: '2026-07-24' } });
-
-    const expectedStart = new Date(2026, 6, 24).toISOString();
-    const expectedEnd = new Date(2026, 6, 25).toISOString();
     await waitFor(() => {
-      expect(mockInvoke).toHaveBeenCalledWith('dashboard_get_metrics', {
-        query: expect.objectContaining({ startAt: expectedStart, endAt: expectedEnd }),
-      });
+      expect(screen.getByRole('button', { name: '日期筛选' })).toHaveTextContent('全部日期');
     });
-    expect(endInput.value).toBe('2026-07-24');
+    expect(screen.queryByLabelText('自定义开始日期')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('自定义结束日期')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '日期筛选' }));
+    const dialog = screen.getByRole('dialog', { name: '日期筛选选项' });
+    expect(within(dialog).getByRole('button', { name: '全部日期' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: '最近3天' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: '最近7天' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: '最近1个月' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: '自定义时间' })).toBeInTheDocument();
   });
 
-  it('清空日期时发送 null 并保留另一侧边界', async () => {
+  it('选择最近3天和最近7天时发送本地自然日半开范围', async () => {
     mockInvoke.mockImplementation((cmd: string) => {
       if (cmd === 'dashboard_get_status') return Promise.resolve([makeStatus('r1')]);
       if (cmd === 'dashboard_get_metrics') return Promise.resolve(makeMetrics());
@@ -312,27 +296,124 @@ describe('DashboardTab', () => {
     });
 
     render(<DashboardTab onViewChange={vi.fn()} />);
+    await screen.findByRole('button', { name: '日期筛选' });
 
-    const startInput = await screen.findByLabelText('开始日期') as HTMLInputElement;
-    const endInput = screen.getByLabelText('结束日期') as HTMLInputElement;
+    const dayStart = new Date();
+    dayStart.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(dayStart);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const recent3Start = new Date(dayStart);
+    recent3Start.setDate(recent3Start.getDate() - 2);
+    const recent7Start = new Date(dayStart);
+    recent7Start.setDate(recent7Start.getDate() - 6);
+
+    fireEvent.click(screen.getByRole('button', { name: '日期筛选' }));
+    fireEvent.click(screen.getByRole('button', { name: '最近3天' }));
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith('dashboard_get_metrics', {
+        query: expect.objectContaining({
+          startAt: recent3Start.toISOString(),
+          endAt: tomorrow.toISOString(),
+        }),
+      });
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: '日期筛选' }));
+    fireEvent.click(screen.getByRole('button', { name: '最近7天' }));
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith('dashboard_get_metrics', {
+        query: expect.objectContaining({
+          startAt: recent7Start.toISOString(),
+          endAt: tomorrow.toISOString(),
+        }),
+      });
+    });
+  });
+
+  it('最近1个月按日历月回溯并保持结束边界为明天零点', async () => {
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'dashboard_get_status') return Promise.resolve([makeStatus('r1')]);
+      if (cmd === 'dashboard_get_metrics') return Promise.resolve(makeMetrics());
+      return Promise.resolve(null);
+    });
+
+    render(<DashboardTab onViewChange={vi.fn()} />);
+    await screen.findByRole('button', { name: '日期筛选' });
+
+    const today = new Date();
+    const day = today.getDate();
+    const expectedEnd = new Date(today);
+    expectedEnd.setHours(0, 0, 0, 0);
+    expectedEnd.setDate(expectedEnd.getDate() + 1);
+    const expectedStart = new Date(expectedEnd);
+    expectedStart.setDate(1);
+    expectedStart.setMonth(expectedStart.getMonth() - 1);
+    const lastDay = new Date(expectedStart.getFullYear(), expectedStart.getMonth() + 1, 0).getDate();
+    expectedStart.setDate(Math.min(day, lastDay));
+
+    fireEvent.click(screen.getByRole('button', { name: '日期筛选' }));
+    fireEvent.click(screen.getByRole('button', { name: '最近1个月' }));
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith('dashboard_get_metrics', {
+        query: expect.objectContaining({
+          startAt: expectedStart.toISOString(),
+          endAt: expectedEnd.toISOString(),
+        }),
+      });
+    });
+  });
+
+  it('全部日期发送空边界，自定义时间只在应用时发送一次请求', async () => {
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'dashboard_get_status') return Promise.resolve([makeStatus('r1')]);
+      if (cmd === 'dashboard_get_metrics') return Promise.resolve(makeMetrics());
+      return Promise.resolve(null);
+    });
+
+    render(<DashboardTab onViewChange={vi.fn()} />);
+    await screen.findByRole('button', { name: '日期筛选' });
+
+    fireEvent.click(screen.getByRole('button', { name: '日期筛选' }));
+    fireEvent.click(screen.getByRole('button', { name: '最近3天' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: '日期筛选' })).toHaveTextContent('最近3天'));
+
+    fireEvent.click(screen.getByRole('button', { name: '日期筛选' }));
+    fireEvent.click(screen.getByRole('button', { name: '自定义时间' }));
+    const startInput = screen.getByLabelText('自定义开始日期') as HTMLInputElement;
+    const endInput = screen.getByLabelText('自定义结束日期') as HTMLInputElement;
+    expect(startInput.value).not.toBe('');
+    expect(endInput.value).not.toBe('');
+
     fireEvent.change(startInput, { target: { value: '2026-07-24' } });
     fireEvent.change(endInput, { target: { value: '2026-07-24' } });
+    expect(screen.getByRole('button', { name: '应用日期' })).not.toBeDisabled();
 
-    const expectedEnd = new Date(2026, 6, 25).toISOString();
+    const metricsCallsBeforeApply = mockInvoke.mock.calls.filter(([cmd]) => cmd === 'dashboard_get_metrics').length;
+    fireEvent.click(screen.getByRole('button', { name: '应用日期' }));
     await waitFor(() => {
+      const metricsCalls = mockInvoke.mock.calls.filter(([cmd]) => cmd === 'dashboard_get_metrics');
+      expect(metricsCalls.length).toBe(metricsCallsBeforeApply + 1);
       expect(mockInvoke).toHaveBeenCalledWith('dashboard_get_metrics', {
-        query: expect.objectContaining({ endAt: expectedEnd }),
+        query: expect.objectContaining({
+          startAt: new Date(2026, 6, 24).toISOString(),
+          endAt: new Date(2026, 6, 25).toISOString(),
+        }),
       });
     });
+    expect(screen.getByRole('button', { name: '日期筛选' })).toHaveTextContent('2026-07-24 至 2026-07-24');
 
-    fireEvent.change(startInput, { target: { value: '' } });
-    await waitFor(() => {
-      expect(mockInvoke).toHaveBeenCalledWith('dashboard_get_metrics', {
-        query: expect.objectContaining({ startAt: null, endAt: expectedEnd }),
-      });
-    });
+    fireEvent.click(screen.getByRole('button', { name: '日期筛选' }));
+    fireEvent.click(screen.getByRole('button', { name: '自定义时间' }));
+    fireEvent.change(screen.getByLabelText('自定义开始日期'), { target: { value: '2026-07-25' } });
+    fireEvent.change(screen.getByLabelText('自定义结束日期'), { target: { value: '2026-07-24' } });
+    expect(screen.getByText('结束日期不能早于开始日期')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '应用日期' })).toBeDisabled();
 
-    fireEvent.change(endInput, { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+    expect(screen.getByRole('button', { name: '日期筛选' })).toHaveTextContent('2026-07-24 至 2026-07-24');
+
+    fireEvent.click(screen.getByRole('button', { name: '日期筛选' }));
+    fireEvent.click(screen.getByRole('button', { name: '全部日期' }));
     await waitFor(() => {
       expect(mockInvoke).toHaveBeenCalledWith('dashboard_get_metrics', {
         query: expect.objectContaining({ startAt: null, endAt: null }),

@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "eeailab-montessori": {
+      "source": "beijita-lab/eeailab-skills",
+      "sourceType": "github",
+      "skillPath": "montessori/SKILL.md",
+      "computedHash": "00bf4dae56f0fefa86df91176191ebd06ef5dbe61f3292ce908ff3b5c58898e7"
+    }
+  }
+}

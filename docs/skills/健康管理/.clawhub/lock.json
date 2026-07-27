@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "skills": {
+    "health-manager": {
+      "version": "1.0.0",
+      "installedAt": 1785140100037,
+      "ownerHandle": "harrylabsj"
+    }
+  }
+}

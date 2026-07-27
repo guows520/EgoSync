@@ -1,0 +1,278 @@
+{
+  "main": {
+    "id": "8d1a22e1e374eedd",
+    "type": "split",
+    "children": [
+      {
+        "id": "0a557b7a2caecd85",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "db82840b5a680948",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "marketing/博文截图设计.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "博文截图设计"
+            }
+          },
+          {
+            "id": "e6f91c64adc4c65e",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "marketing/egosync-launch-blog.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "egosync-launch-blog"
+            }
+          },
+          {
+            "id": "673dfd3d494d557f",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "marketing/博文截图设计.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "博文截图设计"
+            }
+          },
+          {
+            "id": "1213005e17bf9339",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "user-guide/01-快速开始.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "01-快速开始"
+            }
+          }
+        ],
+        "currentTab": 1
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "786733d68eef2837",
+    "type": "split",
+    "children": [
+      {
+        "id": "f01fae7b552eed9d",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "a1543c53e464ed7c",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false
+              },
+              "icon": "lucide-folder-closed",
+              "title": "文件列表"
+            }
+          },
+          {
+            "id": "4043470162098b66",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "搜索"
+            }
+          },
+          {
+            "id": "3bbcecf226ff1c05",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {},
+              "icon": "lucide-bookmark",
+              "title": "书签"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300
+  },
+  "right": {
+    "id": "ab57b7fe03f6e513",
+    "type": "split",
+    "children": [
+      {
+        "id": "d0c9d3a823c2626d",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "3364b519d46d80fa",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "file": "marketing/零行手写代码，我尝试用AI魔法构建了一个数字分身智能体.md",
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "零行手写代码，我尝试用AI魔法构建了一个数字分身智能体 的反向链接列表"
+            }
+          },
+          {
+            "id": "95020d74af24d99f",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "file": "marketing/零行手写代码，我尝试用AI魔法构建了一个数字分身智能体.md",
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "零行手写代码，我尝试用AI魔法构建了一个数字分身智能体 的出链列表"
+            }
+          },
+          {
+            "id": "fc783509201a86c3",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "标签"
+            }
+          },
+          {
+            "id": "3b04d6413c2e0d36",
+            "type": "leaf",
+            "state": {
+              "type": "all-properties",
+              "state": {
+                "sortOrder": "frequency",
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-archive",
+              "title": "添加笔记属性"
+            }
+          },
+          {
+            "id": "2230245e1d669379",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "file": "marketing/零行手写代码，我尝试用AI魔法构建了一个数字分身智能体.md",
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "零行手写代码，我尝试用AI魔法构建了一个数字分身智能体 的大纲"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300,
+    "collapsed": true
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:打开快速切换": false,
+      "graph:查看关系图谱": false,
+      "canvas:新建白板": false,
+      "daily-notes:打开/创建今天的日记": false,
+      "templates:插入模板": false,
+      "command-palette:打开命令面板": false,
+      "bases:新建数据库": false
+    }
+  },
+  "active": "e6f91c64adc4c65e",
+  "lastOpenFiles": [
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-observability-monitoring/skills/postmortem-writing/SKILL.md",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-observability-monitoring/skills/slo-implementation/SKILL.md",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-observability-monitoring/skills/incident-responder/SKILL.md",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-observability-monitoring/skills/observability-engineer/SKILL.md",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-observability-monitoring/skills/performance-engineer/SKILL.md",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-observability-monitoring/skills/distributed-tracing/SKILL.md",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-observability-monitoring/skills/postmortem-writing",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-observability-monitoring/skills/slo-implementation",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-observability-monitoring/skills/performance-engineer",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-observability-monitoring/skills/incident-responder",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-observability-monitoring/skills/observability-engineer",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-observability-monitoring/skills/distributed-tracing",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-observability-monitoring/skills",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-observability-monitoring",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-marketing-growth/skills/content-strategy/references/headless-cms.md",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-marketing-growth/skills/content-creator/references/social_media_optimization.md",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-marketing-growth/skills/content-creator/references/content_frameworks.md",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-marketing-growth/skills/content-creator/references/brand_guidelines.md",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-marketing-growth/skills/content-strategy/evals/evals.json",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-marketing-growth/skills/content-creator/assets/content_calendar_template.md",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-marketing-growth/skills/content-creator/scripts/seo_optimizer.py",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-marketing-growth/skills/email-sequence/SKILL.md",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-marketing-growth/skills/programmatic-seo/SKILL.md",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-marketing-growth/skills/seo-audit/SKILL.md",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-marketing-growth/skills/content-strategy/SKILL.md",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-marketing-growth/skills/content-creator/SKILL.md",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-marketing-growth/skills/analytics-tracking/SKILL.md",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-marketing-growth/skills/ab-test-setup/SKILL.md",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-web-designer/skills/accessibility-compliance-accessibility-audit/resources/implementation-playbook.md",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-web-designer/skills/mobile-design/touch-psychology.md",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-web-designer/skills/mobile-design/SKILL.md",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-web-designer/skills/accessibility-compliance-accessibility-audit/SKILL.md",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-web-designer/skills/mobile-design/platform-ios.md",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-web-designer/skills/mobile-design/mobile-typography.md",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-web-designer/skills/mobile-design/platform-android.md",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-web-designer/skills/mobile-design/mobile-testing.md",
+    "skills/父亲/Parent-Helper/assets/parent-helper-banner.jpg",
+    "marketing/assets/egosync-blog-cover.svg",
+    "user-guide/assets/egosync.png",
+    "user-guide/assets/egosync.exe_20260727_170139.png",
+    "marketing/assets/egosync-main-interface-annotated-v2.png",
+    "marketing/assets/egosync-main-interface-annotated.png",
+    "marketing/assets/egosync-role-skills.png",
+    "marketing/assets/egosync-task-delegation.png",
+    "marketing/assets/egosync-role-memories.png",
+    "截图/委派/3-父亲.png"
+  ]
+}

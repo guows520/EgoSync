@@ -219,3 +219,7 @@ All items resolved in the same session:
 - 聊天执行事件通过正文匹配历史消息；thinking-only、重复正文及多 assistant bubble 时可能丢失或错误归属。来源：其他聊天改动 / `ChatStream.tsx:970-978`。
 - Thinking 分段在空元事件、重复 text/tool 快照、非单调 replacement、DB 写入失败及超时提前返回时可能错误切段或丢失持久化内容。来源：其他聊天改动 / `agent_engine.rs:863,2849-2858,2993-3009,3134-3178`。
 - Thinking 插入连续读取事件前未刷新 `readRun`，会把“读取 → thinking → 写入”显示成“thinking → 读取 → 写入”。来源：其他聊天改动 / `ChatStream.tsx:479-513`。
+
+## Deferred from: code review of fix-deepseek-provider-constraint (2026-07-27)
+
+- **完整 Rust 套件存在 6 项既有 Agent prompt/permission 契约失败**：`cargo test -- --test-threads=1` 结果为 796 passed、6 failed、0 ignored；失败位于未修改的 `services/agent_config.rs`（5 项）与 `services/agent_engine.rs`（1 项），包括旧 Butler prompt 文案、`find-skills` 禁用预期及 permission JSON 形态断言。本次数据库 migration 030 与新增回归测试均通过，且 baseline 后上述失败文件无差异；应另行统一 Agent 配置生成契约与测试期望。

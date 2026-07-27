@@ -469,4 +469,157 @@ mod tests {
         assert_eq!(repaired_checksum, migration.checksum.as_ref());
     }
 
+    #[tokio::test]
+    async fn llm_provider_extension_preserves_data_and_enforces_app_provider_contract() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("connect pre-upgrade db");
+        let pre_upgrade_migrator = Migrator {
+            migrations: std::borrow::Cow::Owned(
+                MIGRATOR
+                    .iter()
+                    .filter(|migration| migration.version < 30)
+                    .cloned()
+                    .collect(),
+            ),
+            ..Migrator::DEFAULT
+        };
+        pre_upgrade_migrator
+            .run(&pool)
+            .await
+            .expect("apply migrations 001-029");
+
+        sqlx::query(
+            "INSERT INTO llm_configs (
+                id, name, provider, base_url, model, api_key_ref, is_default,
+                created_at, updated_at, network_location
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        )
+        .bind("existing")
+        .bind("Existing MiniMax")
+        .bind("minimax")
+        .bind("https://example.test/v1")
+        .bind("model-1")
+        .bind("secret-1")
+        .bind(1_i64)
+        .bind("2026-07-01T00:00:00Z")
+        .bind("2026-07-02T00:00:00Z")
+        .bind("internal")
+        .execute(&pool)
+        .await
+        .expect("seed migration 029 data");
+
+        MIGRATOR
+            .run(&pool)
+            .await
+            .expect("apply provider extension migration 030");
+
+        let existing: (
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            i64,
+            String,
+            String,
+            String,
+        ) = sqlx::query_as(
+            "SELECT id, name, provider, base_url, model, api_key_ref, is_default,
+                    created_at, updated_at, network_location
+             FROM llm_configs WHERE id = 'existing'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("read preserved config");
+        assert_eq!(
+            existing,
+            (
+                "existing".to_string(),
+                "Existing MiniMax".to_string(),
+                "minimax".to_string(),
+                "https://example.test/v1".to_string(),
+                "model-1".to_string(),
+                "secret-1".to_string(),
+                1,
+                "2026-07-01T00:00:00Z".to_string(),
+                "2026-07-02T00:00:00Z".to_string(),
+                "internal".to_string(),
+            )
+        );
+
+        for provider in [
+            "openai_compatible",
+            "anthropic",
+            "minimax",
+            "zhipu",
+            "deepseek",
+            "kimi",
+            "bailian",
+        ] {
+            let id = format!("provider-{provider}");
+            sqlx::query(
+                "INSERT INTO llm_configs (id, name, provider, base_url, model, api_key_ref)
+                 VALUES (?1, ?2, ?3, '', 'model', 'secret')",
+            )
+            .bind(&id)
+            .bind(provider)
+            .bind(provider)
+            .execute(&pool)
+            .await
+            .unwrap_or_else(|error| {
+                panic!("application provider '{provider}' must persist: {error}")
+            });
+
+            let stored: (String, i64, String, String, String) = sqlx::query_as(
+                "SELECT provider, is_default, created_at, updated_at, network_location
+                 FROM llm_configs WHERE id = ?1",
+            )
+            .bind(&id)
+            .fetch_one(&pool)
+            .await
+            .expect("read persisted provider config");
+            assert_eq!(stored.0, provider, "provider ID must round-trip unchanged");
+            assert_eq!(stored.1, 0, "is_default default must remain unchanged");
+            assert!(!stored.2.is_empty(), "created_at default must remain active");
+            assert!(!stored.3.is_empty(), "updated_at default must remain active");
+            assert_eq!(
+                stored.4, "external",
+                "network_location default must remain unchanged"
+            );
+        }
+
+        let invalid_provider = sqlx::query(
+            "INSERT INTO llm_configs (id, name, provider, base_url, model, api_key_ref)
+             VALUES ('invalid-provider', 'Invalid', 'unknown', '', 'model', 'secret')",
+        )
+        .execute(&pool)
+        .await
+        .expect_err("unknown providers must remain rejected")
+        .to_string();
+        assert!(
+            invalid_provider.contains("CHECK constraint failed")
+                && invalid_provider.contains("provider IN"),
+            "unknown provider must fail specifically at the provider CHECK: {invalid_provider}"
+        );
+
+        let invalid_network_location = sqlx::query(
+            "INSERT INTO llm_configs (
+                id, name, provider, base_url, model, api_key_ref, network_location
+             ) VALUES ('invalid-network', 'Invalid', 'deepseek', '', 'model', 'secret', 'unknown')",
+        )
+        .execute(&pool)
+        .await
+        .expect_err("unknown network locations must remain rejected")
+        .to_string();
+        assert!(
+            invalid_network_location.contains("CHECK constraint failed")
+                && invalid_network_location.contains("network_location IN"),
+            "network_location CHECK must survive the table rebuild: {invalid_network_location}"
+        );
+    }
+
 }

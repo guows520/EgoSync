@@ -180,7 +180,7 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
     expect(onMemoryReferenceClick).toHaveBeenCalledWith('memory-2');
   });
 
-  it('thinking token 不直接展示为执行过程或正文链接', async () => {
+  it('thinking token 展示在统一执行过程中但不生成正文记忆链接', async () => {
     const getStreamHandler = captureStreamHandler();
     vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
 
@@ -191,8 +191,144 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
       getStreamHandler()({ conversationId: 'conv-butler', token: '[记忆#memory-hidden]', done: false, thinking: true });
     });
 
-    expect(screen.queryByText('[记忆#memory-hidden]')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '执行过程' })).toBeInTheDocument();
+    expect(screen.getByText('Think 思考中')).toBeInTheDocument();
+    expect(screen.getByTestId('thinking-content')).toHaveTextContent('[记忆#memory-hidden]');
     expect(screen.queryByRole('button', { name: '打开记忆 memory-hidden' })).not.toBeInTheDocument();
+  });
+
+  it('query 发出后在实际 thinking 内容到达前不展示 Think 框', async () => {
+    vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
+    vi.mocked(chatService.sendMessage).mockImplementation(() => new Promise(() => {}));
+
+    render(<ChatStream role={null} />);
+    await waitFor(() => expect(chatService.getButlerConversation).toHaveBeenCalled());
+
+    fireEvent.change(screen.getByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...'), {
+      target: { value: '开始处理' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+
+    await waitFor(() => expect(screen.getByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...')).toBeDisabled());
+    expect(screen.queryByRole('button', { name: '执行过程' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Think 思考中')).not.toBeInTheDocument();
+  });
+
+  it('完成后历史消息替换本地消息时仍保留本轮 Think 内容', async () => {
+    const getStreamHandler = captureStreamHandler();
+    vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
+    vi.mocked(chatService.sendMessage).mockResolvedValue(chatMessage({ id: 'user-1', content: '开始处理' }));
+    vi.mocked(chatService.getHistory)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        chatMessage({ id: 'user-1', content: '开始处理' }),
+        chatMessage({ id: 'assistant-persisted-1', role: 'assistant', content: '处理完成' }),
+      ]);
+
+    render(<ChatStream role={null} />);
+    const input = await screen.findByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...');
+    fireEvent.change(input, { target: { value: '开始处理' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+
+    await act(async () => {
+      getStreamHandler()({ conversationId: 'conv-butler', token: '实际思考内容', done: false, thinking: true });
+      getStreamHandler()({ conversationId: 'conv-butler', token: '处理完成', done: false, thinking: false });
+      getStreamHandler()({ conversationId: 'conv-butler', token: '', done: true, thinking: false });
+    });
+
+    const message = await screen.findByTestId('chat-message-assistant-persisted-1');
+    fireEvent.click(within(message).getByRole('button', { name: '执行过程' }));
+    fireEvent.click(within(message).getByRole('button', { name: 'Think 思考了1秒' }));
+    expect(within(message).getByTestId('thinking-content')).toHaveTextContent('实际思考内容');
+  });
+
+  it('历史执行事件的 0 秒耗时不会覆盖为完成态 0 秒', async () => {
+    vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
+    vi.mocked(chatService.getHistory).mockResolvedValue([
+      chatMessage({ id: 'assistant-history-1', role: 'assistant', content: '完成' }),
+    ]);
+    vi.mocked(chatService.getMessageProcessEvents).mockResolvedValue([
+      {
+        id: 'thinking-history-1',
+        conversationId: 'conv-butler',
+        messageId: 'assistant-history-1',
+        opencodeSessionId: 'session-1',
+        eventType: 'thinking',
+        toolName: null,
+        status: 'completed',
+        summary: '短暂思考',
+        rawJson: JSON.stringify({ elapsedSeconds: 0 }),
+        workingDirectory: null,
+        createdAt: '2026-01-01T00:00:00Z',
+      },
+    ]);
+
+    render(<ChatStream role={null} />);
+    const message = await screen.findByTestId('chat-message-assistant-history-1');
+    fireEvent.click(within(message).getByRole('button', { name: '执行过程' }));
+
+    expect(await within(message).findByText('Think 思考了1秒')).toBeInTheDocument();
+    expect(within(message).queryByText('Think 思考了0秒')).not.toBeInTheDocument();
+  });
+
+  it('Think 每段独立计时，工具执行期间不继续计时', async () => {
+    vi.useFakeTimers();
+    try {
+      const getStreamHandler = captureStreamHandler();
+      vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
+
+      render(<ChatStream role={null} onMemoryReferenceClick={vi.fn()} />);
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      act(() => {
+        getStreamHandler()({ conversationId: 'conv-butler', token: '第一段思考', done: false, thinking: true });
+      });
+      act(() => {
+        vi.advanceTimersByTime(2_100);
+      });
+      expect(screen.getByText('Think 思考了2秒')).toBeInTheDocument();
+
+      act(() => {
+        getStreamHandler()({
+          conversationId: 'conv-butler',
+          token: '',
+          done: false,
+          thinking: false,
+          phase: 'process',
+          processEvent: {
+            id: 'tool-boundary',
+            conversationId: 'conv-butler',
+            messageId: 'assistant-1',
+            opencodeSessionId: 'session-1',
+            eventType: 'tool',
+            toolName: 'bash',
+            status: 'running',
+            summary: '执行命令',
+            rawJson: '{}',
+            workingDirectory: null,
+            createdAt: '2026-01-01T00:00:00Z',
+          },
+        } as StreamPayload);
+      });
+      act(() => {
+        vi.advanceTimersByTime(3_000);
+      });
+      expect(screen.getByText('Think 思考了2秒')).toBeInTheDocument();
+
+      act(() => {
+        getStreamHandler()({ conversationId: 'conv-butler', token: '第二段思考', done: false, thinking: true });
+      });
+      expect(screen.getByText('Think 思考中')).toBeInTheDocument();
+      act(() => {
+        vi.advanceTimersByTime(2_000);
+      });
+      expect(screen.getByText('Think 思考了1秒')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('tool 状态显示通用工具文案且不生成正文链接', async () => {
@@ -1545,7 +1681,7 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
     expect(screen.getByText('新对话').closest('button')).not.toBeDisabled();
   });
 
-  it('只有 thinking token 且历史刷新失败时不展示原始 thinking 并解锁输入', async () => {
+  it('只有 thinking token 且历史刷新失败时仍展示执行过程并解锁输入', async () => {
     vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
     vi.mocked(chatService.sendMessage).mockResolvedValue(chatMessage({ id: 'user-1', content: '他喜欢吃薯条' }));
     const getStreamHandler = captureStreamHandler();
@@ -1566,8 +1702,10 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
     });
 
     await waitFor(() => expect(input).not.toBeDisabled());
-    expect(screen.queryByRole('button', { name: '执行过程' })).not.toBeInTheDocument();
-    expect(screen.queryByText('记录这条饮食偏好')).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: '执行过程' }).length).toBeGreaterThan(0);
+    expect(screen.getByText('Think 思考了1秒')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Think 思考了1秒' }));
+    expect(screen.getByTestId('thinking-content')).toHaveTextContent('记录这条饮食偏好');
     expect(screen.getByText('管家')).toBeInTheDocument();
     expect(screen.getByText('新对话').closest('button')).not.toBeDisabled();
   });

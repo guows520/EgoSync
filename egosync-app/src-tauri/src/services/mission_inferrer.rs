@@ -435,10 +435,14 @@ async fn build_default_provider(pool: &SqlitePool) -> Result<Box<dyn LlmProvider
     let api_key = secret_store::load_secret(&config.api_key_ref)?
         .ok_or_else(|| AppError::KeyringError(format!("未找到配置 '{}' 的 API Key", config.name)))?;
 
+    use crate::models::settings::NetworkLocation;
+    let net_loc = config.network_location.clone();
+    let no_proxy = net_loc == NetworkLocation::Internal;
+
     let provider: Box<dyn LlmProvider> = match config.provider.as_str() {
-        "anthropic" => Box::new(AnthropicProvider::new(config.base_url, api_key, config.model)?),
-        "minimax" => Box::new(OpenAiProvider::new_with_reasoning_split(config.base_url, api_key, config.model)?),
-        _ => Box::new(OpenAiProvider::new(config.base_url, api_key, config.model)?),
+        "anthropic" => Box::new(AnthropicProvider::new(config.base_url, api_key, config.model, no_proxy)?),
+        "minimax" => Box::new(OpenAiProvider::new_with_reasoning_split(config.base_url, api_key, config.model, no_proxy)?),
+        _ => Box::new(OpenAiProvider::new(config.base_url, api_key, config.model, no_proxy)?),
     };
     Ok(provider)
 }

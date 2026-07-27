@@ -15,6 +15,8 @@ vi.mock('../../services/llmConfigService', () => ({
     delete: vi.fn(),
     setDefault: vi.fn(),
     testConnection: vi.fn(),
+    listModels: vi.fn(),
+    listModelsByParams: vi.fn(),
   },
 }));
 
@@ -58,6 +60,43 @@ describe('GlobalSettingsModal', () => {
     vi.clearAllMocks();
     vi.mocked(llmConfigService.list).mockResolvedValue([]);
     vi.mocked(mcpService.list).mockResolvedValue([]);
+  });
+
+  it('新建配置 payload 包含默认 external networkLocation', async () => {
+    vi.mocked(llmConfigService.create).mockResolvedValue({} as any);
+    render(<GlobalSettingsModal onClose={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: '添加新配置' }));
+    fireEvent.click(screen.getByRole('button', { name: '保存配置' }));
+    await waitFor(() => expect(llmConfigService.create).toHaveBeenCalledWith(expect.objectContaining({ networkLocation: 'external' })));
+  });
+
+  it('获取模型列表时传递当前 networkLocation', async () => {
+    vi.mocked(llmConfigService.listModelsByParams).mockResolvedValue([]);
+    render(<GlobalSettingsModal onClose={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: '添加新配置' }));
+    fireEvent.change(screen.getByPlaceholderText('sk-...'), { target: { value: 'test-key' } });
+    fireEvent.change(screen.getAllByRole('combobox')[1], { target: { value: 'internal' } });
+    fireEvent.click(screen.getByRole('button', { name: '获取模型列表' }));
+
+    await waitFor(() =>
+      expect(llmConfigService.listModelsByParams).toHaveBeenCalledWith(
+        'openai_compatible',
+        'https://api.openai.com/v1',
+        'test-key',
+        'internal',
+      ),
+    );
+  });
+
+  it('运行时刷新失败时保留已保存结果并提示重试或重启', async () => {
+    vi.mocked(llmConfigService.create).mockRejectedValue({ RuntimeRefreshError: 'sidecar restart failed' });
+    render(<GlobalSettingsModal onClose={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: '添加新配置' }));
+    fireEvent.click(screen.getByRole('button', { name: '保存配置' }));
+    expect(await screen.findByText('配置已保存，但运行时刷新失败')).toBeInTheDocument();
+    expect(screen.getByText(/请重试或重启应用/)).toBeInTheDocument();
+    expect(llmConfigService.list).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText('新建配置')).not.toBeInTheDocument();
   });
 
   it('展示 MCP Server 标签入口并预留全局管理区块', async () => {

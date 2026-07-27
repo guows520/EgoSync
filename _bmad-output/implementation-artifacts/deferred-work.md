@@ -206,3 +206,16 @@ All items resolved in the same session:
 ## Deferred from: code review of fix-agent-stream-error-duplicate (2026-07-23)
 
 - **Agent Engine 定向测试存在既有 Butler prompt 断言失败（测试门禁）**：`cargo test agent_engine` 运行 110 项时 109 通过、1 失败；失败项 `services::agent_engine::tests::test_build_butler_system_prompt_omits_disabled_meta_skills` 在 `agent_engine.rs:6922` 仍断言旧提示词包含“你是 EgoSync 的分身管家”。本次补丁未修改该 prompt 构建或断言区域，且新增代码已通过编译及 `test_sse_error_maps_to_done_payload` 精确测试；应另行校准 Butler prompt 契约与历史断言。
+
+## Deferred from: code review of 8-6-opencode-sidecar-upgrade-lifecycle (2026-07-26)
+
+- 非 Windows 平台的 `kill_process_on_port` 仍调用 Windows `cmd/netstat/taskkill`；该问题在 baseline `4b69704` 已存在。位置：`egosync-app/src-tauri/src/services/sidecar.rs:742`。
+
+## Deferred from: code review of 8-7-model-network-location-proxy-bypass (2026-07-27)
+
+- NSIS installer hook 文件当前未跟踪；若只提交统一 diff，干净检出上的 Windows NSIS 构建会缺少 `windows/installer-hooks.nsh`。来源：Story 8.6 / `tauri.conf.json:56`。
+- 非 Windows 平台的陈旧 sidecar 端口清理仍执行 `cmd`、`netstat`、`taskkill`，Linux/macOS 重启时无法清理占用端口的旧进程。来源：Story 8.6 / `sidecar.rs:749-782`。
+- Windows Job Object/stop 生命周期存在多项缺口：父进程加入 Job 前的子进程逃逸窗口、正常退出时 Job 句柄未及时关闭、停止失败后 Child 句柄丢失，以及瞬时退出进程测试竞态。来源：Story 8.6 / `sidecar.rs:469-600,1376`。
+- 聊天执行事件通过正文匹配历史消息；thinking-only、重复正文及多 assistant bubble 时可能丢失或错误归属。来源：其他聊天改动 / `ChatStream.tsx:970-978`。
+- Thinking 分段在空元事件、重复 text/tool 快照、非单调 replacement、DB 写入失败及超时提前返回时可能错误切段或丢失持久化内容。来源：其他聊天改动 / `agent_engine.rs:863,2849-2858,2993-3009,3134-3178`。
+- Thinking 插入连续读取事件前未刷新 `readRun`，会把“读取 → thinking → 写入”显示成“thinking → 读取 → 写入”。来源：其他聊天改动 / `ChatStream.tsx:479-513`。

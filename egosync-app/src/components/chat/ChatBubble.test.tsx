@@ -127,16 +127,20 @@ describe('ChatBubble assistant identity', () => {
     expect(onMemoryReferenceClick).not.toHaveBeenCalled();
   });
 
-  it('assistant thinkingContent 不再直接作为执行过程原文展示', () => {
+  it('assistant thinkingContent 作为可折叠执行过程展示', () => {
     render(<ChatBubble message={{ ...assistantMsg, thinkingContent: '用户要求一个PPT文件转换为Markdown格式。' }} />);
 
-    expect(screen.queryByRole('button', { name: '思考过程' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: '查看处理过程' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: '执行过程' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '执行过程' })).toBeInTheDocument();
     expect(screen.queryByText('用户要求一个PPT文件转换为Markdown格式。')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '执行过程' }));
+    expect(screen.getByText('Think 思考时长未知')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Think 思考时长未知' }));
+    expect(screen.getByTestId('thinking-content')).toHaveTextContent('用户要求一个PPT文件转换为Markdown格式。');
+    expect(screen.getByRole('button', { name: '执行过程' }).parentElement).toHaveClass('w-full', 'max-w-[85%]');
+    expect(screen.getByText('管家').parentElement?.parentElement).toHaveClass('w-full', 'max-w-[85%]');
   });
 
-  it('streaming thinking token 不再直接作为执行过程原文展示', () => {
+  it('streaming thinking token 由 ChatStream 统一执行过程承载', () => {
     render(
       <ChatBubble
         message={{ ...assistantMsg, content: '', isComplete: false }}
@@ -162,6 +166,66 @@ describe('ChatBubble assistant identity', () => {
     expect(screen.getByRole('button', { name: '执行过程' })).toBeInTheDocument();
     expect(screen.getByText('正在使用 find-skills...')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '查看处理过程' })).not.toBeInTheDocument();
+  });
+
+  it('活跃 Think 使用固定三行视窗，并在内容更新时保持最新内容可见', () => {
+    const renderBubble = (thinkingContent: string) => (
+      <ChatBubble
+        message={{ ...assistantMsg, content: '' }}
+        executionTraceBlocks={[
+          {
+            id: 'thinking-active',
+            type: 'thinking',
+            content: thinkingContent,
+            elapsedSeconds: 4,
+            isActive: true,
+          },
+          {
+            id: 'tool-after-thinking',
+            type: 'action',
+            actionType: 'shell',
+            title: '执行后续命令',
+            status: 'running',
+          },
+        ]}
+      />
+    );
+    const { container, rerender } = render(renderBubble('第一行\n第二行\n第三行\n第四行\n第五行'));
+
+    fireEvent.click(screen.getByRole('button', { name: '执行过程' }));
+
+    expect(screen.getByText('Think 思考了4秒')).toBeInTheDocument();
+    const viewport = screen.getByTestId('thinking-viewport');
+    expect(viewport).toHaveClass('h-[4.5rem]', 'overflow-hidden', 'whitespace-pre-wrap');
+    expect(viewport).toHaveTextContent(/第一行\s+第二行\s+第三行\s+第四行\s+第五行/);
+    expect(container.textContent!.indexOf('第五行')).toBeLessThan(container.textContent!.indexOf('执行后续命令'));
+
+    Object.defineProperty(viewport, 'scrollHeight', { configurable: true, value: 240 });
+    rerender(renderBubble('第一行\n第二行\n第三行\n第四行\n第五行\n第六行'));
+
+    expect(screen.getByTestId('thinking-viewport').scrollTop).toBe(240);
+  });
+
+  it('Think 完成后默认折叠，点击标题可查看完整内容', () => {
+    render(
+      <ChatBubble
+        message={{ ...assistantMsg, content: '' }}
+        executionTraceBlocks={[{
+          id: 'thinking-completed',
+          type: 'thinking',
+          content: '第一行\n第二行\n第三行\n第四行',
+          elapsedSeconds: 7,
+          isActive: false,
+        }]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '执行过程' }));
+    const thinkButton = screen.getByRole('button', { name: 'Think 思考了7秒' });
+    expect(screen.queryByTestId('thinking-content')).not.toBeInTheDocument();
+
+    fireEvent.click(thinkButton);
+    expect(screen.getByTestId('thinking-content')).toHaveTextContent(/第一行\s+第二行\s+第三行\s+第四行/);
   });
 
   it('操作卡展开后只显示原始执行指令和实际执行结果', () => {

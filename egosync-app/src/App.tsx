@@ -345,7 +345,7 @@ export default function App() {
   }, [roles, currentView]);
 
   return (
-    <div className={cn("flex flex-col h-screen font-sans transition-colors duration-300 bg-[#F1F3F5] text-slate-900 selection:bg-indigo-100 dark:bg-slate-800 dark:text-slate-100 dark:selection:bg-indigo-900 border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden", theme === 'dark' && "dark")}>
+    <div className={cn("flex flex-col h-screen font-sans transition-colors duration-300 bg-[#F1F3F5] text-slate-900 selection:bg-indigo-100 dark:bg-slate-800 dark:text-slate-100 dark:selection:bg-indigo-900 relative rounded-lg overflow-hidden", theme === 'dark' && "dark")}>
         <TitleBar />
         <div className="flex-1 flex overflow-hidden relative">
         <Sidebar
@@ -435,6 +435,10 @@ export default function App() {
       )}
       {isAddRoleOpen && <AddRoleModal onClose={() => setIsAddRoleOpen(false)} onAdd={(role: Role) => { setRoles(prev => [...prev, role]); setIsAddRoleOpen(false); }} />}
       {isNotifOpen && <NotificationPanel onClose={() => setIsNotifOpen(false)} notifications={notifications} isLoading={isNotifLoading} markAsRead={markAsRead} />}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 z-50 rounded-lg ring-1 ring-inset ring-[#D5D9DE] dark:ring-white/12"
+      />
       <RoleConfirmModal
         open={isButlerProposalOpen}
         proposal={butlerProposal}

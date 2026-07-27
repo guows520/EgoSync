@@ -13,6 +13,8 @@ pub enum AppError {
     KeyringError(String),
     #[error("Sidecar error: {0}")]
     SidecarError(String),
+    #[error("配置已保存，但运行时刷新失败: {0}")]
+    RuntimeRefreshError(String),
     /// Story 10.1: 指定的 Skill 在 Registry 中不存在（已被删除或 ID 错误）。
     #[error("Skill not found: {0}")]
     SkillNotFound(String),
@@ -38,6 +40,7 @@ impl serde::Serialize for AppError {
             AppError::ValidationError(msg) => map.serialize_entry("ValidationError", msg)?,
             AppError::KeyringError(msg) => map.serialize_entry("KeyringError", msg)?,
             AppError::SidecarError(msg) => map.serialize_entry("SidecarError", msg)?,
+            AppError::RuntimeRefreshError(msg) => map.serialize_entry("RuntimeRefreshError", msg)?,
             AppError::SkillNotFound(msg) => map.serialize_entry("SkillNotFound", msg)?,
             AppError::SkillNotAddedToScope(msg) => map.serialize_entry("SkillNotAddedToScope", msg)?,
             AppError::SkillDisabled(msg) => map.serialize_entry("SkillDisabled", msg)?,
@@ -67,6 +70,7 @@ mod tests {
             AppError::ValidationError("x".into()),
             AppError::KeyringError("x".into()),
             AppError::SidecarError("x".into()),
+            AppError::RuntimeRefreshError("x".into()),
             AppError::SkillNotFound("x".into()),
             AppError::SkillNotAddedToScope("x".into()),
             AppError::SkillDisabled("x".into()),

@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { LlmConfig, CreateLlmConfigInput, UpdateLlmConfigInput } from '../types/settings';
+import type { LlmConfig, CreateLlmConfigInput, UpdateLlmConfigInput, NetworkLocation } from '../types/settings';
 
 export const llmConfigService = {
   list: () => invoke<LlmConfig[]>('llm_config_list'),
@@ -9,6 +9,6 @@ export const llmConfigService = {
   setDefault: (id: string) => invoke<void>('llm_config_set_default', { id }),
   testConnection: (id: string) => invoke<void>('llm_config_test_connection', { id }),
   listModels: (id: string) => invoke<string[]>('llm_config_list_models', { id }),
-  listModelsByParams: (provider: string, baseUrl: string, apiKey: string) =>
-    invoke<string[]>('llm_config_list_models_by_params', { provider, baseUrl, apiKey }),
+  listModelsByParams: (provider: string, baseUrl: string, apiKey: string, networkLocation: NetworkLocation) =>
+    invoke<string[]>('llm_config_list_models_by_params', { provider, baseUrl, apiKey, networkLocation }),
 };

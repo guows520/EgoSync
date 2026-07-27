@@ -56,6 +56,13 @@ export interface ExecutionTraceDetail {
 export type ExecutionTraceBlock =
   | {
       id: string;
+      type: 'thinking';
+      content: string;
+      elapsedSeconds: number | null;
+      isActive: boolean;
+    }
+  | {
+      id: string;
       type: 'narration';
       content: string;
     }

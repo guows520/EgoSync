@@ -168,6 +168,12 @@ function appendLocalMessages(current: ChatMessage[], localMessages: ChatMessage[
   return next;
 }
 
+function normalizeCompletedThinkingElapsedSeconds(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.max(1, Math.floor(value))
+    : null;
+}
+
 function mergeHistoryWithLocalMessages(history: ChatMessage[], current: ChatMessage[]) {
   if (history.length === 0) return current;
 
@@ -477,6 +483,21 @@ function processEventsToTraceBlocks(events: MessageProcessEvent[]): ExecutionTra
   };
 
   for (const event of mergeSequentialToolEvents(events)) {
+    if (event.eventType === 'thinking') {
+      if (event.summary.trim().length === 0) continue;
+      const raw = safeParseJson(event.rawJson);
+      const elapsedValue = valueAt(raw, ['elapsedSeconds']);
+      blocks.push({
+        id: event.id,
+        type: 'thinking',
+        content: event.summary,
+        elapsedSeconds: event.status === 'running'
+          ? (typeof elapsedValue === 'number' ? Math.max(0, Math.floor(elapsedValue)) : null)
+          : normalizeCompletedThinkingElapsedSeconds(elapsedValue),
+        isActive: event.status === 'running',
+      });
+      continue;
+    }
     if (event.eventType === 'narration') {
       flushReadRun();
       blocks.push({ id: event.id, type: 'narration', content: event.summary });
@@ -540,6 +561,10 @@ export function ChatStream({
   const [streamStatus, setStreamStatus] = useState<StreamStatus | null>(null);
   const [streamProcessEvents, setStreamProcessEvents] = useState<MessageProcessEvent[]>([]);
   const streamProcessEventsRef = useRef<MessageProcessEvent[]>([]);
+  const thinkingStartedAtRef = useRef<number | null>(null);
+  const thinkingElapsedSecondsRef = useRef<number | null>(null);
+  const thinkingSegmentContentRef = useRef('');
+  const thinkingTraceIdRef = useRef<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const messageRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const highlightTimeout = useRef<number | null>(null);
@@ -577,6 +602,71 @@ export function ChatStream({
     setStreamProcessEvents([]);
   }, []);
 
+  const updateStreamProcessEvents = useCallback((updater: (prev: MessageProcessEvent[]) => MessageProcessEvent[]) => {
+    const next = updater(streamProcessEventsRef.current);
+    streamProcessEventsRef.current = next;
+    setStreamProcessEvents(next);
+  }, []);
+
+  const updateThinkingTrace = useCallback((status: 'running' | 'completed') => {
+    const traceId = thinkingTraceIdRef.current;
+    if (!traceId) return;
+    const content = thinkingSegmentContentRef.current;
+    const elapsedSeconds = thinkingElapsedSecondsRef.current;
+    updateStreamProcessEvents(prev => prev.map(event => event.id === traceId
+      ? {
+          ...event,
+          summary: content,
+          status,
+          rawJson: JSON.stringify({ content, elapsedSeconds }),
+        }
+      : event));
+  }, [updateStreamProcessEvents]);
+
+  const startThinkingTimer = useCallback(() => {
+    if (thinkingStartedAtRef.current !== null) return;
+    const traceId = `stream-thinking-${Date.now()}-${streamProcessEventsRef.current.length}`;
+    thinkingStartedAtRef.current = Date.now();
+    thinkingElapsedSecondsRef.current = null;
+    thinkingSegmentContentRef.current = '';
+    thinkingTraceIdRef.current = traceId;
+    updateStreamProcessEvents(prev => [...prev, {
+      id: traceId,
+      conversationId: conversation?.id ?? '',
+      messageId: 'stream-thinking',
+      opencodeSessionId: '',
+      eventType: 'thinking',
+      toolName: null,
+      status: 'running',
+      summary: '',
+      rawJson: JSON.stringify({ content: '', elapsedSeconds: null }),
+      workingDirectory: null,
+      createdAt: new Date().toISOString(),
+    }]);
+  }, [conversation?.id, updateStreamProcessEvents]);
+
+  const finishThinkingTimer = useCallback(() => {
+    const startedAt = thinkingStartedAtRef.current;
+    if (startedAt === null) return;
+    thinkingElapsedSecondsRef.current = Math.max(1, Math.floor((Date.now() - startedAt) / 1000));
+    thinkingStartedAtRef.current = null;
+    updateThinkingTrace('completed');
+    thinkingTraceIdRef.current = null;
+    thinkingSegmentContentRef.current = '';
+  }, [updateThinkingTrace]);
+
+  useEffect(() => {
+    // Keep one stable ticker for the component. Reasoning tokens update the trace
+    // themselves; they must not recreate the interval or reset the elapsed time.
+    const interval = window.setInterval(() => {
+      const startedAt = thinkingStartedAtRef.current;
+      if (startedAt === null) return;
+      thinkingElapsedSecondsRef.current = Math.floor((Date.now() - startedAt) / 1000);
+      updateThinkingTrace('running');
+    }, 1000);
+    return () => window.clearInterval(interval);
+  }, [updateThinkingTrace]);
+
   useEffect(() => {
     return () => {
       if (highlightTimeout.current !== null) {
@@ -600,6 +690,10 @@ export function ChatStream({
     setIsInputLocked(false);
     thinkingContentRef.current = '';
     setThinkingContent('');
+    thinkingStartedAtRef.current = null;
+    thinkingElapsedSecondsRef.current = null;
+    thinkingSegmentContentRef.current = '';
+    thinkingTraceIdRef.current = null;
     setStreamStatus(null);
     resetStreamProcessEvents();
   }, [resetStreamProcessEvents, updateStreamBubbles]);
@@ -760,12 +854,24 @@ export function ChatStream({
 
     const bucketKey = payload.messageId ?? null;
 
+    if (payload.thinking) {
+      startThinkingTimer();
+      const nextThinkingContent = thinkingContentRef.current + payload.token;
+      thinkingContentRef.current = nextThinkingContent;
+      thinkingSegmentContentRef.current += payload.token;
+      setThinkingContent(nextThinkingContent);
+      updateThinkingTrace('running');
+      setIsStreaming(true);
+      setIsInputLocked(true);
+      return;
+    }
+
+    finishThinkingTimer();
+
     if (payload.phase === 'process' && payload.processEvent) {
       setIsStreaming(true);
       setIsInputLocked(true);
-      const nextEvents = [...streamProcessEventsRef.current, payload.processEvent];
-      streamProcessEventsRef.current = nextEvents;
-      setStreamProcessEvents(nextEvents);
+      updateStreamProcessEvents(prev => [...prev, payload.processEvent!]);
       return;
     }
 
@@ -789,14 +895,15 @@ export function ChatStream({
       const remainingAfterDone = currentBubbles.filter(b => b.id !== bucketKey && b.id !== null);
       const isFinalDone = !isDelegationSegmentDone && remainingAfterDone.length === 0;
       const streamGeneration = streamGenerationRef.current;
+      const completedProcessEvents = streamProcessEventsRef.current;
+      let completedMessages: ChatMessage[] = [];
       if (isFinalDone) {
         setIsInputLocked(false);
-        setStreamStatus(null);
+            setStreamStatus(null);
         setSuppressedProcessMessageIds(new Set());
         thinkingContentRef.current = '';
         setThinkingContent('');
-        const completedProcessEvents = streamProcessEventsRef.current;
-        const completedMessages = completedAssistantMessagesFromBubbles(
+        completedMessages = completedAssistantMessagesFromBubbles(
           currentBubbles,
           conversation.id,
           streamGeneration,
@@ -859,6 +966,20 @@ export function ChatStream({
             setIsStreaming(true);
             return;
           }
+          if (isFinalDone && completedProcessEvents.length > 0 && completedMessages.length > 0) {
+            const completedContent = completedMessages[0].content.trim();
+            const persistedMessage = [...history].reverse().find(message =>
+              message.role === 'assistant'
+              && message.isComplete
+              && (completedContent.length === 0 || message.content.trim() === completedContent)
+            );
+            if (persistedMessage) {
+              setProcessEventsByMessageId(prev => ({
+                ...prev,
+                [persistedMessage.id]: completedProcessEvents,
+              }));
+            }
+          }
           setMessages(prev => mergeHistoryWithLocalMessages(history, prev));
           resetStreamProcessEvents();
           applyBucketClear();
@@ -870,12 +991,6 @@ export function ChatStream({
       } else {
         applyBucketClear();
       }
-    } else if (payload.thinking) {
-      setIsStreaming(true);
-      setIsInputLocked(true);
-      const nextThinkingContent = thinkingContentRef.current + payload.token;
-      thinkingContentRef.current = nextThinkingContent;
-      setThinkingContent(nextThinkingContent);
     } else {
       if (payload.phase === 'tool' && !payload.token) return;
       setStreamStatus(null);
@@ -892,7 +1007,7 @@ export function ChatStream({
         return next;
       });
     }
-  }, [conversation, onStreamDone, resetStreamProcessEvents]);
+  }, [conversation, finishThinkingTimer, onStreamDone, resetStreamProcessEvents, startThinkingTimer, updateStreamProcessEvents, updateThinkingTrace]);
 
   useTauriEvent<StreamPayload>('llm:stream', handleStreamEvent, [conversation?.id]);
 
@@ -1057,7 +1172,7 @@ export function ChatStream({
         setMessages(prev => [...prev.filter(m => m.id !== localUserMessageId), userMsg]);
         setIsStreaming(false);
         setIsInputLocked(false);
-        return true;
+            return true;
       }
 
       setMessages(prev => prev.map(m => m.id === localUserMessageId ? userMsg : m));
@@ -1069,7 +1184,7 @@ export function ChatStream({
       if (streamGenerationRef.current === sendGeneration) {
         setIsStreaming(false);
         setIsInputLocked(false);
-      }
+          }
       return false;
     }
   };
@@ -1078,7 +1193,9 @@ export function ChatStream({
   const assistantIcon = role ? getRoleIconComponent(role.icon) : undefined;
   const assistantColor = role ? normalizeColorHex(role.color) : undefined;
 
-  const hasStreamingExecution = streamProcessEvents.length > 0 || Boolean(streamStatus?.statusText);
+  const hasStreamingExecution = streamProcessEvents.some(event =>
+    event.eventType !== 'thinking' || event.summary.trim().length > 0
+  ) || Boolean(streamStatus?.statusText);
   const finalStreamingBubble = isStreaming
     ? [...streamBubbles].reverse().find(b => b.content.trim().length > 0)
     : undefined;

@@ -13,21 +13,35 @@ pub struct OpenAiProvider {
     api_key: String,
     model: String,
     client: Client,
+    stream_client: Client,
     reasoning_split: bool,
 }
 
 impl OpenAiProvider {
-    pub fn new(base_url: String, api_key: String, model: String) -> Result<Self, AppError> {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(10))
+    pub fn new(
+        base_url: String,
+        api_key: String,
+        model: String,
+        no_proxy: bool,
+    ) -> Result<Self, AppError> {
+        let mut builder = Client::builder().timeout(Duration::from_secs(10));
+        if no_proxy {
+            builder = builder.no_proxy();
+        }
+        let client = builder
             .build()
             .map_err(|e| AppError::LlmError(format!("创建 HTTP 客户端失败: {}", e)))?;
+        let mut stream_builder = Client::builder().connect_timeout(Duration::from_secs(10)).http1_only();
+        if no_proxy { stream_builder = stream_builder.no_proxy(); }
+        let stream_client = stream_builder.build()
+            .map_err(|e| AppError::LlmError(format!("创建流式客户端失败: {}", e)))?;
 
         Ok(Self {
             base_url,
             api_key,
             model,
             client,
+            stream_client,
             reasoning_split: false,
         })
     }
@@ -36,8 +50,9 @@ impl OpenAiProvider {
         base_url: String,
         api_key: String,
         model: String,
+        no_proxy: bool,
     ) -> Result<Self, AppError> {
-        let mut p = Self::new(base_url, api_key, model)?;
+        let mut p = Self::new(base_url, api_key, model, no_proxy)?;
         p.reasoning_split = true;
         Ok(p)
     }
@@ -124,13 +139,7 @@ impl LlmProvider for OpenAiProvider {
             }
         }
 
-        let stream_client = Client::builder()
-            .connect_timeout(Duration::from_secs(10))
-            .http1_only()
-            .build()
-            .map_err(|e| AppError::LlmError(format!("创建流式客户端失败: {}", e)))?;
-
-        let response = stream_client
+        let response = self.stream_client
             .post(&url)
             .header("Content-Type", "application/json")
             .header("Accept", "text/event-stream")
@@ -363,6 +372,7 @@ mod tests {
             "https://api.openai.com/v1".to_string(),
             "sk-test".to_string(),
             "gpt-4o".to_string(),
+            false,
         )
         .unwrap();
         assert_eq!(
@@ -377,6 +387,7 @@ mod tests {
             "https://api.openai.com/v1/".to_string(),
             "sk-test".to_string(),
             "gpt-4o".to_string(),
+            false,
         )
         .unwrap();
         assert_eq!(

@@ -853,6 +853,56 @@ async fn persist_and_emit_process_event(
     .await;
 }
 
+fn completed_thinking_elapsed_seconds(started_at: Option<Instant>) -> u64 {
+    started_at
+        .map(|started| started.elapsed().as_secs())
+        .unwrap_or(0)
+        .max(1)
+}
+
+async fn flush_thinking_process_event(
+    conv_pool: &ConversationsPool,
+    conversation_id: &str,
+    message_id: &str,
+    opencode_session_id: &str,
+    text: &mut String,
+    started_at: &mut Option<Instant>,
+    working_directory: Option<&str>,
+) {
+    let summary = text.trim().to_string();
+    if summary.is_empty() {
+        text.clear();
+        *started_at = None;
+        return;
+    }
+    let elapsed_seconds = completed_thinking_elapsed_seconds(*started_at);
+    let candidate = ProcessEventCandidate {
+        event_type: "thinking".to_string(),
+        tool_name: None,
+        status: Some("completed".to_string()),
+        summary: summary.clone(),
+        raw_json: serde_json::json!({ "content": summary, "elapsedSeconds": elapsed_seconds }),
+    };
+    // The live UI already owns a synthetic running thinking block. Persist the
+    // completed segment here without emitting a second live process event, which
+    // would duplicate that block before the next tool/text event.
+    persist_process_event(
+        conv_pool,
+        conversation_id,
+        message_id,
+        opencode_session_id,
+        &candidate.event_type,
+        candidate.tool_name.as_deref(),
+        candidate.status.as_deref(),
+        &candidate.summary,
+        &candidate.raw_json,
+        working_directory,
+    )
+    .await;
+    text.clear();
+    *started_at = None;
+}
+
 async fn flush_narration_process_event(
     app_handle: &tauri::AppHandle,
     conv_pool: &ConversationsPool,
@@ -2259,6 +2309,7 @@ pub async fn resolve_default_provider(
     main_pool: &DbPool,
 ) -> Result<Arc<dyn LlmProvider>, AppError> {
     use crate::db::settings as db;
+    use crate::models::settings::NetworkLocation;
 
     let config = db::get_default_llm_config(main_pool).await?;
 
@@ -2269,18 +2320,23 @@ pub async fn resolve_default_provider(
         ))
     })?;
 
+    let net_loc = config.network_location.clone();
+    let no_proxy = net_loc == NetworkLocation::Internal;
+
     let provider: Arc<dyn LlmProvider> = match config.provider.as_str() {
         "anthropic" => Arc::new(AnthropicProvider::new(
             config.base_url,
             api_key,
             config.model,
+            no_proxy,
         )?),
         "minimax" => Arc::new(OpenAiProvider::new_with_reasoning_split(
             config.base_url,
             api_key,
             config.model,
+            no_proxy,
         )?),
-        _ => Arc::new(OpenAiProvider::new(config.base_url, api_key, config.model)?),
+        _ => Arc::new(OpenAiProvider::new(config.base_url, api_key, config.model, no_proxy)?),
     };
 
     Ok(provider)
@@ -2318,6 +2374,9 @@ async fn try_run_opencode_stream(
     already_retried_skill_load: bool,
     selected_skill: Option<&crate::models::skill::SelectableSkill>,
 ) -> Result<(), OpencodeStreamAttemptError> {
+    let stream_started_at = Instant::now();
+    let mut first_event_logged = false;
+    let mut first_thinking_logged = false;
     let disabled_message = if let Some(rid) = role_id {
         crate::db::roles::get_role(main_pool, rid)
             .await
@@ -2369,7 +2428,9 @@ async fn try_run_opencode_stream(
         }
     }
     let project_dir = resolve_requested_working_directory(app_handle, working_directory)?;
+    tracing::info!(elapsed_ms = stream_started_at.elapsed().as_millis() as u64, "[stream-stage] working directory resolved");
     let mcp_scope_key = crate::services::mcp_server::mcp_scope_key_for_role(main_pool, role_id).await?;
+    tracing::info!(elapsed_ms = stream_started_at.elapsed().as_millis() as u64, "[stream-stage] MCP scope resolved");
     let mcp_scope_lock = app_handle
         .try_state::<crate::commands::chat::OpencodeMcpScopeLock>()
         .map(|state| state.0.clone());
@@ -2382,6 +2443,7 @@ async fn try_run_opencode_stream(
             crate::services::mcp_server::sync_mcp_scope_for_role(main_pool, &agent_config, role_id)
                 .await?;
         }
+        tracing::info!(elapsed_ms = stream_started_at.elapsed().as_millis() as u64, "[stream-stage] MCP scope synchronized");
         let session_cache_key = opencode_session_cache_key(&project_dir, &mcp_scope_key);
         let session_id = {
             let sessions = opencode_sessions.lock().await;
@@ -2452,11 +2514,15 @@ async fn try_run_opencode_stream(
         ?role_id,
         conversation_id,
         bridge_session_registered,
-        "[stage-b-diag] stream session resolved"
+        elapsed_ms = stream_started_at.elapsed().as_millis() as u64,
+        "[stream-stage] session resolved"
     );
+
+    tracing::info!(elapsed_ms = stream_started_at.elapsed().as_millis() as u64, "[stream-stage] prompt built");
 
     // Subscribe BEFORE triggering the prompt so we don't miss early events.
     let mut event_rx = event_router.subscribe(&session_id).await;
+    tracing::info!(elapsed_ms = stream_started_at.elapsed().as_millis() as u64, "[stream-stage] event subscription completed");
 
     // 诊断日志：打印实际发送给 opencode 的完整 content
     tracing::info!(
@@ -2505,6 +2571,7 @@ async fn try_run_opencode_stream(
     let command_skill_name = selected_skill.map(|entry| entry.name.clone());
     let command_arguments = user_message.to_string();
     let (result_tx, mut result_rx) = tokio::sync::oneshot::channel();
+    tracing::info!(elapsed_ms = stream_started_at.elapsed().as_millis() as u64, "[stream-stage] prompt POST started");
     tokio::spawn(async move {
         let result = if let Some(skill_name) = command_skill_name {
             bridge
@@ -2522,6 +2589,8 @@ async fn try_run_opencode_stream(
     let mut part_text: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let mut accumulated_text = String::new();
     let mut accumulated_thinking = String::new();
+    let mut pending_thinking = String::new();
+    let mut thinking_started_at: Option<Instant> = None;
     let mut completed = false;
     let mut drain_deadline: Option<tokio::time::Instant> = None;
     let mut active_tool_timeout: Option<ToolExecutionDeadline> = None;
@@ -2608,6 +2677,10 @@ async fn try_run_opencode_stream(
             }
             maybe_event = event_rx.recv() => {
                 let Some(event) = maybe_event else { break };
+                if !first_event_logged {
+                    first_event_logged = true;
+                    tracing::info!(elapsed_ms = stream_started_at.elapsed().as_millis() as u64, event_type = %event.event_type, "[stream-stage] first event received");
+                }
                 match event.event_type.as_str() {
                     "message.part.delta" => {
                         // Incremental text delta — the primary streaming path.
@@ -2628,12 +2701,33 @@ async fn try_run_opencode_stream(
                         }
                         let part_id = event.properties.get("partID")
                             .and_then(|v| v.as_str()).unwrap_or("");
-                        match classify_bus_text_delta(&event.properties, &visible_text_parts, &reasoning_parts) {
+                        let delta_kind = classify_bus_text_delta(&event.properties, &visible_text_parts, &reasoning_parts);
+                        if matches!(delta_kind, BusTextDeltaKind::Text) {
+                            flush_thinking_process_event(
+                                conv_pool,
+                                conversation_id,
+                                assistant_message_id,
+                                &session_id,
+                                &mut pending_thinking,
+                                &mut thinking_started_at,
+                                Some(&project_dir),
+                            )
+                            .await;
+                        }
+                        match delta_kind {
                             BusTextDeltaKind::Thinking => {
+                                if thinking_started_at.is_none() {
+                                    thinking_started_at = Some(Instant::now());
+                                }
+                                pending_thinking.push_str(delta);
                                 accumulated_thinking.push_str(delta);
                                 if !part_id.is_empty() {
                                     let entry = part_text.entry(part_id.to_string()).or_default();
                                     entry.push_str(delta);
+                                }
+                                if !first_thinking_logged {
+                                    first_thinking_logged = true;
+                                    tracing::info!(elapsed_ms = stream_started_at.elapsed().as_millis() as u64, "[stream-stage] first thinking emitted");
                                 }
                                 emit_stream_token(app_handle, conversation_id, None, delta, true);
                                 continue;
@@ -2687,12 +2781,25 @@ async fn try_run_opencode_stream(
                                                 continue;
                                             }
 
-                                            let (emit_message_id, accum, thinking): (Option<String>, &mut String, bool) = if is_thinking_bus_part_type(ptype) {
-                                                (None, &mut accumulated_thinking, true)
+                                            let thinking = is_thinking_bus_part_type(ptype);
+                                            if !thinking {
+                                                flush_thinking_process_event(
+                                                    conv_pool,
+                                                    conversation_id,
+                                                    assistant_message_id,
+                                                    &session_id,
+                                                    &mut pending_thinking,
+                                                    &mut thinking_started_at,
+                                                    Some(&project_dir),
+                                                )
+                                                .await;
+                                            }
+                                            let (emit_message_id, accum): (Option<String>, &mut String) = if thinking {
+                                                (None, &mut accumulated_thinking)
                                             } else {
                                                 match bubble_state.classify_message(id) {
-                                                    BubbleSlot::First => (None, &mut accumulated_text, false),
-                                                    BubbleSlot::Followup => (final_message_id.clone(), &mut final_text, false),
+                                                    BubbleSlot::First => (None, &mut accumulated_text),
+                                                    BubbleSlot::Followup => (final_message_id.clone(), &mut final_text),
                                                 }
                                             };
                                             let prev = part_text.entry(part_id.to_string()).or_default();
@@ -2700,7 +2807,12 @@ async fn try_run_opencode_stream(
                                                 let delta = text[prev.len()..].to_string();
                                                 *prev = text.to_string();
                                                 accum.push_str(&delta);
-                                                if !thinking {
+                                                if thinking {
+                                                    if thinking_started_at.is_none() {
+                                                        thinking_started_at = Some(Instant::now());
+                                                    }
+                                                    pending_thinking.push_str(&delta);
+                                                } else {
                                                     buffer_narration_delta(&mut pending_narration, &mut has_tool_process_event, &delta);
                                                 }
                                                 emit_stream_token(app_handle, conversation_id, emit_message_id.as_deref(), &delta, thinking);
@@ -2733,6 +2845,18 @@ async fn try_run_opencode_stream(
                         }
                         // Only stream user-visible content. Tool parts are intercepted
                         // to trigger Tauri-side effects (role proposals, delegation, etc.)
+                        if part.part_type == "text" || part.part_type == "tool" {
+                            flush_thinking_process_event(
+                                conv_pool,
+                                conversation_id,
+                                assistant_message_id,
+                                &session_id,
+                                &mut pending_thinking,
+                                &mut thinking_started_at,
+                                Some(&project_dir),
+                            )
+                            .await;
+                        }
                         let (emit_message_id, accum, thinking): (Option<String>, &mut String, bool) = match part.part_type.as_str() {
                             "text" => match bubble_state.classify_message(&part.message_id) {
                                 BubbleSlot::First => (None, &mut accumulated_text, false),
@@ -2869,6 +2993,12 @@ async fn try_run_opencode_stream(
                             let delta = part.text[prev.len()..].to_string();
                             *prev = part.text.clone();
                             accum.push_str(&delta);
+                            if thinking {
+                                if thinking_started_at.is_none() {
+                                    thinking_started_at = Some(Instant::now());
+                                }
+                                pending_thinking.push_str(&delta);
+                            }
                             emit_stream_token(app_handle, conversation_id, emit_message_id.as_deref(), &delta, thinking);
                         } else if part.text != *prev {
                             // Non-monotonic update (replacement). Replay full text.
@@ -3044,6 +3174,16 @@ async fn try_run_opencode_stream(
         }
     }
 
+    flush_thinking_process_event(
+        conv_pool,
+        conversation_id,
+        assistant_message_id,
+        &session_id,
+        &mut pending_thinking,
+        &mut thinking_started_at,
+        Some(&project_dir),
+    )
+    .await;
     event_router.unsubscribe(&session_id).await;
     if bridge_session_registered {
         delegate_bridge.unregister_session(&session_id).await;
@@ -3404,6 +3544,8 @@ pub async fn run_stream(
         );
     }
     let mut accumulated_thinking = String::new();
+    let mut pending_thinking = String::new();
+    let mut thinking_started_at: Option<Instant> = None;
     let mut pending = String::new();
     let mut saw_thinking = false;
     let mut last_emit = Instant::now();
@@ -3437,10 +3579,24 @@ pub async fn run_stream(
                         stream_start.elapsed()
                     );
                 }
+                if thinking_started_at.is_none() {
+                    thinking_started_at = Some(Instant::now());
+                }
+                pending_thinking.push_str(&token);
                 accumulated_thinking.push_str(&token);
                 emit_stream_token(&app_handle, &conversation_id, None, &token, true);
             }
             Some(StreamEvent::Token(token)) => {
+                flush_thinking_process_event(
+                    &conv_pool,
+                    &conversation_id,
+                    &assistant_message_id,
+                    "fallback",
+                    &mut pending_thinking,
+                    &mut thinking_started_at,
+                    None,
+                )
+                .await;
                 if accumulated.is_empty() {
                     tracing::info!(
                         "首个 content token 到达，耗时: {:?}",
@@ -3457,6 +3613,16 @@ pub async fn run_stream(
                 }
             }
             Some(StreamEvent::ToolCall(tc)) => {
+                flush_thinking_process_event(
+                    &conv_pool,
+                    &conversation_id,
+                    &assistant_message_id,
+                    "fallback",
+                    &mut pending_thinking,
+                    &mut thinking_started_at,
+                    None,
+                )
+                .await;
                 tracing::info!(
                     "[run_stream] 收到 ToolCall: name={} id={} args={}",
                     tc.name,
@@ -3467,6 +3633,16 @@ pub async fn run_stream(
                 tool_calls_received.push(tc);
             }
             Some(StreamEvent::Done) => {
+                flush_thinking_process_event(
+                    &conv_pool,
+                    &conversation_id,
+                    &assistant_message_id,
+                    "fallback",
+                    &mut pending_thinking,
+                    &mut thinking_started_at,
+                    None,
+                )
+                .await;
                 tracing::info!(
                     "[run_stream] done: conv={} assistant_msg={} accumulated_len={} saw_thinking={} tool_calls={}",
                     conversation_id,
@@ -3761,6 +3937,16 @@ pub async fn run_stream(
                 break;
             }
             Some(StreamEvent::Error(err_msg)) => {
+                flush_thinking_process_event(
+                    &conv_pool,
+                    &conversation_id,
+                    &assistant_message_id,
+                    "fallback",
+                    &mut pending_thinking,
+                    &mut thinking_started_at,
+                    None,
+                )
+                .await;
                 let friendly = format!(
                     "抱歉，我现在无法回应。原因：{}。请检查一下模型配置是否正确。",
                     summarize_error(&err_msg)
@@ -3778,6 +3964,16 @@ pub async fn run_stream(
                 break;
             }
             None => {
+                flush_thinking_process_event(
+                    &conv_pool,
+                    &conversation_id,
+                    &assistant_message_id,
+                    "fallback",
+                    &mut pending_thinking,
+                    &mut thinking_started_at,
+                    None,
+                )
+                .await;
                 if !pending.is_empty() {
                     let batch = std::mem::take(&mut pending);
                     emit_stream_token(&app_handle, &conversation_id, None, &batch, false);
@@ -5238,6 +5434,13 @@ fn summarize_error(err: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn completed_thinking_elapsed_seconds_never_persists_zero() {
+        // WHY: a completed thinking segment must not regress from the live 1-second
+        // display to a persisted 0-second display when the segment is shorter than one second.
+        assert_eq!(completed_thinking_elapsed_seconds(None), 1);
+    }
+
     use super::*;
     use std::collections::VecDeque;
 

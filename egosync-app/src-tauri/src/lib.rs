@@ -176,9 +176,9 @@ pub fn run() {
                 let ac_ref: &services::agent_config::AgentConfigService = app
                     .state::<services::agent_config::AgentConfigService>()
                     .inner();
-                tauri::async_runtime::block_on(async {
-                    services::llm_config::sync_default_to_opencode(pool_ref, ac_ref).await;
-                });
+                if let Err(error) = tauri::async_runtime::block_on(async {
+                    services::llm_config::sync_default_to_opencode(pool_ref, ac_ref).await
+                }) { tracing::warn!("同步默认 LLM 配置到 opencode.json 失败: {}", error); }
             }
 
             // ── Custom tools: write .opencode/tools/ into opencode-workspace ──
@@ -194,6 +194,11 @@ pub fn run() {
 
             // ── Sidecar: start opencode server (non-blocking, graceful degradation) ──
             let resource_dir = app.path().resource_dir().ok();
+            let pool_ref: &sqlx::SqlitePool = app.state::<db::pool::DbPool>().inner();
+            let original_no_proxy = services::llm_config::process_no_proxy_value();
+            let no_proxy_value = tauri::async_runtime::block_on(async {
+                services::llm_config::generate_no_proxy_value(pool_ref, original_no_proxy.as_deref()).await
+            }).map_err(|e| format!("生成 sidecar NO_PROXY 失败: {}", e))?;
             let mut sidecar = services::sidecar::SidecarManager::new(resource_dir, None)
                 .with_working_dir(opencode_workspace_dir.clone())
                 .with_env(
@@ -203,7 +208,8 @@ pub fn run() {
                 .with_env(
                     services::delegate_bridge::BRIDGE_PORT_ENV,
                     delegate_port.to_string(),
-                );
+                )
+                .with_env("NO_PROXY", no_proxy_value);
 
             let sidecar_started = tauri::async_runtime::block_on(async {
                 match sidecar.start().await {

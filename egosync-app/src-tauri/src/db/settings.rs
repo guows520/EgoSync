@@ -5,7 +5,7 @@ use crate::models::settings::LlmConfig;
 
 pub async fn list_llm_configs(pool: &SqlitePool) -> Result<Vec<LlmConfig>, AppError> {
     let configs = sqlx::query_as::<_, LlmConfig>(
-        "SELECT id, name, provider, base_url, model, api_key_ref, is_default, created_at, updated_at FROM llm_configs ORDER BY created_at ASC"
+        "SELECT id, name, provider, base_url, model, api_key_ref, is_default, network_location, created_at, updated_at FROM llm_configs ORDER BY created_at ASC"
     )
     .fetch_all(pool)
     .await
@@ -16,7 +16,7 @@ pub async fn list_llm_configs(pool: &SqlitePool) -> Result<Vec<LlmConfig>, AppEr
 
 pub async fn get_llm_config(pool: &SqlitePool, id: &str) -> Result<LlmConfig, AppError> {
     sqlx::query_as::<_, LlmConfig>(
-        "SELECT id, name, provider, base_url, model, api_key_ref, is_default, created_at, updated_at FROM llm_configs WHERE id = ?1"
+        "SELECT id, name, provider, base_url, model, api_key_ref, is_default, network_location, created_at, updated_at FROM llm_configs WHERE id = ?1"
     )
     .bind(id)
     .fetch_optional(pool)
@@ -27,7 +27,7 @@ pub async fn get_llm_config(pool: &SqlitePool, id: &str) -> Result<LlmConfig, Ap
 
 pub async fn insert_llm_config(pool: &SqlitePool, config: &LlmConfig) -> Result<(), AppError> {
     sqlx::query(
-        "INSERT INTO llm_configs (id, name, provider, base_url, model, api_key_ref, is_default, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"
+        "INSERT INTO llm_configs (id, name, provider, base_url, model, api_key_ref, is_default, network_location, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"
     )
     .bind(&config.id)
     .bind(&config.name)
@@ -36,6 +36,7 @@ pub async fn insert_llm_config(pool: &SqlitePool, config: &LlmConfig) -> Result<
     .bind(&config.model)
     .bind(&config.api_key_ref)
     .bind(config.is_default)
+    .bind(config.network_location.as_str())
     .bind(&config.created_at)
     .bind(&config.updated_at)
     .execute(pool)
@@ -53,16 +54,18 @@ pub async fn update_llm_config(
     base_url: &str,
     model: &str,
     api_key_ref: &str,
+    network_location: &str,
 ) -> Result<(), AppError> {
     let now = chrono_now();
     let result = sqlx::query(
-        "UPDATE llm_configs SET name = ?1, provider = ?2, base_url = ?3, model = ?4, api_key_ref = ?5, updated_at = ?6 WHERE id = ?7"
+        "UPDATE llm_configs SET name = ?1, provider = ?2, base_url = ?3, model = ?4, api_key_ref = ?5, network_location = ?6, updated_at = ?7 WHERE id = ?8"
     )
     .bind(name)
     .bind(provider)
     .bind(base_url)
     .bind(model)
     .bind(api_key_ref)
+    .bind(network_location)
     .bind(&now)
     .bind(id)
     .execute(pool)
@@ -122,7 +125,7 @@ pub async fn set_default_llm_config(pool: &SqlitePool, id: &str) -> Result<(), A
 
 pub async fn get_default_llm_config(pool: &SqlitePool) -> Result<LlmConfig, AppError> {
     sqlx::query_as::<_, LlmConfig>(
-        "SELECT id, name, provider, base_url, model, api_key_ref, is_default, created_at, updated_at FROM llm_configs WHERE is_default = 1 LIMIT 1"
+        "SELECT id, name, provider, base_url, model, api_key_ref, is_default, network_location, created_at, updated_at FROM llm_configs WHERE is_default = 1 LIMIT 1"
     )
     .fetch_optional(pool)
     .await
@@ -179,6 +182,7 @@ fn days_to_ymd(days: i64) -> (i64, u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::settings::NetworkLocation;
     use sqlx::sqlite::SqlitePoolOptions;
 
     async fn setup_test_db() -> SqlitePool {
@@ -197,6 +201,7 @@ mod tests {
                 model TEXT NOT NULL,
                 api_key_ref TEXT NOT NULL,
                 is_default INTEGER NOT NULL DEFAULT 0,
+                network_location TEXT NOT NULL DEFAULT 'external' CHECK(network_location IN ('internal', 'external')),
                 created_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00Z',
                 updated_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00Z'
             )",
@@ -217,6 +222,7 @@ mod tests {
             model: "gpt-4o".to_string(),
             api_key_ref: format!("llm_{}_api_key", id),
             is_default,
+            network_location: NetworkLocation::External,
             created_at: "2026-01-01T00:00:00Z".to_string(),
             updated_at: "2026-01-01T00:00:00Z".to_string(),
         }
@@ -267,6 +273,7 @@ mod tests {
             "https://api.anthropic.com",
             "claude-3",
             "llm_test-3_api_key",
+            "external",
         )
         .await
         .unwrap();
@@ -274,6 +281,7 @@ mod tests {
         let loaded = get_llm_config(&pool, "test-3").await.unwrap();
         assert_eq!(loaded.name, "Updated");
         assert_eq!(loaded.provider, "anthropic");
+        assert_eq!(loaded.network_location, NetworkLocation::External);
     }
 
     #[tokio::test]
@@ -323,5 +331,42 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count_llm_configs(&pool).await.unwrap(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_network_location_persistence() {
+        let pool = setup_test_db().await;
+        let mut config = test_config("nl-1", "Internal Model", false);
+        config.network_location = NetworkLocation::Internal;
+        insert_llm_config(&pool, &config).await.unwrap();
+
+        let loaded = get_llm_config(&pool, "nl-1").await.unwrap();
+        assert_eq!(loaded.network_location, NetworkLocation::Internal);
+
+        update_llm_config(
+            &pool,
+            "nl-1",
+            "Internal Model",
+            "openai_compatible",
+            "https://internal.example.com/v1",
+            "gpt-4o",
+            "llm_nl-1_api_key",
+            "internal",
+        )
+        .await
+        .unwrap();
+
+        let loaded = get_llm_config(&pool, "nl-1").await.unwrap();
+        assert_eq!(loaded.network_location, NetworkLocation::Internal);
+    }
+
+    #[tokio::test]
+    async fn test_network_location_default_external() {
+        let pool = setup_test_db().await;
+        let config = test_config("nl-default", "Default External", false);
+        insert_llm_config(&pool, &config).await.unwrap();
+
+        let loaded = get_llm_config(&pool, "nl-default").await.unwrap();
+        assert_eq!(loaded.network_location, NetworkLocation::External);
     }
 }

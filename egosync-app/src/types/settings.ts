@@ -1,5 +1,7 @@
 export type LlmProviderType = 'openai_compatible' | 'anthropic' | 'minimax' | 'zhipu' | 'deepseek' | 'kimi' | 'bailian';
 
+export type NetworkLocation = 'internal' | 'external';
+
 export interface LlmConfig {
   id: string;
   name: string;
@@ -8,6 +10,7 @@ export interface LlmConfig {
   model: string;
   apiKeyRef: string;
   isDefault: boolean;
+  networkLocation: NetworkLocation;
   createdAt: string;
   updatedAt: string;
 }
@@ -18,6 +21,7 @@ export interface CreateLlmConfigInput {
   baseUrl: string;
   model: string;
   apiKey: string;
+  networkLocation: NetworkLocation;
 }
 
 export interface UpdateLlmConfigInput {
@@ -26,4 +30,5 @@ export interface UpdateLlmConfigInput {
   baseUrl?: string;
   model?: string;
   apiKey?: string;
+  networkLocation?: NetworkLocation;
 }

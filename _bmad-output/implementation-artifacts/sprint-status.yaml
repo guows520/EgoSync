@@ -1,5 +1,5 @@
 # generated: 2026-05-21
-# last_updated: 2026-07-23T16:30:00+08:00
+# last_updated: 2026-07-27T11:30:45+08:00
 # project: 探索 (EgoSync)
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-21
-last_updated: 2026-07-24T17:30:00+08:00
+last_updated: 2026-07-27T15:38:39+08:00
 project: "探索 (EgoSync)"
 project_key: NOKEY
 tracking_system: file-system
@@ -149,6 +149,8 @@ development_status:
   8-3-wcag-accessibility-audit: done
   8-4-performance-benchmark: done
   8-5-release-auto-publish: done
+  8-6-opencode-sidecar-upgrade-lifecycle: in-progress
+  8-7-model-network-location-proxy-bypass: done
   epic-8-retrospective: optional
 
   # ============================================================
@@ -176,4 +178,3 @@ development_status:
   epic-11: in-progress
   11-1-view-and-filter-cross-agent-activity-statistics: done
   epic-11-retrospective: optional
-

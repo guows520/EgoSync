@@ -8,7 +8,7 @@ import { schedulerService } from '../../services/schedulerService';
 import { appService } from '../../services/appService';
 import { dataService } from '../../services/dataService';
 import type { ExportFormat, ExportResult, ImportResult } from '../../services/dataService';
-import type { LlmConfig, CreateLlmConfigInput, UpdateLlmConfigInput, LlmProviderType } from '../../types/settings';
+import type { LlmConfig, CreateLlmConfigInput, UpdateLlmConfigInput, LlmProviderType, NetworkLocation } from '../../types/settings';
 import type { McpServer, McpServerType } from '../../types/mcp';
 
 // 提供商默认 API 地址映射
@@ -97,6 +97,7 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
   const [knockSoundEnabled, setKnockSoundEnabled] = useState(false);
   const [isSavingSound, setIsSavingSound] = useState(false);
   const [saveError, setSaveError] = useState('');
+  const [runtimeRefreshError, setRuntimeRefreshError] = useState('');
   const [showFormatSelect, setShowFormatSelect] = useState(false);
   const [selectedFormats, setSelectedFormats] = useState<ExportFormat[]>([]);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
@@ -219,7 +220,7 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
   };
 
   const handleEdit = (conf: LlmConfig) => {
-    setEditForm({ name: conf.name, provider: conf.provider, baseUrl: conf.baseUrl, model: conf.model, apiKey: '' });
+    setEditForm({ name: conf.name, provider: conf.provider, baseUrl: conf.baseUrl, model: conf.model, apiKey: '', networkLocation: (conf.networkLocation === 'internal' ? 'internal' : 'external') as NetworkLocation });
     setEditingId(conf.id);
     setIsEditing(true);
     setTestStatus('idle');
@@ -230,7 +231,7 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
   };
 
   const handleNew = () => {
-    setEditForm({ name: '新配置', provider: 'openai_compatible', baseUrl: PROVIDER_DEFAULT_BASE_URL.openai_compatible, apiKey: '', model: '' });
+    setEditForm({ name: '新配置', provider: 'openai_compatible', baseUrl: PROVIDER_DEFAULT_BASE_URL.openai_compatible, apiKey: '', model: '', networkLocation: 'external' as NetworkLocation });
     setEditingId(null);
     setIsEditing(true);
     setTestStatus('idle');
@@ -269,6 +270,7 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
         editForm.provider,
         editForm.baseUrl,
         editForm.apiKey,
+        editForm.networkLocation,
       );
       setAvailableModels(models);
       setShowModelDropdown(true);
@@ -289,6 +291,7 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
           provider: editForm.provider,
           baseUrl: editForm.baseUrl,
           model: editForm.model,
+          networkLocation: editForm.networkLocation,
         };
         if (editForm.apiKey) input.apiKey = editForm.apiKey;
         await llmConfigService.update(editingId, input);
@@ -299,14 +302,21 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
           baseUrl: editForm.baseUrl,
           model: editForm.model,
           apiKey: editForm.apiKey,
+          networkLocation: editForm.networkLocation,
         };
         await llmConfigService.create(input);
       }
       await loadConfigs();
       setIsEditing(false);
     } catch (e: any) {
-      const errMsg = typeof e === 'string' ? e : (e?.message || JSON.stringify(e));
-      setSaveError(errMsg);
+      if (e && typeof e === 'object' && typeof e.RuntimeRefreshError === 'string') {
+        await loadConfigs();
+        setIsEditing(false);
+        setRuntimeRefreshError(e.RuntimeRefreshError);
+      } else {
+        const errMsg = typeof e === 'string' ? e : (e?.message || JSON.stringify(e));
+        setSaveError(errMsg);
+      }
     } finally {
       setIsSaving(false);
     }
@@ -316,8 +326,14 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
     try {
       await llmConfigService.delete(id);
       await loadConfigs();
-    } catch (e) {
-      console.error('删除失败:', e);
+    } catch (e: any) {
+      if (e && typeof e === 'object' && typeof e.RuntimeRefreshError === 'string') {
+        await loadConfigs();
+        setRuntimeRefreshError(e.RuntimeRefreshError);
+      } else {
+        const errMsg = typeof e === 'string' ? e : (e?.message || JSON.stringify(e));
+        setSaveError(errMsg);
+      }
     }
   };
 
@@ -607,6 +623,7 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
                       <div className="mt-3 pl-7 grid grid-cols-2 gap-y-2 text-[13px] text-slate-500 dark:text-slate-400">
                         <div><span className="text-slate-400 dark:text-slate-500 mr-2">模型:</span>{conf.model || '-'}</div>
                         <div><span className="text-slate-400 dark:text-slate-500 mr-2">提供商:</span>{PROVIDER_LABEL[conf.provider] || conf.provider}</div>
+                        <div><span className="text-slate-400 dark:text-slate-500 mr-2">网络:</span>{conf.networkLocation === 'internal' ? '内网直连' : '外网代理'}</div>
                       </div>
                       {testStatus !== 'idle' && testingConfigId === null && lastTestedConfigId === conf.id && (
                         <div className={cn("mt-3 pl-7 text-[13px] flex items-center gap-1.5", testStatus === 'success' ? 'text-green-600' : testStatus === 'error' ? 'text-red-600' : 'text-slate-500 dark:text-slate-400')}>
@@ -683,6 +700,13 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
                       {showModelDropdown && availableModels.length === 0 && (
                         <div className="mt-1.5 text-[12px] text-slate-500 dark:text-slate-400">未获取到可用模型</div>
                       )}
+                    </div>
+                    <div>
+                      <label className="block text-[13px] font-medium text-slate-700 dark:text-slate-300 mb-1.5">网络位置</label>
+                      <select value={editForm.networkLocation} onChange={e => setEditForm({...editForm, networkLocation: e.target.value as NetworkLocation})} className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-[14px] focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none">
+                        <option value="external">外网（走系统代理）</option>
+                        <option value="internal">内网（直连，绕过代理）</option>
+                      </select>
                     </div>
                   </div>
                   <div className="mt-6 flex justify-end gap-3">
@@ -1153,6 +1177,23 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
           )}
         </div>
       </div>
+
+      {runtimeRefreshError && (
+        <Modal onClose={() => setRuntimeRefreshError('')} width="w-[420px]" ariaLabel="配置已保存，但运行时刷新失败">
+          <div className="p-6">
+            <h2 className="text-[18px] font-semibold text-slate-800 dark:text-slate-100 flex items-center gap-2">
+              <AlertCircle size={20} className="text-amber-500" /> 配置已保存，但运行时刷新失败
+            </h2>
+            <p className="mt-3 text-[13px] leading-6 text-slate-600 dark:text-slate-300 break-all">{runtimeRefreshError}</p>
+            <p className="mt-2 text-[13px] text-slate-500 dark:text-slate-400">请重试或重启应用，使新配置生效。</p>
+            <div className="mt-6 flex justify-end">
+              <button onClick={() => setRuntimeRefreshError('')} className="px-5 py-2.5 bg-slate-800 text-white rounded-lg text-[13px] font-medium hover:bg-slate-700 transition-colors">
+                知道了
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
 
       {saveError && (
         <Modal onClose={() => setSaveError('')} width="w-[420px]" ariaLabel="保存失败">

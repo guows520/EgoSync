@@ -1,4 +1,4 @@
-import { useState, Fragment, memo, type AnchorHTMLAttributes, type ReactNode } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, Fragment, memo, type AnchorHTMLAttributes, type ReactNode } from 'react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { cn } from '../../lib/utils';
@@ -144,6 +144,63 @@ function ExecutionActionDetails({ block }: { block: Extract<ExecutionTraceBlock,
   );
 }
 
+function ThinkingTraceBlock({ block }: { block: Extract<ExecutionTraceBlock, { type: 'thinking' }> }) {
+  const [expanded, setExpanded] = useState(block.isActive);
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const hasContent = block.content.trim().length > 0;
+
+  useEffect(() => {
+    setExpanded(block.isActive);
+  }, [block.isActive]);
+
+  useLayoutEffect(() => {
+    if (!block.isActive || !expanded) return;
+    const viewport = viewportRef.current;
+    if (viewport) viewport.scrollTop = viewport.scrollHeight;
+  }, [block.content, block.isActive, expanded]);
+
+  return (
+    <div className="rounded-lg border border-slate-200/70 bg-white/60 dark:border-slate-700/70 dark:bg-slate-900/30">
+      <button
+        type="button"
+        disabled={!hasContent}
+        onClick={() => setExpanded(prev => !prev)}
+        aria-expanded={hasContent && expanded}
+        className={cn(
+          'flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-slate-500 dark:text-slate-400',
+          hasContent && 'hover:bg-slate-50 dark:hover:bg-slate-800/60',
+        )}
+      >
+        <ChevronRight size={12} className={cn('shrink-0 transition-transform', expanded && 'rotate-90')} />
+        <span>{block.isActive && (block.elapsedSeconds === null || block.elapsedSeconds === 0)
+          ? 'Think 思考中'
+          : typeof block.elapsedSeconds === 'number'
+            ? `Think 思考了${block.elapsedSeconds}秒`
+            : 'Think 思考时长未知'}</span>
+      </button>
+      {hasContent && expanded && (
+        <div
+          data-testid="thinking-content"
+          className={cn(
+            'border-t border-slate-200/70 px-3 py-2 text-xs leading-6 text-slate-500 dark:border-slate-700/70 dark:text-slate-400',
+            !block.isActive && 'max-h-64 overflow-y-auto whitespace-pre-wrap',
+          )}
+        >
+          {block.isActive ? (
+            <div
+              ref={viewportRef}
+              data-testid="thinking-viewport"
+              className="h-[4.5rem] overflow-hidden whitespace-pre-wrap"
+            >
+              {block.content}
+            </div>
+          ) : block.content}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ExecutionActionCard({ block }: { block: Extract<ExecutionTraceBlock, { type: 'action' }> }) {
   const [expanded, setExpanded] = useState(false);
   const hasDetails = Boolean(block.details?.length);
@@ -179,7 +236,7 @@ function ExecutionActionCard({ block }: { block: Extract<ExecutionTraceBlock, { 
 export function ExecutionTrace({ blocks, defaultExpanded }: { blocks: ExecutionTraceBlock[]; defaultExpanded: boolean }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   return (
-    <div className="max-w-[85%]">
+    <div className="w-full max-w-[85%]">
       <button
         type="button"
         onClick={() => setExpanded(prev => !prev)}
@@ -190,13 +247,17 @@ export function ExecutionTrace({ blocks, defaultExpanded }: { blocks: ExecutionT
       </button>
       {expanded && (
         <div className="mt-1 space-y-2 rounded-xl border border-slate-200/60 bg-slate-50 p-3 shadow-sm dark:border-slate-700/60 dark:bg-slate-800/50">
-          {blocks.map(block => block.type === 'narration' ? (
-            <p key={block.id} className="text-xs leading-relaxed text-slate-500 whitespace-pre-wrap dark:text-slate-400">
-              {block.content}
-            </p>
-          ) : (
-            <ExecutionActionCard key={block.id} block={block} />
-          ))}
+          {blocks.map(block => {
+            if (block.type === 'thinking') return <ThinkingTraceBlock key={block.id} block={block} />;
+            if (block.type === 'narration') {
+              return (
+                <p key={block.id} className="text-xs leading-relaxed text-slate-500 whitespace-pre-wrap dark:text-slate-400">
+                  {block.content}
+                </p>
+              );
+            }
+            return <ExecutionActionCard key={block.id} block={block} />;
+          })}
         </div>
       )}
     </div>
@@ -228,6 +289,19 @@ export function ChatBubble({
     });
   }
   traceBlocks.push(...executionTraceBlocks);
+  if (
+    !isUser
+    && message.thinkingContent.trim().length > 0
+    && !traceBlocks.some(block => block.type === 'thinking')
+  ) {
+    traceBlocks.unshift({
+      id: `message-thinking-${message.id}`,
+      type: 'thinking',
+      content: message.thinkingContent,
+      elapsedSeconds: null,
+      isActive: false,
+    });
+  }
 
   const hasExecutionTrace = !isUser && traceBlocks.length > 0;
   const executionTraceDefaultExpanded = Boolean(isStreaming && hasExecutionTrace);
@@ -238,13 +312,14 @@ export function ChatBubble({
   return (
     <div className={cn(
       "flex flex-col gap-1.5",
-      isUser ? "items-end" : "items-start"
+      isUser ? "items-end" : "items-start w-full"
     )}>
       {hasExecutionTrace && (
         <ExecutionTrace blocks={traceBlocks} defaultExpanded={executionTraceDefaultExpanded} />
       )}
       <div className={cn(
         "rounded-2xl px-5 py-3 max-w-[85%] text-[14.5px] leading-[1.7] shadow-sm",
+        !isUser && "w-full",
         isUser
           ? "bg-slate-800 dark:bg-indigo-600 text-white rounded-tr-sm"
           : "bg-white dark:bg-slate-800 border border-slate-200/80 dark:border-slate-700 rounded-tl-sm text-slate-700 dark:text-slate-200"

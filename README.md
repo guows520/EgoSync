@@ -1,14 +1,13 @@
 <p align="center">
-  <img src="./egosync_logo_v4_transparent.svg" alt="EgoSync Logo" width="160" />
+  <img src="./assets/egosync-logo.png" alt="EgoSync Logo" width="160" />
 </p>
 
 <h1 align="center">EgoSync</h1>
 
 <p align="center">
-  本地优先、以人生角色为核心的 AI 自我管理桌面应用。
+  EgoSync 是一套以人生角色为核心、由数字分身管家统一协调的个人多智能体系统。
 </p>
 
-> 当前版本：`0.1.2`。项目仍处于持续开发阶段，界面、数据结构与功能可能发生变化。
 
 ## 项目简介
 
@@ -148,30 +147,3 @@ npm run tauri build
 ```
 
 构建产物位于 Tauri target 目录。仓库中的 GitHub Actions 提供跨平台 CI 与基于版本标签的发布流程。
-
-## 产品与开发文档
-
-主要设计和实施资料位于：
-
-- `_bmad-output/planning-artifacts/prd-egosync.md`：产品需求文档
-- `_bmad-output/planning-artifacts/architecture.md`：系统架构
-- `_bmad-output/planning-artifacts/ux-design-specification.md`：UX 设计规范
-- `_bmad-output/planning-artifacts/epics.md`：Epic 与用户故事
-- `_bmad-output/implementation-artifacts/`：实现故事、复盘与进度资料
-- `_bmad-output/project-context.md`：项目开发约束与约定
-
-## 参与开发
-
-提交改动前，请遵循根目录 `AGENTS.md` 与 `_bmad-output/project-context.md` 中的项目约定，并至少运行与改动范围相关的测试。
-
-建议的基本验证命令：
-
-```bash
-cd egosync-app
-npm run test:all
-npm run build
-```
-
-## 许可证
-
-当前仓库尚未声明开源许可证。在许可证文件补充之前，默认保留全部权利。

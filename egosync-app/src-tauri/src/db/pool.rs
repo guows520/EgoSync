@@ -1,3 +1,5 @@
+use sha2::{Digest, Sha384};
+use sqlx::migrate::Migrator;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::SqlitePool;
 use std::path::Path;
@@ -6,6 +8,8 @@ use std::str::FromStr;
 use crate::error::AppError;
 
 pub type DbPool = SqlitePool;
+
+static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
 #[derive(Clone)]
 pub struct ConversationsPool(pub SqlitePool);
@@ -42,11 +46,61 @@ pub async fn init_db(db_path: &Path) -> Result<DbPool, AppError> {
 }
 
 async fn run_migrations(pool: &DbPool) -> Result<(), AppError> {
-    sqlx::migrate!("./migrations")
+    repair_legacy_crlf_migration_checksums(pool).await?;
+    MIGRATOR
         .run(pool)
         .await
         .map_err(|e| AppError::DbError(format!("数据库迁移失败: {}", e)))?;
     tracing::info!("数据库迁移执行完成");
+    Ok(())
+}
+
+async fn repair_legacy_crlf_migration_checksums(pool: &DbPool) -> Result<(), AppError> {
+    let migrations_table_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '_sqlx_migrations')",
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(|e| AppError::DbError(format!("检查迁移记录失败: {}", e)))?;
+    if !migrations_table_exists {
+        return Ok(());
+    }
+
+    let applied: Vec<(i64, Vec<u8>)> =
+        sqlx::query_as("SELECT version, checksum FROM _sqlx_migrations WHERE success = 1")
+            .fetch_all(pool)
+            .await
+            .map_err(|e| AppError::DbError(format!("读取迁移记录失败: {}", e)))?;
+
+    for migration in MIGRATOR.iter() {
+        let Some((_, applied_checksum)) = applied
+            .iter()
+            .find(|(version, _)| *version == migration.version)
+        else {
+            continue;
+        };
+        if applied_checksum.as_slice() == migration.checksum.as_ref()
+            || migration.sql.contains("\r\n")
+        {
+            continue;
+        }
+
+        let legacy_sql = migration.sql.replace('\n', "\r\n");
+        let legacy_checksum = Sha384::digest(legacy_sql.as_bytes());
+        if applied_checksum.as_slice() != legacy_checksum.as_slice() {
+            continue;
+        }
+
+        sqlx::query("UPDATE _sqlx_migrations SET checksum = ? WHERE version = ? AND checksum = ?")
+            .bind(migration.checksum.as_ref())
+            .bind(migration.version)
+            .bind(applied_checksum)
+            .execute(pool)
+            .await
+            .map_err(|e| AppError::DbError(format!("修复迁移 {} 校验值失败: {}", migration.version, e)))?;
+        tracing::warn!(version = migration.version, "已修复仅由 CRLF/LF 换行差异导致的历史迁移校验值");
+    }
+
     Ok(())
 }
 
@@ -372,4 +426,47 @@ mod tests {
         .await
         .expect("create opencode skill after upgrade");
     }
+
+    #[tokio::test]
+    async fn init_db_repairs_legacy_crlf_migration_checksum_without_losing_data() {
+        use sha2::{Digest, Sha384};
+
+        let dir = tempdir().expect("create temp dir");
+        let db_path = dir.path().join("egosync.db");
+        let pool = init_db(&db_path).await.expect("init db");
+        sqlx::query("INSERT INTO roles (id, name, goal, status) VALUES ('role-1', '保留数据', '验证无损升级', 'active')")
+            .execute(&pool)
+            .await
+            .expect("seed user data");
+
+        let migration = sqlx::migrate!("./migrations")
+            .iter()
+            .find(|migration| migration.version == 3)
+            .expect("migration 3 exists");
+        let legacy_sql = migration.sql.replace('\n', "\r\n");
+        let legacy_checksum = Sha384::digest(legacy_sql.as_bytes()).to_vec();
+        sqlx::query("UPDATE _sqlx_migrations SET checksum = ? WHERE version = 3")
+            .bind(legacy_checksum)
+            .execute(&pool)
+            .await
+            .expect("simulate legacy Windows checksum");
+        pool.close().await;
+
+        let reopened = init_db(&db_path)
+            .await
+            .expect("line-ending-only checksum difference should be repaired");
+        let role_name: String = sqlx::query_scalar("SELECT name FROM roles WHERE id = 'role-1'")
+            .fetch_one(&reopened)
+            .await
+            .expect("user data remains readable");
+        assert_eq!(role_name, "保留数据");
+
+        let repaired_checksum: Vec<u8> =
+            sqlx::query_scalar("SELECT checksum FROM _sqlx_migrations WHERE version = 3")
+                .fetch_one(&reopened)
+                .await
+                .expect("query repaired checksum");
+        assert_eq!(repaired_checksum, migration.checksum.as_ref());
+    }
+
 }

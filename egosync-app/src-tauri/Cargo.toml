@@ -1,6 +1,6 @@
 [package]
 name = "egosync"
-version = "0.1.3"
+version = "0.1.4"
 description = "EgoSync - Your Digital Life Coordinator"
 authors = ["EgoSync Team"]
 license = ""
@@ -28,6 +28,7 @@ async-trait = "0.1"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 thiserror = "1"
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
+sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }
 reqwest = { version = "0.12", features = ["json", "stream"] }
 futures = "0.3"

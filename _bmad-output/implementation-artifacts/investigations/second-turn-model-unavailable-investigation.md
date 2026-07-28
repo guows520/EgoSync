@@ -195,3 +195,48 @@ Concluded；未修改业务代码，未执行修复。
 1. Onboarding 强制工具调用：关闭 thinking，保留 `tool_choice=required`。
 2. 正常 Agent：保持 thinking + tools + 不传 `tool_choice`；由 opencode 负责完整 Agent Loop。
 3. 若直接 Provider fallback 也要求完整支持 Thinking 工具调用，则需端到端保存并回传 `reasoning_content`，不能只把它作为 UI 展示事件；否则应在 fallback 的工具请求中关闭 thinking，明确作为降级能力。
+
+## Follow-up: 2026-07-28 #3
+
+### Latest-package Reproduction
+
+- **Confirmed:** 最新安装实例版本为 0.1.4，运行日志在 onboarding effective step 3 仍收到 HTTP 400：`Thinking mode does not support this tool_choice`。
+- **Confirmed:** 当前修复源码在 `egosync-app/src-tauri/src/services/agent_engine.rs` 为 step >= 3 设置 `disable_thinking: true`，并保留 `tool_choice: required`。
+- **Confirmed:** `egosync-app/src-tauri/src/llm/openai.rs:97-99` 将该选项序列化为顶层 `enable_thinking: false`。
+
+### Protocol Evidence
+
+- **Confirmed:** DeepSeek V4 官方 Thinking Mode 文档规定 OpenAI 格式的开关为 `thinking: { "type": "enabled/disabled" }`，且默认值为 `enabled`。
+- **Confirmed:** DeepSeek 官方 Chat Completion 参数文档同样只定义 `thinking.type=enabled|disabled`，没有定义 `enable_thinking`。
+- **Confirmed:** DeepSeek 官方 Agent 集成文档明确指出 V4 Thinking 模式会拒绝 `tool_choice` 参数，并要求 Thinking 工具调用回传 `reasoning_content`。
+- **Confirmed:** `deepseek-v4-flash` 是 2026-04-24 发布的官方模型名，不是第三方别名或配置错误。
+
+### Root Cause Revision
+
+前一轮修复的策略正确（强制工具调用时关闭 Thinking），但协议字段错误。`enable_thinking=false` 对 DeepSeek V4 不是有效开关，因此被忽略；由于 V4 默认 Thinking 开启，step 3 的实际语义仍是 Thinking + `tool_choice=required`，服务器继续返回同一 HTTP 400。
+
+这解释了为什么安装最新 0.1.4 后现象完全不变：不是安装器没有更新，而是打入安装器的修复没有真正关闭 DeepSeek V4 Thinking。
+
+### Hypothesis Updates
+
+- “安装了旧包”：**Unconfirmed / no longer leading**。尚未直接解包 NSIS payload（本机无 7-Zip），但运行时间、版本、日志与最新构建吻合；且当前源码中的错误字段足以独立解释复现。
+- “DeepSeek 忽略 `enable_thinking=false`”：**Confirmed by protocol definition**。官方 V4 API 使用 `thinking.type`，未定义 `enable_thinking`。
+- “请求未关闭 Thinking”：**Confirmed semantically**。当前序列化没有发送 DeepSeek V4 所需的关闭字段，默认值为 enabled。
+
+### Correct Fix Direction
+
+1. 对 DeepSeek V4 请求发送：`"thinking": { "type": "disabled" }`，而不是 `"enable_thinking": false`。
+2. onboarding step >= 3 保持 `tool_choice: "required"`，确保角色创建流程的确定性。
+3. 增加请求序列化测试，明确断言 DeepSeek V4 关闭 Thinking 的 JSON 形态，避免只测试内部 `disable_thinking` 布尔值。
+4. 普通 Thinking + tools 路径继续不发送 `tool_choice`，并完整保留/回传 `reasoning_content`。
+5. 若 OpenAI-compatible provider 同时服务其他厂商，应按 provider/model capability 映射 Thinking 开关，不能把 DeepSeek 专用字段无条件应用到所有兼容端点。
+
+### Updated Conclusion
+
+**Confidence: High**
+
+最新包仍失败的直接根因是 DeepSeek V4 Thinking 开关序列化错误：应用发送 `enable_thinking=false`，官方 API 要求 `thinking.type=disabled`。因此服务端继续采用默认 Thinking 模式，并拒绝 `tool_choice=required`。
+
+### Status
+
+Concluded；根因已闭环，尚未修改业务代码。

@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, time::Duration};
 
 use futures::StreamExt;
 use reqwest::Client;
-use serde_json::json;
+use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
 use super::traits::{ChatCompletionMessage, ChatOptions, LlmProvider, StreamEvent, ToolCall};
@@ -63,6 +63,14 @@ impl OpenAiProvider {
     }
 }
 
+fn apply_disable_thinking(body: &mut Value, model: &str) {
+    if model.to_ascii_lowercase().starts_with("deepseek-v4") {
+        body["thinking"] = json!({ "type": "disabled" });
+    } else {
+        body["enable_thinking"] = json!(false);
+    }
+}
+
 fn serialize_messages(messages: &[ChatCompletionMessage]) -> Vec<serde_json::Value> {
     messages.iter().map(|m| {
         let mut msg = json!({"role": m.role, "content": m.content});
@@ -100,7 +108,7 @@ impl LlmProvider for OpenAiProvider {
         });
 
         if options.disable_thinking {
-            body["enable_thinking"] = json!(false);
+            apply_disable_thinking(&mut body, &self.model);
         }
 
         if self.reasoning_split {
@@ -384,6 +392,26 @@ mod tests {
             provider.completions_url(),
             "https://api.openai.com/v1/chat/completions"
         );
+    }
+
+    #[test]
+    fn test_deepseek_v4_disable_thinking_uses_v4_wire_format() {
+        // WHY: DeepSeek V4 defaults to Thinking and rejects tool_choice while Thinking is enabled.
+        let mut body = json!({});
+        apply_disable_thinking(&mut body, "deepseek-v4-flash");
+
+        assert_eq!(body["thinking"]["type"], "disabled");
+        assert!(body.get("enable_thinking").is_none());
+    }
+
+    #[test]
+    fn test_non_deepseek_v4_disable_thinking_keeps_compatible_wire_format() {
+        // WHY: the shared provider must not silently change the protocol used by other compatible APIs.
+        let mut body = json!({});
+        apply_disable_thinking(&mut body, "qwen-plus");
+
+        assert_eq!(body["enable_thinking"], false);
+        assert!(body.get("thinking").is_none());
     }
 
     #[test]

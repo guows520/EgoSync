@@ -982,12 +982,14 @@ async fn generate_title(
         ChatCompletionMessage {
             role: "system".to_string(),
             content: "你是一个标题生成器。用一句简短的中文标题（不超过15个字）总结对话内容。只输出标题，不要任何额外文字、标点或引号。".to_string(),
+            reasoning_content: None,
             tool_calls: None,
             tool_call_id: None,
         },
         ChatCompletionMessage {
             role: "user".to_string(),
             content: format!("请为以下对话生成标题：\n\n{}", summary),
+            reasoning_content: None,
             tool_calls: None,
             tool_call_id: None,
         },

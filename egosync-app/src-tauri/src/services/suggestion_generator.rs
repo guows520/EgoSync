@@ -113,12 +113,14 @@ title 是简短标题（不超过 30 字），content 是具体建议内容（10
         ChatCompletionMessage {
             role: "system".to_string(),
             content: system.to_string(),
+            reasoning_content: None,
             tool_calls: None,
             tool_call_id: None,
         },
         ChatCompletionMessage {
             role: "user".to_string(),
             content: user,
+            reasoning_content: None,
             tool_calls: None,
             tool_call_id: None,
         },

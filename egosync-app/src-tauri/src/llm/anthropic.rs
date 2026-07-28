@@ -379,6 +379,7 @@ mod tests {
         let msg = ChatCompletionMessage {
             role: "tool".to_string(),
             content: "角色回复".to_string(),
+            reasoning_content: None,
             tool_calls: None,
             tool_call_id: Some("toolu_1".to_string()),
         };
@@ -396,6 +397,7 @@ mod tests {
         let msg = ChatCompletionMessage {
             role: "assistant".to_string(),
             content: "稍等，我让产品经理看一下".to_string(),
+            reasoning_content: None,
             tool_calls: Some(vec![ToolCall {
                 id: "toolu_1".to_string(),
                 name: "delegate_to_role".to_string(),

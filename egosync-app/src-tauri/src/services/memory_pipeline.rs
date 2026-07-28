@@ -596,6 +596,7 @@ fn build_memory_reconciliation_prompt(
         ChatCompletionMessage {
             role: "system".to_string(),
             content: "你是 EgoSync 的记忆冲突审查器。只输出严格 JSON 对象，不要 Markdown、code fence 或解释文本。顶层格式必须是 {\"actions\":[{\"memoryIndex\":0,\"action\":\"insert|skip|update\",\"existingMemoryId\":\"...\"}]}。只审视同一个 owner 下的记忆；相同记忆输出 skip，新增记忆与旧记忆冲突且新记忆更新时输出 update，否则输出 insert。skip/update 必须引用 existingMemoryId。".to_string(),
+            reasoning_content: None,
             tool_calls: None,
             tool_call_id: None,
         },
@@ -607,6 +608,7 @@ fn build_memory_reconciliation_prompt(
                 existing_lines,
                 candidate_lines
             ),
+            reasoning_content: None,
             tool_calls: None,
             tool_call_id: None,
         },
@@ -798,6 +800,7 @@ fn build_role_memory_assignment_prompt(
         ChatCompletionMessage {
             role: "system".to_string(),
             content: "你是 EgoSync 的角色记忆归属判定器。只输出严格 JSON 对象，不要 Markdown、code fence 或解释文本。顶层格式必须是 {\"assignments\":[{\"memoryIndex\":0,\"roleId\":\"...|null\"}]}。每条 memory 最多归属一个 active 角色；只把关于某个 active 角色领域的事实、偏好、认知更新归属给该角色；任务状态或无法明确归属时 roleId 输出 null。".to_string(),
+            reasoning_content: None,
             tool_calls: None,
             tool_call_id: None,
         },
@@ -807,6 +810,7 @@ fn build_role_memory_assignment_prompt(
                 "active roles:\n{}\n\nextracted memories:\n{}\n\nsource transcript:\n{}",
                 role_lines, memory_lines, transcript
             ),
+            reasoning_content: None,
             tool_calls: None,
             tool_call_id: None,
         },
@@ -1080,12 +1084,14 @@ fn build_extraction_prompt(
                 "你是 EgoSync 的记忆提炼器。{}\n只输出严格 JSON 对象，不要 Markdown、code fence 或解释文本。顶层格式必须是 {{\"memories\":[{{\"category\":\"preference|task_status|cognition_update|fact\",\"content\":\"...\",\"evidenceType\":\"explicit_statement|inferred_from_request\",\"evidenceText\":\"原始用户消息中的连续原文\",\"sourceMessageIds\":[\"...\"]}}]}}。无持久价值信息时输出 {{\"memories\":[]}}。只记录用户明确说出的长期信息；命令、任务要求和一次性操作不得推断为偏好、习惯、事实或状态。处理、阅读、总结材料不等于正在学习；一次指定 PDF/Word/Markdown 不等于格式偏好；一次搜索、创建或调用 Skill 不等于使用习惯。task_status 只能复述用户明确说出的正在进行、计划或承诺，不能从“请帮我做 X”推导“我正在做 X”。evidenceText 必须逐字摘自 sourceMessageIds 对应消息；直接陈述标记 explicit_statement，从请求推断的内容标记 inferred_from_request，后者不会被保存。不确定时输出空数组，宁可漏记，不可猜测。不要基于助手回复、角色回复或模型建议生成记忆。记忆内容用第一人称语境的自然事实表述，不要把对话对象称为“用户”，例如输出“儿子喜欢吃薯条”，不要输出“用户儿子喜欢吃薯条”。",
                 scope
             ),
+            reasoning_content: None,
             tool_calls: None,
             tool_call_id: None,
         },
         ChatCompletionMessage {
             role: "user".to_string(),
             content: format!("请从以下对话消息中提炼结构化记忆：\n\n{}", transcript),
+            reasoning_content: None,
             tool_calls: None,
             tool_call_id: None,
         },

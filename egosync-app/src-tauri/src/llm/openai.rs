@@ -63,6 +63,25 @@ impl OpenAiProvider {
     }
 }
 
+fn serialize_messages(messages: &[ChatCompletionMessage]) -> Vec<serde_json::Value> {
+    messages.iter().map(|m| {
+        let mut msg = json!({"role": m.role, "content": m.content});
+        if let Some(reasoning) = m.reasoning_content.as_ref().filter(|value| !value.trim().is_empty()) {
+            msg["reasoning_content"] = json!(reasoning);
+        }
+        if let Some(ref tool_calls) = m.tool_calls {
+            let tc: Vec<serde_json::Value> = tool_calls.iter().map(|tc| json!({
+                "id": tc.id, "type": "function",
+                "function": { "name": tc.name, "arguments": tc.arguments }
+            })).collect();
+            msg["tool_calls"] = json!(tc);
+            if m.content.is_empty() { msg["content"] = json!(null); }
+        }
+        if let Some(ref tool_call_id) = m.tool_call_id { msg["tool_call_id"] = json!(tool_call_id); }
+        msg
+    }).collect()
+}
+
 #[async_trait::async_trait]
 impl LlmProvider for OpenAiProvider {
     async fn chat_stream(
@@ -72,36 +91,7 @@ impl LlmProvider for OpenAiProvider {
         options: ChatOptions,
     ) -> Result<(), AppError> {
         let url = self.completions_url();
-        let msgs: Vec<serde_json::Value> = messages
-            .iter()
-            .map(|m| {
-                let mut msg = json!({"role": m.role, "content": m.content});
-                if let Some(ref tool_calls) = m.tool_calls {
-                    let tc: Vec<serde_json::Value> = tool_calls
-                        .iter()
-                        .map(|tc| {
-                            json!({
-                                "id": tc.id,
-                                "type": "function",
-                                "function": {
-                                    "name": tc.name,
-                                    "arguments": tc.arguments
-                                }
-                            })
-                        })
-                        .collect();
-                    msg["tool_calls"] = json!(tc);
-                    // When role is assistant with tool_calls, content can be null
-                    if m.content.is_empty() {
-                        msg["content"] = json!(null);
-                    }
-                }
-                if let Some(ref tool_call_id) = m.tool_call_id {
-                    msg["tool_call_id"] = json!(tool_call_id);
-                }
-                msg
-            })
-            .collect();
+        let msgs = serialize_messages(&messages);
 
         let mut body = json!({
             "model": self.model,
@@ -394,6 +384,21 @@ mod tests {
             provider.completions_url(),
             "https://api.openai.com/v1/chat/completions"
         );
+    }
+
+    #[test]
+    fn test_reasoning_content_is_serialized_for_tool_followup() {
+        // WHY: DeepSeek requires the reasoning that produced a tool call on that assistant message.
+        let messages = vec![ChatCompletionMessage { role: "assistant".into(), content: String::new(), reasoning_content: Some("分析后调用工具".into()), tool_calls: Some(vec![ToolCall { id: "call-1".into(), name: "create_role".into(), arguments: "{}".into() }]), tool_call_id: None }];
+        let serialized = serialize_messages(&messages);
+        assert_eq!(serialized[0]["reasoning_content"], "分析后调用工具");
+    }
+
+    #[test]
+    fn test_empty_reasoning_content_is_omitted() {
+        // WHY: messages without reasoning must retain their existing OpenAI-compatible wire shape.
+        let messages = vec![ChatCompletionMessage { role: "user".into(), content: "你好".into(), reasoning_content: Some("  \n\t".into()), tool_calls: None, tool_call_id: None }];
+        assert!(serialize_messages(&messages)[0].get("reasoning_content").is_none());
     }
 
     #[test]

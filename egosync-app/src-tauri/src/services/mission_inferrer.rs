@@ -394,6 +394,7 @@ async fn call_llm_with_timeout(
     let messages = vec![ChatCompletionMessage {
         role: "user".to_string(),
         content: prompt.to_string(),
+        reasoning_content: None,
         tool_calls: None,
         tool_call_id: None,
     }];

@@ -287,12 +287,14 @@ pub fn build_briefing_prompt(data: &BriefingData, today: &str) -> Vec<ChatComple
         ChatCompletionMessage {
             role: "system".to_string(),
             content: system.to_string(),
+            reasoning_content: None,
             tool_calls: None,
             tool_call_id: None,
         },
         ChatCompletionMessage {
             role: "user".to_string(),
             content: user,
+            reasoning_content: None,
             tool_calls: None,
             tool_call_id: None,
         },

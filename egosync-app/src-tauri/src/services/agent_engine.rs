@@ -1827,6 +1827,7 @@ pub async fn build_butler_messages(
     result.push(ChatCompletionMessage {
         role: "system".to_string(),
         content: system_prompt,
+        reasoning_content: None,
         tool_calls: None,
         tool_call_id: None,
     });
@@ -1837,6 +1838,7 @@ pub async fn build_butler_messages(
         result.push(ChatCompletionMessage {
             role: msg.role,
             content: msg.content,
+            reasoning_content: None,
             tool_calls: None,
             tool_call_id: None,
         });
@@ -1853,6 +1855,7 @@ pub async fn build_butler_messages(
             result.push(ChatCompletionMessage {
                 role: "user".to_string(),
                 content: user_message.to_string(),
+                reasoning_content: None,
                 tool_calls: None,
                 tool_call_id: None,
             });
@@ -1992,6 +1995,7 @@ pub async fn build_role_messages(
     result.push(ChatCompletionMessage {
         role: "system".to_string(),
         content: system_prompt,
+        reasoning_content: None,
         tool_calls: None,
         tool_call_id: None,
     });
@@ -2002,6 +2006,7 @@ pub async fn build_role_messages(
         result.push(ChatCompletionMessage {
             role: msg.role,
             content: msg.content,
+            reasoning_content: None,
             tool_calls: None,
             tool_call_id: None,
         });
@@ -2016,6 +2021,7 @@ pub async fn build_role_messages(
             result.push(ChatCompletionMessage {
                 role: "user".to_string(),
                 content: user_message.to_string(),
+                reasoning_content: None,
                 tool_calls: None,
                 tool_call_id: None,
             });
@@ -2100,6 +2106,7 @@ pub async fn build_onboarding_messages(
     result.push(ChatCompletionMessage {
         role: "system".to_string(),
         content: ONBOARDING_SYSTEM_PROMPT.to_string(),
+        reasoning_content: None,
         tool_calls: None,
         tool_call_id: None,
     });
@@ -2115,6 +2122,7 @@ pub async fn build_onboarding_messages(
         result.push(ChatCompletionMessage {
             role: msg.role,
             content: msg.content,
+            reasoning_content: None,
             tool_calls: None,
             tool_call_id: None,
         });
@@ -2131,6 +2139,7 @@ pub async fn build_onboarding_messages(
             result.push(ChatCompletionMessage {
                 role: "user".to_string(),
                 content: user_message.to_string(),
+                reasoning_content: None,
                 tool_calls: None,
                 tool_call_id: None,
             });
@@ -2143,6 +2152,7 @@ pub async fn build_onboarding_messages(
             result.push(ChatCompletionMessage {
                 role: "user".to_string(),
                 content: "你好".to_string(),
+                reasoning_content: None,
                 tool_calls: None,
                 tool_call_id: None,
             });
@@ -2284,13 +2294,52 @@ fn create_role_tool_definition() -> ToolDefinition {
     }
 }
 
+fn assistant_tool_call_message(content: String, reasoning: &str, tool_calls: Vec<ToolCall>) -> ChatCompletionMessage {
+    ChatCompletionMessage { role: "assistant".to_string(), content, reasoning_content: (!reasoning.trim().is_empty()).then(|| reasoning.to_string()), tool_calls: Some(tool_calls), tool_call_id: None }
+}
+
+fn build_tool_followup_messages(
+    mut messages: Vec<ChatCompletionMessage>,
+    assistant_content: String,
+    accumulated_reasoning: &str,
+    tool_calls: &[ToolCall],
+    tool_results: &[String],
+) -> Vec<ChatCompletionMessage> {
+    messages.push(assistant_tool_call_message(
+        assistant_content,
+        accumulated_reasoning,
+        tool_calls.to_vec(),
+    ));
+    for (tool_call, result_text) in tool_calls.iter().zip(tool_results.iter()) {
+        let content = if tool_call.name == "create_role"
+            && result_text.starts_with("role_proposal_emitted:")
+        {
+            "角色提议已发送给用户，等待用户在弹窗中确认或修改。不要宣布创建成功。".to_string()
+        } else {
+            result_text.clone()
+        };
+        messages.push(ChatCompletionMessage {
+            role: "tool".to_string(),
+            content,
+            reasoning_content: None,
+            tool_calls: None,
+            tool_call_id: Some(tool_call.id.clone()),
+        });
+    }
+    messages
+}
+
+fn get_butler_chat_options() -> ChatOptions {
+    ChatOptions { disable_thinking: false, tools: Some(vec![delegate_to_role_tool_definition(), create_role_tool_definition(), record_emergence_rejection_tool_definition()]), tool_choice: None }
+}
+
 fn get_onboarding_chat_options(step: u8) -> ChatOptions {
     // Only provide the create_role tool from step 3 onwards.
     // Steps 1-2 are for greeting and asking about interests — the model must NOT
     // be able to call create_role until it has gathered enough context.
     if step >= 3 {
         ChatOptions {
-            disable_thinking: false,
+            disable_thinking: true,
             tools: Some(vec![create_role_tool_definition()]),
             // Force the model to call the tool — prevents it from endlessly
             // asking clarifying questions instead of proposing a role.
@@ -3503,15 +3552,7 @@ pub async fn run_stream(
         (None, Some(_)) => ChatOptions::default(),
         // 管家视图：挂 delegate_to_role + create_role + record_emergence_rejection
         // tool_choice=None 让 LLM 自主决定（意图模糊时追问）
-        (None, None) => ChatOptions {
-            disable_thinking: false,
-            tools: Some(vec![
-                delegate_to_role_tool_definition(),
-                create_role_tool_definition(),
-                record_emergence_rejection_tool_definition(),
-            ]),
-            tool_choice: None,
-        },
+        (None, None) => get_butler_chat_options(),
     };
 
     let (tx, mut rx) = mpsc::channel::<StreamEvent>(128);
@@ -3756,31 +3797,13 @@ pub async fn run_stream(
                     };
 
                     // Build follow-up messages with tool results for continuation
-                    let mut followup_messages = messages.clone();
-                    // Add the assistant message with tool_calls
-                    followup_messages.push(ChatCompletionMessage {
-                        role: "assistant".to_string(),
-                        content: first_bubble_text,
-                        tool_calls: Some(tool_calls_received.clone()),
-                        tool_call_id: None,
-                    });
-                    // Add tool results
-                    for (tc, result_text) in tool_calls_received.iter().zip(tool_results.iter()) {
-                        let content = if tc.name == "create_role"
-                            && result_text.starts_with("role_proposal_emitted:")
-                        {
-                            "角色提议已发送给用户，等待用户在弹窗中确认或修改。不要宣布创建成功。"
-                                .to_string()
-                        } else {
-                            result_text.clone()
-                        };
-                        followup_messages.push(ChatCompletionMessage {
-                            role: "tool".to_string(),
-                            content,
-                            tool_calls: None,
-                            tool_call_id: Some(tc.id.clone()),
-                        });
-                    }
+                    let followup_messages = build_tool_followup_messages(
+                        messages.clone(),
+                        first_bubble_text,
+                        &accumulated_thinking,
+                        &tool_calls_received,
+                        &tool_results,
+                    );
 
                     // Stream the follow-up response (LLM will generate text after seeing tool results)
                     let (tx2, mut rx2) = mpsc::channel::<StreamEvent>(128);
@@ -4883,9 +4906,9 @@ async fn run_delegated_role_provider(
         &first.tool_calls,
     )
     .await;
-    messages.push(ChatCompletionMessage { role: "assistant".to_string(), content: first.text, tool_calls: Some(first.tool_calls.clone()), tool_call_id: None });
+    messages.push(ChatCompletionMessage { role: "assistant".to_string(), content: first.text, reasoning_content: None, tool_calls: Some(first.tool_calls.clone()), tool_call_id: None });
     for (call, outcome) in first.tool_calls.iter().zip(outcomes.iter()) {
-        messages.push(ChatCompletionMessage { role: "tool".to_string(), content: serde_json::to_string(outcome).unwrap_or_else(|_| "{\"status\":\"error\"}".to_string()), tool_calls: None, tool_call_id: Some(call.id.clone()) });
+        messages.push(ChatCompletionMessage { role: "tool".to_string(), content: serde_json::to_string(outcome).unwrap_or_else(|_| "{\"status\":\"error\"}".to_string()), reasoning_content: None, tool_calls: None, tool_call_id: Some(call.id.clone()) });
     }
     let followup = collect_local_stream(provider, messages, ChatOptions { disable_thinking: true, tools: None, tool_choice: None }).await;
     let reply = if followup.text.trim().is_empty() {
@@ -5355,6 +5378,7 @@ async fn try_fallback_extract_role(
         role: "system".to_string(),
         content: "你是一个严格的 JSON 提取器。仅输出一行 JSON，不要任何解释、前后缀或代码块包裹。"
             .to_string(),
+        reasoning_content: None,
         tool_calls: None,
         tool_call_id: None,
     });
@@ -5366,6 +5390,7 @@ async fn try_fallback_extract_role(
     messages.push(ChatCompletionMessage {
         role: "assistant".to_string(),
         content: assistant_text.to_string(),
+        reasoning_content: None,
         tool_calls: None,
         tool_call_id: None,
     });
@@ -5374,6 +5399,7 @@ async fn try_fallback_extract_role(
         content: "请从以上对话中提取要创建的角色信息，只输出一行 JSON，键固定为 name/icon/color/goal。\
                   name 必填（中文角色名）；icon 从这些标识符里选一个最贴合的：briefcase/code/chart-bar/palette/pen-tool/book-open/graduation-cap/dumbbell/heart-pulse/leaf/home/users/baby/gamepad-2/music/camera/plane/utensils/coffee/target/sparkles/lightbulb/compass/wallet；color 从这些 hex 里选最贴合：#4F46E5/#0EA5E9/#10B981/#F59E0B/#EF4444/#8B5CF6/#EC4899/#64748B；goal 为一句话。\
                   如果无法确定角色名，输出 {}。".to_string(),
+        reasoning_content: None,
         tool_calls: None,
         tool_call_id: None,
     });
@@ -5446,12 +5472,14 @@ mod tests {
 
     struct ScriptedDelegateProvider {
         rounds: Mutex<VecDeque<Vec<StreamEvent>>>,
+        messages: Mutex<Vec<Vec<ChatCompletionMessage>>>,
     }
 
     #[async_trait::async_trait]
     impl LlmProvider for ScriptedDelegateProvider {
         async fn test_connection(&self) -> Result<(), AppError> { Ok(()) }
-        async fn chat_stream(&self, _messages: Vec<ChatCompletionMessage>, tx: mpsc::Sender<StreamEvent>, _options: ChatOptions) -> Result<(), AppError> {
+        async fn chat_stream(&self, messages: Vec<ChatCompletionMessage>, tx: mpsc::Sender<StreamEvent>, _options: ChatOptions) -> Result<(), AppError> {
+            self.messages.lock().await.push(messages);
             let events = self.rounds.lock().await.pop_front().unwrap_or_default();
             for event in events { let _ = tx.send(event).await; }
             Ok(())
@@ -5459,7 +5487,7 @@ mod tests {
     }
 
     fn scripted_provider(rounds: Vec<Vec<StreamEvent>>) -> Arc<dyn LlmProvider> {
-        Arc::new(ScriptedDelegateProvider { rounds: Mutex::new(rounds.into()) })
+        Arc::new(ScriptedDelegateProvider { rounds: Mutex::new(rounds.into()), messages: Mutex::new(Vec::new()) })
     }
 
     fn task_call(id: &str, title: &str, deadline: Option<&str>) -> ToolCall {
@@ -5563,7 +5591,7 @@ mod tests {
             vec![StreamEvent::Done, StreamEvent::ToolCall(task_call("call-1", "准备产品评审", None))],
             vec![StreamEvent::Done, StreamEvent::Token("已整理会议建议。".into())],
         ]);
-        let messages = vec![ChatCompletionMessage { role: "system".into(), content: DELEGATED_TASK_PROMPT.into(), tool_calls: None, tool_call_id: None }];
+        let messages = vec![ChatCompletionMessage { role: "system".into(), content: DELEGATED_TASK_PROMPT.into(), reasoning_content: None, tool_calls: None, tool_call_id: None }];
 
         let run = run_delegated_role_provider(
             &provider,
@@ -5586,7 +5614,7 @@ mod tests {
         let pool = setup_test_main_pool().await;
         let role = crate::db::roles::create_role(&pool, &CreateRoleInput { name: "产品经理".into(), icon: None, color: None, goal: None }).await.unwrap();
         let provider = scripted_provider(vec![vec![StreamEvent::Token("建议先讲目标与取舍。".into()), StreamEvent::Done]]);
-        let messages = vec![ChatCompletionMessage { role: "system".into(), content: DELEGATED_TASK_PROMPT.into(), tool_calls: None, tool_call_id: None }];
+        let messages = vec![ChatCompletionMessage { role: "system".into(), content: DELEGATED_TASK_PROMPT.into(), reasoning_content: None, tool_calls: None, tool_call_id: None }];
 
         let run = run_delegated_role_provider(
             &provider,
@@ -5611,7 +5639,7 @@ mod tests {
             vec![StreamEvent::ToolCall(task_call("ok", "准备产品评审", None)), StreamEvent::ToolCall(task_call("bad", "   ", None))],
             vec![StreamEvent::Error("模型收尾失败".into())],
         ]);
-        let messages = vec![ChatCompletionMessage { role: "system".into(), content: DELEGATED_TASK_PROMPT.into(), tool_calls: None, tool_call_id: None }];
+        let messages = vec![ChatCompletionMessage { role: "system".into(), content: DELEGATED_TASK_PROMPT.into(), reasoning_content: None, tool_calls: None, tool_call_id: None }];
 
         let run = run_delegated_role_provider(
             &provider,
@@ -6373,6 +6401,70 @@ mod tests {
         assert!(ONBOARDING_SYSTEM_PROMPT.contains("引导"));
         assert!(ONBOARDING_SYSTEM_PROMPT.contains("create_role"));
         assert!(ONBOARDING_SYSTEM_PROMPT.contains("行为红线"));
+    }
+
+    #[test]
+    fn test_onboarding_options_respect_pre_tool_and_forced_tool_boundaries() {
+        // WHY: steps 1-2 gather context without tools; every supported step from 3 onward
+        // must avoid DeepSeek's Thinking + required-tool conflict while still forcing create_role.
+        for step in [1, 2] {
+            let options = get_onboarding_chat_options(step);
+            assert!(!options.disable_thinking, "step {step}");
+            assert!(options.tools.is_none(), "step {step}");
+            assert!(options.tool_choice.is_none(), "step {step}");
+        }
+        for step in [3, 4, 5] {
+            let options = get_onboarding_chat_options(step);
+            assert!(options.disable_thinking, "step {step}");
+            assert_eq!(options.tool_choice.as_deref(), Some("required"), "step {step}");
+            assert_eq!(options.tools.as_ref().map(Vec::len), Some(1), "step {step}");
+        }
+    }
+
+    #[test]
+    fn test_butler_tools_keep_thinking_without_forced_choice() {
+        // WHY: only onboarding is downgraded; normal tools retain autonomous Thinking selection.
+        let options = get_butler_chat_options();
+        assert!(!options.disable_thinking);
+        assert!(options.tools.is_some());
+        assert!(options.tool_choice.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_thinking_chunks_reach_actual_tool_followup_messages() {
+        // WHY: all Thinking chunks that precede a tool call must be preserved verbatim on
+        // the exact assistant message sent in the provider's follow-up request.
+        let provider = Arc::new(ScriptedDelegateProvider {
+            rounds: Mutex::new(vec![
+                vec![StreamEvent::Thinking("第一段 ".into()), StreamEvent::Thinking("第二段".into()), StreamEvent::ToolCall(ToolCall { id: "call-1".into(), name: "create_role".into(), arguments: "{}".into() }), StreamEvent::Done],
+                vec![StreamEvent::Done],
+            ].into()),
+            messages: Mutex::new(Vec::new()),
+        });
+        let (tx, mut rx) = mpsc::channel(16);
+        provider.chat_stream(Vec::new(), tx, ChatOptions::default()).await.unwrap();
+        let mut reasoning = String::new();
+        let mut tool_calls = Vec::new();
+        while let Some(event) = rx.recv().await {
+            match event {
+                StreamEvent::Thinking(chunk) => reasoning.push_str(&chunk),
+                StreamEvent::ToolCall(call) => tool_calls.push(call),
+                StreamEvent::Done => break,
+                _ => {}
+            }
+        }
+        let followup = build_tool_followup_messages(Vec::new(), String::new(), &reasoning, &tool_calls, &["ok".into()]);
+        let (tx2, _rx2) = mpsc::channel(16);
+        provider.chat_stream(followup, tx2, ChatOptions { disable_thinking: true, tools: None, tool_choice: None }).await.unwrap();
+
+        let recorded = provider.messages.lock().await;
+        let assistant = &recorded[1][0];
+        assert_eq!(assistant.reasoning_content.as_deref(), Some("第一段 第二段"));
+        assert_eq!(assistant.tool_calls.as_ref().map(Vec::len), Some(1));
+        assert_eq!(recorded[1][1].tool_call_id.as_deref(), Some("call-1"));
+
+        let whitespace = assistant_tool_call_message(String::new(), "  \n\t", tool_calls);
+        assert!(whitespace.reasoning_content.is_none());
     }
 
     #[test]

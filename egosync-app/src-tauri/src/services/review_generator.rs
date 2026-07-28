@@ -452,12 +452,14 @@ pub fn build_review_prompt(
         ChatCompletionMessage {
             role: "system".to_string(),
             content: system.to_string(),
+            reasoning_content: None,
             tool_calls: None,
             tool_call_id: None,
         },
         ChatCompletionMessage {
             role: "user".to_string(),
             content: user,
+            reasoning_content: None,
             tool_calls: None,
             tool_call_id: None,
         },
@@ -667,12 +669,14 @@ pub fn build_suggestion_prompt(
         ChatCompletionMessage {
             role: "system".to_string(),
             content: system.to_string(),
+            reasoning_content: None,
             tool_calls: None,
             tool_call_id: None,
         },
         ChatCompletionMessage {
             role: "user".to_string(),
             content: user,
+            reasoning_content: None,
             tool_calls: None,
             tool_call_id: None,
         },

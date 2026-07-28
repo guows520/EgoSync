@@ -1047,12 +1047,7 @@ async fn extract_with_provider(
         return Ok(Vec::new());
     }
 
-    let allowed_ids: HashSet<String> = messages
-        .iter()
-        .filter(|m| m.role == "user")
-        .map(|m| m.id.clone())
-        .collect();
-    parse_extraction_response(&response, &allowed_ids)
+    parse_extraction_response(&response, messages)
 }
 
 fn build_extraction_prompt(
@@ -1082,7 +1077,7 @@ fn build_extraction_prompt(
         ChatCompletionMessage {
             role: "system".to_string(),
             content: format!(
-                "你是 EgoSync 的记忆提炼器。{}\n只输出严格 JSON 对象，不要 Markdown、code fence 或解释文本。顶层格式必须是 {{\"memories\":[{{\"category\":\"preference|task_status|cognition_update|fact\",\"content\":\"...\",\"sourceMessageIds\":[\"...\"]}}]}}。无持久价值信息时输出 {{\"memories\":[]}}。每条记忆必须引用 1 个或多个原始用户消息 id，只记录用户自己说出的、未来有持续价值的信息。不要基于助手回复、角色回复或模型建议生成记忆。记忆内容用第一人称语境的自然事实表述，不要把对话对象称为“用户”，例如输出“儿子喜欢吃薯条”，不要输出“用户儿子喜欢吃薯条”。",
+                "你是 EgoSync 的记忆提炼器。{}\n只输出严格 JSON 对象，不要 Markdown、code fence 或解释文本。顶层格式必须是 {{\"memories\":[{{\"category\":\"preference|task_status|cognition_update|fact\",\"content\":\"...\",\"evidenceType\":\"explicit_statement|inferred_from_request\",\"evidenceText\":\"原始用户消息中的连续原文\",\"sourceMessageIds\":[\"...\"]}}]}}。无持久价值信息时输出 {{\"memories\":[]}}。只记录用户明确说出的长期信息；命令、任务要求和一次性操作不得推断为偏好、习惯、事实或状态。处理、阅读、总结材料不等于正在学习；一次指定 PDF/Word/Markdown 不等于格式偏好；一次搜索、创建或调用 Skill 不等于使用习惯。task_status 只能复述用户明确说出的正在进行、计划或承诺，不能从“请帮我做 X”推导“我正在做 X”。evidenceText 必须逐字摘自 sourceMessageIds 对应消息；直接陈述标记 explicit_statement，从请求推断的内容标记 inferred_from_request，后者不会被保存。不确定时输出空数组，宁可漏记，不可猜测。不要基于助手回复、角色回复或模型建议生成记忆。记忆内容用第一人称语境的自然事实表述，不要把对话对象称为“用户”，例如输出“儿子喜欢吃薯条”，不要输出“用户儿子喜欢吃薯条”。",
                 scope
             ),
             tool_calls: None,
@@ -1107,12 +1102,79 @@ struct ExtractionResponse {
 struct RawExtractedMemory {
     category: String,
     content: String,
+    #[serde(default)]
+    evidence_type: String,
+    #[serde(default)]
+    evidence_text: String,
     source_message_ids: Vec<String>,
+}
+
+fn contains_any(value: &str, markers: &[&str]) -> bool {
+    markers.iter().any(|marker| value.contains(marker))
+}
+
+fn has_supported_explicit_evidence(memory: &RawExtractedMemory, messages: &[Message]) -> bool {
+    if memory.evidence_type != "explicit_statement" {
+        return false;
+    }
+    let evidence = memory.evidence_text.trim();
+    if evidence.is_empty()
+        || !memory.source_message_ids.iter().any(|id| {
+            messages.iter().any(|message| {
+                message.role == "user" && message.id == *id && message.content.contains(evidence)
+            })
+        })
+    {
+        return false;
+    }
+
+    let durable_markers = [
+        "我喜欢",
+        "我偏好",
+        "我更喜欢",
+        "我的习惯",
+        "我经常",
+        "我通常",
+        "以后",
+        "今后",
+        "默认",
+        "请记住",
+        "我正在",
+        "我计划",
+        "我准备",
+        "我打算",
+    ];
+    let request_markers = ["请", "帮我", "麻烦", "把", "给我", "能否", "可以帮"];
+    if contains_any(evidence, &request_markers) && !contains_any(evidence, &durable_markers) {
+        return false;
+    }
+
+    let claim = memory.content.as_str();
+    let signal_groups: &[(&[&str], &[&str])] = &[
+        (
+            &["偏好", "喜欢", "默认"],
+            &["偏好", "喜欢", "更喜欢", "默认", "以后", "今后"],
+        ),
+        (
+            &["习惯", "经常", "通常", "总是", "一直"],
+            &["习惯", "经常", "通常", "总是", "一直"],
+        ),
+        (
+            &["正在", "计划", "准备", "打算"],
+            &["正在", "计划", "准备", "打算"],
+        ),
+        (&["学习"], &["学习", "在学"]),
+    ];
+    signal_groups
+        .iter()
+        .all(|(claim_markers, evidence_markers)| {
+            !contains_any(claim, claim_markers) || contains_any(evidence, evidence_markers)
+        })
 }
 
 fn parse_extraction_response(
     response: &str,
-    allowed_message_ids: &HashSet<String>,
+    messages: &[Message],
 ) -> Result<Vec<ExtractedMemory>, AppError> {
     let cleaned = strip_json_code_fence(response.trim());
     let parsed: ExtractionResponse = serde_json::from_str(cleaned)
@@ -1133,12 +1195,17 @@ fn parse_extraction_response(
                 return None;
             }
             if memory.source_message_ids.is_empty()
-                || memory
-                    .source_message_ids
-                    .iter()
-                    .any(|id| !allowed_message_ids.contains(id))
+                || memory.source_message_ids.iter().any(|id| {
+                    !messages
+                        .iter()
+                        .any(|message| message.role == "user" && message.id == *id)
+                })
             {
                 tracing::warn!("memory extraction dropped invalid source ids");
+                return None;
+            }
+            if !has_supported_explicit_evidence(&memory, messages) {
+                tracing::warn!("memory extraction dropped unsupported evidence");
                 return None;
             }
             Some(ExtractedMemory {
@@ -1209,7 +1276,6 @@ mod tests {
     use super::*;
     use crate::models::chat::Message;
     use sqlx::sqlite::SqlitePoolOptions;
-    use std::collections::HashSet;
 
     async fn setup_main_pool() -> DbPool {
         let pool = SqlitePoolOptions::new()
@@ -1290,27 +1356,25 @@ mod tests {
         }
     }
 
-    fn allowed_ids() -> HashSet<String> {
-        ["msg-1".to_string(), "msg-2".to_string()]
-            .into_iter()
-            .collect()
-    }
-
     #[test]
-    fn parse_extraction_response_accepts_strict_json_and_code_fence() {
+    fn parse_extraction_response_accepts_explicit_supported_evidence() {
+        let messages = vec![
+            message("msg-1", "user", "我偏好中文输出，并重视可验证结论"),
+            message("msg-2", "user", "我正在做 Story 2.6"),
+        ];
         let strict = parse_extraction_response(
-            r#"{"memories":[{"category":"preference","content":"用户喜欢中文输出","sourceMessageIds":["msg-1"]}]}"#,
-            &allowed_ids(),
+            r#"{"memories":[{"category":"preference","content":"用户喜欢中文输出","evidenceType":"explicit_statement","evidenceText":"我偏好中文输出","sourceMessageIds":["msg-1"]}]}"#,
+            &messages,
         )
         .expect("strict json parses");
         let fenced = parse_extraction_response(
-            "```json\n{\"memories\":[{\"category\":\"fact\",\"content\":\"用户在做 Story 2.6\",\"sourceMessageIds\":[\"msg-2\"]}]}\n```",
-            &allowed_ids(),
+            "```json\n{\"memories\":[{\"category\":\"fact\",\"content\":\"用户正在做 Story 2.6\",\"evidenceType\":\"explicit_statement\",\"evidenceText\":\"我正在做 Story 2.6\",\"sourceMessageIds\":[\"msg-2\"]}]}\n```",
+            &messages,
         )
         .expect("fenced json parses");
         let surrounded = parse_extraction_response(
-            "下面是结果：\n~~~Json\n{\"memories\":[{\"category\":\"fact\",\"content\":\"用户重视可验证结论\",\"sourceMessageIds\":[\"msg-1\"]}]}\n~~~\n请查收。",
-            &allowed_ids(),
+            "下面是结果：\n~~~Json\n{\"memories\":[{\"category\":\"fact\",\"content\":\"用户重视可验证结论\",\"evidenceType\":\"explicit_statement\",\"evidenceText\":\"重视可验证结论\",\"sourceMessageIds\":[\"msg-1\"]}]}\n~~~\n请查收。",
+            &messages,
         )
         .expect("surrounded json parses");
 
@@ -1319,28 +1383,80 @@ mod tests {
         assert_eq!(strict[0].content, "中文输出");
         assert_eq!(strict[0].source_message_ids, vec!["msg-1"]);
         assert_eq!(fenced.len(), 1);
-        assert_eq!(fenced[0].category, "fact");
-        assert_eq!(fenced[0].content, "在做 Story 2.6");
+        assert_eq!(fenced[0].content, "做 Story 2.6");
         assert_eq!(surrounded.len(), 1);
         assert_eq!(surrounded[0].content, "重视可验证结论");
     }
 
     #[test]
-    fn parse_extraction_response_filters_invalid_items_and_empty_output() {
+    fn parse_extraction_response_rejects_one_off_requests_as_durable_attributes() {
+        let messages = vec![
+            message(
+                "msg-1",
+                "user",
+                "帮我处理并总结这份北京大学 Harness Engineering 课程文档",
+            ),
+            message("msg-2", "user", "把截取内容保存为 PDF"),
+            message("msg-3", "user", "帮我搜索并创建一个 Skill"),
+        ];
         let parsed = parse_extraction_response(
             r#"{
                 "memories": [
-                    {"category":"invalid","content":"错误分类","sourceMessageIds":["msg-1"]},
-                    {"category":"fact","content":"   ","sourceMessageIds":["msg-1"]},
-                    {"category":"fact","content":"错误来源","sourceMessageIds":["other"]},
-                    {"category":"task_status","content":"用户推进记忆管线","sourceMessageIds":["msg-1","msg-2"]}
+                    {"category":"task_status","content":"正在学习北京大学 Harness Engineering 课程","evidenceType":"explicit_statement","evidenceText":"帮我处理并总结这份北京大学 Harness Engineering 课程文档","sourceMessageIds":["msg-1"]},
+                    {"category":"preference","content":"我偏好将文档截取内容保存为 PDF 格式","evidenceType":"inferred_from_request","evidenceText":"把截取内容保存为 PDF","sourceMessageIds":["msg-2"]},
+                    {"category":"fact","content":"我有使用 Skill 平台扩展功能的习惯","evidenceType":"explicit_statement","evidenceText":"帮我搜索并创建一个 Skill","sourceMessageIds":["msg-3"]}
                 ]
             }"#,
-            &allowed_ids(),
+            &messages,
+        )
+        .expect("json parses");
+
+        assert!(parsed.is_empty(), "一次性任务不能变成长期记忆");
+    }
+
+    #[test]
+    fn parse_extraction_response_keeps_matching_explicit_durable_statements() {
+        let messages = vec![
+            message(
+                "msg-1",
+                "user",
+                "我正在系统学习北京大学的 Harness Engineering 课程",
+            ),
+            message("msg-2", "user", "以后这类文档默认给我 PDF，我偏好 PDF"),
+            message("msg-3", "user", "我经常使用 Skill 扩展功能，请记住这个习惯"),
+        ];
+        let parsed = parse_extraction_response(
+            r#"{
+                "memories": [
+                    {"category":"task_status","content":"正在系统学习北京大学的 Harness Engineering 课程","evidenceType":"explicit_statement","evidenceText":"我正在系统学习北京大学的 Harness Engineering 课程","sourceMessageIds":["msg-1"]},
+                    {"category":"preference","content":"偏好 PDF 格式","evidenceType":"explicit_statement","evidenceText":"以后这类文档默认给我 PDF，我偏好 PDF","sourceMessageIds":["msg-2"]},
+                    {"category":"fact","content":"经常使用 Skill 扩展功能","evidenceType":"explicit_statement","evidenceText":"我经常使用 Skill 扩展功能，请记住这个习惯","sourceMessageIds":["msg-3"]}
+                ]
+            }"#,
+            &messages,
+        )
+        .expect("json parses");
+
+        assert_eq!(parsed.len(), 3, "明确陈述的长期信息仍应保留");
+    }
+
+    #[test]
+    fn parse_extraction_response_filters_invalid_items_and_empty_output() {
+        let messages = vec![message("msg-1", "user", "请记住：我正在推进记忆管线")];
+        let parsed = parse_extraction_response(
+            r#"{
+                "memories": [
+                    {"category":"invalid","content":"错误分类","evidenceType":"explicit_statement","evidenceText":"我正在推进记忆管线","sourceMessageIds":["msg-1"]},
+                    {"category":"fact","content":"   ","evidenceType":"explicit_statement","evidenceText":"我正在推进记忆管线","sourceMessageIds":["msg-1"]},
+                    {"category":"fact","content":"错误来源","evidenceType":"explicit_statement","evidenceText":"我正在推进记忆管线","sourceMessageIds":["other"]},
+                    {"category":"task_status","content":"用户正在推进记忆管线","evidenceType":"explicit_statement","evidenceText":"我正在推进记忆管线","sourceMessageIds":["msg-1"]}
+                ]
+            }"#,
+            &messages,
         )
         .expect("json parses");
         let empty =
-            parse_extraction_response(r#"{"memories":[]}"#, &allowed_ids()).expect("empty parses");
+            parse_extraction_response(r#"{"memories":[]}"#, &messages).expect("empty parses");
 
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].category, "task_status");
@@ -1350,7 +1466,8 @@ mod tests {
 
     #[test]
     fn parse_extraction_response_rejects_natural_language() {
-        let err = parse_extraction_response("这里没有值得记录的记忆。", &allowed_ids())
+        let messages = vec![message("msg-1", "user", "我偏好中文")];
+        let err = parse_extraction_response("这里没有值得记录的记忆。", &messages)
             .expect_err("natural language is not valid extraction json");
         assert!(matches!(err, crate::error::AppError::ValidationError(_)));
     }
@@ -1381,12 +1498,23 @@ mod tests {
     }
 
     impl FakeMemoryProvider {
-        fn new(category: &str, content: &str, source_message_id: &str) -> Self {
+        fn new(
+            category: &str,
+            content: &str,
+            source_message_id: &str,
+            evidence_text: &str,
+        ) -> Self {
             Self {
-                response: format!(
-                    r#"{{"memories":[{{"category":"{}","content":"{}","sourceMessageIds":["{}"]}}]}}"#,
-                    category, content, source_message_id
-                ),
+                response: serde_json::json!({
+                    "memories": [{
+                        "category": category,
+                        "content": content,
+                        "evidenceType": "explicit_statement",
+                        "evidenceText": evidence_text,
+                        "evidenceType":"explicit_statement","evidenceText":"请记住：我偏好中文沟通，并正在推进任务 0","sourceMessageIds": [source_message_id],
+                    }]
+                })
+                .to_string(),
             }
         }
 
@@ -1496,7 +1624,7 @@ mod tests {
                 .join("\n");
             let response = if prompt.contains("角色专属记忆") {
                 format!(
-                    r#"{{"memories":[{{"category":"task_status","content":"产品经理正在准备设计评审","sourceMessageIds":["{}"]}}]}}"#,
+                    r#"{{"memories":[{{"category":"task_status","content":"产品经理正在准备设计评审","evidenceType":"explicit_statement","evidenceText":"请记住：我偏好中文沟通，并正在推进任务 0","sourceMessageIds":["{}"]}}]}}"#,
                     self.role_source_message_id
                 )
             } else {
@@ -1543,7 +1671,7 @@ mod tests {
                 .join("\n");
             let response = if prompt.contains("产品经理建议调整设计评审") {
                 format!(
-                    r#"{{"memories":[{{"category":"task_status","content":"产品经理正在调整设计评审","sourceMessageIds":["{}"]}}]}}"#,
+                    r#"{{"memories":[{{"category":"task_status","content":"产品经理正在调整设计评审","evidenceType":"explicit_statement","evidenceText":"请记住：我偏好中文沟通，并正在推进任务 0","sourceMessageIds":["{}"]}}]}}"#,
                     self.assistant_source_message_id
                 )
             } else {
@@ -1561,14 +1689,23 @@ mod tests {
 
     struct RolePromptProvider {
         role_1_source_message_id: String,
+        role_1_evidence_text: String,
         role_2_source_message_id: String,
+        role_2_evidence_text: String,
     }
 
     impl RolePromptProvider {
-        fn new(role_1_source_message_id: &str, role_2_source_message_id: &str) -> Self {
+        fn new(
+            role_1_source_message_id: &str,
+            role_1_evidence_text: &str,
+            role_2_source_message_id: &str,
+            role_2_evidence_text: &str,
+        ) -> Self {
             Self {
                 role_1_source_message_id: role_1_source_message_id.to_string(),
+                role_1_evidence_text: role_1_evidence_text.to_string(),
                 role_2_source_message_id: role_2_source_message_id.to_string(),
+                role_2_evidence_text: role_2_evidence_text.to_string(),
             }
         }
     }
@@ -1591,15 +1728,27 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join("\n");
             let response = if prompt.contains(&self.role_1_source_message_id) {
-                format!(
-                    r#"{{"memories":[{{"category":"task_status","content":"角色一历史委派记忆","sourceMessageIds":["{}"]}}]}}"#,
-                    self.role_1_source_message_id
-                )
+                serde_json::json!({
+                    "memories": [{
+                        "category": "task_status",
+                        "content": "角色一历史委派记忆",
+                        "evidenceType": "explicit_statement",
+                        "evidenceText": self.role_1_evidence_text,
+                        "sourceMessageIds": [self.role_1_source_message_id],
+                    }]
+                })
+                .to_string()
             } else if prompt.contains(&self.role_2_source_message_id) {
-                format!(
-                    r#"{{"memories":[{{"category":"task_status","content":"角色二最新委派记忆","sourceMessageIds":["{}"]}}]}}"#,
-                    self.role_2_source_message_id
-                )
+                serde_json::json!({
+                    "memories": [{
+                        "category": "task_status",
+                        "content": "角色二最新委派记忆",
+                        "evidenceType": "explicit_statement",
+                        "evidenceText": self.role_2_evidence_text,
+                        "sourceMessageIds": [self.role_2_source_message_id],
+                    }]
+                })
+                .to_string()
             } else {
                 r#"{"memories":[]}"#.to_string()
             };
@@ -1644,7 +1793,7 @@ mod tests {
                 .join("\n");
             let response = if prompt.contains("角色专属记忆") {
                 format!(
-                    r#"{{"memories":[{{"category":"task_status","content":"角色记忆不应被全局错误阻断","sourceMessageIds":["{}"]}}]}}"#,
+                    r#"{{"memories":[{{"category":"task_status","content":"角色记忆不应被全局错误阻断","evidenceType":"explicit_statement","evidenceText":"请记住：我偏好中文沟通，并正在推进任务 0","sourceMessageIds":["{}"]}}]}}"#,
                     self.role_source_message_id
                 )
             } else {
@@ -1695,7 +1844,7 @@ mod tests {
                 "角色一提取返回非 JSON".to_string()
             } else if prompt.contains(&self.role_2_source_message_id) {
                 format!(
-                    r#"{{"memories":[{{"category":"task_status","content":"角色二不应被角色一错误阻断","sourceMessageIds":["{}"]}}]}}"#,
+                    r#"{{"memories":[{{"category":"task_status","content":"角色二不应被角色一错误阻断","evidenceType":"explicit_statement","evidenceText":"请记住：我偏好中文沟通，并正在推进任务 0","sourceMessageIds":["{}"]}}]}}"#,
                     self.role_2_source_message_id
                 )
             } else {
@@ -1790,7 +1939,7 @@ mod tests {
                     pool,
                     conversation_id,
                     "user",
-                    &format!("请记住偏好 {}", i),
+                    &format!("请记住：我偏好中文沟通，并正在推进任务 {}", i),
                     true,
                 )
                 .await
@@ -1930,6 +2079,7 @@ mod tests {
                 "fact",
                 "用户偏好中文沟通",
                 &global_messages[0].id,
+                &global_messages[0].content,
             )),
         )
         .await
@@ -1942,6 +2092,7 @@ mod tests {
                 "preference",
                 "产品规划需要表格输出",
                 &role_messages[0].id,
+                &role_messages[0].content,
             )),
         )
         .await
@@ -2007,7 +2158,7 @@ mod tests {
         .await
         .unwrap();
         let extraction_response = format!(
-            r#"{{"memories":[{{"category":"preference","content":"儿子喜欢吃薯条","sourceMessageIds":["{}"]}}]}}"#,
+            r#"{{"memories":[{{"category":"preference","content":"儿子喜欢吃薯条","evidenceType":"explicit_statement","evidenceText":"他比较喜欢吃薯条","sourceMessageIds":["{}"]}}]}}"#,
             msg_1.id
         );
 
@@ -2052,11 +2203,26 @@ mod tests {
         let butler_conv = conversations::create_conversation(&conv_pool, None)
             .await
             .unwrap();
-        let messages = insert_complete_user_messages(&conv_pool, &butler_conv.id).await;
-        let extraction_response = format!(
-            r#"{{"memories":[{{"category":"task_status","content":"明天下午要参加儿子的家长会","sourceMessageIds":["{}"]}}]}}"#,
-            messages[0].id
-        );
+        insert_complete_user_messages(&conv_pool, &butler_conv.id).await;
+        let status_message = conversations::insert_message(
+            &conv_pool,
+            &butler_conv.id,
+            "user",
+            "我明天下午要参加儿子的家长会",
+            true,
+        )
+        .await
+        .unwrap();
+        let extraction_response = serde_json::json!({
+            "memories": [{
+                "category": "task_status",
+                "content": "明天下午要参加儿子的家长会",
+                "evidenceType": "explicit_statement",
+                "evidenceText": status_message.content,
+                "sourceMessageIds": [status_message.id],
+            }]
+        })
+        .to_string();
 
         let count = extract_for_conversation_with_provider(
             &main_pool,
@@ -2111,6 +2277,7 @@ mod tests {
                 "task_status",
                 "产品经理正在准备设计评审",
                 &delegated_user.id,
+                &delegated_user.content,
             )),
         )
         .await
@@ -2289,7 +2456,9 @@ mod tests {
             &butler_conv.id,
             Arc::new(RolePromptProvider::new(
                 &old_role_messages[0].id,
+                &old_role_messages[0].content,
                 &delegated_user.id,
+                &delegated_user.content,
             )),
         )
         .await
@@ -2347,7 +2516,9 @@ mod tests {
             &butler_conv.id,
             Arc::new(RolePromptProvider::new(
                 "missing-role-1-source",
+                "",
                 &wrong_role_messages[0].id,
+                &wrong_role_messages[0].content,
             )),
         )
         .await
@@ -2408,7 +2579,9 @@ mod tests {
             &butler_conv.id,
             Arc::new(RolePromptProvider::new(
                 &role_1_messages[0].id,
+                &role_1_messages[0].content,
                 &role_2_messages[0].id,
+                &role_2_messages[0].content,
             )),
         )
         .await
@@ -2477,7 +2650,9 @@ mod tests {
             &butler_conv.id,
             Arc::new(RolePromptProvider::new(
                 &role_1_messages[0].id,
+                &role_1_messages[0].content,
                 &role_2_messages[0].id,
+                &role_2_messages[0].content,
             )),
         )
         .await
@@ -2620,7 +2795,7 @@ mod tests {
         let prompt = build_extraction_prompt(None, &messages);
         let extracted = extract_with_provider(
             Arc::new(ErrorAfterTokenProvider {
-                token: r#"{"memories":[{"category":"fact","content":"不应写入","sourceMessageIds":["msg-1"]}]}"#
+                token: r#"{"memories":[{"category":"fact","content":"不应写入","evidenceType":"explicit_statement","evidenceText":"请记住：我偏好中文沟通，并正在推进任务 0","sourceMessageIds":["msg-1"]}]}"#
                     .to_string(),
             }),
             &prompt,

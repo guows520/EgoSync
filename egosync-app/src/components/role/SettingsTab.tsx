@@ -679,7 +679,6 @@ export function SettingsTab({
           onChange={handleProactivityChange}
           disabled={isSavingProactivity}
         />
-        <p className="text-[12px] text-slate-400 dark:text-slate-500 mt-2.5 leading-relaxed">V1 仅保存角色主动性级别；实际主动建议会在后续主动循环中生效。</p>
       </div>
 
       <div className={sectionClass('skills', 'pt-6 border-t border-slate-200/80 dark:border-slate-700/80')}>

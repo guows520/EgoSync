@@ -164,7 +164,7 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
 
     render(<ChatStream role={null} onMemoryReferenceClick={onMemoryReferenceClick} />);
     await waitFor(() => expect(chatService.getButlerConversation).toHaveBeenCalled());
-    fireEvent.change(screen.getByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...'), { target: { value: '为什么' } });
+    fireEvent.change(screen.getByPlaceholderText('跟 管家 说点什么，比如：查看一下我有哪些任务…'), { target: { value: '为什么' } });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
     await waitFor(() => expect(chatService.sendMessage).toHaveBeenCalled());
 
@@ -204,12 +204,12 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
     render(<ChatStream role={null} />);
     await waitFor(() => expect(chatService.getButlerConversation).toHaveBeenCalled());
 
-    fireEvent.change(screen.getByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...'), {
+    fireEvent.change(screen.getByPlaceholderText('跟 管家 说点什么，比如：查看一下我有哪些任务…'), {
       target: { value: '开始处理' },
     });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
 
-    await waitFor(() => expect(screen.getByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...')).toBeDisabled());
+    await waitFor(() => expect(screen.getByPlaceholderText('跟 管家 说点什么，比如：查看一下我有哪些任务…')).toBeDisabled());
     expect(screen.queryByRole('button', { name: '执行过程' })).not.toBeInTheDocument();
     expect(screen.queryByText('Think 思考中')).not.toBeInTheDocument();
   });
@@ -226,7 +226,7 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
       ]);
 
     render(<ChatStream role={null} />);
-    const input = await screen.findByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...');
+    const input = await screen.findByPlaceholderText('跟 管家 说点什么，比如：查看一下我有哪些任务…');
     fireEvent.change(input, { target: { value: '开始处理' } });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
 
@@ -483,7 +483,7 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
 
     fireEvent.click(await screen.findByRole('button', { name: '选择工作目录' }));
     expect(await screen.findByText(/CaseA/)).toBeInTheDocument();
-    fireEvent.change(screen.getByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...'), { target: { value: '处理这个项目' } });
+    fireEvent.change(screen.getByPlaceholderText('跟 管家 说点什么，比如：查看一下我有哪些任务…'), { target: { value: '处理这个项目' } });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
 
     await waitFor(() => {
@@ -1103,7 +1103,7 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
 
     render(<ChatStream role={null} />);
 
-    const input = await screen.findByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...');
+    const input = await screen.findByPlaceholderText('跟 管家 说点什么，比如：查看一下我有哪些任务…');
     fireEvent.change(input, { target: { value: '继续' } });
     fireEvent.keyDown(input, { key: 'Enter' });
 
@@ -1152,7 +1152,7 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
 
     render(<ChatStream role={null} />);
 
-    const input = await screen.findByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...');
+    const input = await screen.findByPlaceholderText('跟 管家 说点什么，比如：查看一下我有哪些任务…');
     fireEvent.change(input, { target: { value: '明天有产品设计评审' } });
     fireEvent.keyDown(input, { key: 'Enter' });
 
@@ -1212,7 +1212,7 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
 
     render(<ChatStream role={null} />);
 
-    const input = await screen.findByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...');
+    const input = await screen.findByPlaceholderText('跟 管家 说点什么，比如：查看一下我有哪些任务…');
     fireEvent.change(input, { target: { value: '第一条' } });
     fireEvent.keyDown(input, { key: 'Enter' });
     await waitFor(() => expect(input).toBeDisabled());
@@ -1273,7 +1273,7 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
 
     render(<ChatStream role={null} />);
 
-    const input = await screen.findByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...');
+    const input = await screen.findByPlaceholderText('跟 管家 说点什么，比如：查看一下我有哪些任务…');
     fireEvent.change(input, { target: { value: '继续' } });
     fireEvent.keyDown(input, { key: 'Enter' });
 
@@ -1333,7 +1333,7 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
 
     render(<ChatStream role={null} />);
 
-    const input = await screen.findByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...');
+    const input = await screen.findByPlaceholderText('跟 管家 说点什么，比如：查看一下我有哪些任务…');
     fireEvent.change(input, { target: { value: '明天有产品设计评审' } });
     fireEvent.keyDown(input, { key: 'Enter' });
     await waitFor(() => expect(input).toBeDisabled());
@@ -1384,7 +1384,7 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
 
     render(<ChatStream role={null} />);
 
-    const input = await screen.findByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...');
+    const input = await screen.findByPlaceholderText('跟 管家 说点什么，比如：查看一下我有哪些任务…');
     fireEvent.change(input, { target: { value: '我明天要提交下个版本的PRD' } });
     fireEvent.keyDown(input, { key: 'Enter' });
     await waitFor(() => expect(input).toBeDisabled());
@@ -1430,7 +1430,7 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
 
     render(<ChatStream role={null} />);
 
-    const input = await screen.findByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...');
+    const input = await screen.findByPlaceholderText('跟 管家 说点什么，比如：查看一下我有哪些任务…');
     fireEvent.change(input, { target: { value: '第一条' } });
     fireEvent.keyDown(input, { key: 'Enter' });
     await waitFor(() => expect(input).toBeDisabled());
@@ -1469,7 +1469,7 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
 
     render(<ChatStream role={null} />);
 
-    const input = await screen.findByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...');
+    const input = await screen.findByPlaceholderText('跟 管家 说点什么，比如：查看一下我有哪些任务…');
     fireEvent.change(input, { target: { value: '继续' } });
     fireEvent.keyDown(input, { key: 'Enter' });
     await waitFor(() => expect(input).toBeDisabled());
@@ -1521,7 +1521,7 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
 
     render(<ChatStream role={null} />);
 
-    const input = await screen.findByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...');
+    const input = await screen.findByPlaceholderText('跟 管家 说点什么，比如：查看一下我有哪些任务…');
     fireEvent.change(input, { target: { value: '第一条' } });
     fireEvent.keyDown(input, { key: 'Enter' });
     await waitFor(() => expect(input).toBeDisabled());
@@ -1583,7 +1583,7 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
 
     render(<ChatStream role={null} />);
 
-    const input = await screen.findByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...');
+    const input = await screen.findByPlaceholderText('跟 管家 说点什么，比如：查看一下我有哪些任务…');
     fireEvent.change(input, { target: { value: '第一条' } });
     fireEvent.keyDown(input, { key: 'Enter' });
     await waitFor(() => expect(input).toBeDisabled());
@@ -1640,7 +1640,7 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
 
     render(<ChatStream role={null} />);
 
-    const input = await screen.findByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...');
+    const input = await screen.findByPlaceholderText('跟 管家 说点什么，比如：查看一下我有哪些任务…');
     fireEvent.change(input, { target: { value: '继续' } });
     fireEvent.keyDown(input, { key: 'Enter' });
     await waitFor(() => expect(input).toBeDisabled());
@@ -1666,7 +1666,7 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
 
     render(<ChatStream role={null} />);
 
-    const input = await screen.findByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...');
+    const input = await screen.findByPlaceholderText('跟 管家 说点什么，比如：查看一下我有哪些任务…');
     fireEvent.change(input, { target: { value: '继续' } });
     fireEvent.keyDown(input, { key: 'Enter' });
     await waitFor(() => expect(input).toBeDisabled());
@@ -1691,7 +1691,7 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
 
     render(<ChatStream role={null} />);
 
-    const input = await screen.findByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...');
+    const input = await screen.findByPlaceholderText('跟 管家 说点什么，比如：查看一下我有哪些任务…');
     fireEvent.change(input, { target: { value: '他喜欢吃薯条' } });
     fireEvent.keyDown(input, { key: 'Enter' });
     await waitFor(() => expect(input).toBeDisabled());
@@ -1718,7 +1718,7 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
 
     render(<ChatStream role={null} />);
 
-    const input = await screen.findByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...');
+    const input = await screen.findByPlaceholderText('跟 管家 说点什么，比如：查看一下我有哪些任务…');
     expect(input).toBeDisabled();
 
     await act(async () => {
@@ -1738,7 +1738,7 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
 
     render(<ChatStream role={null} />);
 
-    const input = await screen.findByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...');
+    const input = await screen.findByPlaceholderText('跟 管家 说点什么，比如：查看一下我有哪些任务…');
     await waitFor(() => expect(input).not.toBeDisabled());
     fireEvent.change(input, { target: { value: '这条不会真正发送' } });
     fireEvent.keyDown(input, { key: 'Enter' });
@@ -1766,7 +1766,7 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
     render(<ChatStream role={null} />);
 
     await waitFor(() => expect(chatService.getHistory).toHaveBeenCalledTimes(1));
-    const input = await screen.findByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...');
+    const input = await screen.findByPlaceholderText('跟 管家 说点什么，比如：查看一下我有哪些任务…');
     fireEvent.change(input, { target: { value: '继续' } });
     fireEvent.keyDown(input, { key: 'Enter' });
     await waitFor(() => expect(screen.getByText('继续')).toBeInTheDocument());
@@ -1787,7 +1787,7 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
 
     render(<ChatStream role={null} />);
 
-    const input = await screen.findByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...');
+    const input = await screen.findByPlaceholderText('跟 管家 说点什么，比如：查看一下我有哪些任务…');
     fireEvent.change(input, { target: { value: '不会发送成功' } });
     fireEvent.keyDown(input, { key: 'Enter' });
 
@@ -1830,7 +1830,7 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
 
     render(<ChatStream role={null} />);
 
-    const input = await screen.findByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...');
+    const input = await screen.findByPlaceholderText('跟 管家 说点什么，比如：查看一下我有哪些任务…');
     fireEvent.change(input, { target: { value: '继续' } });
     fireEvent.keyDown(input, { key: 'Enter' });
     await waitFor(() => expect(input).toBeDisabled());
@@ -2050,7 +2050,7 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
 
     render(<ChatStream role={null} />);
 
-    const input = await screen.findByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...');
+    const input = await screen.findByPlaceholderText('跟 管家 说点什么，比如：查看一下我有哪些任务…');
     fireEvent.change(input, { target: { value: '明天有产品设计评审' } });
     fireEvent.keyDown(input, { key: 'Enter' });
 
@@ -2094,7 +2094,7 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
 
     render(<ChatStream role={null} />);
 
-    const input = await screen.findByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...');
+    const input = await screen.findByPlaceholderText('跟 管家 说点什么，比如：查看一下我有哪些任务…');
     fireEvent.change(input, { target: { value: '第一条' } });
     fireEvent.keyDown(input, { key: 'Enter' });
     await waitFor(() => expect(input).toBeDisabled());
@@ -2185,7 +2185,7 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
     render(<ChatStream role={null} />);
 
     await waitFor(() => expect(chatService.getHistory).toHaveBeenCalledTimes(1));
-    const input = await screen.findByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...');
+    const input = await screen.findByPlaceholderText('跟 管家 说点什么，比如：查看一下我有哪些任务…');
     fireEvent.change(input, { target: { value: '历史加载中发送' } });
     fireEvent.keyDown(input, { key: 'Enter' });
     await waitFor(() => expect(screen.getByText('历史加载中发送')).toBeInTheDocument());
@@ -2211,7 +2211,7 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
     render(<ChatStream role={null} />);
 
     await waitFor(() => expect(chatService.getHistory).toHaveBeenCalledTimes(1));
-    const input = await screen.findByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...');
+    const input = await screen.findByPlaceholderText('跟 管家 说点什么，比如：查看一下我有哪些任务…');
     fireEvent.change(input, { target: { value: '新消息' } });
     fireEvent.keyDown(input, { key: 'Enter' });
     await waitFor(() => expect(screen.getByText('新消息')).toBeInTheDocument());
@@ -2257,7 +2257,7 @@ describe('ChatStream Skill 选择 (Story 10.1)', () => {
     render(<ChatStream role={null} />);
     await waitFor(() => expect(chatService.getButlerConversation).toHaveBeenCalled());
 
-    const input = await screen.findByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...');
+    const input = await screen.findByPlaceholderText('跟 管家 说点什么，比如：查看一下我有哪些任务…');
     fireEvent.change(input, { target: { value: '@' } });
     fireEvent.keyDown(input, { key: 'Enter' });
     fireEvent.change(input, { target: { value: '帮我生成季度汇报' } });
@@ -2277,7 +2277,7 @@ describe('ChatStream Skill 选择 (Story 10.1)', () => {
     };
     vi.mocked(skillService.listSelectableForScope).mockResolvedValueOnce([mockSkill]).mockResolvedValueOnce([]);
     render(<ChatStream role={null} />);
-    const input = await screen.findByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...');
+    const input = await screen.findByPlaceholderText('跟 管家 说点什么，比如：查看一下我有哪些任务…');
     await waitFor(() => expect(skillService.listSelectableForScope).toHaveBeenCalledTimes(1));
     fireEvent.change(input, { target: { value: '@' } });
     fireEvent.keyDown(input, { key: 'Enter' });
@@ -2310,7 +2310,7 @@ describe('ChatStream Skill 选择 (Story 10.1)', () => {
       .mockResolvedValueOnce([mockSkill])
       .mockRejectedValueOnce(new Error('refresh failed'));
     render(<ChatStream role={null} />);
-    const input = await screen.findByPlaceholderText('跟管家说点什么，比如：帮我安排一个会议...');
+    const input = await screen.findByPlaceholderText('跟 管家 说点什么，比如：查看一下我有哪些任务…');
     await waitFor(() => expect(skillService.listSelectableForScope).toHaveBeenCalledTimes(1));
     fireEvent.change(input, { target: { value: '@' } });
     fireEvent.keyDown(input, { key: 'Enter' });

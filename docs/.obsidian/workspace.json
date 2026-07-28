@@ -27,12 +27,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "user-guide/05-记忆使命与冲突.md",
+                "file": "user-guide/10-故障排查与术语.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "05-记忆使命与冲突"
+              "title": "10-故障排查与术语"
             }
           },
           {
@@ -137,7 +137,7 @@
             "state": {
               "type": "backlink",
               "state": {
-                "file": "marketing/零行手写代码，我尝试用AI魔法构建了一个数字分身智能体.md",
+                "file": "user-guide/10-故障排查与术语.md",
                 "collapseAll": false,
                 "extraContext": false,
                 "sortOrder": "alphabetical",
@@ -147,7 +147,7 @@
                 "unlinkedCollapsed": true
               },
               "icon": "links-coming-in",
-              "title": "零行手写代码，我尝试用AI魔法构建了一个数字分身智能体 的反向链接列表"
+              "title": "10-故障排查与术语 的反向链接列表"
             }
           },
           {
@@ -199,21 +199,21 @@
             "state": {
               "type": "outline",
               "state": {
-                "file": "marketing/零行手写代码，我尝试用AI魔法构建了一个数字分身智能体.md",
+                "file": "user-guide/10-故障排查与术语.md",
                 "followCursor": false,
                 "showSearch": false,
                 "searchQuery": ""
               },
               "icon": "lucide-list",
-              "title": "零行手写代码，我尝试用AI魔法构建了一个数字分身智能体 的大纲"
+              "title": "10-故障排查与术语 的大纲"
             }
           }
-        ]
+        ],
+        "currentTab": 4
       }
     ],
     "direction": "horizontal",
-    "width": 300,
-    "collapsed": true
+    "width": 300
   },
   "left-ribbon": {
     "hiddenItems": {
@@ -228,51 +228,51 @@
   },
   "active": "e6f91c64adc4c65e",
   "lastOpenFiles": [
+    "marketing.rar",
+    "user-guide.rar",
+    "user-guide/09-数据与隐私.md",
+    "user-guide/08-Skill-MCP与模型服务.md",
+    "user-guide/assets/8.3.1.png",
+    "user-guide/assets/1-BA.png",
+    "user-guide/07-通知仪表盘与活动统计.md",
+    "user-guide/06-主动工作与复盘.md",
+    "user-guide/assets/6.6.1.png",
+    "user-guide/assets/egosync.exe_20260728_142615.png",
+    "user-guide/05-记忆使命与冲突.md",
+    "user-guide/assets/5.4.1.png",
+    "user-guide/assets/egosync.exe_20260728_142319.png",
+    "user-guide/assets/5.2.1.png",
+    "user-guide/04-任务与四象限.md",
+    "user-guide/assets/4.1.1.png",
+    "user-guide/assets/egosync.exe_20260728_141748.png",
+    "user-guide/03-对话与Agent能力.md",
+    "user-guide/assets/3.5.1.png",
+    "user-guide/02-管家与角色.md",
+    "marketing/博文截图设计.md",
+    "user-guide/01-快速开始.md",
+    "user-guide/00-目录.md",
+    "user-guide/10-故障排查与术语.md",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-security-developer/skills/auth-implementation-patterns/resources/implementation-playbook.md",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-security-developer/skills/dependency-management-deps-audit/resources/implementation-playbook.md",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-security-developer/skills/api-security-best-practices/SKILL.md",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-security-developer/skills/backend-security-coder/SKILL.md",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-security-developer/skills/frontend-security-coder/SKILL.md",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-security-developer/skills/dependency-management-deps-audit/SKILL.md",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-security-developer/skills/cc-skill-security-review/SKILL.md",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-security-developer/skills/dependency-management-deps-audit/resources",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-security-developer/skills/pci-compliance/SKILL.md",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-security-developer/skills/auth-implementation-patterns/SKILL.md",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-security-developer/skills/auth-implementation-patterns/resources",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-security-developer/skills/backend-security-coder",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-security-developer/skills/api-security-best-practices",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-security-developer/skills/frontend-security-coder",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-security-developer/skills/pci-compliance",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-security-developer/skills/dependency-management-deps-audit",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-security-developer/skills/cc-skill-security-review",
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-security-developer/skills/auth-implementation-patterns",
     "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-odoo-erp/skills/odoo-sales-crm-expert/SKILL.md",
     "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-odoo-erp/skills/odoo-security-rules/SKILL.md",
     "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-odoo-erp/skills/odoo-performance-tuner/SKILL.md",
-    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-odoo-erp/skills/odoo-orm-expert/SKILL.md",
-    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-odoo-erp/skills/odoo-module-developer/SKILL.md",
-    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-odoo-erp/skills/odoo-ecommerce-configurator/SKILL.md",
-    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-odoo-erp/skills/odoo-docker-deployment/SKILL.md",
-    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-odoo-erp/skills/odoo-sales-crm-expert",
-    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-odoo-erp/skills/odoo-security-rules",
-    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-odoo-erp/skills/odoo-performance-tuner",
-    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-odoo-erp/skills/odoo-orm-expert",
-    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-odoo-erp/skills/odoo-module-developer",
-    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-odoo-erp/skills/odoo-ecommerce-configurator",
-    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-odoo-erp/skills/odoo-docker-deployment",
-    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-odoo-erp/skills",
-    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-odoo-erp",
-    "user-guide/04-任务与四象限.md",
-    "user-guide/03-对话与Agent能力.md",
-    "user-guide/02-管家与角色.md",
-    "user-guide/01-快速开始.md",
-    "marketing/egosync-launch-blog.md",
-    "skills/健康管理/antigravity-awesome-skills/verification/aas-v1/baseline/v1/legacy/14.6.0",
-    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-oss-maintainer/skills/changelog-automation/resources/implementation-playbook.md",
-    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-oss-maintainer/skills/requesting-code-review/SKILL.md",
-    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-oss-maintainer/skills/requesting-code-review/code-reviewer.md",
-    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-oss-maintainer/skills/receiving-code-review/SKILL.md",
-    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-oss-maintainer/skills/pr-writer/SKILL.md",
-    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-oss-maintainer/skills/git-advanced-workflows/SKILL.md",
-    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-oss-maintainer/skills/finishing-a-development-branch/SKILL.md",
-    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-oss-maintainer/skills/documentation-templates/SKILL.md",
-    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-oss-maintainer/skills/create-pr/SKILL.md",
-    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-oss-maintainer/skills/create-branch/SKILL.md",
-    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-oss-maintainer/skills/commit/SKILL.md",
-    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-oss-maintainer/skills/changelog-automation/SKILL.md",
-    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-makepad-builder/skills/makepad-widgets/SKILL.md",
-    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-makepad-builder/skills/makepad-shaders/SKILL.md",
-    "skills/健康管理/antigravity-awesome-skills/assets/github-social-preview.png",
-    "skills/健康管理/antigravity-awesome-skills/assets/buy-me-a-coffee-banner.png",
-    "skills/健康管理/antigravity-awesome-skills/assets/aas-readme-hero.jpeg",
-    "skills/健康管理/antigravity-awesome-skills/assets/aas-social-card.jpeg",
-    "skills/健康管理/antigravity-awesome-skills/assets/aas-logo.jpeg",
-    "skills/父亲/Parent-Helper/assets/parent-helper-banner.jpg",
-    "marketing/assets/egosync-blog-cover.svg",
-    "user-guide/assets/egosync.png",
-    "user-guide/assets/egosync.exe_20260727_170139.png",
-    "marketing/assets/egosync-main-interface-annotated-v2.png"
+    "skills/健康管理/antigravity-awesome-skills/plugins/agentic-bundle-odoo-erp/skills/odoo-orm-expert/SKILL.md"
   ]
 }

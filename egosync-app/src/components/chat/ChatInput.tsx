@@ -158,7 +158,7 @@ export function ChatInput({
         value={input}
         onChange={handleChange}
         onKeyDown={handleKeyDown}
-        placeholder={placeholder ?? "跟管家说点什么，比如：帮我安排一个会议..."}
+        placeholder={placeholder ?? "跟 管家 说点什么，比如：查看一下我有哪些任务…"}
         aria-label={placeholder || "跟管家说点什么"}
         role="combobox"
         aria-autocomplete="list"

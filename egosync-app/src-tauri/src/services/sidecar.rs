@@ -644,9 +644,7 @@ impl SidecarManager {
         }
     }
 
-    /// Check if the opencode server is responding to health checks.
-    /// Tries `/health` first, falls back to `/` — opencode's actual endpoint
-    /// is unverified, so accept any 2xx from either path as "alive".
+    /// Check the documented OpenCode health endpoint and validate its JSON contract.
     pub async fn health_check(&self) -> bool {
         let client = match reqwest::Client::builder()
             .timeout(HEALTH_CHECK_TIMEOUT)
@@ -657,14 +655,23 @@ impl SidecarManager {
             Err(_) => return false,
         };
 
-        for url in self.health_check_urls() {
-            if let Ok(resp) = client.get(&url).send().await {
-                if resp.status().is_success() {
-                    return true;
-                }
-            }
+        let Some(url) = self.health_check_urls().into_iter().next() else {
+            return false;
+        };
+        let Ok(resp) = client.get(&url).send().await else {
+            return false;
+        };
+        if !resp.status().is_success() {
+            return false;
         }
-        false
+        let Ok(body) = resp.json::<serde_json::Value>().await else {
+            return false;
+        };
+        body.get("healthy").and_then(|value| value.as_bool()) == Some(true)
+            && body
+                .get("version")
+                .and_then(|value| value.as_str())
+                .is_some()
     }
 
     /// Restart the opencode server.
@@ -708,12 +715,9 @@ impl SidecarManager {
         self.child.as_ref().and_then(|c| c.id())
     }
 
-    /// Construct candidate health check URLs (tried in order).
+    /// Construct the documented OpenCode health check URL.
     pub fn health_check_urls(&self) -> Vec<String> {
-        vec![
-            format!("http://127.0.0.1:{}/health", self.port),
-            format!("http://127.0.0.1:{}/", self.port),
-        ]
+        vec![format!("http://127.0.0.1:{}/global/health", self.port)]
     }
 
     /// Wait for the server to become healthy after starting.
@@ -959,16 +963,13 @@ mod tests {
     }
 
     #[test]
-    fn test_health_check_urls_includes_both_endpoints() {
-        // WHY: opencode's actual health endpoint is unverified at spec time;
-        // accepting either /health or / lets the sidecar work regardless of
-        // which path opencode chose, preventing a 10s startup timeout when
-        // the assumed endpoint is wrong.
+    fn test_health_check_urls_use_documented_endpoint() {
+        // WHY: startup readiness must validate OpenCode itself, not accept an unrelated 2xx page.
         let mgr = SidecarManager::new(None, Some(4096));
-        let urls = mgr.health_check_urls();
-        assert_eq!(urls.len(), 2);
-        assert!(urls.iter().any(|u| u.ends_with("/health")));
-        assert!(urls.iter().any(|u| u.ends_with(":4096/")));
+        assert_eq!(
+            mgr.health_check_urls(),
+            vec!["http://127.0.0.1:4096/global/health".to_string()]
+        );
     }
 
     #[test]

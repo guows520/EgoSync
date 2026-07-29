@@ -224,6 +224,11 @@ pub fn run() {
                 }
             });
 
+            if sidecar_started {
+                app.state::<services::agent_config::AgentConfigService>()
+                    .mark_runtime_loaded();
+            }
+
             let sidecar_port = sidecar.port();
             let opencode_available = if sidecar_started {
                 true

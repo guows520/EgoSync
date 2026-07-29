@@ -2468,15 +2468,45 @@ async fn try_run_opencode_stream(
         return Ok(());
     }
 
-    if delegate_bridge.take_runtime_refresh().await {
+    let config_refresh_requested = app_handle
+        .try_state::<crate::services::agent_config::AgentConfigService>()
+        .map(|state| state.take_runtime_refresh())
+        .unwrap_or(false);
+    let delegate_refresh_requested = delegate_bridge.take_runtime_refresh().await;
+    let runtime_refresh_requested = config_refresh_requested || delegate_refresh_requested;
+    if runtime_refresh_requested {
         if let Err(error) =
             refresh_opencode_runtime_for_mcp_retry(app_handle, &opencode_sessions).await
         {
-            delegate_bridge.request_runtime_refresh().await;
+            if config_refresh_requested {
+                if let Some(agent_config) =
+                    app_handle.try_state::<crate::services::agent_config::AgentConfigService>()
+                {
+                    agent_config.request_runtime_refresh();
+                }
+            }
+            if delegate_refresh_requested {
+                delegate_bridge.request_runtime_refresh().await;
+            }
             return Err(error.into());
         }
     }
     let project_dir = resolve_requested_working_directory(app_handle, working_directory)?;
+    if runtime_refresh_requested {
+        let agent = opencode_agent_key(role_id);
+        if !agent_bridge.agent_exists(&agent, &project_dir).await? {
+            if let Some(agent_config) =
+                app_handle.try_state::<crate::services::agent_config::AgentConfigService>()
+            {
+                agent_config.request_runtime_refresh();
+            }
+            return Err(AppError::SidecarError(format!(
+                "OpenCode runtime refresh completed but agent `{}` is unavailable",
+                agent
+            ))
+            .into());
+        }
+    }
     tracing::info!(elapsed_ms = stream_started_at.elapsed().as_millis() as u64, "[stream-stage] working directory resolved");
     let mcp_scope_key = crate::services::mcp_server::mcp_scope_key_for_role(main_pool, role_id).await?;
     tracing::info!(elapsed_ms = stream_started_at.elapsed().as_millis() as u64, "[stream-stage] MCP scope resolved");

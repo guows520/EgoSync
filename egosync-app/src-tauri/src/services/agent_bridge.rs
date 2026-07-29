@@ -39,12 +39,13 @@ impl AgentBridge {
         directory: &str,
     ) -> Result<SessionInfo, AppError> {
         let url = format!("{}/session", self.base_url);
-        let body = serde_json::json!({});
+        let body = if agent.is_empty() {
+            serde_json::json!({})
+        } else {
+            serde_json::json!({ "agent": agent })
+        };
 
-        let mut query_params: Vec<(&str, &str)> = vec![("directory", directory)];
-        if !agent.is_empty() {
-            query_params.push(("agent", agent));
-        }
+        let query_params: Vec<(&str, &str)> = vec![("directory", directory)];
 
         let resp = self
             .http_client
@@ -64,7 +65,7 @@ impl AgentBridge {
 
     /// Get messages from a session.
     pub async fn get_messages(&self, session_id: &str) -> Result<Vec<AgentMessage>, AppError> {
-        let url = format!("{}/session/{}/messages", self.base_url, session_id);
+        let url = format!("{}/session/{}/message", self.base_url, session_id);
 
         let resp =
             self.http_client.get(&url).send().await.map_err(|e| {
@@ -109,14 +110,30 @@ impl AgentBridge {
     }
 
     /// Compact / compress a session's context.
-    pub async fn compact_session(&self, session_id: &str) -> Result<(), AppError> {
-        let url = format!("{}/session/{}/compact", self.base_url, session_id);
+    pub async fn compact_session(
+        &self,
+        session_id: &str,
+        provider_id: &str,
+        model_id: &str,
+    ) -> Result<(), AppError> {
+        let url = format!("{}/session/{}/summarize", self.base_url, session_id);
+        let body = serde_json::json!({
+            "providerID": provider_id,
+            "modelID": model_id,
+            "auto": false
+        });
 
-        let resp = self.http_client.post(&url).send().await.map_err(|e| {
-            AppError::SidecarError(format!("compact_session request failed: {}", e))
-        })?;
+        let resp = self
+            .http_client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| {
+                AppError::SidecarError(format!("compact_session request failed: {}", e))
+            })?;
 
-        Self::ensure_success(&resp)?;
+        Self::ensure_success_with_body(resp).await?;
         Ok(())
     }
 
@@ -255,36 +272,81 @@ impl AgentBridge {
 
     /// Get available providers.
     pub async fn get_providers(&self) -> Result<Vec<ProviderInfo>, AppError> {
-        let url = format!("{}/providers", self.base_url);
-
+        let url = format!("{}/provider", self.base_url);
         let resp =
             self.http_client.get(&url).send().await.map_err(|e| {
                 AppError::SidecarError(format!("get_providers request failed: {}", e))
             })?;
-
-        Self::ensure_success(&resp)?;
-
-        resp.json::<Vec<ProviderInfo>>()
+        let resp = Self::ensure_success_with_body(resp).await?;
+        let value = resp
+            .json::<serde_json::Value>()
             .await
-            .map_err(|e| AppError::SidecarError(format!("get_providers parse failed: {}", e)))
+            .map_err(|e| AppError::SidecarError(format!("get_providers parse failed: {}", e)))?;
+        Ok(value
+            .get("all")
+            .and_then(|items| items.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|item| {
+                let id = item.get("id")?.as_str()?.to_string();
+                let name = item
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(&id)
+                    .to_string();
+                let models = item
+                    .get("models")
+                    .and_then(|v| v.as_object())
+                    .map(|models| models.keys().cloned().collect())
+                    .unwrap_or_default();
+                Some(ProviderInfo { id, name, models })
+            })
+            .collect())
     }
 
-    /// Get available agents.
-    pub async fn get_agents(&self) -> Result<Vec<AgentInfo>, AppError> {
-        let url = format!("{}/agents", self.base_url);
-
+    /// Get available agents for a project directory.
+    pub async fn get_agents(&self, directory: &str) -> Result<Vec<AgentInfo>, AppError> {
+        let url = format!("{}/agent", self.base_url);
         let resp = self
             .http_client
             .get(&url)
+            .query(&[("directory", directory)])
             .send()
             .await
             .map_err(|e| AppError::SidecarError(format!("get_agents request failed: {}", e)))?;
-
-        Self::ensure_success(&resp)?;
-
-        resp.json::<Vec<AgentInfo>>()
+        let resp = Self::ensure_success_with_body(resp).await?;
+        let items = resp
+            .json::<Vec<serde_json::Value>>()
             .await
-            .map_err(|e| AppError::SidecarError(format!("get_agents parse failed: {}", e)))
+            .map_err(|e| AppError::SidecarError(format!("get_agents parse failed: {}", e)))?;
+        Ok(items
+            .into_iter()
+            .filter_map(|item| {
+                let name = item.get("name")?.as_str()?.to_string();
+                Some(AgentInfo {
+                    id: name.clone(),
+                    name,
+                    mode: item
+                        .get("mode")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    description: item
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                })
+            })
+            .collect())
+    }
+
+    pub async fn agent_exists(&self, agent: &str, directory: &str) -> Result<bool, AppError> {
+        Ok(self
+            .get_agents(directory)
+            .await?
+            .iter()
+            .any(|candidate| candidate.id == agent))
     }
 
     // ── Helpers ─────────────────────────────────────────────────────

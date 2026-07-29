@@ -1,5 +1,7 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use serde_json::{json, Map, Value};
 
@@ -312,6 +314,7 @@ export default tool({
 /// to opencode agent entries on every CRUD operation.
 pub struct AgentConfigService {
     config_path: PathBuf,
+    runtime_refresh_pending: Arc<AtomicBool>,
 }
 
 const BUTLER_KEY: &str = "butler";
@@ -321,7 +324,25 @@ const PLAIN_MESSAGE_CONFIRMATION_RULE: &str = r#"[用户确认规则]
 
 impl AgentConfigService {
     pub fn new(config_path: PathBuf) -> Self {
-        Self { config_path }
+        Self {
+            config_path,
+            runtime_refresh_pending: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Mark the running OpenCode process as stale after a persisted config change.
+    pub fn request_runtime_refresh(&self) {
+        self.runtime_refresh_pending.store(true, Ordering::Release);
+    }
+
+    /// Consume the pending refresh request. Callers must restore it if refresh fails.
+    pub fn take_runtime_refresh(&self) -> bool {
+        self.runtime_refresh_pending.swap(false, Ordering::AcqRel)
+    }
+
+    /// The sidecar has just loaded the current on-disk configuration.
+    pub fn mark_runtime_loaded(&self) {
+        self.runtime_refresh_pending.store(false, Ordering::Release);
     }
 
     // ── File I/O ───────────────────────────────────────────────────
@@ -349,10 +370,18 @@ impl AgentConfigService {
         let tmp = self.config_path.with_extension("json.tmp");
         let pretty = serde_json::to_string_pretty(config)
             .map_err(|e| AppError::SidecarError(format!("序列化 opencode.json 失败: {}", e)))?;
+        if self.config_path.exists()
+            && std::fs::read_to_string(&self.config_path)
+                .map(|current| current == pretty)
+                .unwrap_or(false)
+        {
+            return Ok(());
+        }
         std::fs::write(&tmp, pretty)
             .map_err(|e| AppError::SidecarError(format!("写入 opencode.json.tmp 失败: {}", e)))?;
         std::fs::rename(&tmp, &self.config_path)
             .map_err(|e| AppError::SidecarError(format!("rename opencode.json 失败: {}", e)))?;
+        self.request_runtime_refresh();
         Ok(())
     }
 
@@ -1004,6 +1033,28 @@ pub fn purge_legacy_managed_mcp(legacy_config_path: &std::path::Path) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn save_requests_runtime_refresh_only_for_real_config_changes() {
+        // WHY: chat may restart OpenCode after config writes, so no-op saves must not create a restart loop.
+        let dir = tempfile::tempdir().unwrap();
+        let svc = AgentConfigService::new(dir.path().join("opencode.json"));
+        let initial = json!({ "agent": {} });
+
+        assert!(!svc.take_runtime_refresh());
+        svc.save(&initial).unwrap();
+        assert!(svc.take_runtime_refresh());
+        assert!(!svc.take_runtime_refresh());
+
+        svc.save(&initial).unwrap();
+        assert!(!svc.take_runtime_refresh());
+
+        svc.save(&json!({ "agent": { "role-new": {} } })).unwrap();
+        assert!(svc.take_runtime_refresh());
+        svc.request_runtime_refresh();
+        svc.mark_runtime_loaded();
+        assert!(!svc.take_runtime_refresh());
+    }
 
     fn make_role(id: &str, name: &str, goal: &str, status: &str, skills_config: &str) -> Role {
         Role {

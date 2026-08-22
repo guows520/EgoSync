@@ -231,7 +231,7 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
   };
 
   const handleNew = () => {
-    setEditForm({ name: '新配置', provider: 'openai_compatible', baseUrl: PROVIDER_DEFAULT_BASE_URL.openai_compatible, apiKey: '', model: '', networkLocation: 'external' as NetworkLocation });
+    setEditForm({ name: '新配置', provider: 'openai_compatible', baseUrl: PROVIDER_DEFAULT_BASE_URL.openai_compatible, apiKey: '', model: '', networkLocation: 'internal' as NetworkLocation });
     setEditingId(null);
     setIsEditing(true);
     setTestStatus('idle');

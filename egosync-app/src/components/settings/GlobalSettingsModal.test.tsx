@@ -62,12 +62,12 @@ describe('GlobalSettingsModal', () => {
     vi.mocked(mcpService.list).mockResolvedValue([]);
   });
 
-  it('新建配置 payload 包含默认 external networkLocation', async () => {
+  it('新建配置 payload 包含默认 internal networkLocation', async () => {
     vi.mocked(llmConfigService.create).mockResolvedValue({} as any);
     render(<GlobalSettingsModal onClose={vi.fn()} />);
     fireEvent.click(await screen.findByRole('button', { name: '添加新配置' }));
     fireEvent.click(screen.getByRole('button', { name: '保存配置' }));
-    await waitFor(() => expect(llmConfigService.create).toHaveBeenCalledWith(expect.objectContaining({ networkLocation: 'external' })));
+    await waitFor(() => expect(llmConfigService.create).toHaveBeenCalledWith(expect.objectContaining({ networkLocation: 'internal' })));
   });
 
   it('获取模型列表时传递当前 networkLocation', async () => {

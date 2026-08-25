@@ -1,0 +1,184 @@
+# EgoSync 伴侣 · Android 高保真前端原型
+
+> **这是什么**：EgoSync 手机伴侣 App（PRD §4.14，FR-40/41/43）的 Compose 高保真原型。
+> 纯前端 + mock 数据——无网络、无加密、无 NSD 发现、无系统推送；
+> 连接能力只有接口 + Fake 实现。桌面端是唯一事实源，本原型仅验证移动端的
+> 信息架构、降级态体验与"老管家"美学。
+>
+> 权威依据：`_bmad-output/planning-artifacts/architecture.md` 手机伴侣增量章节、
+> `_bmad-output/planning-artifacts/prd-egosync.md` §4.14。
+
+## 构建
+
+```bash
+# JDK 17 + Android SDK（platform-36 / build-tools 36）
+./gradlew :app:assembleDebug          # 产出 app/build/outputs/apk/debug/app-debug.apk
+./gradlew :app:testDebugUnitTest      # 单元测试
+```
+
+- 单模块 `:app`；Gradle KTS + version catalog（`gradle/libs.versions.toml`）
+- minSdk 26 / compileSdk & targetSdk 36；AGP 9.3.2（内置 Kotlin 编译）+ Kotlin 2.4.10 + Compose BOM 2026.08.00
+- 依赖白名单：Compose BOM / Material3 / Navigation-Compose / kotlinx-coroutines（+ lifecycle-viewmodel-compose、activity-compose 等 Compose 编译期必需件）
+- **无** Room / Hilt / 全局状态框架 / OkHttp（架构反模式清单生效）
+
+## 页面地图
+
+```text
+冷启动
+ └─ 未配对 → 配对流（全屏，无底栏）
+     ① 欢迎说明（桌面唯一事实源 / 端到端加密 / 诚实降级）
+     ② 扫码取景模拟（静息取景框 + 扫掠线，点「模拟扫码成功」推进）
+     ③ 连接中动画（发现设备 → 交换密钥 → 验证身份 三阶段高亮）
+     ④ 配对成功 → 进入主界面（配对关系持久化，再次启动直达）
+ └─ 已配对 → 主界面
+     ├─ 顶部：三态连接横幅（局域网直连🟢 / 中继转发🔵 / 离线🔴，三色+圆点）
+     ├─ 💬 管家（Tab 1）
+     │    ├─ 消息流：用户/管家气泡、思考中态、流式打字机（逐字浮现+光标）
+     │    ├─ 输入框（降级态禁用并说明原因）
+     │    └─ 建议 ActionCard：确认/拒绝按钮态（确认→✓ 已转交管家执行）
+     ├─ 📋 任务（Tab 2）
+     │    └─ 四象限分组：Q1 红/Q2 蓝/Q3 琥珀/Q4 灰；大石头🪨标记；勾选完成（划线）
+     ├─ 📊 仪表盘（Tab 3）
+     │    ├─ 管家概览卡（平均能量/待办 + 三个二级页入口 + 未读角标）
+     │    └─ 角色卡横向滑动：emoji 图标、能量条呼吸动效（全 App 唯一装饰动效）、
+     │        任务/记忆/会话/待办统计四宫格
+     ├─ 👤 我的（Tab 4）
+     │    ├─ 外观：深色默认/浅色切换（持久化）
+     │    ├─ 通知：whisper/tap/knock 三级开关（仅应用内语义）
+     │    ├─ 配对设备卡（当前连接状态圆点）+ 解除配对（确认对话框）
+     │    └─ 隐藏入口：连点「版本号」7 次 → 状态模拟（Debug）
+     └─ 二级页（push 路由，fade 转场）
+          ├─ 📄 晨间简报：管家问候 + 分节文本 + 行动点卡片（确认/稍后）
+          ├─ 📈 周复盘：正向叙事成绩单 + 能量趋势 Canvas 柱状图（自绘）+ 大石头推进
+          └─ 🔔 通知中心：whisper/tap/knock 三级分组 + 未读圆点 + 敲门级确认/拒绝
+
+全局组件
+ ├─ 三态连接横幅：direct 绿 / relay 蓝 / offline 红（含缓存数据截至时间）
+ └─ 降级态遮罩（offline/degraded 时覆盖主界面）：
+     灰色蒙层（拦截交互=引擎功能禁用）+ 数据截止时间标注 + 说明文案
+     + 底部速记输入条（唯一开放入口；恢复连接后自动提交管家，Snackbar 提示）
+```
+
+## Mock / Debug 开关使用说明
+
+### 状态模拟（核心 debug 能力）
+
+1. 进入 **我的** Tab → 滚到底部「关于」卡片
+2. **连点「版本号」7 次**（Android 开发者选项惯例）→ 提示"状态模拟已开启"
+3. 「关于」上方出现 **状态模拟（Debug）** 分组，四档可选：
+
+| 档位 | 效果 |
+|------|------|
+| 局域网直连 direct | 横幅绿色「局域网直连」；全部功能可用 |
+| 中继转发 relay | 横幅蓝色「中继转发 · 端到端加密」；全部功能可用 |
+| 离线 · 无缓存 offline | 横幅红色；遮罩显示「离线 · 暂无缓存」+ 速记条 |
+| 降级 · 只读缓存 degraded | 横幅红色；遮罩显示「数据截至 今天 08:15」+ 速记条 |
+
+切换即时生效，驱动横幅、降级遮罩、对话/任务/通知的操作禁用态全局变化。
+
+### 速记队列（FR-43 演示）
+
+切到 offline/degraded → 底部速记条输入文字点「记下」→ 队列计数 +1（多条可累积）→
+切回 direct/relay → 队列自动提交，Snackbar 提示「连接已恢复，N 条速记已提交管家处理」。
+
+### 管家对话 mock 行为
+
+- 发送消息 → 思考中（~0.9s）→ 流式打字机逐字回复（回复文案轮换）
+- **第 2 次发言后**会浮现一张待确认建议 ActionCard（确认/拒绝按钮态演示）
+- 配对成功后再次冷启动直达主界面（配对关系持久化于 SharedPreferences）
+- 解除配对（我的页）→ 回到配对流
+
+### 主题
+
+深色默认（保护专注力）；我的页可切浅色，选择持久化。
+色彩角色预留「工作=冷色 accent（靛蓝系）/ 家庭=暖色 accent（琥珀系）」映射位：
+`ui/theme/Color.kt` 中 `RoleDomain.accent()`。
+
+## 后续接入真实连接层的替换点
+
+所有 Fake 实现集中在 `AppModelContainer`（手工 DI，无框架），替换时**只改容器一处，UI 零改动**。
+
+### 1. `connection/ConnectionClient.kt` — 连接客户端接口（替换 `FakeConnectionClient`）
+
+```kotlin
+interface ConnectionClient {
+    val state: StateFlow<ConnectionState>   // 三态：Direct / Relay / Offline(降级信息)
+    val paired: StateFlow<Boolean>          // 配对关系
+    fun setDebugMode(mode: DebugConnectionMode)  // Debug 状态模拟（真实实现可空实现）
+    fun completePairing()
+    fun unpair()
+}
+
+sealed interface ConnectionState {
+    data object Direct : ConnectionState                  // NSD 发现 → WS 直连桌面
+    data object Relay : ConnectionState                   // WS 连中继，按 relay_id 转发
+    data class Offline(snapshotAvailable: Boolean, dataAsOf: String?) : ConnectionState
+}
+```
+
+真实实现职责：NSD/mDNS 发现（`_egosync._tcp`）→ Noise XX 握手 → 同一加密帧协议双承载（直连 WS / 中继 WS）→ 断线重连发最新快照补齐（SNAPSHOT 帧）。
+UI 已订阅 `state` 流：横幅、降级遮罩、引擎可用性（`engineAvailable`）全部由该流驱动。
+
+### 2. `sync/SnapshotStore.kt` — 快照数据（mock → SNAPSHOT/STATE_DELTA 帧驱动）
+
+原型中为静态 object。真实层替换为版本化快照存储：`SNAPSHOT` 全量替换 + `STATE_DELTA` 增量合并（对应架构中的 `StateMerger`）。字段口径见架构「快照引擎」节（活跃/近期会话各 200 条、10MB 上限截断明示）。
+
+### 3. `sync/QuickNoteQueue.kt` — 速记队列（内存 → 持久化 FIFO + COMMAND 帧）
+
+```kotlin
+class QuickNoteQueue {
+    val items: StateFlow<List<QuickNote>>  // QuickNote(id: 幂等UUID, text, submitted)
+    fun submit(text: String)               // 降级态入队
+    fun flush()                            // 重连后逐条 COMMAND(幂等ID) 提交，确认后删队
+}
+```
+
+原型 `flush()` 直接清队；真实层改为逐条发送、桌面确认后删队（无丢失）。
+自动触发点已在 `AppModelContainer.init` 的连接状态收集器中。
+
+### 4. `notify/NotificationDispatch.kt` — 通知分发抽象（V1 应用内实现）
+
+```kotlin
+interface NotificationDispatch {
+    fun dispatch(notice: NoticeItem)
+    fun markRead(id: String)
+    fun markAllRead()
+    fun respond(id: String, confirmed: Boolean)  // 敲门级快捷决策
+}
+```
+
+`InAppNotificationAdapter` 为 V1 实现。FR-42 系统推送接入时新增 FCM/UnifiedPush 适配器实现同一接口。
+
+### 5. `ui/chat/ChatViewModel.kt` — 对话指令（mock 循环 → COMMAND/STREAM_TOKEN 帧）
+
+`sendMessage` 改为发 COMMAND 帧；回复改为 STREAM_TOKEN 帧驱动（打字机 UI 已按流式语义实现，`ChatMessage.streaming` 字段即为此预留）。
+
+## 技术注记
+
+- **AGP 9 内置 Kotlin 编译**：不需要（且不能再使用）`org.jetbrains.kotlin.android` 插件；仅保留 `org.jetbrains.kotlin.plugin.compose` 编译器插件
+- **手工 DI**：`AppModelContainer` 在 `MainActivity` 组装，ViewModel 经 `viewModelFactory` 注入依赖——架构禁 Hilt 的官方替代模式
+- **动效克制**：呼吸能量条（dashboard）与页面 fade 转场之外，仅扫码页有一条功能性扫掠线
+- **低能量颜色**：采用 UX 规范的暗淡灰（弃 PRD FR-19 红色条款，避免负罪感；PRD 待清理标记）
+- 已裁决的文档冲突：默认主题为 **dark**（本任务指令与 PRD 调性一致，覆盖 UX 规范的浅色默认）
+
+## 目录结构
+
+```text
+companion-android/
+├── app/src/main/java/com/egosync/companion/
+│   ├── MainActivity.kt / AppModelContainer.kt
+│   ├── pairing/        # 配对流（PairingScreen / PairingViewModel）
+│   ├── connection/     # ConnectionState / ConnectionClient / Fake / 横幅
+│   ├── sync/           # SnapshotStore（mock 快照）/ QuickNoteQueue
+│   ├── notify/         # NotificationDispatch / InAppNotificationAdapter
+│   └── ui/
+│       ├── AppNavHost.kt          # 导航图（pairing 根 + 四 Tab + 二级页）
+│       ├── components/            # DegradedOverlay（降级态遮罩）
+│       ├── chat/ tasks/ dashboard/ settings/
+│       ├── briefing/ review/ notify/   # 二级页
+│       └── theme/                 # Color / Theme / Type（dark 默认 + RoleAccent）
+└── app/src/test/java/com/egosync/companion/
+    ├── sync/QuickNoteQueueTest.kt
+    ├── connection/FakeConnectionClientTest.kt
+    └── pairing/PairingViewModelTest.kt
+```

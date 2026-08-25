@@ -1,0 +1,354 @@
+package com.egosync.companion.sync
+
+import com.egosync.companion.ui.theme.Quadrant
+import com.egosync.companion.ui.theme.RoleDomain
+
+/**
+ * 快照数据模型 + 内存 mock。
+ *
+ * 对应架构「快照引擎」：手机端对快照只读渲染（桌面为唯一事实源）。
+ * 接入真实连接层后，本 object 中的静态 mock 将替换为
+ * SNAPSHOT / STATE_DELTA 帧驱动的版本化快照存储。
+ */
+
+// ── 角色卡 ─────────────────────────────────────────────────────────────
+
+data class RoleCard(
+    val id: String,
+    val name: String,
+    val icon: String,
+    val domain: RoleDomain,
+    /** 能量 0~100：任务完成率/大石头推进/互动/目标活跃的加权健康度 */
+    val energy: Int,
+    val pendingCount: Int,
+    val lastActive: String,
+    val taskCount: Int,
+    val memoryCount: Int,
+    val sessionCount: Int,
+)
+
+// ── 四象限任务 ─────────────────────────────────────────────────────────
+
+data class TaskItem(
+    val id: String,
+    val title: String,
+    val quadrant: Quadrant,
+    val roleName: String,
+    val due: String?,
+    /** 大石头：本周不可妥协的优先项（每角色每周 1~2 件） */
+    val bigRock: Boolean,
+    val done: Boolean = false,
+)
+
+// ── 晨间简报 ───────────────────────────────────────────────────────────
+
+data class BriefingSection(val title: String, val body: String)
+
+data class BriefingActionPoint(
+    val id: String,
+    val text: String,
+    val fromRole: String,
+    val confirmed: Boolean? = null, // null=待处理 true=已确认 false=已拒绝
+)
+
+data class MorningBriefing(
+    val date: String,
+    val greeting: String,
+    val sections: List<BriefingSection>,
+    val actionPoints: List<BriefingActionPoint>,
+)
+
+// ── 周复盘 ─────────────────────────────────────────────────────────────
+
+data class RoleScore(
+    val roleName: String,
+    val completed: Int,
+    val total: Int,
+    val energyNow: Int,
+    val energyDelta: Int,
+)
+
+data class BigRockResult(
+    val text: String,
+    val completed: Boolean,
+)
+
+data class WeeklyReview(
+    val weekLabel: String,
+    val narrative: String,
+    val roleScores: List<RoleScore>,
+    /** 近 7 天能量趋势（聚合值 0~100），供 Canvas 柱状图自绘 */
+    val energyTrend: List<Int>,
+    val energyTrendDays: List<String>,
+    val bigRockResults: List<BigRockResult>,
+    val closingQuestion: String,
+)
+
+// ── 三级通知（whisper / tap / knock）───────────────────────────────────
+
+enum class NoticeLevel(val label: String, val description: String) {
+    WHISPER("耳语", "角色日常沉淀，静默积累进简报"),
+    TAP("轻触", "值得顺嘴一提的动态"),
+    KNOCK("敲门", "需要你决定的事，每日上限 3 次"),
+}
+
+data class NoticeItem(
+    val id: String,
+    val level: NoticeLevel,
+    val text: String,
+    val fromRole: String,
+    val time: String,
+    val read: Boolean = false,
+    /** 敲门级通知附带待决策 ActionCard */
+    val actionable: Boolean = false,
+    val actionState: Boolean? = null, // null=待处理 true=已确认 false=已拒绝
+)
+
+// ── 管家对话 ───────────────────────────────────────────────────────────
+
+data class ChatMessage(
+    val id: String,
+    val fromButler: Boolean,
+    val text: String,
+    /** 流式打字机进行中（管家回复逐字浮现） */
+    val streaming: Boolean = false,
+)
+
+data class ActionCardSuggestion(
+    val id: String,
+    val title: String,
+    val detail: String,
+    val fromRole: String,
+    val state: ActionCardState = ActionCardState.PENDING,
+)
+
+enum class ActionCardState { PENDING, CONFIRMED, REJECTED }
+
+// ═══════════════════════════════════════════════════════════════════════
+// Mock 数据（老管家语气 · 覆盖工作/家庭/学习三个角色域）
+// ═══════════════════════════════════════════════════════════════════════
+
+object SnapshotStore {
+
+    val roles: List<RoleCard> = listOf(
+        RoleCard(
+            id = "role-pm",
+            name = "产品经理",
+            icon = "🎯",
+            domain = RoleDomain.WORK,
+            energy = 82,
+            pendingCount = 3,
+            lastActive = "10 分钟前",
+            taskCount = 14,
+            memoryCount = 38,
+            sessionCount = 26,
+        ),
+        RoleCard(
+            id = "role-father",
+            name = "父亲",
+            icon = "🏠",
+            domain = RoleDomain.FAMILY,
+            energy = 56,
+            pendingCount = 1,
+            lastActive = "昨天",
+            taskCount = 6,
+            memoryCount = 17,
+            sessionCount = 12,
+        ),
+        RoleCard(
+            id = "role-learner",
+            name = "学习者",
+            icon = "📚",
+            domain = RoleDomain.LEARN,
+            energy = 33,
+            pendingCount = 0,
+            lastActive = "4 天前",
+            taskCount = 9,
+            memoryCount = 21,
+            sessionCount = 8,
+        ),
+    )
+
+    val tasks: List<TaskItem> = listOf(
+        TaskItem(
+            id = "t-1",
+            title = "产品评审会议材料",
+            quadrant = Quadrant.Q1,
+            roleName = "产品经理",
+            due = "今天 14:00",
+            bigRock = false,
+        ),
+        TaskItem(
+            id = "t-2",
+            title = "回复供应商询价邮件",
+            quadrant = Quadrant.Q1,
+            roleName = "产品经理",
+            due = "今天 17:00 前",
+            bigRock = false,
+        ),
+        TaskItem(
+            id = "t-3",
+            title = "读完《深度工作》第 3 章并写笔记",
+            quadrant = Quadrant.Q2,
+            roleName = "学习者",
+            due = "本周日",
+            bigRock = true,
+        ),
+        TaskItem(
+            id = "t-4",
+            title = "预约女儿的钢琴课时间",
+            quadrant = Quadrant.Q2,
+            roleName = "父亲",
+            due = null,
+            bigRock = true,
+        ),
+        TaskItem(
+            id = "t-5",
+            title = "整理季度 OKR 草稿",
+            quadrant = Quadrant.Q2,
+            roleName = "产品经理",
+            due = "周五",
+            bigRock = false,
+        ),
+        TaskItem(
+            id = "t-6",
+            title = "给母亲回电话",
+            quadrant = Quadrant.Q3,
+            roleName = "父亲",
+            due = "今晚",
+            bigRock = false,
+        ),
+        TaskItem(
+            id = "t-7",
+            title = "取干洗衣物",
+            quadrant = Quadrant.Q3,
+            roleName = "管家",
+            due = "今天",
+            bigRock = false,
+        ),
+        TaskItem(
+            id = "t-8",
+            title = "刷 20 分钟行业资讯",
+            quadrant = Quadrant.Q4,
+            roleName = "产品经理",
+            due = null,
+            bigRock = false,
+        ),
+    )
+
+    val briefing: MorningBriefing = MorningBriefing(
+        date = "8 月 25 日 · 周二",
+        greeting = "早上好 boss。今天你的产品经理角色有个 14:00 的评审会议，材料概要已经备好；父亲角色提醒今天 16:30 是女儿的钢琴课；学习者那边昨晚沉淀了 2 条读书笔记，不着急处理。",
+        sections = listOf(
+            BriefingSection(
+                title = "今日日程",
+                body = "09:30 晨间规划 · 14:00 产品评审（材料已备） · 16:30 女儿钢琴课 · 20:00 家庭时间",
+            ),
+            BriefingSection(
+                title = "昨夜沉淀",
+                body = "学习者新增 2 条《深度工作》读书笔记；产品经理整理了评审用的竞品对比要点，已归档。",
+            ),
+            BriefingSection(
+                title = "角色状态",
+                body = "产品经理能量 82%，状态很好；父亲 56%，钢琴课相关事项需要留意；学习者 33%，有几天没读书了——今天最重要的一件事：评审前把竞品对比页过一遍。",
+            ),
+        ),
+        actionPoints = listOf(
+            BriefingActionPoint(
+                id = "ap-1",
+                text = "评审前 30 分钟提醒你过一遍竞品对比页",
+                fromRole = "产品经理",
+            ),
+            BriefingActionPoint(
+                id = "ap-2",
+                text = "钢琴课结束后提醒你问问女儿上课感受",
+                fromRole = "父亲",
+            ),
+        ),
+    )
+
+    val weeklyReview: WeeklyReview = WeeklyReview(
+        weekLabel = "第 34 周 · 8 月 17 日 — 8 月 23 日",
+        narrative = "这周你在工作和家庭两个维度都稳步推进。产品经理完成 5/7 项任务，能量从 68% 升到 82%；父亲角色的大石头「陪女儿看画展」已经完成；学习者的「读完第 3 章」还在推进中，不急。",
+        roleScores = listOf(
+            RoleScore(roleName = "产品经理", completed = 5, total = 7, energyNow = 82, energyDelta = +14),
+            RoleScore(roleName = "父亲", completed = 3, total = 4, energyNow = 56, energyDelta = -6),
+            RoleScore(roleName = "学习者", completed = 1, total = 3, energyNow = 33, energyDelta = -9),
+        ),
+        energyTrend = listOf(62, 58, 66, 71, 74, 70, 76),
+        energyTrendDays = listOf("一", "二", "三", "四", "五", "六", "日"),
+        bigRockResults = listOf(
+            BigRockResult(text = "陪女儿看画展", completed = true),
+            BigRockResult(text = "读完《深度工作》第 3 章", completed = false),
+            BigRockResult(text = "完成季度路线图初稿", completed = true),
+        ),
+        closingQuestion = "下周想先关注哪个方面？我可以帮你把大石头先排进日历。",
+    )
+
+    val notices: List<NoticeItem> = listOf(
+        NoticeItem(
+            id = "n-knock-1",
+            level = NoticeLevel.KNOCK,
+            text = "boss，产品评审改到了今天下午 2 点，和接孩子的钢琴课时间撞了——需要你决定一下。",
+            fromRole = "管家",
+            time = "10 分钟前",
+            actionable = true,
+        ),
+        NoticeItem(
+            id = "n-knock-2",
+            level = NoticeLevel.KNOCK,
+            text = "供应商的报价明天到期，要不要让产品经理先把比价表整理出来？",
+            fromRole = "产品经理",
+            time = "2 小时前",
+            actionable = true,
+            read = true,
+        ),
+        NoticeItem(
+            id = "n-tap-1",
+            level = NoticeLevel.TAP,
+            text = "顺便说一句，父亲角色提醒这周五是女儿钢琴课。",
+            fromRole = "父亲",
+            time = "3 小时前",
+        ),
+        NoticeItem(
+            id = "n-tap-2",
+            level = NoticeLevel.TAP,
+            text = "学习者昨晚沉淀了 2 条读书笔记，已归档。",
+            fromRole = "学习者",
+            time = "昨天 23:40",
+            read = true,
+        ),
+        NoticeItem(
+            id = "n-whisper-1",
+            level = NoticeLevel.WHISPER,
+            text = "产品经理整理了 3 条竞品对比要点。",
+            fromRole = "产品经理",
+            time = "昨天",
+        ),
+        NoticeItem(
+            id = "n-whisper-2",
+            level = NoticeLevel.WHISPER,
+            text = "父亲角色更新了家庭日历（女儿钢琴课改期）。",
+            fromRole = "父亲",
+            time = "昨天",
+            read = true,
+        ),
+    )
+
+    /** 管家开场对话（配对成功后初始消息流）。 */
+    val initialChat: List<ChatMessage> = listOf(
+        ChatMessage(
+            id = "m-1",
+            fromButler = true,
+            text = "早上好 boss。今天最重要的一件事是下午 2 点的产品评审，材料产品经理已经备好了。另外，女儿钢琴课在四点半，我提前提醒您。",
+        ),
+    )
+
+    /** 用户发言后管家的流式回复轮换（mock 打字机效果）。 */
+    val butlerReplies: List<String> = listOf(
+        "好的，这事我记下了。要不要让产品经理跟进？完成后第一时间告诉你。",
+        "明白。这件事我建议放进 Q2——重要，但不必现在动手。您看呢？",
+        "已经为您记下来了。顺带一提，今天 Q1 还有两件事，需要我复述一下吗？",
+        "收到，boss。学习者角色这几天能量偏低（33%），要不要安排 20 分钟的读书时间？",
+    )
+}

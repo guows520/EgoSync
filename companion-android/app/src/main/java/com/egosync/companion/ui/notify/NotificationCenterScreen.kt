@@ -37,9 +37,10 @@ import com.egosync.companion.sync.NoticeItem
 import com.egosync.companion.sync.NoticeLevel
 import com.egosync.companion.sync.SnapshotStore
 import com.egosync.companion.ui.theme.BrandBlue
+import com.egosync.companion.ui.theme.BrandError
 import com.egosync.companion.ui.theme.BrandGreen
-import com.egosync.companion.ui.theme.BrandViolet
 import com.egosync.companion.ui.theme.EgoSyncTheme
+import com.egosync.companion.ui.theme.QuadrantGray
 
 /**
  * 二级页 · 通知中心（FR-22 V1 应用内形态）：whisper/tap/knock 三级分组列表 + 未读圆点。
@@ -108,10 +109,11 @@ fun NotificationCenterScreen(
 
 @Composable
 private fun LevelHeader(level: NoticeLevel, unreadCount: Int) {
+    // 母本 NotificationPanel levelConfig：whisper 灰 / tap 蓝 / knock 红
     val (icon, color) = when (level) {
-        NoticeLevel.WHISPER -> "🍃" to BrandGreen
+        NoticeLevel.WHISPER -> "🍃" to QuadrantGray
         NoticeLevel.TAP -> "👋" to BrandBlue
-        NoticeLevel.KNOCK -> "🚪" to BrandViolet
+        NoticeLevel.KNOCK -> "🚪" to BrandError
     }
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -138,6 +140,31 @@ private fun LevelHeader(level: NoticeLevel, unreadCount: Int) {
     }
 }
 
+/** 级别徽章 — 母本 NotificationPanel：whisper 灰底灰字 / tap 蓝底蓝字 / knock 红底红字。 */
+@Composable
+private fun LevelBadge(level: NoticeLevel) {
+    val (label, fg, bg) = when (level) {
+        NoticeLevel.WHISPER ->
+            Triple(level.label, QuadrantGray, QuadrantGray.copy(alpha = 0.15f))
+        NoticeLevel.TAP ->
+            Triple(level.label, BrandBlue, BrandBlue.copy(alpha = 0.12f))
+        NoticeLevel.KNOCK ->
+            Triple(level.label, BrandError, BrandError.copy(alpha = 0.12f))
+    }
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(bg)
+            .padding(horizontal = 6.dp, vertical = 2.dp)
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            color = fg,
+        )
+    }
+}
+
 @Composable
 private fun NoticeRow(
     notice: NoticeItem,
@@ -146,7 +173,7 @@ private fun NoticeRow(
 ) {
     Surface(
         color = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(10.dp),
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(Modifier.padding(14.dp)) {
@@ -163,8 +190,10 @@ private fun NoticeRow(
                 Text(
                     notice.fromRole,
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary,
+                    color = MaterialTheme.colorScheme.onSurface,
                 )
+                Spacer(Modifier.size(6.dp))
+                LevelBadge(notice.level)
                 Spacer(Modifier.weight(1f))
                 Text(
                     notice.time,
@@ -189,9 +218,6 @@ private fun NoticeRow(
                             Button(
                                 onClick = { onRespond(true) },
                                 enabled = engineAvailable,
-                                colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                                    containerColor = BrandGreen,
-                                ),
                             ) { Text("确认") }
                             Spacer(Modifier.size(10.dp))
                             OutlinedButton(

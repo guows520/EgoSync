@@ -89,7 +89,7 @@ fun SettingsScreen(
 
         SectionTitle("外观")
         Spacer(Modifier.height(8.dp))
-        Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(16.dp)) {
+        Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(10.dp)) {
             Column(Modifier.padding(16.dp)) {
                 Text("主题", style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(4.dp))
@@ -110,7 +110,7 @@ fun SettingsScreen(
 
         SectionTitle("通知")
         Spacer(Modifier.height(8.dp))
-        Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(16.dp)) {
+        Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(10.dp)) {
             Column(Modifier.padding(vertical = 6.dp)) {
                 Text(
                     "三级通知 · 仅应用内（系统推送将随后续版本提供）",
@@ -134,7 +134,7 @@ fun SettingsScreen(
 
         SectionTitle("配对设备")
         Spacer(Modifier.height(8.dp))
-        Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(16.dp)) {
+        Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(10.dp)) {
             Column(Modifier.padding(16.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
@@ -175,7 +175,7 @@ fun SettingsScreen(
         if (uiState.debugUnlocked) {
             SectionTitle("状态模拟（Debug）")
             Spacer(Modifier.height(8.dp))
-            Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(16.dp)) {
+            Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(10.dp)) {
                 Column(Modifier.padding(16.dp)) {
                     Text(
                         "手动切换连接状态，驱动顶部横幅与降级态遮罩实时变化。",
@@ -197,7 +197,7 @@ fun SettingsScreen(
 
         SectionTitle("关于")
         Spacer(Modifier.height(8.dp))
-        Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(16.dp)) {
+        Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(10.dp)) {
             Column(
                 Modifier
                     .fillMaxWidth()

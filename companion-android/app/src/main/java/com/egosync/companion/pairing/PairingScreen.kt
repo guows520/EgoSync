@@ -111,7 +111,7 @@ private fun FeatureRow(icon: String, title: String, body: String) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(10.dp))
             .background(MaterialTheme.colorScheme.surface)
             .padding(16.dp),
     ) {
@@ -159,9 +159,9 @@ private fun ScanStep(onScanCompleted: () -> Unit, onBack: () -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .height(260.dp)
-            .clip(RoundedCornerShape(20.dp))
+            .clip(RoundedCornerShape(12.dp))
             .background(Color.Black.copy(alpha = 0.55f))
-            .border(1.5.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(20.dp)),
+            .border(1.5.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp)),
         contentAlignment = Alignment.Center,
     ) {
         // 四角取景标记

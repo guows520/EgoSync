@@ -59,6 +59,44 @@
      + 底部速记输入条（唯一开放入口；恢复连接后自动提交管家，Snackbar 提示）
 ```
 
+## 与桌面端的设计语言对照表
+
+母本：`egosync-app/`（`tailwind.config.js` + `src/index.css` CSS 变量 + 组件实际用色）。
+取用规则：✅ 色彩 token / 信息层级 / 动效节奏 / 组件行为语义；❌ 布局骨架与桌面交互范式（Sidebar/hover/宽屏双栏）——一切以移动端 M3 组件重新承载。
+
+### M3 ColorScheme ← 桌面 token
+
+| M3 角色（深色/浅色） | 桌面 token 来源 | 取值 |
+|---|---|---|
+| `background` | `--bg-base` | `#0F1117` / `#F8F9FA` |
+| `surface` | `--bg-surface` | `#1A1B2E` / `#FFFFFF` |
+| `surfaceVariant` | `--bg-elevated` | `#252638` / `#FAFAFA` |
+| `onBackground` / `onSurface` | `--text-primary` | `#E8E8ED` / `#1A1A2E` |
+| `onSurfaceVariant` | `--text-secondary` | `#9CA3AF` / `#6B7280` |
+| `outline` | `--border-default` | `#374151` / `#E5E7EB` |
+| `primary` | 管家 `--role-accent`（`BUTLER_ACCENT`）+ dark 按钮 `bg-indigo-600` | `#6366F1` / `#4F46E5` |
+| `secondary` | 角色色温·暖（`roleIcons.ts` 琥珀） | `#F59E0B` |
+| `tertiary` | `--energy-high` | `#10B981` |
+| `error` | `--color-error` | `#EF4444` |
+
+### 语义色与组件行为 ← 桌面组件
+
+| 移动端用法 | 桌面母本 | 说明 |
+|---|---|---|
+| 能量色谱 ≥70/40~69/<40 = 翠绿/琥珀/**红** | `DashboardTab.tsx` emerald/amber/**red**-500、`RoleSidebarIcon.tsx` | 组件实际用红；CSS `--energy-low` 灰 token 桌面从未引用，弃 |
+| 呼吸动效：opacity 0.6↔1.0、3s ease-in-out | `index.css` `.breathe` + `--duration-breath: 3s` | 全 App 唯一装饰动效 |
+| 圆角 6/10/12/24dp（Shapes） | `--radius-button/card/dialog/input` | 输入框 24dp 胶囊形态 |
+| 动效时长 200/250/300ms | `--duration-fast/normal/color` | 页面转场取 220/180ms 近似档 |
+| 用户气泡 primary 实色白字 / 管家气泡 surface+outline 边框 | `ChatBubble.tsx` `bg-indigo-600`+白 / 白底+border | 深色模式主交互色为 indigo 实色，非 M3 亮 tonal 惯例 |
+| 思考态三弹跳点（160ms 交错、1.4s） | `ChatBubble.tsx` `BounceDots` | 8dp 圆点 |
+| ActionCard 确认=indigo 实色钮；确认态 indigo 勾圆徽+边框、拒绝态灰 X 圆徽 | `ActionCard.tsx` | `rounded-[10px]` 卡片 |
+| 大石头=琥珀描边文字徽章 | `TaskOverviewTab.tsx:114` | 非 emoji |
+| 通知三级：whisper 灰 / tap 蓝 / knock 红 + 行内徽章 | `NotificationPanel.tsx` `levelConfig` | 徽章制；knock 的 `animate-pulse` 不取（动效白名单） |
+| 角色图标=实色容器（46dp 圆角方块）+白图标 | `RoleHeader.tsx` / `DashboardTab.tsx` | accent 实色，非 tint |
+| 能量条 6dp 高、轨道灰、色随分档 | `RoleHeader.tsx` h-[6px] / `DashboardTab.tsx` h-1.5 | |
+| 角色域色温 | `roleIcons.ts` 8 色板 + `App.tsx` `--role-accent` | 移动端按域预映射：工作=靛蓝#4F46E5（冷）/家庭=琥珀#F59E0B（暖）+6% tint；接真实数据后改角色自带 color |
+| 配对/引导分步节奏 | `OnboardingView.tsx` step 1→5 | 步进+进度指示 |
+
 ## Mock / Debug 开关使用说明
 
 ### 状态模拟（核心 debug 能力）

@@ -81,7 +81,7 @@ fun BriefingScreen(
             // 问候段（管家语气）
             Surface(
                 color = MaterialTheme.colorScheme.surface,
-                shape = RoundedCornerShape(16.dp),
+                shape = RoundedCornerShape(10.dp),
             ) {
                 Row(Modifier.padding(14.dp)) {
                     Text("🤵", style = MaterialTheme.typography.titleLarge)
@@ -105,7 +105,7 @@ fun BriefingScreen(
                 )
                 Surface(
                     color = MaterialTheme.colorScheme.surface,
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(
@@ -141,7 +141,7 @@ fun BriefingScreen(
 private fun ActionPointCard(point: BriefingActionPoint, onRespond: (Boolean) -> Unit) {
     Surface(
         color = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(10.dp),
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(Modifier.padding(14.dp)) {

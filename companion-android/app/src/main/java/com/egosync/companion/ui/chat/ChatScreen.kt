@@ -1,7 +1,13 @@
 package com.egosync.companion.ui.chat
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -18,7 +24,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -38,7 +43,6 @@ import androidx.compose.ui.unit.dp
 import com.egosync.companion.sync.ActionCardSuggestion
 import com.egosync.companion.sync.ActionCardState
 import com.egosync.companion.sync.ChatMessage
-import com.egosync.companion.ui.theme.BrandGreen
 import com.egosync.companion.ui.theme.EgoSyncTheme
 
 /**
@@ -110,7 +114,7 @@ fun ChatScreen(
                         modifier = Modifier.weight(1f),
                         enabled = engineAvailable,
                         maxLines = 3,
-                        shape = RoundedCornerShape(14.dp),
+                        shape = RoundedCornerShape(24.dp),
                     )
                     Spacer(Modifier.size(10.dp))
                     Button(
@@ -149,8 +153,11 @@ private fun MessageBubble(message: ChatMessage) {
             Spacer(Modifier.size(8.dp))
         }
         Surface(
-            color = if (message.fromButler) MaterialTheme.colorScheme.surfaceVariant
-            else MaterialTheme.colorScheme.primaryContainer,
+            color = if (message.fromButler) MaterialTheme.colorScheme.surface
+            else MaterialTheme.colorScheme.primary,
+            border = if (message.fromButler)
+                androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+            else null,
             shape = RoundedCornerShape(
                 topStart = 16.dp,
                 topEnd = 16.dp,
@@ -162,8 +169,9 @@ private fun MessageBubble(message: ChatMessage) {
             Text(
                 text = if (message.streaming) "${message.text}▍" else message.text,
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                color = if (message.fromButler) MaterialTheme.colorScheme.onSurface
+                else MaterialTheme.colorScheme.onPrimary,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
             )
         }
     }
@@ -176,21 +184,43 @@ private fun ThinkingBubble() {
             Modifier
                 .size(30.dp)
                 .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primaryContainer),
+                .background(MaterialTheme.colorScheme.primary),
             contentAlignment = Alignment.Center,
         ) {
             Text("🤵", style = MaterialTheme.typography.bodySmall)
         }
         Spacer(Modifier.size(8.dp))
         Surface(
-            color = MaterialTheme.colorScheme.surfaceVariant,
+            color = MaterialTheme.colorScheme.surface,
             shape = RoundedCornerShape(16.dp, 16.dp, 4.dp, 16.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
         ) {
-            Text(
-                "管家正在思考…",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            // 母本 ChatBubble.BounceDots：三圆点 160ms 交错弹跳（1.4s 周期）
+            ThinkingDots(Modifier.padding(horizontal = 16.dp, vertical = 14.dp))
+        }
+    }
+}
+
+@Composable
+private fun ThinkingDots(modifier: Modifier = Modifier) {
+    val transition = rememberInfiniteTransition(label = "dots")
+    val phase by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 3f,
+        animationSpec = infiniteRepeatable(tween(1400, easing = LinearEasing)),
+        label = "dotPhase",
+    )
+    Row(modifier, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        repeat(3) { index ->
+            // 各点错相 160ms（桌面 animationDelay 0/160/320ms）
+            val t = ((phase - index * 0.8f).coerceIn(0f, 1f))
+            val lift = if (t < 0.5f) t * 2 else (1f - t) * 2
+            Box(
+                Modifier
+                    .size(8.dp)
+                    .offset(y = (-6 * lift).dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.onSurfaceVariant)
             )
         }
     }
@@ -205,11 +235,23 @@ fun ActionCard(
     onRespond: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val stateBorder = when (card.state) {
+        // 母本 ActionCard.tsx：confirmed → border-indigo-300；rejected → border-slate-300
+        ActionCardState.CONFIRMED -> androidx.compose.foundation.BorderStroke(
+            1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
+        )
+        ActionCardState.REJECTED -> androidx.compose.foundation.BorderStroke(
+            1.dp, MaterialTheme.colorScheme.outline,
+        )
+        ActionCardState.PENDING -> androidx.compose.foundation.BorderStroke(
+            1.dp, MaterialTheme.colorScheme.outline,
+        )
+    }
     Surface(
         color = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(10.dp), // 母本 rounded-[10px]
         modifier = modifier.fillMaxWidth(),
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        border = stateBorder,
     ) {
         Column(Modifier.padding(14.dp)) {
             Text(
@@ -232,7 +274,6 @@ fun ActionCard(
                         Button(
                             onClick = { onRespond(true) },
                             enabled = enabled,
-                            colors = ButtonDefaults.buttonColors(containerColor = BrandGreen),
                         ) { Text("确认") }
                         Spacer(Modifier.size(10.dp))
                         OutlinedButton(onClick = { onRespond(false) }, enabled = enabled) {
@@ -248,16 +289,38 @@ fun ActionCard(
                         )
                     }
                 }
-                ActionCardState.CONFIRMED -> Text(
-                    "✓ 已确认 · 已转交管家执行",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = BrandGreen,
-                )
-                ActionCardState.REJECTED -> Text(
-                    "已拒绝 · 建议已放下",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                ActionCardState.CONFIRMED -> Row(verticalAlignment = Alignment.CenterVertically) {
+                    // 母本：w-7 圆底 + Check（indigo）
+                    Box(
+                        Modifier
+                            .size(28.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)),
+                        contentAlignment = Alignment.Center,
+                    ) { Text("✓", color = MaterialTheme.colorScheme.primary) }
+                    Spacer(Modifier.size(8.dp))
+                    Text(
+                        "已确认 · 已转交管家执行",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+                ActionCardState.REJECTED -> Row(verticalAlignment = Alignment.CenterVertically) {
+                    // 母本：w-7 灰圆底 + X
+                    Box(
+                        Modifier
+                            .size(28.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                        contentAlignment = Alignment.Center,
+                    ) { Text("×", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    Spacer(Modifier.size(8.dp))
+                    Text(
+                        "已拒绝 · 建议已放下",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
     }

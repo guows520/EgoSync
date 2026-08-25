@@ -2,6 +2,7 @@ package com.egosync.companion.ui.tasks
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -28,6 +29,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.egosync.companion.sync.SnapshotStore
 import com.egosync.companion.sync.TaskItem
+import com.egosync.companion.ui.theme.BrandWarn
 import com.egosync.companion.ui.theme.EgoSyncTheme
 import com.egosync.companion.ui.theme.Quadrant
 import com.egosync.companion.ui.theme.color
@@ -127,7 +129,7 @@ internal fun TaskRow(
 ) {
     Surface(
         color = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(10.dp),
         modifier = modifier
             .fillMaxWidth()
             .then(if (enabled) Modifier.clickable(onClick = onToggle) else Modifier),
@@ -170,7 +172,7 @@ internal fun TaskRow(
                     )
                     if (task.bigRock) {
                         Spacer(Modifier.size(6.dp))
-                        Text("🪨", style = MaterialTheme.typography.bodySmall)
+                        BigRockBadge()
                     }
                 }
                 Spacer(Modifier.size(3.dp))
@@ -192,6 +194,20 @@ internal fun TaskRow(
             }
         }
     }
+}
+
+/** 大石头徽章 — 母本：text-amber-600 border-amber-400 透明底小徽章。 */
+@Composable
+internal fun BigRockBadge(modifier: Modifier = Modifier) {
+    Text(
+        "大石头",
+        style = MaterialTheme.typography.labelSmall,
+        color = BrandWarn,
+        modifier = modifier
+            .clip(RoundedCornerShape(4.dp))
+            .border(1.dp, BrandWarn, RoundedCornerShape(4.dp))
+            .padding(horizontal = 5.dp, vertical = 1.dp),
+    )
 }
 
 // ── Preview ────────────────────────────────────────────────────────────

@@ -84,7 +84,7 @@ fun WeeklyReviewScreen(
             // 正向叙事（"看看你的进步"，绝不制造被评判感）
             Surface(
                 color = MaterialTheme.colorScheme.surface,
-                shape = RoundedCornerShape(16.dp),
+                shape = RoundedCornerShape(10.dp),
             ) {
                 Row(Modifier.padding(14.dp)) {
                     Text("🤵", style = MaterialTheme.typography.titleLarge)
@@ -107,7 +107,7 @@ fun WeeklyReviewScreen(
             )
             Surface(
                 color = MaterialTheme.colorScheme.surface,
-                shape = RoundedCornerShape(14.dp),
+                shape = RoundedCornerShape(10.dp),
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Column(Modifier.padding(vertical = 8.dp)) {
@@ -133,7 +133,7 @@ fun WeeklyReviewScreen(
             )
             Surface(
                 color = MaterialTheme.colorScheme.surface,
-                shape = RoundedCornerShape(14.dp),
+                shape = RoundedCornerShape(10.dp),
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Column(Modifier.padding(14.dp)) {
@@ -154,7 +154,7 @@ fun WeeklyReviewScreen(
             )
             Surface(
                 color = MaterialTheme.colorScheme.surface,
-                shape = RoundedCornerShape(14.dp),
+                shape = RoundedCornerShape(10.dp),
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -183,7 +183,7 @@ fun WeeklyReviewScreen(
             // 管家引导反思
             Surface(
                 color = MaterialTheme.colorScheme.primaryContainer,
-                shape = RoundedCornerShape(14.dp),
+                shape = RoundedCornerShape(10.dp),
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text(

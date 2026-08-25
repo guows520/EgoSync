@@ -114,6 +114,13 @@ context:
 
 ## Spec Change Log
 
+- **2026-08-25 增补：设计语言对齐桌面母本**（原始任务书补充条款"设计语言参照"）：
+  - 依据：用户补发桌面端设计语言参照要求，母本 = `egosync-app/`（index.css CSS 变量 + 组件实际用色）。
+  - 修订：色彩 token 全量对齐（深色 border #374151、surface #1A1B2E/#252638）；Shapes 对齐 --radius-*（6/10/12/24dp，输入框胶囊）；呼吸动效 2.2s/0.65 → 3s/0.6（.breathe 母本）；用户气泡 indigo 实色白字、管家气泡带边框；思考态改三弹跳点（BounceDots 160ms 交错）；ActionCard 确认改 indigo 实色+勾圆徽状态；大石头 🪨 emoji → 琥珀描边徽章；通知三级改 whisper 灰/tap 蓝/knock 红 + 行内徽章；角色图标改实色容器；能量条 6dp。
+  - **低能量色裁决翻转**：此前取 UX 规范暗灰弃 PRD FR-19 红；现桌面母本组件两处一致用红（DashboardTab red-500 / RoleSidebarIcon #EF4444），且设计语言以桌面为母本、PRD 同向 → 改判红色，UX 规范低能量灰标记为待清理项（原 CSS --energy-low 灰 token 桌面亦从未引用）。
+  - README 新增"与桌面端的设计语言对照表"：M3 角色 ← 桌面 token 来源 + 组件行为映射。
+  - 不取（按任务书规则）：Sidebar 布局、hover/右键桌面交互、knock 的 animate-pulse（动效白名单）、Tailwind class 原文。
+
 - **2026-08-25 评审循环 1**（三路对抗评审：盲审/边界猎手/验收审计）：
   - 触发发现：降级遮罩不消费指针事件可点穿（HIGH）；扫掠线动画 no-op（HIGH，自查发现）；建议卡轮次竞态（MEDIUM）；简报行动点死按钮（MEDIUM）；通知中心快照读取、ActionCard 双击、容器随 Activity 重建丢速记（边界猎手）。
   - 修订：遮罩加 pointerInput 全量消费；扫掠线改 offset；建议卡轮次快照；简报行动点接入本地决策状态 + 回调参数；通知中心改 collectAsState；容器改进程级单例；ActionCard PENDING 守卫；配对导航 launchSingleTop；并发发送守卫；横幅空 dataAsOf 回退文案。

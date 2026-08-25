@@ -1,5 +1,6 @@
 package com.egosync.companion.ui.dashboard
 
+import androidx.compose.animation.core.EaseInOut
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -124,7 +125,7 @@ private fun ButlerOverviewCard(
 ) {
     Surface(
         color = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(10.dp),
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(Modifier.padding(16.dp)) {
@@ -197,7 +198,7 @@ internal fun RoleCardItem(role: RoleCard, modifier: Modifier = Modifier) {
 
     Surface(
         color = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(10.dp),
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 4.dp),
@@ -206,11 +207,11 @@ internal fun RoleCardItem(role: RoleCard, modifier: Modifier = Modifier) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
                     Modifier
-                        .size(52.dp)
-                        .clip(CircleShape)
-                        .background(roleAccent.tint),
+                        .size(46.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(roleAccent.accent),
                     contentAlignment = Alignment.Center,
-                ) { Text(role.icon, style = MaterialTheme.typography.headlineSmall) }
+                ) { Text(role.icon, style = MaterialTheme.typography.titleLarge) }
 
                 Spacer(Modifier.size(14.dp))
                 Column(Modifier.weight(1f)) {
@@ -270,16 +271,16 @@ private fun StatCell(label: String, value: Int, modifier: Modifier = Modifier) {
 }
 
 /**
- * 呼吸能量条：填充部分 alpha 0.65↔1.0 缓慢起伏（2.2s 周期）。
+ * 呼吸能量条 — 母本 index.css .breathe：opacity 0.6↔1.0、3s ease-in-out 无限循环。
  * 全 App 唯一的装饰性动效（"角色卡片有呼吸感——活的实体"）。
  */
 @Composable
 internal fun BreathingEnergyBar(energy: Int, accent: Color, modifier: Modifier = Modifier) {
     val transition = rememberInfiniteTransition(label = "breath")
     val breath by transition.animateFloat(
-        initialValue = 0.65f,
+        initialValue = 0.6f,
         targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(1100), RepeatMode.Reverse),
+        animationSpec = infiniteRepeatable(tween(1500, easing = EaseInOut), RepeatMode.Reverse),
         label = "breathAlpha",
     )
 
@@ -301,15 +302,15 @@ internal fun BreathingEnergyBar(energy: Int, accent: Color, modifier: Modifier =
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(8.dp)
-                .clip(RoundedCornerShape(4.dp))
+                .height(6.dp)
+                .clip(RoundedCornerShape(3.dp))
                 .background(MaterialTheme.colorScheme.surfaceVariant)
         ) {
             Box(
                 Modifier
                     .fillMaxWidth(energy / 100f)
-                    .height(8.dp)
-                    .clip(RoundedCornerShape(4.dp))
+                    .height(6.dp)
+                    .clip(RoundedCornerShape(3.dp))
                     .background(accent.copy(alpha = breath))
             )
         }

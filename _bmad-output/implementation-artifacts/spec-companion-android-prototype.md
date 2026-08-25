@@ -152,3 +152,84 @@ mock 数据黄金样例（直接用于 SnapshotStore）：
 
 **Manual checks (if no CLI):**
 - Android Studio 打开 companion-android/ 可同步；任一 Screen 的 @Preview 可渲染
+
+## Suggested Review Order
+
+**设计意图入口（连接层抽象——未来真实层的替换点）**
+
+- 连接客户端接口：三态状态流 + 配对关系，全部 UI 由该流驱动
+  [`ConnectionClient.kt:45`](../../companion-android/app/src/main/java/com/egosync/companion/connection/ConnectionClient.kt#L45)
+
+- Fake 实现：纯 StateFlow 四档模拟，替换真实层时 UI 零改动
+  [`FakeConnectionClient.kt:13`](../../companion-android/app/src/main/java/com/egosync/companion/connection/FakeConnectionClient.kt#L13)
+
+- 手工 DI 容器（进程级单例）：所有 Fake 的唯一持有处，旋转重建不丢速记
+  [`AppModelContainer.kt:78`](../../companion-android/app/src/main/java/com/egosync/companion/AppModelContainer.kt#L78)
+
+**FR-40/43 状态可见性与降级**
+
+- 顶部三态横幅：绿直连/蓝中继/红离线，含缓存截止时间
+  [`ConnectionStatusBanner.kt:36`](../../companion-android/app/src/main/java/com/egosync/companion/connection/ConnectionStatusBanner.kt#L36)
+
+- 降级遮罩：灰蒙层消费全部指针事件 + 引擎禁用说明 + 速记输入条
+  [`DegradedOverlay.kt:67`](../../companion-android/app/src/main/java/com/egosync/companion/ui/components/DegradedOverlay.kt#L67)
+
+- 全局导航骨架：NavHost 层叠加遮罩（覆盖二级页），配对→主壳→四 Tab
+  [`AppNavHost.kt:70`](../../companion-android/app/src/main/java/com/egosync/companion/ui/AppNavHost.kt#L70)
+
+**首跑配对流（FR-40）**
+
+- 四步全屏页：欢迎→扫码取景模拟（offset 扫掠线）→连接动画→成功
+  [`PairingScreen.kt:50`](../../companion-android/app/src/main/java/com/egosync/companion/pairing/PairingScreen.kt#L50)
+
+**核心体验：四 Tab**
+
+- 管家对话：思考态→流式打字机（轮次快照 + 并发守卫）
+  [`ChatViewModel.kt:55`](../../companion-android/app/src/main/java/com/egosync/companion/ui/chat/ChatViewModel.kt#L55)
+
+- 消息气泡 + ActionCard 确认/拒绝按钮态
+  [`ChatScreen.kt:49`](../../companion-android/app/src/main/java/com/egosync/companion/ui/chat/ChatScreen.kt#L49)
+
+- 四象限任务：Q1~Q4 分色、大石头🪨、勾选划线
+  [`TasksScreen.kt:39`](../../companion-android/app/src/main/java/com/egosync/companion/ui/tasks/TasksScreen.kt#L39)
+
+- 仪表盘：角色卡横滑 + 统计四宫格
+  [`DashboardScreen.kt:49`](../../companion-android/app/src/main/java/com/egosync/companion/ui/dashboard/DashboardScreen.kt#L49)
+
+- 呼吸能量条：全 App 唯一装饰动效（2.2s alpha 起伏）
+  [`DashboardScreen.kt:277`](../../companion-android/app/src/main/java/com/egosync/companion/ui/dashboard/DashboardScreen.kt#L277)
+
+- 设置页：主题/通知级别/配对设备/解除配对（确认对话框）
+  [`SettingsScreen.kt:51`](../../companion-android/app/src/main/java/com/egosync/companion/ui/settings/SettingsScreen.kt#L51)
+
+- 隐藏状态模拟：连点版本号 7 次解锁（Android 开发者选项惯例）
+  [`SettingsViewModel.kt:65`](../../companion-android/app/src/main/java/com/egosync/companion/ui/settings/SettingsViewModel.kt#L65)
+
+**二级页**
+
+- 晨间简报：分节文本 + 行动点决策闭环（本地状态）
+  [`BriefingScreen.kt:43`](../../companion-android/app/src/main/java/com/egosync/companion/ui/briefing/BriefingScreen.kt#L43)
+
+- 周复盘：Canvas 自绘能量趋势柱状图
+  [`WeeklyReviewScreen.kt:241`](../../companion-android/app/src/main/java/com/egosync/companion/ui/review/WeeklyReviewScreen.kt#L241)
+
+- 通知中心：三级分组 + 未读圆点 + 敲门级确认/拒绝
+  [`NotificationCenterScreen.kt:50`](../../companion-android/app/src/main/java/com/egosync/companion/ui/notify/NotificationCenterScreen.kt#L50)
+
+**美学基建**
+
+- dark 默认 + light 可切的 Material3 主题
+  [`Theme.kt:56`](../../companion-android/app/src/main/java/com/egosync/companion/ui/theme/Theme.kt#L56)
+
+- 色彩 token 与"工作冷色/家庭暖色"映射位
+  [`Color.kt:60`](../../companion-android/app/src/main/java/com/egosync/companion/ui/theme/Color.kt#L60)
+
+**Mock 数据与测试**
+
+- 快照数据黄金样例（老管家语气、三角色域、四象限任务）
+  [`SnapshotStore.kt:131`](../../companion-android/app/src/main/java/com/egosync/companion/sync/SnapshotStore.kt#L131)
+
+- 意图级单测：速记无丢失/配对状态机/四态映射契约
+  [`QuickNoteQueueTest.kt:11`](../../companion-android/app/src/test/java/com/egosync/companion/sync/QuickNoteQueueTest.kt#L11)
+  [`PairingViewModelTest.kt:22`](../../companion-android/app/src/test/java/com/egosync/companion/pairing/PairingViewModelTest.kt#L22)
+  [`FakeConnectionClientTest.kt:14`](../../companion-android/app/src/test/java/com/egosync/companion/connection/FakeConnectionClientTest.kt#L14)

@@ -18,7 +18,7 @@ import kotlinx.coroutines.launch
  * 手工组装容器（无 DI 框架）：所有 Fake/Mock 单例的唯一持有处。
  * 接入真实连接层时，只需替换 [connection] 的实现——其余代码零改动。
  */
-class AppModelContainer(context: Context) {
+class AppModelContainer private constructor(context: Context) {
 
     private val prefs = context.getSharedPreferences("companion_prefs", Context.MODE_PRIVATE)
 
@@ -71,9 +71,17 @@ class AppModelContainer(context: Context) {
         _eventMessage.value = null
     }
 
-    private companion object {
-        const val KEY_PAIRED = "paired"
-        const val KEY_THEME = "theme"
+    companion object {
+        @Volatile private var instance: AppModelContainer? = null
+
+        /** 进程级单例：跨 Activity 配置重建（旋转等）保留速记队列与运行状态（FR-43 无丢失）。 */
+        fun get(context: Context): AppModelContainer =
+            instance ?: synchronized(this) {
+                instance ?: AppModelContainer(context.applicationContext).also { instance = it }
+            }
+
+        private const val KEY_PAIRED = "paired"
+        private const val KEY_THEME = "theme"
         const val VALUE_DARK = "dark"
         const val VALUE_LIGHT = "light"
     }

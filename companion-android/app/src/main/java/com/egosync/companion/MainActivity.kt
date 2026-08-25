@@ -25,7 +25,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        val container = AppModelContainer(applicationContext)
+        val container = AppModelContainer.get(applicationContext)
         setContent {
             EgoSyncRoot(container)
         }

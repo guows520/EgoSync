@@ -55,9 +55,12 @@ class ChatViewModel : ViewModel() {
     fun sendMessage(text: String) {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return
+        // 并发守卫：上一条回复未完成（思考中/流式中）时忽略新发送，防打字机交错
+        if (_uiState.value.thinking || _uiState.value.messages.any { it.streaming }) return
         userCount++
 
         _uiState.update { it.copy(messages = it.messages + ChatMessage(nextId++.toString(), false, trimmed)) }
+        val myRound = userCount
 
         viewModelScope.launch {
             _uiState.update { it.copy(thinking = true) }
@@ -89,7 +92,8 @@ class ChatViewModel : ViewModel() {
             }
 
             // 第二轮对话后浮现一张待确认建议卡（FR-11/12 ActionCard）
-            if (userCount == 2 && _uiState.value.actionCards.isEmpty()) {
+            // 以轮次快照判断：连发消息时该轮回复完成后依然触发
+            if (myRound == 2 && _uiState.value.actionCards.isEmpty()) {
                 _uiState.update {
                     it.copy(
                         actionCards = it.actionCards + ActionCardSuggestion(
@@ -105,6 +109,10 @@ class ChatViewModel : ViewModel() {
     }
 
     fun respondActionCard(cardId: String, confirmed: Boolean) {
+        // 双击守卫：仅 PENDING 卡片可响应，防重复回复
+        val target = _uiState.value.actionCards.find { it.id == cardId } ?: return
+        if (target.state != ActionCardState.PENDING) return
+
         _uiState.update { state ->
             state.copy(
                 actionCards = state.actionCards.map {

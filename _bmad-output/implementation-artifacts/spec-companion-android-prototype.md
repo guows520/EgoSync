@@ -2,7 +2,7 @@
 title: 'companion-android 手机伴侣 Compose 高保真原型'
 type: 'feature'
 created: '2026-08-25'
-status: 'in-progress'
+status: 'done'
 baseline_commit: '3a23ca42c0eef5f0fec4f4b19ec6da70db5e5293'
 context:
   - '{project-root}/_bmad-output/planning-artifacts/architecture.md'
@@ -114,7 +114,11 @@ context:
 
 ## Spec Change Log
 
-（空）
+- **2026-08-25 评审循环 1**（三路对抗评审：盲审/边界猎手/验收审计）：
+  - 触发发现：降级遮罩不消费指针事件可点穿（HIGH）；扫掠线动画 no-op（HIGH，自查发现）；建议卡轮次竞态（MEDIUM）；简报行动点死按钮（MEDIUM）；通知中心快照读取、ActionCard 双击、容器随 Activity 重建丢速记（边界猎手）。
+  - 修订：遮罩加 pointerInput 全量消费；扫掠线改 offset；建议卡轮次快照；简报行动点接入本地决策状态 + 回调参数；通知中心改 collectAsState；容器改进程级单例；ActionCard PENDING 守卫；配对导航 launchSingleTop；并发发送守卫；横幅空 dataAsOf 回退文案。
+  - 避免的坏状态：降级锁定失效（可离线发令）、演示动效假活、演示承诺不兑现。
+  - KEEP：StateFlow 驱动全部 UI（流订阅一致性）；手工 DI 单容器组装（真实层替换只改一处）；mock 语气与色彩 token 与 PRD/UX 规范逐项对应。
 
 ## Design Notes
 

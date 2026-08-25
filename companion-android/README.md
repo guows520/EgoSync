@@ -11,13 +11,13 @@
 ## 构建
 
 ```bash
-# JDK 17 + Android SDK（platform-36 / build-tools 36）
+# JDK 17 + Android SDK（platform-37 / build-tools 36）
 ./gradlew :app:assembleDebug          # 产出 app/build/outputs/apk/debug/app-debug.apk
 ./gradlew :app:testDebugUnitTest      # 单元测试
 ```
 
 - 单模块 `:app`；Gradle KTS + version catalog（`gradle/libs.versions.toml`）
-- minSdk 26 / compileSdk & targetSdk 36；AGP 9.3.2（内置 Kotlin 编译）+ Kotlin 2.4.10 + Compose BOM 2026.08.00
+- minSdk 26 / compileSdk & targetSdk 37；AGP 9.3.2（内置 Kotlin 编译）+ Kotlin 2.4.10 + Compose BOM 2026.08.00
 - 依赖白名单：Compose BOM / Material3 / Navigation-Compose / kotlinx-coroutines（+ lifecycle-viewmodel-compose、activity-compose 等 Compose 编译期必需件）
 - **无** Room / Hilt / 全局状态框架 / OkHttp（架构反模式清单生效）
 

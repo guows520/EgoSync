@@ -1,6 +1,7 @@
 package com.egosync.companion.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,6 +28,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -60,7 +62,17 @@ fun DegradedOverlayHost(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(Color(0xFF0F1117).copy(alpha = 0.72f)),
+            .background(Color(0xFF0F1117).copy(alpha = 0.72f))
+            // 降级锁定：消费全部指针事件，杜绝点穿蒙层操作底层引擎功能（FR-43）
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        event.changes.forEach { it.consume() }
+                        if (!event.changes.any { it.pressed }) break
+                    }
+                }
+            },
         contentAlignment = Alignment.Center,
     ) {
         Column(

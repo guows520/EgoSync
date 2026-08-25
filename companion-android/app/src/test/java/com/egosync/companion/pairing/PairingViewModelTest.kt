@@ -9,7 +9,6 @@ import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -55,28 +54,5 @@ class PairingViewModelTest {
 
         dispatcher.scheduler.advanceUntilIdle()
         assertEquals(PairingStep.SUCCESS, vm.step.value)
-    }
-
-    @Test
-    fun `成功页进入主界面时建立配对关系`() {
-        val connection = FakeConnectionClient()
-        val vm = PairingViewModel(connection)
-        vm.startScan()
-        vm.onScanCompleted()
-        dispatcher.scheduler.advanceUntilIdle()
-
-        vm.enterApp()
-
-        assertTrue(connection.paired.value)
-    }
-
-    @Test
-    fun `未到成功页时进入主界面不建立配对`() {
-        val connection = FakeConnectionClient()
-        val vm = PairingViewModel(connection)
-
-        vm.enterApp()
-
-        assertFalse(connection.paired.value)
     }
 }

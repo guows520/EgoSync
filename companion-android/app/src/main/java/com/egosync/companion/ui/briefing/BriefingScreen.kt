@@ -24,6 +24,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.tooling.preview.Preview
@@ -40,9 +42,12 @@ import com.egosync.companion.ui.theme.EgoSyncTheme
 @Composable
 fun BriefingScreen(
     onBack: () -> Unit,
+    onRespondActionPoint: (pointId: String, confirmed: Boolean) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
 ) {
     val briefing = SnapshotStore.briefing
+    // 行动点决策的本地状态（mock）：confirmed/null→待处理
+    val decided = remember { mutableStateMapOf<String, Boolean>() }
 
     Scaffold(
         modifier = modifier,
@@ -120,7 +125,11 @@ fun BriefingScreen(
                 modifier = Modifier.padding(start = 4.dp, bottom = 6.dp),
             )
             briefing.actionPoints.forEach { point ->
-                ActionPointCard(point)
+                val state = if (decided.containsKey(point.id)) decided[point.id] else null
+                ActionPointCard(point.copy(confirmed = state)) { confirmed ->
+                    decided[point.id] = confirmed
+                    onRespondActionPoint(point.id, confirmed)
+                }
                 Spacer(Modifier.height(10.dp))
             }
             Spacer(Modifier.height(24.dp))
@@ -129,7 +138,7 @@ fun BriefingScreen(
 }
 
 @Composable
-private fun ActionPointCard(point: BriefingActionPoint) {
+private fun ActionPointCard(point: BriefingActionPoint, onRespond: (Boolean) -> Unit) {
     Surface(
         color = MaterialTheme.colorScheme.surface,
         shape = RoundedCornerShape(14.dp),
@@ -147,9 +156,9 @@ private fun ActionPointCard(point: BriefingActionPoint) {
             when (point.confirmed) {
                 null -> {
                     Row {
-                        Button(onClick = {}) { Text("确认") }
+                        Button(onClick = { onRespond(true) }) { Text("确认") }
                         Spacer(Modifier.size(10.dp))
-                        OutlinedButton(onClick = {}) { Text("稍后") }
+                        OutlinedButton(onClick = { onRespond(false) }) { Text("稍后") }
                     }
                 }
                 true -> Text(

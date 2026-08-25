@@ -58,8 +58,4 @@ class PairingViewModel(
         }
     }
 
-    /** 配对成功后进入主界面（持久化由容器层负责）。 */
-    fun enterApp() {
-        if (_step.value == PairingStep.SUCCESS) connection.completePairing()
-    }
 }

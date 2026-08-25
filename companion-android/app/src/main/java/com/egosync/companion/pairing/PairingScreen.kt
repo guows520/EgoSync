@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
@@ -169,14 +170,14 @@ private fun ScanStep(onScanCompleted: () -> Unit, onBack: () -> Unit) {
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(2.dp)
                 .padding(horizontal = 22.dp)
+                .height(2.dp)
                 .background(
                     Brush.horizontalGradient(
                         listOf(Color.Transparent, BrandIndigoLight, Color.Transparent)
                     )
                 )
-                .alignWithScanY(scanY),
+                .offset(y = (scanY * 236).dp),
         )
         Text(
             "原型模拟：点击下方按钮完成扫码",
@@ -194,12 +195,6 @@ private fun ScanStep(onScanCompleted: () -> Unit, onBack: () -> Unit) {
         Text("返回上一步")
     }
 }
-
-/** 扫描线按进度纵向定位。 */
-private fun Modifier.alignWithScanY(progress: Float): Modifier =
-    this.then(
-        Modifier.padding(top = (progress * 236).dp)
-    )
 
 @Composable
 private fun BoxScope.CornerMarks() {

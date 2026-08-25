@@ -46,8 +46,12 @@ fun ConnectionStatusBanner(
         )
         is ConnectionState.Offline -> Triple(
             BrandError, "离线",
-            if (state.snapshotAvailable) "桌面不可达 · 显示缓存数据（截至 ${state.dataAsOf.orEmpty()}）"
-            else "桌面不可达 · 暂无缓存数据",
+            when {
+                state.snapshotAvailable && state.dataAsOf != null ->
+                    "桌面不可达 · 显示缓存数据（截至 ${state.dataAsOf}）"
+                state.snapshotAvailable -> "桌面不可达 · 显示缓存数据"
+                else -> "桌面不可达 · 暂无缓存数据"
+            }
         )
     }
 

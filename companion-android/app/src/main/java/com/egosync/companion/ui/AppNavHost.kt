@@ -15,6 +15,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -68,17 +69,21 @@ object Routes {
 @Composable
 fun AppNavHost(container: AppModelContainer) {
     val navController = rememberNavController()
-    val paired by container.connection.paired.collectAsState()
-    val startDestination = if (paired) Routes.DASHBOARD else Routes.PAIRING
+    // 首次组合时定格起始页（配对/解除配对由显式导航处理，避免图重建重置返回栈）
+    val startDestination = remember {
+        if (container.connection.paired.value) Routes.DASHBOARD else Routes.PAIRING
+    }
+    val connectionState by container.connection.state.collectAsState()
 
-    NavHost(
-        navController = navController,
-        startDestination = startDestination,
-        enterTransition = { fadeIn(tween(220)) },
-        exitTransition = { fadeOut(tween(180)) },
-        popEnterTransition = { fadeIn(tween(220)) },
-        popExitTransition = { fadeOut(tween(180)) },
-    ) {
+    androidx.compose.foundation.layout.Box(Modifier.fillMaxSize()) {
+        NavHost(
+            navController = navController,
+            startDestination = startDestination,
+            enterTransition = { fadeIn(tween(220)) },
+            exitTransition = { fadeOut(tween(180)) },
+            popEnterTransition = { fadeIn(tween(220)) },
+            popExitTransition = { fadeOut(tween(180)) },
+        ) {
         composable(Routes.PAIRING) {
             PairingRoute(navController, container)
         }
@@ -89,6 +94,15 @@ fun AppNavHost(container: AppModelContainer) {
         composable(Routes.BRIEFING) { BriefingRoute(navController) }
         composable(Routes.REVIEW) { WeeklyReviewRoute(navController) }
         composable(Routes.NOTIFICATIONS) { NotificationCenterRoute(navController, container) }
+        }
+
+        // 降级态遮罩全局覆盖（含二级页）：离线时任何页面都明示数据截止与引擎禁用
+        if (connectionState is com.egosync.companion.connection.ConnectionState.Offline) {
+            DegradedOverlayHost(
+                state = connectionState,
+                quickNotes = container.quickNotes,
+            )
+        }
     }
 }
 
@@ -114,6 +128,7 @@ private fun PairingRoute(navController: NavHostController, container: AppModelCo
             container.completePairing()
             navController.navigate(Routes.DASHBOARD) {
                 popUpTo(Routes.PAIRING) { inclusive = true }
+                launchSingleTop = true
             }
         },
     )
@@ -172,11 +187,6 @@ private fun MainShellRoute(
                 Routes.DASHBOARD -> DashboardRoute(navController, container)
                 Routes.SETTINGS -> SettingsRoute(navController, container)
             }
-            // 降级态遮罩：灰色蒙层 + 数据截止时间 + 引擎禁用说明 + 速记输入条
-            DegradedOverlayHost(
-                state = connectionState,
-                quickNotes = container.quickNotes,
-            )
         }
     }
 }
@@ -264,9 +274,10 @@ private fun WeeklyReviewRoute(navController: NavHostController) {
 @Composable
 private fun NotificationCenterRoute(navController: NavHostController, container: AppModelContainer) {
     val notices by container.notifications.notices.collectAsState()
+    val connectionState by container.connection.state.collectAsState()
     NotificationCenterScreen(
         notices = notices,
-        engineAvailable = container.connection.state.value.engineAvailable,
+        engineAvailable = connectionState.engineAvailable,
         onBack = { navController.popBackStack() },
         onMarkAllRead = container.notifications::markAllRead,
         onRespond = container.notifications::respond,

@@ -1,12 +1,12 @@
 ---
 stepsCompleted: [1, 2, 3, 4, 5, 6, 7, 8]
 baselineStepsCompleted: [1, 2, 3, 4, 5, 6, 7, 8]
-inputDocuments: ['prd-egosync.md', 'ux-design-specification.md', 'brainstorming-session-2026-05-18-1000.md', 'egosync-app/src/App.tsx']
+inputDocuments: ['prd-egosync.md', 'ux-design-specification.md', 'brainstorming-session-2026-05-18-1000.md', 'egosync-app/src/App.tsx', 'addendum.md', '.decision-log.md']
 workflowType: 'architecture'
 lastStep: 8
 status: 'complete'
 baselineCompletedAt: '2026-05-25'
-updated: '2026-07-23'
+updated: '2026-08-25'
 completedAt: '2026-07-23'
 project_name: '探索'
 user_name: 'boss'
@@ -1923,3 +1923,466 @@ mcp_server_refresh_butler_runtime
 
 实施 Agent 必须遵守本文决策、增量实现模式、文件边界和明确排除项。首要动作是同步 PRD FR-39，然后创建或更新 Epics/Stories，再按 FR-37、FR-38、FR-39 分别实施垂直切片。
 
+## Incremental Project Context Analysis — 手机伴侣基建（FR-40～FR-43）
+
+### Requirements Overview
+
+**功能需求（FR-40~43，全部压在全新基础设施上）：**
+
+| FR | 内容 | 架构影响 |
+|----|------|----------|
+| FR-40 | 配对与连接管理 | ①扫码/配对码的密钥交换与信任建立；②局域网自动发现直连；③出网云中继加密转发；④直连↔中继↔离线三态连接状态机。云中继 = 项目首个服务端组件 |
+| FR-41 | 实时状态同步 | 状态通道（桌面→手机长连接主动推送）+ 指令通道（手机操作=远程命令，结果回流）；流式对话需跨设备桥接；断线重连=最新快照补齐（明确不做历史回放） |
+| FR-42 | 移动推送 | 推送通道：三级通知→Android 系统渠道；FCM 与自建的分界待裁决；锁屏快捷操作须等效回流；桌面未运行=无新推送（既定边界） |
+| FR-43 | 离线降级 | 快照口径裁决（哪些域、多大上限）+ 速记排队（本地队列、重连自动提交、无丢失） |
+
+隐性需求：一档 18 项核心 FR + 二档 6 项适配 FR 的"移动呈现"——其架构含义全部收敛到上述四条通道（连接/状态/指令/推送），不逐 FR 设计。
+
+**非功能需求：**
+
+- **隐私 = 技术不可能性**：中继必须零知识——只转发端到端加密流量、无法读明文、零落地存储（PRD Privacy 守则的直接延伸）
+- **成本红线**：V1 免费且本地优先，中继是首个常驻成本项；PRD 明确要求部署与成本方案在本阶段定论
+- **诚实代价原则**：桌面关机→手机降级为只读快照+速记排队，是架构固有属性，UI 必须明示而非掩盖
+- **桌面零回归**：所有变更不得动摇基线三层架构、双库边界与 keyring 管理
+
+**Scale & Complexity:**
+
+- Primary domain: 三端系统（桌面 Rust 编排层扩展 + Android 客户端 + 极简云中继服务）
+- Complexity level: High —— 新增网络基础设施五件套：服务发现、NAT 穿越回退、E2E 加密、配对信任、移动端生命周期
+- 预计新增架构组件：约 8~10 个
+
+### Technical Constraints & Dependencies
+
+| 约束 | 来源 | 影响 |
+|------|------|------|
+| 桌面唯一事实源 | 决策#17 / FR-25 | 手机无业务库主权，只有快照缓存；引擎/DB/keyring/opencode 全留桌面 |
+| 中继仅加密转发、不落地 | PRD ASSUMPTION | 排除一切"中继暂存/离线投递"设计 |
+| V1 一台手机 ↔ 一台桌面 | FR-40 ASSUMPTION | 配对模型单对单，无需多设备路由 |
+| 仅 Android，iOS=V2 | 决策#17 | 技术栈选型只需覆盖 Android，但不宜堵死 iOS |
+| 工作循环仅桌面运行时执行 | FR-10 | 推送的产生方永远是桌面；不存在云端代替桌面跑循环 |
+| 基线规范全量继承 | project-context.md | 命名/IPC/错误处理/keyring 规则延伸到新模块 |
+
+### Cross-Cutting Concerns Identified
+
+1. **配对与信任链** — 密钥交换机制、防中间人、重装恢复流程
+2. **连接状态机** — mDNS 自动发现、直连/中继无缝切换、状态可见性
+3. **E2E 加密通道** — 会话密钥协商、重连续传、四通道共用一条加密承载
+4. **中继本体** — 自建 WebSocket 中继 vs 成熟隧道方案；协议、鉴权、部署形态、成本
+5. **App 技术栈与推送链路** — Kotlin 原生 vs 跨端复用；FCM 分界；快照口径裁决
+
+## Incremental Starter Template Evaluation — 手机伴侣基建（FR-40～FR-43）
+
+### Primary Technology Domain
+
+三端系统：Android 原生客户端（Kotlin + Jetpack Compose）+ 桌面 Rust 编排层扩展（现有代码库）+ 自建云中继（Rust 极简服务，单 VPS Docker 部署）
+
+### Setup Strategy
+
+**Manual/Minimal Init** —— 无现成脚手架覆盖"三端 + 自定协议"形态；三个子项目各自用官方最小模板起步，不引入全家桶框架。
+
+| 子项目 | 初始化方式 | 理由 |
+|--------|-----------|------|
+| `companion-android/` | Android Studio 官方 Compose 模板新建 | 原生栈一等公民能力（FCM 渠道、锁屏操作、前台服务、NsdManager） |
+| `relay-server/` | `cargo new` + axum 最小骨架 | 与桌面同语言同 tokio 运行时，可共享加密协议 crate；几百行可审计 |
+| 桌面端 | 现有 `egosync-app/src-tauri` 增量扩展 | 零重建，新增 connection/pairing 服务模块，沿用基线分层 |
+
+### Initialization Commands
+
+```bash
+# Android：Android Studio → New Project → Empty Activity (Compose)，包名 com.egosync.companion
+# 中继：
+cargo new relay-server
+# 依赖：axum 0.8 + tokio + tokio-tungstenite + （E2E 协议库 step-04 定）
+# 部署：多阶段 Dockerfile → 单 VPS docker compose up（无状态、无卷挂载）
+```
+
+### Architectural Decisions Provided by Starter
+
+**Language & Runtime:**
+- Android: Kotlin 2.x（当前 2.3+）+ JDK 17 + Jetpack Compose / Material 3（BOM 取初始化时官方模板内置最新）
+- 中继 & 桌面扩展: Rust edition 2021 + tokio（同一异步运行时心智）
+- 协议契约: 手机↔桌面消息协议以单一 schema 为事实源，生成 TS/Kotlin/Rust 类型（机制细节 step-04 裁决）
+
+**Build Tooling:** Gradle KTS（Android）/ Cargo（Rust ×2）/ 多阶段 Dockerfile（中继）
+
+**Testing Framework:** Compose UI Test + JUnit（Android）；`#[cfg(test)]` + 集成测试（中继）；基线 Vitest/cargo/E2E 体系不变（桌面）
+
+**Code Organization:**
+
+```
+EgoSync/
+├── egosync-app/src-tauri/   # [扩展] services/{connection,pairing,snapshot}.rs 等
+├── companion-android/       # [新] Kotlin + Compose 单模块起步
+└── relay-server/            # [新] 无状态加密转发服务
+```
+
+**否决记录：**
+- ~~Capacitor 复用 React~~ — 推送/后台需插件桥接，伴侣 UI 本非移植，复用价值低
+- ~~Tauri 2 Mobile~~ — Android 推送生态不成熟，双端框架耦合升级风险高
+- ~~iroh 1.0~~ — 能力全面但两端嵌 Rust 的 JNI 构建链复杂度不值（记录备选理由，防回头重提）
+- ~~Tailscale 类隧道~~ — 第三方账号体系绑定，违背零知识自托管初衷
+
+## Incremental Core Architectural Decisions — 手机伴侣基建（FR-40～FR-43）
+
+### Decision Priority Analysis
+
+**Critical Decisions (Block Implementation):**
+
+| # | 决策 | 裁决 | 理由 |
+|---|------|------|------|
+| 1 | 配对密钥交换 | Noise XX + 扫码互信（Rust: snow；Android: noise-java） | 握手内双向认证防中间人，无 PKI/证书管理；重装=重新扫码即恢复 |
+| 2 | 直连↔中继协议关系 | 同一加密帧协议、双承载 | 手机端只换地址不换逻辑，状态机最简；否决双协议方案 |
+| 3 | 云中继本体 | 自建 Rust 无状态转发服务（axum 0.8），内存注册表零持久化 | 零知识可审计哲学落地；断线即丢不做离线投递 |
+| 4 | 指令注入点 | 桌面编排层新增 `companion` 服务模块为唯一入口 | 手机永不直接触达 agent_bridge/opencode/DB，基线边界零破坏 |
+| 5 | 快照口径 | 大而全落死：活跃/近期会话各最近 200 条 + 本季度简报/复盘 + 未读通知；记忆库不上机；上限 10MB 超限截断明示 | boss 权衡后选体验优先；口径落死防实现漂移 |
+| 6 | 推送链路 | **FR-42 正式降级出 V1**；保留 NotificationDispatch 抽象层 | Android FCM 凭证无法分发到用户桌面端；V1 仅应用内通知 |
+
+**Important Decisions (Shape Architecture):**
+- 局域网发现：NSD/mDNS 广播 `_egosync._tcp`（PRD"无需人工干预"的标准解）
+- 连接状态机：`direct / relay / offline` 三态，prefer-direct 切换策略
+- 中继鉴权：挑战-应答证明公钥所有权（防 ID 抢占）
+- 协议契约：单一 schema 为事实源，生成 TS/Kotlin/Rust 类型
+
+**Deferred Decisions (Post-V1):**
+- iOS 伴侣 App（PRD V2 既定）
+- 系统推送接入（FCM 中继代理或 UnifiedPush——分发抽象已预留适配器位）
+- 多桌面绑定（V1 单对单 [ASSUMPTION] 保持）
+- 云端数据同步/托管（Non-Goal 不变）
+
+### 配对与信任链（FR-40）
+
+**配对流程：**
+```
+桌面：生成 QR = { relay_addr, desktop_static_pubkey, relay_id(=pubkey哈希), pairing_nonce }
+手机：扫码 → 经直连或中继发起 Noise XX 握手 → 双向身份认证 → 派生会话密钥
+桌面：写入 paired_devices 表 → 后续连接免配对
+重装恢复：手机新实例重新扫码即可，桌面无需重置（符合 FR-40 验收）
+```
+
+**密钥存储：**
+- 手机静态私钥 → Android Keystore
+- 桌面静态密钥 → 系统 keyring（与 LLM API Key 同级管理，遵循基线安全规则）
+- 手机快照缓存落盘 → Keystore 派生 AES 加密
+
+### 连接与通道架构（FR-40/41）
+
+**四通道收敛为一条加密承载上的帧类型集：**
+`HELLO / SNAPSHOT / STATE_DELTA / COMMAND / COMMAND_RESULT / STREAM_TOKEN / NOTICE / PING`
+
+- 连接通道：NSD 发现 → WS 直连桌面端口；出网 → WS 连中继按 relay_id 转发。同一帧协议。
+- 状态通道：桌面状态变化 → `STATE_DELTA` 主动推送；断线重连 → 全量 `SNAPSHOT` 替换（不做历史回放，PRD 假设保持）
+- 指令通道：手机操作 → `COMMAND` → companion 模块执行现有 services → `COMMAND_RESULT` 回流；流式对话经 `STREAM_TOKEN` 帧镜像 `llm:stream` 语义
+
+### 云中继本体
+
+- axum 0.8 + tokio + tokio-tungstenite；与桌面共享加密协议 crate
+- 内存注册表 `{relay_id → 连接}`，零持久化、零落地（进程重启即清空）
+- 鉴权：注册时挑战-应答证明持有对应私钥
+- 纯二进制加密帧转发，中继不可读明文（Noise 会话密钥仅两端持有）
+- 部署：多阶段 Dockerfile → 单 VPS docker compose up；`/healthz` 健康检查；tracing 结构化日志；metrics 延后
+- 成本模型：单实例可承载数百并发长连接，$5/月级 VPS 起步
+
+### 快照引擎（FR-41/43）
+
+- 口径（已裁决落死）：角色卡状态（含能量）+ 四象限任务 + 仪表盘指标 + 活跃及近期会话各最近 200 条消息 + 本季度晨间简报/周复盘 + 未读通知；**记忆库不上机**
+- 总量上限 10MB，超限按最旧截断并在 UI 明示数据截止时间
+- 生成：桌面端相关写操作后节流重建（debounce），内存持有不持久化（重启后首次连接现生成）
+- 下发：全量替换式；重连即补齐最新快照
+- 手机端：单一版本化文件存储 + 元数据，不引入 Room
+
+### 降级态与速记队列（FR-43）
+
+- 手机本地持久化 FIFO 速记队列，每条带幂等 ID
+- 恢复连接后逐条提交为管家指令，桌面确认入库后删队，无丢失
+- 降级态 UI：明示离线与数据截止时间；依赖引擎的入口不可交互并说明原因
+
+### 通知分发（FR-42 降级记录）
+
+- **V1 仅应用内通知**（App 前台/连接时呈现三级通知）
+- NotificationDispatch 抽象层保留：V1 实现 InAppAdapter；FCM 中继代理 / UnifiedPush 为后续可插适配器
+- 锁屏快捷确认/拒绝随 FR-42 一并延后至推送接入时
+- ⚠️ **待办（架构定稿随附）**：修订 PRD §4.14 FR-42（移出 MVP 或标 DEFERRED）、§6.1 MVP 范围、§9 假设索引；决策日志新增 #18 记录本次降级裁决及理由（FCM service account 凭证无法安全分发到用户桌面端）
+
+### Data Architecture（增量）
+
+- 桌面新增表 `paired_devices`（SQLx migration）：`id, device_name, device_pubkey, paired_at, last_seen_at`
+- 该表纳入 data_export 导入导出与销毁清单（基线数据主权规则延伸）
+- 手机端：加密快照文件 + 速记持久化队列；无业务库主权（决策#17 边界不变）
+- 中继端：零数据库
+
+### Decision Impact Analysis
+
+**Implementation Sequence:**
+1. 加密协议 crate（Noise XX 帧封装）+ 协议 schema 定义
+2. 桌面 pairing/connection 服务模块（QR 生成、NSD 广播、WS 监听、paired_devices）
+3. relay-server 最小转发服务 + Docker 化
+4. Android 骨架：扫码配对 + 连接状态机
+5. 快照引擎 + 状态通道
+6. 指令通道 + 流式回流
+7. 降级态 + 速记队列
+8. （预留位）NotificationDispatch 适配器接口
+
+**Cross-Component Dependencies:**
+- 加密协议 crate → 被桌面、中继、Android 三方共同依赖（最高优先级，先行冻结）
+- companion 模块 → 复用全部现有 services；是手机指令的唯一入口
+- paired_devices 表 → 被 pairing、connection、data_export 三处依赖
+- NotificationDispatch → V1 只有 InAppAdapter 实装，接口先行稳定
+
+## Implementation Patterns Addendum — 手机伴侣基建（FR-40～FR-43）
+
+### Pattern Categories Defined
+
+基线 100 条规则（project-context.md）继续全量生效；本节只定义伴侣基建引入的 **5 类新冲突点**，未提及处一律继承基线。
+
+### Naming Patterns
+
+**桌面新模块（扁平文件 + 前缀，不建子目录）：**
+- `services/companion_pairing.rs` — QR 生成、Noise XX 握手编排、paired_devices 读写
+- `services/companion_connection.rs` — NSD 广播、WS 监听、连接状态机、通道切换
+- `services/companion_snapshot.rs` — 快照节流重建、SNAPSHOT 帧下发
+- `services/companion_dispatch.rs` — COMMAND 解析 → 现有 services 调用 → RESULT 回流；NotificationDispatch 抽象
+
+**共享协议 crate：**
+- 位置：`crates/companion-proto/`（package 名 companion-proto，lib 名 companion_proto）
+- 引用方式：src-tauri 与 relay-server 均 path 依赖
+- **禁止**在仓库根建 Cargo workspace（避免扰动基线构建行为）
+
+**新增 Tauri Commands（域前缀 snake_case）：**
+- `pairing_generate_qr / pairing_confirm / paired_device_list / paired_device_remove / companion_get_status`
+
+**Android 包结构（com.egosync.companion）：**
+- `pairing/`（扫码、握手）、`connection/`（状态机、NSD）、`sync/`（SnapshotStore、QuickNoteQueue）、`notify/`（InAppAdapter）、`ui/<feature>/`
+- 文件命名：`XxxScreen.kt / XxxViewModel.kt / SnapshotStore.kt / QuickNoteQueue.kt`
+
+### Format Patterns
+
+- 帧 = 长度前缀二进制 Noise 传输消息；内层 payload JSON 一律 camelCase（三语言一致）
+- 枚举小写字符串；日期 ISO 8601；ID 为 UUID v4 —— 继承基线
+- `HELLO` 帧必带 `protocolVersion: u16`；任何帧类型/payload 变更必须 bump 版本并同步 schema 单一事实源
+
+### Communication Patterns
+
+- 手机↔桌面帧类型集冻结为 8 种：`HELLO / SNAPSHOT / STATE_DELTA / COMMAND / COMMAND_RESULT / STREAM_TOKEN / NOTICE / PING`；扩展须走 schema 变更 + 版本 bump
+- 桌面 UI 新 Tauri Events 用 `companion:` 命名空间：`companion:paired / companion:connected / companion:disconnected / quicknote:submitted`
+
+### Process Patterns
+
+- 重连退避：指数 1s→30s 封顶 + 随机抖动
+- 直连↔中继切换滞回：NSD 消失后探测 3s 才回落中继，防抖动
+- 错误分类：`AppError` 新增 `PairingError / ConnectionError / ProtocolError` 变体；序列化形状不变；用户可见文案中文不暴露技术细节
+- 日志：两端 Rust 用 tracing；帧内容明文永远不入日志（零知识纪律）；Android 用带 `Companion/` 前缀 tag 的系统 Log
+
+### Structure Patterns
+
+**测试位置：**
+- 中继：单元测试同文件 `#[cfg(test)]`；集成测试 `tests/`（含"零持久化"断言：重启后注册表为空）
+- Android：单元测试 `src/test/` co-located；仅配对冒烟路径进 `src/androidTest/`
+- 桌面：沿用基线（同文件单元测试 + tests/test_{domain}.rs）
+
+### Enforcement Guidelines
+
+**All AI Agents MUST:**
+1. 所有手机指令必经 companion_dispatch 模块进入现有 services
+2. 协议变更必须改 schema 单一事实源并三语言同步生成
+3. 中继保持零持久化——新增任何落盘行为都是违约
+4. 新增表/Command/事件遵循本文件与基线命名规范
+
+**Anti-Patterns (禁止):**
+- ❌ 在中继记录或存储任何帧内容
+- ❌ 绕过 companion 模块直调 agent_bridge/opencode/DB
+- ❌ Android 端引入 Room 或全局状态框架
+- ❌ 仓库根 Cargo workspace
+- ❌ 私增帧类型或绕过 protocolVersion
+
+## Project Structure Addendum — 手机伴侣基建（FR-40～FR-43）
+
+### Complete Project Directory Structure
+
+标记：`[N]` 新增；`[M]` 修改现有文件；未标记处基线不动。
+
+```text
+EgoSync/
+├── egosync-app/src-tauri/                  # 桌面端增量扩展
+│   ├── migrations/029_paired_devices.sql   # [N]
+│   ├── src/
+│   │   ├── commands/companion.rs           # [N] pairing_*/paired_device_*/companion_get_status
+│   │   ├── services/
+│   │   │   ├── companion_pairing.rs        # [N]
+│   │   │   ├── companion_connection.rs     # [N]
+│   │   │   ├── companion_snapshot.rs       # [N]
+│   │   │   └── companion_dispatch.rs       # [N]
+│   │   ├── db/paired_devices.rs            # [N]
+│   │   ├── models/companion.rs             # [N]
+│   │   └── lib.rs                          # [M] 仅注册新 commands
+│   └── tests/test_companion.rs             # [N]
+├── crates/companion-proto/                 # [N] 共享加密协议 crate（唯一可触碰 Noise 库之处）
+│   ├── Cargo.toml
+│   └── src/{lib.rs, frames.rs, crypto.rs, schema.json}
+├── relay-server/                           # [N] 零持久化转发服务
+│   ├── Cargo.toml / Dockerfile / docker-compose.yml
+│   └── src/{main.rs, registry.rs, forward.rs, auth.rs}
+├── companion-android/                      # [N] Kotlin + Compose 单模块
+│   ├── build.gradle.kts / settings.gradle.kts
+│   ├── src/main/java/com/egosync/companion/
+│   │   ├── MainActivity.kt
+│   │   ├── pairing/{PairingScreen, PairingViewModel, QrScanner}.kt
+│   │   ├── connection/{ConnectionViewModel, ConnectionStatusBanner, NsdDiscovery, RelayClient}.kt
+│   │   ├── sync/{SnapshotStore, QuickNoteQueue, StateMerger}.kt
+│   │   ├── notify/{NotificationDispatch, InAppNotificationAdapter}.kt
+│   │   └── ui/{chat, dashboard, tasks, settings, theme}/…
+│   ├── src/test/…                          # 单元测试 co-located
+│   └── src/androidTest/…                   # 仅配对冒烟路径
+└── .github/workflows/
+    ├── ci.yml                              # [M] 增加 android 与 relay job
+    ├── android-ci.yml                      # [N]
+    └── relay-docker.yml                    # [N] 镜像构建发布
+```
+
+### Architectural Boundaries
+
+**四条硬边界：**
+
+1. **加密边界**：`crates/companion-proto` 是全仓唯一允许依赖 snow / noise-java 的位置；三端其余代码只操作帧类型，不见密码学细节
+2. **桌面边界**：companion_* 四个 service 只能经 `companion_dispatch` 调用既有 services；commands 保持薄层；现有 services 对伴侣一无所知
+3. **中继边界**：只见 relay_id 与密文帧；无 DB、无磁盘写、断线即丢
+4. **Android 边界**：UI 不触达连接实现（经 ViewModel → 连接客户端接口）；`sync/` 对快照只读渲染；速记只能进队列
+
+**数据边界：**
+
+| 数据 | 位置 | 规则 |
+|------|------|------|
+| 配对设备记录 | egosync.db `paired_devices` | 纳入导出/导入/销毁清单 |
+| 会话密钥 | 双端内存 | 断线即弃，重连重新派生 |
+| 快照缓存 | 手机加密文件 | Keystore 派生 AES；单版本化文件 |
+| 速记队列 | 手机本地持久化 FIFO | 幂等 ID，确认后删队 |
+| 中继状态 | 内存注册表 | 零持久化，进程重启清空 |
+
+### Requirements to Structure Mapping
+
+| FR | 归属 |
+|----|------|
+| FR-40 配对与连接 | `companion_pairing` + `companion_connection` + `relay-server/*` + Android `pairing/ connection/` |
+| FR-41 状态同步 | `companion_snapshot`（状态通道）+ `companion_dispatch`(指令/流式回流) + Android `sync/ ui/` |
+| FR-42（降级 V1） | `notify/NotificationDispatch` 抽象 + InAppAdapter 实装 |
+| FR-43 离线降级 | Android `sync/QuickNoteQueue` + 降级态 UI；桌面侧零改动 |
+
+### Integration Points & Data Flow
+
+```text
+[指令] 手机 COMMAND →(直连WS|中继WS)→ companion_connection → companion_dispatch → 既有 services → COMMAND_RESULT 回流
+[状态] 桌面写操作 → companion_snapshot 节流重建 → STATE_DELTA/SNAPSHOT 推送 → 手机 StateMerger → UI
+[速记] 手机本地队列 → 重连后逐条 COMMAND(幂等ID) → 管家处理 → 确认后删队
+[配对] 桌面 QR → 手机扫码 → Noise XX 握手(直连或经中继) → paired_devices 落库
+```
+
+**外部集成：**
+- 云中继 = 唯一新增外部服务端点（自托管）
+- NSD/mDNS = 局域网发现（系统服务，无第三方依赖）
+- 无其他第三方云依赖（推送延后）
+
+### Development Workflow Integration
+
+```bash
+# 中继本地开发
+cd relay-server && cargo run          # ws://127.0.0.1:7333（端口可配）
+# 桌面：基线流程不变
+cd egosync-app && npm run tauri dev   # 伴侣连接层随应用启动
+# Android：Android Studio 打开 companion-android/
+```
+
+## Architecture Validation Results — 手机伴侣基建（FR-40～FR-43）
+
+_本次验证覆盖架构文档、PRD §4.14 与基线架构的一致性；未修改业务代码，未运行任何测试；结论仅表示具备实施指导能力。_
+
+### Coherence Validation ✅
+
+| 检查项 | 结果 | 说明 |
+|--------|------|------|
+| Kotlin ↔ Rust 加密互通 | 通过（待首故事验证） | snow 与 noise-java 同属 Noise 框架规范；参数套件需冻结后互通测试 |
+| axum 0.8 + tokio + tungstenite | 通过 | 同栈同运行时，与桌面一致 |
+| 双端外连中继拓扑 | 通过 | 无入站端口转发需求，零配置约束自洽 |
+| 与基线 100 条规则 | 通过 | 命名/分层/keyring/数据主权规则全量继承，无第二套范式 |
+| 桌面零回归 | 通过 | 全部为增量模块，现有 services 对伴侣一无所知 |
+
+### Requirements Coverage Validation ✅
+
+- **FR-40**：扫码配对 / NSD 自动发现 / 直连↔中继自动切换（prefer-direct 滞回）/ 三态状态可见 / paired_devices 持久化 / 重装重扫恢复 / 中继不可读明文 —— 六条验收逐条有支撑
+- **FR-41**：STATE_DELTA 推送 / COMMAND 执行回流 / STREAM_TOKEN 流式镜像 / 重连全量快照补齐
+- **FR-42**：**已按 boss 裁决正式降级出 V1**（FCM service account 凭证无法安全分发到用户桌面端）；NotificationDispatch 抽象保留接入位；随附 PRD 修订待办
+- **FR-43**：三态状态机统一覆盖"局域网关机"与"广域网中断"；只读缓存+截止时间标注；幂等速记队列
+
+### Implementation Readiness Validation ✅
+
+- 决策完整性：Critical×6 全部带版本与理由；实现模式含帧类型集、命名、错误分类
+- 结构完整性：三子项目目录树到文件级；四条硬边界明确
+- 模式完整性：5 类新冲突点全部约定，反模式清单齐备
+
+### Gap Analysis Results
+
+**Critical Gaps：无**
+
+**Important Gaps（不阻塞，首故事内解决）：**
+1. Noise 参数套件未冻结 —— 建议 `Noise_XX_25519_ChaChaPoly_BLAKE2s`，首个协议 story 验证 snow↔noise-java 互通后写入 `crates/companion-proto/src/schema.json`
+2. 选型留实现期：桌面 mDNS 广播 crate（候选 mdns-sd）、Android WS 客户端（候选 OkHttp）与二维码扫描库（候选 ML Kit Barcode）
+3. 桌面本地 WS 监听端口策略与 Windows 防火墙首次弹窗的 UX 处理
+
+**Nice-to-Have Gaps（明确延后）：**
+- 中继 metrics 可观测性、多实例横向扩展、快照传输压缩
+
+### Validation Issues Addressed
+
+FR-42 冲突已在决策阶段当面裁决并落档（降级 + PRD 修订待办 + 决策日志 #18 待记），无遗留矛盾。
+
+### Architecture Completeness Checklist
+
+**Requirements Analysis**
+- [x] 项目上下文深度分析
+- [x] 规模与复杂度评估
+- [x] 技术约束识别
+- [x] 跨切关注点映射
+
+**Architectural Decisions**
+- [x] 关键决策含版本号文档化
+- [x] 技术栈完整指定
+- [x] 集成模式定义
+- [x] 性能考量已处理（节流重建/10MB 上限/退避滞回）
+
+**Implementation Patterns**
+- [x] 命名规范建立（增量部分）
+- [x] 结构模式定义
+- [x] 通信模式指定（8 种帧类型冻结）
+- [x] 流程模式文档化
+
+**Project Structure**
+- [x] 完整目录结构定义（文件级）
+- [x] 组件边界建立（四条硬边界）
+- [x] 集成点映射
+- [x] 需求到结构映射完成
+
+### Architecture Readiness Assessment
+
+**Overall Status:** READY WITH MINOR GAPS
+
+**Confidence Level:** Medium（主要不确定性：跨语言 Noise 参数互通验证）
+
+**Key Strengths:**
+- 中继零知识零持久化，"技术不可能性"隐私哲学贯穿
+- 单一加密帧协议双承载，连接层复杂度压至最低
+- 手机指令唯一入口 companion_dispatch，基线边界零破坏
+- FR-42 降级经显式裁决并留有演进接口，文档与 PRD 无暗雷
+
+**Areas for Future Enhancement:**
+- 系统推送接入（FCM 中继代理或 UnifiedPush）
+- iOS 伴侣 App、多桌面绑定、云同步（均 Non-Goal/Deferred）
+
+### Implementation Handoff
+
+**AI Agent Guidelines:**
+- 本文档（含手机伴侣增量章节）与 `project-context.md` 共同构成实施规范；冲突时以更新者为准并显式记录
+- 遵守四条硬边界与反模式清单
+- 协议变更必须走 schema 单一事实源
+
+**First Implementation Priority:**
+1. Story 1：`crates/companion-proto` —— 冻结 Noise 参数套件、定义 8 种帧 schema、snow/noise-java 互通冒烟测试
+2. Story 2：桌面 `companion_pairing`（QR 生成 + paired_devices migration）
+3. 后续按 Implementation Sequence 2~8 顺延

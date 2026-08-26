@@ -5,6 +5,7 @@ import com.egosync.companion.connection.ConnectionState
 import com.egosync.companion.connection.FakeConnectionClient
 import com.egosync.companion.notify.InAppNotificationAdapter
 import com.egosync.companion.sync.QuickNoteQueue
+import com.egosync.companion.sync.SnapshotStore
 import com.egosync.companion.ui.theme.ThemeMode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -25,6 +26,9 @@ class AppModelContainer private constructor(context: Context) {
     val connection = FakeConnectionClient(initialPaired = prefs.getBoolean(KEY_PAIRED, false))
     val quickNotes = QuickNoteQueue()
     val notifications = InAppNotificationAdapter()
+
+    /** 快照数据源装配缝（只读渲染）：三主 ViewModel 经此取数。当前指向 mock 单例；接入真实连接层时在此换装帧驱动快照存储，UI 层零改动。 */
+    val snapshotStore = SnapshotStore
 
     private val _themeMode = MutableStateFlow(
         if (prefs.getString(KEY_THEME, VALUE_DARK) == VALUE_LIGHT) ThemeMode.LIGHT else ThemeMode.DARK

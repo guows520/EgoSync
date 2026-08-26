@@ -194,7 +194,7 @@ private fun MainShellRoute(
 @Composable
 private fun ChatRoute(container: AppModelContainer) {
     val vm: ChatViewModel = viewModel(
-        factory = viewModelFactory { initializer { ChatViewModel() } }
+        factory = viewModelFactory { initializer { ChatViewModel(container) } }
     )
     val uiState by vm.uiState.collectAsState()
     val connectionState by container.connection.state.collectAsState()
@@ -209,7 +209,7 @@ private fun ChatRoute(container: AppModelContainer) {
 @Composable
 private fun TasksRoute(container: AppModelContainer) {
     val vm: TasksViewModel = viewModel(
-        factory = viewModelFactory { initializer { TasksViewModel() } }
+        factory = viewModelFactory { initializer { TasksViewModel(container) } }
     )
     val uiState by vm.uiState.collectAsState()
     val connectionState by container.connection.state.collectAsState()
@@ -223,7 +223,7 @@ private fun TasksRoute(container: AppModelContainer) {
 @Composable
 private fun DashboardRoute(navController: NavHostController, container: AppModelContainer) {
     val vm: DashboardViewModel = viewModel(
-        factory = viewModelFactory { initializer { DashboardViewModel() } }
+        factory = viewModelFactory { initializer { DashboardViewModel(container) } }
     )
     val uiState by vm.uiState.collectAsState()
     val notices by container.notifications.notices.collectAsState()

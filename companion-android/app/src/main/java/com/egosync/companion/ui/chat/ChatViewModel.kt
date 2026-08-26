@@ -2,6 +2,7 @@ package com.egosync.companion.ui.chat
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.egosync.companion.AppModelContainer
 import com.egosync.companion.sync.ActionCardSuggestion
 import com.egosync.companion.sync.ActionCardState
 import com.egosync.companion.sync.ChatMessage
@@ -41,11 +42,13 @@ data class ChatUiState(
 
 /**
  * 管家对话 mock 状态机：发送 → 思考中 → 流式打字机回复（镜像 llm:stream 语义）。
- * 接入真实连接层后：发送改为 COMMAND 帧，回复改为 STREAM_TOKEN 帧驱动。
+ * 初始消息与回复轮换取自容器快照（只读）；接入真实连接层后：发送改为 COMMAND 帧，回复改为 STREAM_TOKEN 帧驱动。
  */
-class ChatViewModel : ViewModel() {
+class ChatViewModel(private val container: AppModelContainer) : ViewModel() {
 
-    private val _uiState = MutableStateFlow(ChatUiState())
+    private val _uiState = MutableStateFlow(
+        ChatUiState(messages = container.snapshotStore.initialChat)
+    )
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
 
     private var replyIndex = 0
@@ -68,7 +71,8 @@ class ChatViewModel : ViewModel() {
             _uiState.update { it.copy(thinking = false) }
 
             // 流式打字机：逐字浮现（原型模拟 STREAM_TOKEN 帧）
-            val full = SnapshotStore.butlerReplies[replyIndex % SnapshotStore.butlerReplies.size]
+            val replies = container.snapshotStore.butlerReplies
+            val full = replies[replyIndex % replies.size]
             replyIndex++
             val msgId = nextId++.toString()
             _uiState.update {

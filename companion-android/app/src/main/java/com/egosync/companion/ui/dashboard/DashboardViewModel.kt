@@ -1,6 +1,7 @@
 package com.egosync.companion.ui.dashboard
 
 import androidx.lifecycle.ViewModel
+import com.egosync.companion.AppModelContainer
 import com.egosync.companion.sync.RoleCard
 import com.egosync.companion.sync.SnapshotStore
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -22,8 +23,10 @@ data class DashboardUiState(
 }
 
 /** 仪表盘 mock 状态：角色卡列表来自快照（只读渲染）。 */
-class DashboardViewModel : ViewModel() {
+class DashboardViewModel(private val container: AppModelContainer) : ViewModel() {
 
-    private val _uiState = MutableStateFlow(DashboardUiState())
+    private val _uiState = MutableStateFlow(
+        DashboardUiState(roles = container.snapshotStore.roles)
+    )
     val uiState: StateFlow<DashboardUiState> = _uiState.asStateFlow()
 }

@@ -238,3 +238,7 @@ All items resolved in the same session:
 ## Deferred from: quick-dev 评审 of spec-companion-android-snapshotstore-vm-wiring (2026-08-26)
 
 - **真实连接层回复流健壮性（预存在逻辑，本次评审顺带暴露）**：`ChatViewModel.sendMessage` 回复轮换 `replies[replyIndex % replies.size]` 在 `butlerReplies` 为空列表时触发整数除零 ArithmeticException（`viewModelScope` 协程内未捕获将崩溃）；空字符串回复会经打字机循环留下一颗永久空白管家气泡。当前静态 mock（4 条固定回复）下不可达，且表达式为基线 f638a7c 既有代码原样搬移、非本次引入；接入 SNAPSHOT/STATE_DELTA 帧驱动数据时应一并补空列表/空串守卫。位置：`companion-android/app/src/main/java/com/egosync/companion/ui/chat/ChatViewModel.kt:74-82`。
+
+## Deferred from: quick-dev 评审 of spec-mobile-fr-parity-group1-chat (2026-08-26)
+
+- **聊天自动滚动以逐字文本为 key 致高频重启（预存在模式，本次评审顺带暴露）**：`ChatScreen` 的 `LaunchedEffect` 把 `uiState.messages.lastOrNull()?.text` 作为 key，打字机每 24ms 变一次文本即重启 `animateScrollToItem`，滚动抖动且流式期间用户无法上滑阅读历史。该模式在基线 bf845248 的原 ChatScreen.kt:74 已存在（`LaunchedEffect(totalItems, uiState.messages.lastOrNull()?.text)`），组 1 改动原样延续、未引入新缺陷；修法为仅以结构变化（条目数/卡片增删）触发滚动，或先判断列表已贴近底部才自动滚。位置：`companion-android/app/src/main/java/com/egosync/companion/ui/chat/ChatScreen.kt`。

@@ -208,6 +208,9 @@ private fun ChatRoute(container: AppModelContainer) {
         engineAvailable = connectionState.engineAvailable,
         onSendMessage = vm::sendMessage,
         onActionCardRespond = vm::respondActionCard,
+        onRoleSelected = vm::selectRole,
+        onStopStreaming = vm::stopStreaming,
+        onDecompositionRespond = vm::respondDecomposition,
     )
 }
 

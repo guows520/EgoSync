@@ -112,6 +112,10 @@ data class ChatMessage(
     val text: String,
     /** 流式打字机进行中（管家回复逐字浮现） */
     val streaming: Boolean = false,
+    /** 发言人角色 id（FR-1 委派第二段）；null=管家或用户消息 */
+    val senderRoleId: String? = null,
+    /** 置信度<0.7（FR-30）：视图层气泡尾部内联标注 */
+    val lowConfidence: Boolean = false,
 )
 
 data class ActionCardSuggestion(
@@ -123,6 +127,51 @@ data class ActionCardSuggestion(
 )
 
 enum class ActionCardState { PENDING, CONFIRMED, REJECTED }
+
+// ── 意图路由 / 任务拆分 / 执行溯源（组 1 chat FR mock）────────────────
+
+/** 拆分提案条目（镜像桌面 TaskDecompositionProposal.items） */
+data class DecompositionItem(val title: String, val deadline: String?)
+
+/** 任务拆分提案（镜像桌面 taskDecomposition 类型：对话流内嵌提案卡） */
+data class TaskDecompositionProposal(
+    val id: String,
+    val taskSummary: String,
+    val roleName: String,
+    val roleIcon: String,
+    val items: List<DecompositionItem>,
+    val state: DecompositionState = DecompositionState.PENDING,
+)
+
+enum class DecompositionState { PENDING, ACCEPTED, KEPT_SINGLE }
+
+/** 工具执行状态（FR-33 工具执行可视） */
+enum class ToolStatus { RUNNING, COMPLETED, FAILED }
+
+/**
+ * 执行溯源块（FR-29，镜像桌面 ExecutionTraceBlock 三型）：
+ * Think 思考 / Narration 旁白 / Action 工具动作。
+ */
+sealed class ExecutionTraceBlock {
+    abstract val id: String
+
+    data class Thinking(
+        override val id: String,
+        val content: String,
+        val elapsedSeconds: Int?,
+        val isActive: Boolean,
+    ) : ExecutionTraceBlock()
+
+    data class Narration(override val id: String, val content: String) : ExecutionTraceBlock()
+
+    data class Action(
+        override val id: String,
+        val title: String,
+        val status: ToolStatus,
+        /** 桌面 actionType：shell/read/edit/write/skill/explore/tool */
+        val actionType: String = "tool",
+    ) : ExecutionTraceBlock()
+}
 
 // ═══════════════════════════════════════════════════════════════════════
 // Mock 数据（老管家语气 · 覆盖工作/家庭/学习三个角色域）
@@ -350,5 +399,97 @@ object SnapshotStore {
         "明白。这件事我建议放进 Q2——重要，但不必现在动手。您看呢？",
         "已经为您记下来了。顺带一提，今天 Q1 还有两件事，需要我复述一下吗？",
         "收到，boss。学习者角色这几天能量偏低（33%），要不要安排 20 分钟的读书时间？",
+    )
+
+    // ── 组 1 chat 增补 mock ─────────────────────────────────────────────
+
+    /** 委派路由表（FR-1）：关键词 → 目标角色。消息含关键词即走两段委派。 */
+    val delegationKeywords: Map<String, String> = mapOf(
+        "产品经理" to "role-pm",
+        "父亲" to "role-father",
+        "学习者" to "role-learner",
+    )
+
+    /** 委派第一段气泡文案模板（{role} 替换为角色名）。 */
+    fun delegationFirstSegment(roleName: String): String =
+        "稍等，我让${roleName}看一下。"
+
+    /** 委派第二段气泡文案模板（角色视角反馈）。 */
+    val delegationReplies: Map<String, String> = mapOf(
+        "role-pm" to "来自产品经理的反馈：这事我接下了。初步看有两个切入点，我先出个方案草稿，明早给你过目。",
+        "role-father" to "来自父亲的反馈：收到。我把这件事和女儿的时间表对了一下，不冲突，我来跟进。",
+        "role-learner" to "来自学习者的反馈：好的，我把这章的笔记先翻出来，整理个摘要给你参考。",
+    )
+
+    /** 任务拆分提案种子（FR-2，mock 触发：管家视图第 2 轮回复后浮现）。 */
+    val decompositionProposal: TaskDecompositionProposal = TaskDecompositionProposal(
+        id = "td-1",
+        taskSummary = "整理季度 OKR 草稿",
+        roleName = "产品经理",
+        roleIcon = "target",
+        items = listOf(
+            DecompositionItem("回顾上季度 OKR 完成度", "周四"),
+            DecompositionItem("草拟下季度 3 个 O", "周五"),
+            DecompositionItem("拆解 KR 并对齐负责人", "下周一"),
+        ),
+    )
+
+    /** 执行溯源块种子（FR-29，随第二轮回复挂在助手消息上）。 */
+    val executionTrace: List<ExecutionTraceBlock> = listOf(
+        ExecutionTraceBlock.Thinking(
+            id = "trace-think-1",
+            content = "用户想整理季度 OKR。先判断范围：上季度复盘 + 下季度目标 + KR 对齐。这是一件可以拆分的复合任务。",
+            elapsedSeconds = 4,
+            isActive = false,
+        ),
+        ExecutionTraceBlock.Narration(
+            id = "trace-narr-1",
+            content = "我先查一下你的日程和现有任务，看看怎么排最合适。",
+        ),
+        ExecutionTraceBlock.Action(
+            id = "trace-action-1",
+            title = "读取日程与任务快照",
+            status = ToolStatus.COMPLETED,
+            actionType = "read",
+        ),
+    )
+
+    /** 低置信回复（FR-30：confidence<0.7 → 气泡尾部内联标注）。 */
+    val lowConfidenceReply: String =
+        "我猜你可能是想问下周的安排，但我不太确定具体指哪一天。你可以再说明一下吗？"
+
+    /** 角色会话种子（FR-20：切到角色视图时的初始消息流）。 */
+    val roleChatSeeds: Map<String, List<ChatMessage>> = mapOf(
+        "role-pm" to listOf(
+            ChatMessage(
+                id = "r-pm-1",
+                fromButler = true,
+                senderRoleId = "role-pm",
+                text = "boss，评审材料已备好。竞品对比页我标了 3 处需要你拍板的点，会前 30 分钟我会提醒你过一遍。",
+            ),
+        ),
+        "role-father" to listOf(
+            ChatMessage(
+                id = "r-fa-1",
+                fromButler = true,
+                senderRoleId = "role-father",
+                text = "今天 16:30 是女儿钢琴课。课后建议问问她上课感受，另外这周末画展的票我已经留意了。",
+            ),
+        ),
+        "role-learner" to listOf(
+            ChatMessage(
+                id = "r-le-1",
+                fromButler = true,
+                senderRoleId = "role-learner",
+                text = "昨晚沉淀了 2 条《深度工作》读书笔记。第 3 章还剩一半，要不要安排 20 分钟读完？",
+            ),
+        ),
+    )
+
+    /** 工具执行阶段序列（FR-33：流式期间的工具名+状态指示轮换）。 */
+    val toolExecutionStages: List<String> = listOf(
+        "读取日程与任务快照",
+        "整理竞品对比要点",
+        "生成回复草稿",
     )
 }

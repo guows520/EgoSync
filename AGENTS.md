@@ -1,6 +1,20 @@
 除非显式覆盖，否则本规则适用于本项目中的所有任务。
 核心倾向：非琐碎工作，谨慎优先于速度；琐碎任务可自主判断处理。
 
+## 项目地图（先读这里）
+
+- EgoSync：本地优先的个人多智能体桌面应用。桌面端 Tauri 2 + React 18 + TypeScript + Vite + Tailwind；后端 Rust/Tokio + SQLite(SQLx)。
+- `egosync-app/`：`src/` 前端、`src-tauri/` Rust 后端与 SQLite 迁移、`tests/e2e/` 端到端测试（依赖独立安装）。
+- `companion-android/`：手机伴侣高保真原型（纯前端 + mock，桌面端是唯一事实源），局部规范见其 README.md。
+- `_bmad-output/project-context.md`：技术栈细节、关键实现规则、使用指南——项目细节以此为准，动手前先读。
+- 权威文档：`_bmad-output/planning-artifacts/architecture.md`、`prd-egosync.md`；运行/发布细节 → README.md 与 `.github/workflows/`。
+
+## 常用命令
+
+- 桌面端（`egosync-app/` 下）：`npm run tauri dev`（完整开发环境）/ `npm run test:all`（vitest + cargo test）/ `npm run build`（tsc 类型检查 + 构建，本项目无独立 lint 脚本）/ `npm run tauri build`（当前平台安装包）
+- 端到端（`egosync-app/tests/e2e/` 下，先 `npm install`）：`npm test` / `npm run test:ci` / `npm run pa11y`
+- Android 原型（`companion-android/` 下）：`./gradlew :app:assembleDebug` / `./gradlew :app:testDebugUnitTest`
+
 ## 规则一：先思后码（Think Before Coding）
 
 明确声明前提假设。遇不确定处，先提问而非盲目猜测。
@@ -32,11 +46,11 @@
 切勿用于：路由分发、重试机制、确定性数据转换。
 若常规代码能给出答案，就由代码处理。
 
-## 规则六：Token 预算绝非软性建议（Token budgets are not advisory）
+## 规则六：输出节流（Output thrift）
 
-单任务上限：4,000 Token。单会话上限：30,000 Token。
-接近预算上限时，执行上下文摘要并重置状态。
-主动暴露超支。切勿静默越界消耗。
+预计超过一屏的输出必须分块：先给骨架或摘要，再逐块展开。
+不在对话里整段复述仓库已有内容，用文件路径引用；贴代码只贴相关片段。
+每阶段收尾用几句话小结即可，不逐行解说已完成改动；预感会超支时明说，不要静默拖长。
 
 ## 规则七：显式暴露冲突，拒绝折中调和（Surface conflicts, don't average them）
 
@@ -76,3 +90,29 @@
 问题排查时，不要仅靠逻辑判断去猜测，这种猜测毫无意义，应该通过代码、日志等证据，找到真正的根因
 对于通过当前证据仍然无法判断的，优先考虑增加诊断日志协助判断，列出所有需要增加诊断日志的位置，由用户确认后执行
 问题定位出来后，相关的诊断日志需要完全移除
+
+## 规则十四：决策请求要素齐全（Complete decision requests）
+
+凡需用户确认或决策的点，用通俗、清晰、简洁的语言一次讲清四件事：
+① 问题是什么；② 为什么需要决策；③ 各选项分别有什么影响；④ 推荐方案及其理由。
+只抛问题不给方案、或只给方案不讲影响的提问方式都不合格；没有把握时如实说明，不强行推荐。
+
+## 完成定义（DoD）
+
+- `npm run build` 通过（tsc 零类型错误）；涉及 Rust 的改动 `npm run test:all` 全绿
+- E2E 相关改动须跑 `tests/e2e` 对应脚本；无法执行的验证必须说明原因，禁止声称“已验证”
+
+## Never 列表
+
+- 绝不自动 push、绝不强制 push
+- 绝不为让测试变绿而删测试或改断言
+- 绝不提交密钥/.env/生产配置；绝不手改生成物（src-tauri/target 等）
+- 连续失败 3 次：停止尝试，附完整报错向用户报告
+
+## Commit 规范
+
+- `<type>(<scope>): 中文描述`，type 用 feat/fix/docs/chore/test/refactor（沿用既有风格）
+
+## 个人通用约定
+
+- 相关文档与代码注释使用中文（其余跨项目通用偏好已融入上文对应规则）

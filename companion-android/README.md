@@ -96,6 +96,9 @@
 | 能量条 6dp 高、轨道灰、色随分档 | `RoleHeader.tsx` h-[6px] / `DashboardTab.tsx` h-1.5 | |
 | 角色域色温 | `roleIcons.ts` 8 色板 + `App.tsx` `--role-accent` | 移动端按域预映射：工作=靛蓝#4F46E5（冷）/家庭=琥珀#F59E0B（暖）+6% tint；接真实数据后改角色自带 color |
 | 配对/引导分步节奏 | `OnboardingView.tsx` step 1→5 | 步进+进度指示 |
+| 信息密度双模式（`InfoDensity` token，`ui/theme/Density.kt`）：对话流轻量 / 仪表盘密集，屏幕入口声明模式取值 | `ChatStream.tsx` space-y-3、`ChatBubble.tsx` px-5 py-3；`DashboardTab.tsx` grid gap-2.5 | PRD §4.14「两种模式自然切换」，非运行时用户开关 |
+| 动效白名单：呼吸 3s + 思考点 1.4s + 转场 220/180ms + 色温 300ms 单次过渡（`ui/theme/Motion.kt`）；系统「移除动画」开启时全部静态（呼吸定格 alpha 0.6） | `index.css` `--duration-breath: 3s` / `BounceDots` / `prefers-reduced-motion` 全局降 0.01ms | Android 无该媒体查询，以 ANIMATOR_DURATION_SCALE=0 为平台等价物 |
+| 色温过渡：域 accent 变化 300ms 渐变（角色卡图标底/徽章 tint/页指示点） | `App.tsx` `--role-accent` 切换 + `--duration-color: 300ms` 过渡 | 指示点取当前页角色域 accent，为「微妙色温变化」的移动落点 |
 
 ## Mock / Debug 开关使用说明
 

@@ -6,8 +6,10 @@ import androidx.compose.material3.Icon
 import com.egosync.companion.ui.icons.LucideIcons
 import com.egosync.companion.ui.icons.RoleIcons
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.EaseInOut
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
@@ -45,8 +47,13 @@ import androidx.compose.ui.unit.dp
 import com.egosync.companion.sync.RoleCard
 import com.egosync.companion.sync.SnapshotStore
 import com.egosync.companion.ui.theme.EgoSyncTheme
+import com.egosync.companion.ui.theme.BreathDurationMillis
+import com.egosync.companion.ui.theme.ColorTransitionMillis
+import com.egosync.companion.ui.theme.InfoDensity
 import com.egosync.companion.ui.theme.accent
+import com.egosync.companion.ui.theme.densitySpec
 import com.egosync.companion.ui.theme.energyColor
+import com.egosync.companion.ui.theme.rememberReducedMotion
 
 /**
  * ③ 仪表盘 Tab：角色卡横向滑动（图标、能量条呼吸动效、任务/记忆/会话统计数字）。
@@ -95,7 +102,17 @@ fun DashboardScreen(
 
         Spacer(Modifier.height(10.dp))
 
-        // 页指示点
+        // 页指示点（活动点取当前页角色域 accent：色温随角色切换渐变）
+        // reduced-motion 时直切不渐变（动效白名单降级）
+        val reducedMotion = rememberReducedMotion()
+        val colorTransitionSpec = if (reducedMotion) snap<Color>() else tween(ColorTransitionMillis)
+        val currentAccent = uiState.roles.getOrNull(pagerState.currentPage)?.domain?.accent()?.accent
+            ?: MaterialTheme.colorScheme.primary
+        val activeDotColor by animateColorAsState(
+            targetValue = currentAccent,
+            animationSpec = colorTransitionSpec,
+            label = "dotAccent",
+        )
         Row(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.Center,
@@ -108,7 +125,7 @@ fun DashboardScreen(
                         .size(if (active) 8.dp else 6.dp)
                         .clip(CircleShape)
                         .background(
-                            if (active) MaterialTheme.colorScheme.primary
+                            if (active) activeDotColor
                             else MaterialTheme.colorScheme.outline
                         )
                 )
@@ -179,6 +196,7 @@ private fun ButlerOverviewCard(
 
 @Composable
 private fun RowScope.OverviewEntry(icon: ImageVector, text: String, onClick: () -> Unit) {
+    val d = densitySpec(InfoDensity.CONSOLE)
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant,
         shape = RoundedCornerShape(10.dp),
@@ -187,7 +205,7 @@ private fun RowScope.OverviewEntry(icon: ImageVector, text: String, onClick: () 
             .clickable(onClick = onClick),
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
+            modifier = Modifier.fillMaxWidth().padding(vertical = d.unitPaddingY),
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -203,6 +221,20 @@ private fun RowScope.OverviewEntry(icon: ImageVector, text: String, onClick: () 
 @Composable
 internal fun RoleCardItem(role: RoleCard, modifier: Modifier = Modifier) {
     val roleAccent = role.domain.accent()
+    // 母本 App.tsx --role-accent 切换 + index.css --duration-color:300ms 过渡：
+    // 域 accent 变化时以 300ms 单次过渡渐变（色温随角色域偏移，功能性 transition）
+    // reduced-motion 时直切不渐变（动效白名单降级）
+    val colorTransitionSpec = if (rememberReducedMotion()) snap<Color>() else tween(ColorTransitionMillis)
+    val accentColor by animateColorAsState(
+        targetValue = roleAccent.accent,
+        animationSpec = colorTransitionSpec,
+        label = "roleAccent",
+    )
+    val tintColor by animateColorAsState(
+        targetValue = roleAccent.tint,
+        animationSpec = colorTransitionSpec,
+        label = "roleTint",
+    )
 
     Surface(
         color = MaterialTheme.colorScheme.surface,
@@ -217,7 +249,7 @@ internal fun RoleCardItem(role: RoleCard, modifier: Modifier = Modifier) {
                     Modifier
                         .size(46.dp)
                         .clip(RoundedCornerShape(12.dp))
-                        .background(roleAccent.accent),
+                        .background(accentColor),
                     contentAlignment = Alignment.Center,
                 ) { Icon(RoleIcons.getRoleIcon(role.icon), contentDescription = role.name, modifier = Modifier.size(24.dp), tint = Color.White) }
 
@@ -233,7 +265,7 @@ internal fun RoleCardItem(role: RoleCard, modifier: Modifier = Modifier) {
                 Box(
                     Modifier
                         .clip(RoundedCornerShape(10.dp))
-                        .background(roleAccent.tint)
+                        .background(tintColor)
                         .padding(horizontal = 10.dp, vertical = 4.dp)
                 ) {
                     Text(
@@ -279,18 +311,26 @@ private fun StatCell(label: String, value: Int, modifier: Modifier = Modifier) {
 }
 
 /**
- * 呼吸能量条 — 母本 index.css .breathe：opacity 0.6↔1.0、3s ease-in-out 无限循环。
+ * 呼吸能量条 — 母本 index.css .breathe：opacity 0.6↔1.0、--duration-breath 3s
+ * ease-in-out 无限循环（半程 BreathDurationMillis/2 × Reverse = 全周期 3s）。
  * 全 App 唯一的装饰性动效（"角色卡片有呼吸感——活的实体"）。
+ * reduced-motion（系统「移除动画」开启）：定格母本关键帧端点 opacity 0.6，静态显示。
  */
 @Composable
 internal fun BreathingEnergyBar(energy: Int, accent: Color, modifier: Modifier = Modifier) {
-    val transition = rememberInfiniteTransition(label = "breath")
-    val breath by transition.animateFloat(
-        initialValue = 0.6f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(1500, easing = EaseInOut), RepeatMode.Reverse),
-        label = "breathAlpha",
-    )
+    val reducedMotion = rememberReducedMotion()
+    val breath: Float = if (reducedMotion) {
+        0.6f
+    } else {
+        val transition = rememberInfiniteTransition(label = "breath")
+        val animated by transition.animateFloat(
+            initialValue = 0.6f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(tween(BreathDurationMillis / 2, easing = EaseInOut), RepeatMode.Reverse),
+            label = "breathAlpha",
+        )
+        animated
+    }
 
     Column(modifier.fillMaxWidth()) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {

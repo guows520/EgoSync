@@ -228,7 +228,8 @@ All items resolved in the same session:
 
 调查见 `investigations/mobile-desktop-parity-investigation.md`。用户裁决：先做 #1 图标系统重做（已立项为 spec-companion-android-icon-parity），以下三项后续迭代。**全部为纯移动前端工作，数据继续跑在 mock/SnapshotStore 只读，不碰后端**（桌面 companion 模块 Phase 2/3 整体后延），符合纯前端原型硬性边界（不引入网络/Room/Hilt/OkHttp）。
 
-- **#2 设计语言补齐**：信息密度双模式（对话流轻量 / 仪表盘密集）+ 动效克制（仅角色卡呼吸 `--breath-duration:3s`）+ 色温随角色偏移（工作冷 / 家庭暖）+ `prefers-reduced-motion` 降 0ms。色彩 token 已对齐（`Color.kt:10-26`），补的是密度 / 动效 / 色温三件。
+- **#2 设计语言补齐**：信息密度双模式（对话流轻量 / 仪表盘密集）+ 动效克制（仅角色卡呼吸 `--breath-duration:3s`）+ 色温随角色偏移（工作冷 / 家庭暖）+ `prefers-reduced-motion` 降 0ms。色彩 token 已对齐（`Color.kt:10-26`），补的是密度 / 动效 / 色温三件。**✅ 已完成于 2026-08-26，见 `spec-companion-android-design-language-parity.md`。**
+- **#2 附带 defer（评审发现，2026-08-26）：reduced-motion 活跟踪**——`rememberReducedMotion()` 按规格「读取一次并缓存」实现，应用运行中切换系统「移除动画」开关不生效（须重建 Activity 才刷新）；web `prefers-reduced-motion` 是实时媒体查询，语义上不完全等价。后续增强：DisposableEffect + ContentObserver 监听 `Settings.Global.getUriFor(ANIMATOR_DURATION_SCALE)` 活跟踪（纯 compose-runtime 零新依赖），或 minSdk≥28 时改用 `ValueAnimator.areAnimatorsEnabled()`。位置：`companion-android/app/src/main/java/com/egosync/companion/ui/theme/Motion.kt:432-441`。
 - **#3 三 ViewModel 重接 SnapshotStore 只读**：`ChatViewModel`/`TasksViewModel`/`DashboardViewModel` 从硬编码 mock（`AppNavHost.kt:197/212/226` 无参构造）→ 经 `AppModelContainer` 接 `SnapshotStore` 只读快照。这是「换 ConnectionClient 实现零改动」真正生效的前提（当前仅 Settings/Notifications/降级遮罩读 container）。**✅ 已完成于 2026-08-26，见 `spec-companion-android-snapshotstore-vm-wiring.md`。**
 - **#4 FR 屏补全（17 项）**：14 缺失 + 3 部分 FR 的屏/交互。逐 FR 桌面基线 → 移动新增对照见调查 case file 的 Recommended Next Steps B 表。本身需再拆成若干 story（建议按屏分组：chat 相关 FR-1/2/20/29/30；dashboard 相关 FR-12/38；role/memory 相关 FR-5/8/9；tasks 相关 FR-23；review FR-17；onboarding FR-21；notify FR-24）。
 

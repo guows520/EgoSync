@@ -42,11 +42,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.egosync.companion.sync.ActionCardSuggestion
 import com.egosync.companion.sync.ActionCardState
 import com.egosync.companion.sync.ChatMessage
 import com.egosync.companion.ui.theme.EgoSyncTheme
+import com.egosync.companion.ui.theme.InfoDensity
+import com.egosync.companion.ui.theme.densitySpec
+import com.egosync.companion.ui.theme.rememberReducedMotion
 
 /**
  * ① 管家对话 Tab：消息流（用户/管家气泡、思考中态、流式打字机）、
@@ -62,6 +66,8 @@ fun ChatScreen(
 ) {
     var input by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
+    // 对话流轻量模式（PRD §4.14）：消息流间距与气泡内边距走密度 token
+    val d = densitySpec(InfoDensity.CONVERSATIONAL)
     val totalItems = uiState.messages.size + uiState.actionCards.size
 
     // 新消息时跟随滚动到底部
@@ -80,7 +86,7 @@ fun ChatScreen(
                 .weight(1f)
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(d.itemSpacing),
         ) {
             items(uiState.messages, key = { it.id }) { message ->
                 MessageBubble(message)
@@ -139,6 +145,7 @@ fun ChatScreen(
 
 @Composable
 private fun MessageBubble(message: ChatMessage) {
+    val d = densitySpec(InfoDensity.CONVERSATIONAL)
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = if (message.fromButler) Arrangement.Start else Arrangement.End,
@@ -174,7 +181,7 @@ private fun MessageBubble(message: ChatMessage) {
                 style = MaterialTheme.typography.bodyMedium,
                 color = if (message.fromButler) MaterialTheme.colorScheme.onSurface
                 else MaterialTheme.colorScheme.onPrimary,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                modifier = Modifier.padding(horizontal = d.unitPaddingX, vertical = d.unitPaddingY),
             )
         }
     }
@@ -206,6 +213,13 @@ private fun ThinkingBubble() {
 
 @Composable
 private fun ThinkingDots(modifier: Modifier = Modifier) {
+    // reduced-motion（系统「移除动画」开启）：三点静止显示，不弹跳
+    if (rememberReducedMotion()) {
+        Row(modifier, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            repeat(3) { ThinkingDot(yOffset = 0.dp) }
+        }
+        return
+    }
     val transition = rememberInfiniteTransition(label = "dots")
     val phase by transition.animateFloat(
         initialValue = 0f,
@@ -218,15 +232,20 @@ private fun ThinkingDots(modifier: Modifier = Modifier) {
             // 各点错相 160ms（桌面 animationDelay 0/160/320ms）
             val t = ((phase - index * 0.8f).coerceIn(0f, 1f))
             val lift = if (t < 0.5f) t * 2 else (1f - t) * 2
-            Box(
-                Modifier
-                    .size(8.dp)
-                    .offset(y = (-6 * lift).dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.onSurfaceVariant)
-            )
+            ThinkingDot(yOffset = (-6 * lift).dp)
         }
     }
+}
+
+@Composable
+private fun ThinkingDot(yOffset: Dp) {
+    Box(
+        Modifier
+            .size(8.dp)
+            .offset(y = yOffset)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.onSurfaceVariant)
+    )
 }
 
 // ── 建议 ActionCard（确认/拒绝按钮态）──────────────────────────────────

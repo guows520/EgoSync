@@ -4,6 +4,8 @@ import androidx.compose.material3.Icon
 import com.egosync.companion.ui.icons.LucideIcons
 import androidx.compose.ui.graphics.vector.ImageVector
 
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -44,6 +46,7 @@ import com.egosync.companion.ui.settings.SettingsScreen
 import com.egosync.companion.ui.settings.SettingsViewModel
 import com.egosync.companion.ui.tasks.TasksScreen
 import com.egosync.companion.ui.tasks.TasksViewModel
+import com.egosync.companion.ui.theme.rememberReducedMotion
 
 private data class TabSpec(
     val route: String,
@@ -78,15 +81,17 @@ fun AppNavHost(container: AppModelContainer) {
         if (container.connection.paired.value) Routes.DASHBOARD else Routes.PAIRING
     }
     val connectionState by container.connection.state.collectAsState()
+    // reduced-motion（系统「移除动画」开启）：页面转场瞬时，不做淡入淡出
+    val reducedMotion = rememberReducedMotion()
 
     androidx.compose.foundation.layout.Box(Modifier.fillMaxSize()) {
         NavHost(
             navController = navController,
             startDestination = startDestination,
-            enterTransition = { fadeIn(tween(220)) },
-            exitTransition = { fadeOut(tween(180)) },
-            popEnterTransition = { fadeIn(tween(220)) },
-            popExitTransition = { fadeOut(tween(180)) },
+            enterTransition = { if (reducedMotion) EnterTransition.None else fadeIn(tween(220)) },
+            exitTransition = { if (reducedMotion) ExitTransition.None else fadeOut(tween(180)) },
+            popEnterTransition = { if (reducedMotion) EnterTransition.None else fadeIn(tween(220)) },
+            popExitTransition = { if (reducedMotion) ExitTransition.None else fadeOut(tween(180)) },
         ) {
         composable(Routes.PAIRING) {
             PairingRoute(navController, container)

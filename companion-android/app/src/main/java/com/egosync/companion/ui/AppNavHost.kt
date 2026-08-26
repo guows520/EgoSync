@@ -242,6 +242,7 @@ private fun TasksRoute(container: AppModelContainer) {
         uiState = uiState,
         engineAvailable = connectionState.engineAvailable,
         onToggleTask = vm::toggleTask,
+        onQuadrantFilterSelected = vm::selectQuadrantFilter,
     )
 }
 

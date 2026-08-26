@@ -123,4 +123,7 @@ object LucideIcons {
         )
     }
     val X: ImageVector by lazy { lucide("X", "M18 6 6 18", "m6 6 12 12") }
+    // ── 组 4 tasks FR-23 图标（lucide 官方 path data 逐字移植）──
+    val Filter: ImageVector by lazy { lucide("Filter", "M22 3H2l8 9.46V19l4 2v-8.54L22 3") }
+    val Loader2: ImageVector by lazy { lucide("Loader2", "M21 12a9 9 0 1 1-6.219-8.56") }
 }

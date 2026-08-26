@@ -1,8 +1,14 @@
 package com.egosync.companion.ui.tasks
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.material3.Icon
 import com.egosync.companion.ui.icons.LucideIcons
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.border
@@ -17,25 +23,30 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.egosync.companion.sync.SnapshotStore
 import com.egosync.companion.sync.TaskItem
+import com.egosync.companion.ui.theme.BrandIndigo
 import com.egosync.companion.ui.theme.BrandWarn
 import com.egosync.companion.ui.theme.EgoSyncTheme
 import com.egosync.companion.ui.theme.Quadrant
 import com.egosync.companion.ui.theme.color
+import com.egosync.companion.ui.theme.rememberReducedMotion
 
 /**
  * ② 任务 Tab：四象限分组列表（Q1~Q4 分色、大石头星标、勾选完成交互）。
@@ -45,11 +56,18 @@ fun TasksScreen(
     uiState: TasksUiState,
     engineAvailable: Boolean,
     onToggleTask: (taskId: String) -> Unit,
+    onQuadrantFilterSelected: (Quadrant?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val grouped = uiState.grouped()
 
     Column(modifier = modifier.fillMaxSize()) {
+        // FR-23 象限筛选行（镜像桌面 TaskOverviewTab.tsx:286-301：Filter 图标 + 全部/Q1~Q4 单选 chip）
+        QuadrantFilterRow(
+            selected = uiState.quadrantFilter,
+            onSelect = onQuadrantFilterSelected,
+            modifier = Modifier.padding(horizontal = 16.dp),
+        )
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(
@@ -66,6 +84,17 @@ fun TasksScreen(
                     )
                 }
             }
+            if (grouped.values.all { it.isEmpty() }) {
+                item(key = "empty-state") {
+                    Text(
+                        // 镜像桌面 TaskOverviewTab.tsx:354-357 空态文案分支
+                        if (uiState.quadrantFilter == null) "所有角色都很轻松，可以考虑添加新目标"
+                        else "当前筛选无匹配任务",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
             Quadrant.entries.forEach { quadrant ->
                 val tasks = grouped[quadrant].orEmpty()
                 if (tasks.isNotEmpty()) {
@@ -76,12 +105,83 @@ fun TasksScreen(
                         TaskRow(
                             task = tasks[index],
                             enabled = engineAvailable,
+                            isClassifying = uiState.classifyingIds.contains(tasks[index].id),
                             onToggle = { onToggleTask(tasks[index].id) },
                         )
                     }
                 }
             }
         }
+    }
+}
+
+/** 象限筛选行：Filter 图标 + 全部/Q1~Q4 单选 chip（镜像桌面 quadrantChips，选中 indigo 高亮）。 */
+@Composable
+private fun QuadrantFilterRow(
+    selected: Quadrant?,
+    onSelect: (Quadrant?) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    // 横向滚动承载（同组 1 RoleSwitcherRow）：窄屏/大字体下末尾 chip 仍可达
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 12.dp),
+    ) {
+        Icon(
+            LucideIcons.Filter,
+            contentDescription = null,
+            modifier = Modifier.size(14.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.size(6.dp))
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier.weight(1f),
+        ) {
+            item(key = "all") {
+                QuadrantFilterChip(
+                    label = "全部",
+                    selected = selected == null,
+                    onClick = { onSelect(null) },
+                )
+            }
+            items(Quadrant.entries.size, key = { Quadrant.entries[it].code }) { index ->
+                val quadrant = Quadrant.entries[index]
+                QuadrantFilterChip(
+                    label = quadrant.code,
+                    selected = selected == quadrant,
+                    onClick = { onSelect(quadrant) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun QuadrantFilterChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    // 选中态同组 1 RoleChip 母本：primary 底 + onPrimary 字 + primary 描边
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(8.dp),
+        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface,
+        border = BorderStroke(
+            1.dp,
+            if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+        ),
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelMedium,
+            color = if (selected) MaterialTheme.colorScheme.onPrimary
+            else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+        )
     }
 }
 
@@ -129,6 +229,7 @@ internal fun TaskRow(
     enabled: Boolean,
     onToggle: () -> Unit,
     modifier: Modifier = Modifier,
+    isClassifying: Boolean = false,
 ) {
     Surface(
         color = MaterialTheme.colorScheme.surface,
@@ -194,6 +295,10 @@ internal fun TaskRow(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
+                    if (isClassifying) {
+                        Spacer(Modifier.size(6.dp))
+                        ClassifyingBadge()
+                    }
                 }
             }
         }
@@ -214,6 +319,56 @@ internal fun BigRockBadge(modifier: Modifier = Modifier) {
     )
 }
 
+/** 「智能分类中…」徽章 — 母本：TaskOverviewTab.tsx:124-132（indigo 底 + Loader2 旋转 + 文案）。 */
+@Composable
+internal fun ClassifyingBadge(modifier: Modifier = Modifier) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(BrandIndigo.copy(alpha = 0.08f))
+            .border(1.dp, BrandIndigo.copy(alpha = 0.25f), RoundedCornerShape(4.dp))
+            .padding(horizontal = 5.dp, vertical = 1.dp),
+    ) {
+        SpinningLoader()
+        Spacer(Modifier.size(3.dp))
+        Text(
+            "智能分类中…",
+            style = MaterialTheme.typography.labelSmall,
+            color = BrandIndigo,
+        )
+    }
+}
+
+/** Loader2 旋转 — 母本：animate-spin + motion-reduce:animate-none（reduced-motion 时静止显示）。 */
+@Composable
+private fun SpinningLoader(modifier: Modifier = Modifier) {
+    if (rememberReducedMotion()) {
+        Icon(
+            LucideIcons.Loader2,
+            contentDescription = null,
+            modifier = modifier.size(11.dp),
+            tint = BrandIndigo,
+        )
+        return
+    }
+    val transition = rememberInfiniteTransition(label = "loader")
+    val angle by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(tween(1000, easing = LinearEasing)),
+        label = "loaderAngle",
+    )
+    Icon(
+        LucideIcons.Loader2,
+        contentDescription = null,
+        modifier = modifier
+            .size(11.dp)
+            .graphicsLayer { rotationZ = angle },
+        tint = BrandIndigo,
+    )
+}
+
 // ── Preview ────────────────────────────────────────────────────────────
 
 @Preview(showBackground = true)
@@ -224,6 +379,7 @@ private fun TasksScreenPreview() {
             uiState = TasksUiState.sample(),
             engineAvailable = true,
             onToggleTask = {},
+            onQuadrantFilterSelected = {},
         )
     }
 }
@@ -241,6 +397,12 @@ private fun TaskRowPreview() {
             TaskRow(
                 task = SnapshotStore.tasks.first().copy(done = true),
                 enabled = true,
+                onToggle = {},
+            )
+            TaskRow(
+                task = SnapshotStore.tasks.first(),
+                enabled = true,
+                isClassifying = true,
                 onToggle = {},
             )
         }

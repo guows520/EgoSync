@@ -14,6 +14,7 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -32,28 +33,50 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import com.egosync.companion.sync.ActivityWindow
+import com.egosync.companion.sync.MetricScope
+import com.egosync.companion.sync.MetricType
 import com.egosync.companion.sync.RoleCard
 import com.egosync.companion.sync.SnapshotStore
 import com.egosync.companion.ui.theme.EgoSyncTheme
 import com.egosync.companion.ui.theme.BreathDurationMillis
 import com.egosync.companion.ui.theme.ColorTransitionMillis
 import com.egosync.companion.ui.theme.InfoDensity
+import com.egosync.companion.ui.theme.BrandBlue
+import com.egosync.companion.ui.theme.BrandIndigo
+import com.egosync.companion.ui.theme.BrandWarn
 import com.egosync.companion.ui.theme.accent
 import com.egosync.companion.ui.theme.densitySpec
 import com.egosync.companion.ui.theme.energyColor
 import com.egosync.companion.ui.theme.rememberReducedMotion
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneOffset
+import java.time.temporal.ChronoUnit
+import java.util.Locale
 
 /**
  * ③ 仪表盘 Tab：角色卡横向滑动（图标、能量条呼吸动效、任务/记忆/会话统计数字）。
@@ -66,6 +89,8 @@ fun DashboardScreen(
     onOpenBriefing: () -> Unit,
     onOpenReview: () -> Unit,
     onOpenNotifications: () -> Unit,
+    onMetricsScopeSelected: (String) -> Unit,
+    onActivityWindowSelected: (ActivityWindow) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val pagerState = rememberPagerState(pageCount = { uiState.roles.size })
@@ -88,6 +113,18 @@ fun DashboardScreen(
         )
 
         Spacer(Modifier.height(18.dp))
+
+        // FR-38 活动统计：scope+时间筛选 + 指标网格（镜像桌面 DashboardTab「活动统计」节）
+        ActivityStatsSection(
+            scopeId = uiState.metricsScopeId,
+            window = uiState.activityWindow,
+            roles = uiState.roles,
+            metrics = uiState.activityMetrics,
+            onScopeSelected = onMetricsScopeSelected,
+            onWindowSelected = onActivityWindowSelected,
+        )
+
+        Spacer(Modifier.height(14.dp))
 
         // 角色卡横向滑动
         HorizontalPager(
@@ -365,6 +402,346 @@ internal fun BreathingEnergyBar(energy: Int, accent: Color, modifier: Modifier =
     }
 }
 
+// ── FR-38 活动统计（scope+时间筛选 + 指标网格）─────────────────────────
+
+/** 指标卡配色镜像桌面 DashboardTab metricCards：text-indigo/purple/amber/blue-500。 */
+private val MetricPurple = Color(0xFFA855F7)
+
+/**
+ * 预设时间窗（标签与顺序镜像桌面 DATE_PRESETS）。
+ * 天数上界为分桶模型的近似：桌面「最近1个月」是日历月回退（28–31 天浮动），
+ * 移动统一取近 30 天（Recent(29)），与天数桶边界 7–29 对齐——桶粒度降级的一部分。
+ */
+private val TIME_PRESETS: List<Pair<String, ActivityWindow.Recent>> = listOf(
+    "最近3天" to ActivityWindow.Recent(2),
+    "最近7天" to ActivityWindow.Recent(6),
+    "最近1个月" to ActivityWindow.Recent(29),
+)
+
+@Composable
+private fun ActivityStatsSection(
+    scopeId: String,
+    window: ActivityWindow,
+    roles: List<RoleCard>,
+    metrics: Map<MetricType, Int>,
+    onScopeSelected: (String) -> Unit,
+    onWindowSelected: (ActivityWindow) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier.fillMaxWidth()) {
+        Text(
+            "活动统计",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 4.dp),
+        )
+        Spacer(Modifier.height(8.dp))
+
+        // 筛选行：角色 scope 下拉 + 时间范围下拉（镜像桌面 select + DateRangeFilter）
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ScopeFilterChip(scopeId, roles, onScopeSelected, Modifier.weight(1f))
+            TimeFilterChip(window, onWindowSelected, Modifier.weight(1f))
+        }
+
+        Spacer(Modifier.height(10.dp))
+
+        // 指标网格：2×2（镜像桌面 grid-cols-2，图标/标签/配色逐项对应）
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                MetricCard(MetricType.TASK_TOTAL, metrics, Modifier.weight(1f))
+                MetricCard(MetricType.MEMORY_COUNT, metrics, Modifier.weight(1f))
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                MetricCard(MetricType.PENDING_TASKS, metrics, Modifier.weight(1f))
+                MetricCard(MetricType.CONVERSATION_COUNT, metrics, Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+/** scope 下拉触发钮与菜单：选项顺序镜像桌面（全部/管家/各角色），无图标纯文本。 */
+@Composable
+private fun ScopeFilterChip(
+    scopeId: String,
+    roles: List<RoleCard>,
+    onSelected: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box(modifier) {
+        FilterChipSurface(label = scopeLabel(scopeId, roles), leadingIcon = null) { expanded = true }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text("全部") },
+                onClick = { onSelected(MetricScope.ALL); expanded = false },
+            )
+            DropdownMenuItem(
+                text = { Text("管家") },
+                onClick = { onSelected(MetricScope.BUTLER); expanded = false },
+            )
+            roles.forEach { role ->
+                DropdownMenuItem(
+                    text = { Text(role.name) },
+                    onClick = { onSelected(role.id); expanded = false },
+                )
+            }
+        }
+    }
+}
+
+/** 时间下拉：CalendarDays+标签+ChevronDown 触发钮；自定义时间走两次 DatePickerDialog。 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TimeFilterChip(
+    window: ActivityWindow,
+    onSelected: (ActivityWindow) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    var showStartPicker by remember { mutableStateOf(false) }
+    var showEndPicker by remember { mutableStateOf(false) }
+    var draftStart by remember { mutableStateOf<LocalDate?>(null) }
+
+    Box(modifier) {
+        FilterChipSurface(label = windowLabel(window), leadingIcon = LucideIcons.CalendarDays) {
+            expanded = true
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text("全部日期") },
+                onClick = { onSelected(ActivityWindow.All); expanded = false },
+            )
+            TIME_PRESETS.forEach { (label, preset) ->
+                DropdownMenuItem(
+                    text = { Text(label) },
+                    onClick = { onSelected(preset); expanded = false },
+                )
+            }
+            // 自定义时间：先选开始再选结束（移动适配桌面双 date input 编辑器）
+            DropdownMenuItem(
+                text = { Text("自定义时间") },
+                onClick = { draftStart = null; showStartPicker = true; expanded = false },
+            )
+        }
+    }
+
+    if (showStartPicker) {
+        val state = rememberDatePickerState()
+        DatePickerDialog(
+            onDismissRequest = { showStartPicker = false },
+            confirmButton = {
+                // 未选日期禁用推进（镜像桌面：日期未填满则应用钮禁用），避免流程静默中断
+                TextButton(
+                    enabled = state.selectedDateMillis != null,
+                    onClick = {
+                        state.selectedDateMillis?.let { draftStart = epochToLocalDate(it) }
+                        showStartPicker = false
+                        showEndPicker = true
+                    },
+                ) { Text("下一步") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showStartPicker = false }) { Text("取消") }
+            },
+        ) {
+            Text(
+                "开始日期",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp),
+            )
+            DatePicker(state = state)
+        }
+    }
+
+    if (showEndPicker && draftStart != null) {
+        val start = draftStart ?: return
+        val state = rememberDatePickerState()
+        val draftEnd = state.selectedDateMillis?.let(::epochToLocalDate)
+        val rangeError =
+            if (draftEnd != null && draftEnd < start) "结束日期不能早于开始日期" else ""
+        DatePickerDialog(
+            onDismissRequest = { showEndPicker = false; draftStart = null },
+            confirmButton = {
+                TextButton(
+                    enabled = draftEnd != null && rangeError.isEmpty(),
+                    onClick = {
+                        onSelected(
+                            ActivityWindow.Custom(
+                                oldestDaysAgo = start.toDaysAgo(),
+                                newestDaysAgo = draftEnd!!.toDaysAgo(),
+                            )
+                        )
+                        showEndPicker = false
+                        draftStart = null
+                    },
+                ) { Text("应用日期") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showEndPicker = false; draftStart = null }) { Text("取消") }
+            },
+        ) {
+            Text(
+                "结束日期",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp),
+            )
+            DatePicker(state = state)
+            // 校验失败时保留编辑态、行内报错并禁用「应用日期」（镜像桌面 customRangeError：编辑器不关闭）
+            if (rangeError.isNotEmpty()) {
+                Text(
+                    rangeError,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(horizontal = 24.dp),
+                )
+            }
+        }
+    }
+}
+
+/** 下拉触发钮外观：描边 Surface + 前置图标 + 标签 + ChevronDown（镜像桌面 DateRangeFilter trigger）。 */
+@Composable
+private fun FilterChipSurface(
+    label: String,
+    leadingIcon: ImageVector?,
+    onClick: () -> Unit,
+) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(10.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (leadingIcon != null) {
+                Icon(
+                    leadingIcon,
+                    contentDescription = null,
+                    modifier = Modifier.size(14.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.size(6.dp))
+            }
+            Text(
+                label,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            Icon(
+                LucideIcons.ChevronDown,
+                contentDescription = null,
+                modifier = Modifier.size(14.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/**
+ * 指标卡：图标+标签一行、数值右下大字（镜像桌面 metricCards 卡片结构）。
+ * mock 同步聚合无加载态——桌面 AC-13「加载保留上次数据」分支不适用。
+ */
+@Composable
+private fun MetricCard(
+    type: MetricType,
+    metrics: Map<MetricType, Int>,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(12.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        modifier = modifier,
+    ) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    metricIcon(type),
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                    tint = type.cardColor(),
+                )
+                Spacer(Modifier.size(6.dp))
+                Text(
+                    type.label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "${metrics[type] ?: 0}",
+                style = MaterialTheme.typography.titleLarge,
+                textAlign = TextAlign.End,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+}
+
+private fun metricIcon(type: MetricType): ImageVector = when (type) {
+    MetricType.TASK_TOTAL -> LucideIcons.ListTodo
+    MetricType.MEMORY_COUNT -> LucideIcons.Brain
+    MetricType.PENDING_TASKS -> LucideIcons.Clock
+    MetricType.CONVERSATION_COUNT -> LucideIcons.MessageSquare
+}
+
+private fun MetricType.cardColor(): Color = when (this) {
+    MetricType.TASK_TOTAL -> BrandIndigo
+    MetricType.MEMORY_COUNT -> MetricPurple
+    MetricType.PENDING_TASKS -> BrandWarn
+    MetricType.CONVERSATION_COUNT -> BrandBlue
+}
+
+private fun scopeLabel(scopeId: String, roles: List<RoleCard>): String = when (scopeId) {
+    MetricScope.ALL -> "全部"
+    MetricScope.BUTLER -> "管家"
+    else -> roles.firstOrNull { it.id == scopeId }?.name ?: "全部"
+}
+
+private fun windowLabel(window: ActivityWindow): String = when (window) {
+    ActivityWindow.All -> "全部日期"
+    is ActivityWindow.Recent ->
+        // 标签单一来源：从 TIME_PRESETS 反查，避免魔数两处维护
+        TIME_PRESETS.firstOrNull { it.second == window }?.first
+            ?: "最近${window.maxDaysAgo + 1}天"
+    is ActivityWindow.Custom -> {
+        // 与 DatePicker 的 UTC 解码同基准，避免设备时区造成天数漂移
+        val today = LocalDate.now(ZoneOffset.UTC)
+        val start = today.minusDays(window.oldestDaysAgo.toLong())
+        val end = today.minusDays(window.newestDaysAgo.toLong())
+        if (start.year != end.year) {
+            "%04d-%02d-%02d 至 %04d-%02d-%02d".format(
+                Locale.ROOT,
+                start.year, start.monthValue, start.dayOfMonth,
+                end.year, end.monthValue, end.dayOfMonth,
+            )
+        } else {
+            "%02d-%02d 至 %02d-%02d".format(
+                Locale.ROOT,
+                start.monthValue, start.dayOfMonth, end.monthValue, end.dayOfMonth,
+            )
+        }
+    }
+}
+
+/** DatePicker 的 UTC epoch millis → LocalDate（M3 DatePicker 以 UTC 零点存日期）。 */
+private fun epochToLocalDate(millis: Long): LocalDate =
+    Instant.ofEpochMilli(millis).atZone(ZoneOffset.UTC).toLocalDate()
+
+/** 以「UTC 今天」为基准换算天数前（与 DatePicker 解码同时区；未来日期按今天处理）。 */
+private fun LocalDate.toDaysAgo(): Int =
+    ChronoUnit.DAYS.between(this, LocalDate.now(ZoneOffset.UTC)).toInt().coerceAtLeast(0)
+
 // ── Preview ────────────────────────────────────────────────────────────
 
 @Preview(showBackground = true)
@@ -377,6 +754,8 @@ private fun DashboardScreenPreview() {
             onOpenBriefing = {},
             onOpenReview = {},
             onOpenNotifications = {},
+            onMetricsScopeSelected = {},
+            onActivityWindowSelected = {},
         )
     }
 }

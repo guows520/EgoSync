@@ -242,6 +242,8 @@ private fun DashboardRoute(navController: NavHostController, container: AppModel
         onOpenBriefing = { navController.navigate(Routes.BRIEFING) },
         onOpenReview = { navController.navigate(Routes.REVIEW) },
         onOpenNotifications = { navController.navigate(Routes.NOTIFICATIONS) },
+        onMetricsScopeSelected = vm::setMetricsScope,
+        onActivityWindowSelected = vm::setActivityWindow,
     )
 }
 
@@ -258,6 +260,8 @@ private fun SettingsRoute(navController: NavHostController, container: AppModelC
         connectionState = connectionState,
         onSetTheme = vm::setTheme,
         onToggleNoticeLevel = vm::toggleNoticeLevel,
+        onProactivityRoleSelected = vm::selectProactivityRole,
+        onProactivityLevelSelected = vm::setProactivityLevel,
         onDebugModeSelected = vm::selectDebugMode,
         onVersionTapped = vm::onVersionTapped,
         onUnpair = {

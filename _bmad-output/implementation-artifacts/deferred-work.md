@@ -242,3 +242,8 @@ All items resolved in the same session:
 ## Deferred from: quick-dev 评审 of spec-mobile-fr-parity-group1-chat (2026-08-26)
 
 - **聊天自动滚动以逐字文本为 key 致高频重启（预存在模式，本次评审顺带暴露）**：`ChatScreen` 的 `LaunchedEffect` 把 `uiState.messages.lastOrNull()?.text` 作为 key，打字机每 24ms 变一次文本即重启 `animateScrollToItem`，滚动抖动且流式期间用户无法上滑阅读历史。该模式在基线 bf845248 的原 ChatScreen.kt:74 已存在（`LaunchedEffect(totalItems, uiState.messages.lastOrNull()?.text)`），组 1 改动原样延续、未引入新缺陷；修法为仅以结构变化（条目数/卡片增删）触发滚动，或先判断列表已贴近底部才自动滚。位置：`companion-android/app/src/main/java/com/egosync/companion/ui/chat/ChatScreen.kt`。
+
+## Deferred from: quick-dev 评审 of spec-mobile-fr-parity-group2-dashboard (2026-08-26)
+
+- **自定义时间窗的绝对锚定与未来日期提示（原型粒度降级的接线期事项）**：`ActivityWindow.Custom` 以相对天数（oldest/newestDaysAgo）入状态，跨午夜后标签与窗口整体前移一天（非用户操作所致）；`toDaysAgo()` 把 DatePicker 可选的未来日期静默钳为今天。当前 mock 分桶模型下均为有意降级（Design Notes 已声明），接真实 SNAPSHOT 帧数据时应改为携带绝对日期并给未来日期行内提示。位置：`companion-android/app/src/main/java/com/egosync/companion/ui/dashboard/DashboardScreen.kt`（TimeFilterChip/toDaysAgo）。
+- **新 UI 的 densitySpec 接线观察项**：仪表盘活动统计节与设置页主动性节沿用固定 dp，未接 `densitySpec(InfoDensity)`；与全 app 多数既有组件一致（仅 3 处用 densitySpec），「沿用既有约定」条款两种解读下倾向合规。若后续统一密度双模式改造，这两节应一并纳入。位置：`companion-android/app/src/main/java/com/egosync/companion/ui/dashboard/DashboardScreen.kt:417`、`ui/settings/SettingsScreen.kt:150`。

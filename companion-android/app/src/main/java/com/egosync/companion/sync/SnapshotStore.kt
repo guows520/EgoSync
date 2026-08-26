@@ -173,6 +173,39 @@ sealed class ExecutionTraceBlock {
     ) : ExecutionTraceBlock()
 }
 
+// ── 主动性级别 / 活动统计（组 2 dashboard FR mock）────────────────────
+
+/** 主动性三档（FR-12，镜像桌面 types/role.ts ProactivityLevel 与 ProactivityToggle 文案）。 */
+enum class ProactivityLevel(val label: String) {
+    PASSIVE("静默执行"),
+    MODERATE("适度建议"),
+    PROACTIVE("积极主动"),
+}
+
+/** 活动统计指标（FR-38，镜像桌面 DashboardTab metricCards 标签与顺序）。 */
+enum class MetricType(val label: String) {
+    TASK_TOTAL("任务总数"),
+    MEMORY_COUNT("记忆数量"),
+    PENDING_TASKS("待处理任务"),
+    CONVERSATION_COUNT("对话数量"),
+}
+
+/** 活动统计 scope 取值（FR-38，镜像桌面 useDashboard 的 all/butler/roleId 三型）。 */
+object MetricScope {
+    const val ALL = "all"
+    const val BUTLER = "butler"
+}
+
+/**
+ * 统计时间窗（FR-38）：All=全部日期；Recent(maxDaysAgo)=最近 N 天；
+ * Custom=天数前闭区间（oldest ≥ newest：起点日期更早、距今天数更大）。
+ */
+sealed interface ActivityWindow {
+    data object All : ActivityWindow
+    data class Recent(val maxDaysAgo: Int) : ActivityWindow
+    data class Custom(val oldestDaysAgo: Int, val newestDaysAgo: Int) : ActivityWindow
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // Mock 数据（老管家语气 · 覆盖工作/家庭/学习三个角色域）
 // ═══════════════════════════════════════════════════════════════════════
@@ -492,4 +525,72 @@ object SnapshotStore {
         "整理竞品对比要点",
         "生成回复草稿",
     )
+
+    // ── 组 2 dashboard 增补 mock ────────────────────────────────────────
+
+    /**
+     * 活动分桶账本（FR-38 mock）：角色 id（含 "butler"）→ MetricType → 4 个天数桶计数。
+     * 桶边界：[0]=0–2 天前（近3天）、[1]=3–6 天前（近7天段）、[2]=7–29 天前（近1月段）、[3]=30+ 天前。
+     * 「全部日期」= 四桶总和，与角色卡统计数字对齐（如产品经理任务 Σ=14）。
+     * 接真实连接层后由 SNAPSHOT 帧的聚合指标替换。
+     */
+    val activityLedger: Map<String, Map<MetricType, List<Int>>> = mapOf(
+        "butler" to mapOf(
+            MetricType.TASK_TOTAL to listOf(1, 1, 0, 0),
+            MetricType.MEMORY_COUNT to listOf(0, 1, 2, 0),
+            MetricType.PENDING_TASKS to listOf(0, 0, 0, 0),
+            MetricType.CONVERSATION_COUNT to listOf(5, 4, 2, 1),
+        ),
+        "role-pm" to mapOf(
+            MetricType.TASK_TOTAL to listOf(4, 3, 5, 2),
+            MetricType.MEMORY_COUNT to listOf(6, 10, 14, 8),
+            MetricType.PENDING_TASKS to listOf(2, 1, 0, 0),
+            MetricType.CONVERSATION_COUNT to listOf(8, 10, 6, 2),
+        ),
+        "role-father" to mapOf(
+            MetricType.TASK_TOTAL to listOf(2, 1, 2, 1),
+            MetricType.MEMORY_COUNT to listOf(4, 6, 5, 2),
+            MetricType.PENDING_TASKS to listOf(1, 0, 0, 0),
+            MetricType.CONVERSATION_COUNT to listOf(4, 5, 2, 1),
+        ),
+        "role-learner" to mapOf(
+            MetricType.TASK_TOTAL to listOf(1, 2, 4, 2),
+            MetricType.MEMORY_COUNT to listOf(2, 5, 8, 6),
+            MetricType.PENDING_TASKS to listOf(0, 0, 0, 0),
+            MetricType.CONVERSATION_COUNT to listOf(1, 3, 3, 1),
+        ),
+    )
+
+    /** 天数桶边界（daysAgo 闭区间），顺序与 activityLedger 桶注释一一对应。 */
+    private val ACTIVITY_BUCKET_BOUNDS: List<IntRange> =
+        listOf(0..2, 3..6, 7..29, 30..Int.MAX_VALUE)
+
+    /**
+     * 按 scope+时间窗聚合活动指标（FR-38）。
+     * scopeId："all"=全部 agent 合计（含管家）；否则角色 id（含 "butler"）。
+     * 自定义窗口按「桶重叠即整桶计入」近似（原型粒度降级，不逐日精确）。
+     */
+    fun activityMetrics(scopeId: String, window: ActivityWindow): Map<MetricType, Int> {
+        val ledgers = if (scopeId == MetricScope.ALL) {
+            activityLedger.values
+        } else {
+            listOfNotNull(activityLedger[scopeId])
+        }
+        return MetricType.entries.associateWith { type ->
+            ledgers.sumOf { ledger ->
+                val buckets = ledger[type].orEmpty()
+                buckets.indices.sumOf { i ->
+                    if (windowOverlapsBucket(window, ACTIVITY_BUCKET_BOUNDS[i])) buckets[i] else 0
+                }
+            }
+        }
+    }
+
+    /** 区间重叠判定：窗口在 daysAgo 轴上为 [newestDaysAgo, oldestDaysAgo]，桶为 bounds。 */
+    private fun windowOverlapsBucket(window: ActivityWindow, bounds: IntRange): Boolean = when (window) {
+        ActivityWindow.All -> true
+        is ActivityWindow.Recent -> bounds.first <= window.maxDaysAgo
+        is ActivityWindow.Custom ->
+            bounds.first <= window.oldestDaysAgo && bounds.last >= window.newestDaysAgo
+    }
 }

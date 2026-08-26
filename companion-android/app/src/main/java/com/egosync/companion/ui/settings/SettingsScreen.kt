@@ -1,9 +1,6 @@
 package com.egosync.companion.ui.settings
 
-import androidx.compose.material3.Icon
-import androidx.compose.ui.graphics.vector.ImageVector
-import com.egosync.companion.ui.icons.LucideIcons
-
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -22,8 +19,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -36,20 +37,29 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.egosync.companion.connection.ConnectionState
 import com.egosync.companion.connection.DebugConnectionMode
 import com.egosync.companion.sync.NoticeLevel
+import com.egosync.companion.sync.ProactivityLevel
+import com.egosync.companion.sync.RoleCard
+import com.egosync.companion.sync.SnapshotStore
+import com.egosync.companion.ui.icons.LucideIcons
+import com.egosync.companion.ui.icons.RoleIcons
 import com.egosync.companion.ui.theme.BrandBlue
 import com.egosync.companion.ui.theme.BrandError
 import com.egosync.companion.ui.theme.BrandGreen
 import com.egosync.companion.ui.theme.EgoSyncTheme
 import com.egosync.companion.ui.theme.ThemeMode
+import com.egosync.companion.ui.theme.accent
 
 /**
  * ④ 我的 Tab：设置列表——主题切换、通知级别开关（仅应用内语义）、
- * 配对设备卡片、解除配对；隐藏"状态模拟"入口（连点版本号 7 次解锁）。
+ * 角色主动性级别（FR-12：角色选择 + 三档分段）、配对设备、解除配对；
+ * 隐藏"状态模拟"入口（连点版本号 7 次解锁）。
  */
 @Composable
 fun SettingsScreen(
@@ -57,6 +67,8 @@ fun SettingsScreen(
     connectionState: ConnectionState,
     onSetTheme: (ThemeMode) -> Unit,
     onToggleNoticeLevel: (NoticeLevel) -> Unit,
+    onProactivityRoleSelected: (String) -> Unit,
+    onProactivityLevelSelected: (ProactivityLevel) -> Unit,
     onDebugModeSelected: (DebugConnectionMode) -> Unit,
     onVersionTapped: () -> String?,
     onUnpair: () -> Unit,
@@ -130,6 +142,41 @@ fun SettingsScreen(
                 }
                 NoticeLevelRow("敲门 Knock", "需要你决定的事（每日上限 3 次）", uiState.knockEnabled) {
                     onToggleNoticeLevel(NoticeLevel.KNOCK)
+                }
+            }
+        }
+
+        Spacer(Modifier.height(18.dp))
+
+        // ── FR-12 主动性级别：角色选择 chip 行 + 三档分段控件（镜像桌面 ProactivityToggle）──
+        SectionTitle("主动性级别")
+        Spacer(Modifier.height(8.dp))
+        Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(10.dp)) {
+            Column(Modifier.padding(16.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    uiState.proactivityRoles.forEach { role ->
+                        ProactivityRoleChip(
+                            role = role,
+                            selected = uiState.proactivityRoleId == role.id,
+                            onClick = { onProactivityRoleSelected(role.id) },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    ProactivityLevel.entries.forEach { level ->
+                        SegmentedButton(
+                            selected = uiState.selectedProactivity == level,
+                            onClick = { onProactivityLevelSelected(level) },
+                            shape = SegmentedButtonDefaults.itemShape(
+                                index = level.ordinal,
+                                count = ProactivityLevel.entries.size,
+                            ),
+                        ) {
+                            Text(level.label)
+                        }
+                    }
                 }
             }
         }
@@ -271,6 +318,53 @@ private fun ThemeOption(
     }
 }
 
+/**
+ * FR-12 角色 chip：视觉语言复用聊天屏角色切换器（getRoleIcon + 域 accent，选中 primary 高亮）。
+ * 与 ChatScreen.RoleChip 保持同一套观感；独立私有实现以维持各屏自包含的既有组织方式。
+ */
+@Composable
+private fun ProactivityRoleChip(
+    role: RoleCard,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(12.dp),
+        color = if (selected) MaterialTheme.colorScheme.primary
+        else MaterialTheme.colorScheme.surfaceVariant,
+        border = BorderStroke(
+            1.dp,
+            if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+        ),
+        modifier = modifier,
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                RoleIcons.getRoleIcon(role.icon),
+                contentDescription = role.name,
+                modifier = Modifier.size(14.dp),
+                tint = if (selected) MaterialTheme.colorScheme.onPrimary
+                else role.domain.accent().accent,
+            )
+            Spacer(Modifier.size(6.dp))
+            Text(
+                role.name,
+                style = MaterialTheme.typography.labelMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                color = if (selected) MaterialTheme.colorScheme.onPrimary
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
 @Composable
 private fun NoticeLevelRow(
     title: String,
@@ -354,6 +448,8 @@ private fun SettingsScreenPreview() {
             connectionState = ConnectionState.Direct,
             onSetTheme = {},
             onToggleNoticeLevel = {},
+            onProactivityRoleSelected = {},
+            onProactivityLevelSelected = {},
             onDebugModeSelected = {},
             onVersionTapped = { null },
             onUnpair = {},
@@ -373,6 +469,8 @@ private fun SettingsScreenDebugPreview() {
             connectionState = ConnectionState.Offline(snapshotAvailable = true, dataAsOf = "今天 08:15"),
             onSetTheme = {},
             onToggleNoticeLevel = {},
+            onProactivityRoleSelected = {},
+            onProactivityLevelSelected = {},
             onDebugModeSelected = {},
             onVersionTapped = { null },
             onUnpair = {},

@@ -70,4 +70,43 @@ object LucideIcons {
     val ChevronRight: ImageVector by lazy { lucide("ChevronRight", "m9 18 6-6-6-6") }
     val Play: ImageVector by lazy { lucide("Play", "m6 3 14 9-14 9z") }
     val Square: ImageVector by lazy { lucide("Square", "M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z") }
+    // ── 组 2 dashboard FR 图标（lucide 官方 path data 逐字移植；rect/circle 按既有约定转 path）──
+    val CalendarDays: ImageVector by lazy {
+        lucide(
+            "CalendarDays",
+            "M8 2v3",
+            "M16 2v3",
+            // lucide rect x=3 y=3 width=18 height=18 rx=2
+            "M5,3h14a2,2 0 0 1 2,2v14a2,2 0 0 1 -2,2h-14a2,2 0 0 1 -2,-2v-14a2,2 0 0 1 2,-2z",
+            "M3 9h18",
+            "M8 13h.01",
+            "M12 13h.01",
+            "M16 13h.01",
+            "M8 17h.01",
+            "M12 17h.01",
+            "M16 17h.01",
+        )
+    }
+    val Brain: ImageVector by lazy {
+        lucide(
+            "Brain",
+            "M12 18V5",
+            "M15 13a4.17 4.17 0 0 1-3-4 4.17 4.17 0 0 1-3 4",
+            "M17.598 6.5A3 3 0 1 0 12 5a3 3 0 1 0-5.598 1.5",
+            "M17.997 5.125a4 4 0 0 1 2.526 5.77",
+            "M18 18a4 4 0 0 0 2-7.464",
+            "M19.967 17.483A4 4 0 1 1 12 18a4 4 0 1 1-7.967-.517",
+            "M6 18a4 4 0 0 1-2-7.464",
+            "M6.003 5.125a4 4 0 0 0-2.526 5.77",
+        )
+    }
+    val Clock: ImageVector by lazy {
+        lucide(
+            "Clock",
+            // lucide circle cx=12 cy=12 r=10（同 Target 圆弧写法）
+            "M2,12A10,10 0 1 0 22,12A10,10 0 1 0 2,12",
+            "M12 6v6l4 2",
+        )
+    }
+    val ChevronDown: ImageVector by lazy { lucide("ChevronDown", "m6 9 6 6 6-6") }
 }

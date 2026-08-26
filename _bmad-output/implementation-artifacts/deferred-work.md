@@ -223,3 +223,17 @@ All items resolved in the same session:
 ## Deferred from: code review of fix-deepseek-provider-constraint (2026-07-27)
 
 - **完整 Rust 套件存在 6 项既有 Agent prompt/permission 契约失败**：`cargo test -- --test-threads=1` 结果为 796 passed、6 failed、0 ignored；失败位于未修改的 `services/agent_config.rs`（5 项）与 `services/agent_engine.rs`（1 项），包括旧 Butler prompt 文案、`find-skills` 禁用预期及 permission JSON 形态断言。本次数据库 migration 030 与新增回归测试均通过，且 baseline 后上述失败文件无差异；应另行统一 Agent 配置生成契约与测试期望。
+
+## Deferred from: mobile-desktop-parity 调查拆分 — 前端 UI 对等工作多目标切分 (2026-08-25)
+
+调查见 `investigations/mobile-desktop-parity-investigation.md`。用户裁决：先做 #1 图标系统重做（已立项为 spec-companion-android-icon-parity），以下三项后续迭代。**全部为纯移动前端工作，数据继续跑在 mock/SnapshotStore 只读，不碰后端**（桌面 companion 模块 Phase 2/3 整体后延），符合纯前端原型硬性边界（不引入网络/Room/Hilt/OkHttp）。
+
+- **#2 设计语言补齐**：信息密度双模式（对话流轻量 / 仪表盘密集）+ 动效克制（仅角色卡呼吸 `--breath-duration:3s`）+ 色温随角色偏移（工作冷 / 家庭暖）+ `prefers-reduced-motion` 降 0ms。色彩 token 已对齐（`Color.kt:10-26`），补的是密度 / 动效 / 色温三件。
+- **#3 三 ViewModel 重接 SnapshotStore 只读**：`ChatViewModel`/`TasksViewModel`/`DashboardViewModel` 从硬编码 mock（`AppNavHost.kt:197/212/226` 无参构造）→ 经 `AppModelContainer` 接 `SnapshotStore` 只读快照。这是「换 ConnectionClient 实现零改动」真正生效的前提（当前仅 Settings/Notifications/降级遮罩读 container）。**✅ 已完成于 2026-08-26，见 `spec-companion-android-snapshotstore-vm-wiring.md`。**
+- **#4 FR 屏补全（17 项）**：14 缺失 + 3 部分 FR 的屏/交互。逐 FR 桌面基线 → 移动新增对照见调查 case file 的 Recommended Next Steps B 表。本身需再拆成若干 story（建议按屏分组：chat 相关 FR-1/2/20/29/30；dashboard 相关 FR-12/38；role/memory 相关 FR-5/8/9；tasks 相关 FR-23；review FR-17；onboarding FR-21；notify FR-24）。
+
+边界：D 类三项（FR-14/15/7）采用语义一致（经后端事件 → 通知承载），不在此前端工作内；FR-20/21 强制语义适配。
+
+## Deferred from: quick-dev 评审 of spec-companion-android-snapshotstore-vm-wiring (2026-08-26)
+
+- **真实连接层回复流健壮性（预存在逻辑，本次评审顺带暴露）**：`ChatViewModel.sendMessage` 回复轮换 `replies[replyIndex % replies.size]` 在 `butlerReplies` 为空列表时触发整数除零 ArithmeticException（`viewModelScope` 协程内未捕获将崩溃）；空字符串回复会经打字机循环留下一颗永久空白管家气泡。当前静态 mock（4 条固定回复）下不可达，且表达式为基线 f638a7c 既有代码原样搬移、非本次引入；接入 SNAPSHOT/STATE_DELTA 帧驱动数据时应一并补空列表/空串守卫。位置：`companion-android/app/src/main/java/com/egosync/companion/ui/chat/ChatViewModel.kt:74-82`。

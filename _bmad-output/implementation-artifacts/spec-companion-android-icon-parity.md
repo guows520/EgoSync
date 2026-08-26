@@ -101,6 +101,6 @@ val Check: ImageVector by lazy {
 **Result (step-03 self-check, 2026-08-25):** ✅ `assembleDebug` BUILD SUCCESSFUL · emoji 扫描空输出（无渲染点）· `RoleIconsTest` 8 用例通过。实现方式：直接实现（子代理 3 连失败，证伪 [B] 路径——子代理沙箱跑不了多分钟 `./gradlew` 构建）。生成器 `/tmp/gen_lucide.py` 取 lucide 官方 SVG 转 PathParser pathData。
 
 **Pending human review:**
-1. 🪨 → `LucideIcons.HardDrive`（Ask-First 候选，lucide 无 rock 图标）— PairingScreen「诚实降级」特性行；待人确认是否接受 HardDrive 或指定替代。
+1. 🪨 → `LucideIcons.HardDrive`（Ask-First 候选，lucide 无 rock 图标）— PairingScreen「诚实降级」特性行；✅ 已确认采用 HardDrive（人审通过 2026-08-25）。
 2. 视觉保真度：无渲染环境，仅验证 编译+id 对齐+测试，未逐图标像素比对。建议人审或截图比对桌面 lucide。
 3. import 分组：机械注入使部分文件 import 块出现空行/未分组（仅告警级，不影响编译）—— review 时可顺手规整。

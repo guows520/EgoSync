@@ -46,6 +46,7 @@ import com.egosync.companion.ui.memory.MemoryScreen
 import com.egosync.companion.ui.memory.MemoryViewModel
 import com.egosync.companion.ui.notify.NotificationCenterScreen
 import com.egosync.companion.ui.review.WeeklyReviewScreen
+import com.egosync.companion.ui.review.WeeklyReviewViewModel
 import com.egosync.companion.ui.settings.SettingsScreen
 import com.egosync.companion.ui.settings.SettingsViewModel
 import com.egosync.companion.ui.tasks.TasksScreen
@@ -106,7 +107,7 @@ fun AppNavHost(container: AppModelContainer) {
         composable(Routes.DASHBOARD) { MainShellRoute(navController, container, Routes.DASHBOARD) }
         composable(Routes.SETTINGS) { MainShellRoute(navController, container, Routes.SETTINGS) }
         composable(Routes.BRIEFING) { BriefingRoute(navController) }
-        composable(Routes.REVIEW) { WeeklyReviewRoute(navController) }
+        composable(Routes.REVIEW) { WeeklyReviewRoute(navController, container) }
         composable(Routes.NOTIFICATIONS) { NotificationCenterRoute(navController, container) }
         // FR-8/9 记忆屏：按角色进入（仪表盘角色卡「查看记忆」入口）
         composable(
@@ -298,8 +299,23 @@ private fun BriefingRoute(navController: NavHostController) {
 }
 
 @Composable
-private fun WeeklyReviewRoute(navController: NavHostController) {
-    WeeklyReviewScreen(onBack = { navController.popBackStack() })
+private fun WeeklyReviewRoute(navController: NavHostController, container: AppModelContainer) {
+    val vm: WeeklyReviewViewModel = viewModel(
+        factory = viewModelFactory { initializer { WeeklyReviewViewModel(container) } },
+    )
+    val uiState by vm.uiState.collectAsState()
+    WeeklyReviewScreen(
+        uiState = uiState,
+        onBack = { navController.popBackStack() },
+        onEnterPlan = vm::enterPlanPhase,
+        onBackToReview = vm::enterReviewPhase,
+        onUpdateItem = vm::updateItem,
+        onRemoveItem = vm::removeItem,
+        onAddItem = vm::addItem,
+        onAdoptSuggestion = vm::adoptSuggestion,
+        // 确认成功 → pop 返回（等价桌面 savePlan 成功后 onClose 关 Modal）
+        onConfirmPlan = { vm.confirmPlan { navController.popBackStack() } },
+    )
 }
 
 @Composable

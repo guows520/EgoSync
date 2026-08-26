@@ -88,6 +88,9 @@ data class WeeklyReview(
     val closingQuestion: String,
 )
 
+/** 大石头规划条目（FR-17，镜像桌面 types/review.ts BigRockPlanItem）。 */
+data class BigRockPlanItem(val roleId: String, val title: String)
+
 // ── 三级通知（whisper / tap / knock）───────────────────────────────────
 
 enum class NoticeLevel(val label: String, val description: String) {
@@ -710,5 +713,22 @@ object SnapshotStore {
         icon = "lightbulb",
         color = "#8B5CF6",
         goal = "把零散的想法收敛成可执行的方案",
+    )
+
+    // ── 组 5 review 增补 mock ──────────────────────────────────────────
+
+    /**
+     * 大石头建议（FR-17）：角色 id → 建议文案（镜像桌面 review_get_bigrock_suggestions）。
+     * 学习者故意缺席 → 演示「手动填写本周大石头」分支（桌面 suggestions 为空时的占位）。
+     */
+    val bigRockSuggestions: Map<String, List<String>> = mapOf(
+        "role-pm" to listOf(
+            "完成下季度路线图评审并锁定排期",
+            "整理一次完整的客户反馈复盘",
+        ),
+        "role-father" to listOf(
+            "安排一次全家的周末户外活动",
+            "陪女儿完成一幅拼图作品",
+        ),
     )
 }

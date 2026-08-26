@@ -1,5 +1,11 @@
 package com.egosync.companion.ui.dashboard
 
+import androidx.compose.ui.graphics.vector.ImageVector
+
+import androidx.compose.material3.Icon
+import com.egosync.companion.ui.icons.LucideIcons
+import com.egosync.companion.ui.icons.RoleIcons
+
 import androidx.compose.animation.core.EaseInOut
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -136,7 +142,7 @@ private fun ButlerOverviewCard(
                         .clip(CircleShape)
                         .background(MaterialTheme.colorScheme.primaryContainer),
                     contentAlignment = Alignment.Center,
-                ) { Text("🤵", style = MaterialTheme.typography.titleLarge) }
+                ) { Icon(LucideIcons.ConciergeBell, contentDescription = "管家", modifier = Modifier.size(24.dp)) }
                 Spacer(Modifier.size(12.dp))
                 Column(Modifier.weight(1f)) {
                     Text("管家 · 全局概览", style = MaterialTheme.typography.titleMedium)
@@ -163,16 +169,16 @@ private fun ButlerOverviewCard(
             }
             Spacer(Modifier.height(14.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OverviewEntry("📄 晨间简报", onOpenBriefing)
-                OverviewEntry("📈 周复盘", onOpenReview)
-                OverviewEntry("🔔 通知", onOpenNotifications)
+                OverviewEntry(LucideIcons.FileText, "晨间简报", onOpenBriefing)
+                OverviewEntry(LucideIcons.TrendingUp, "周复盘", onOpenReview)
+                OverviewEntry(LucideIcons.Bell, "通知", onOpenNotifications)
             }
         }
     }
 }
 
 @Composable
-private fun RowScope.OverviewEntry(text: String, onClick: () -> Unit) {
+private fun RowScope.OverviewEntry(icon: ImageVector, text: String, onClick: () -> Unit) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant,
         shape = RoundedCornerShape(10.dp),
@@ -180,13 +186,15 @@ private fun RowScope.OverviewEntry(text: String, onClick: () -> Unit) {
             .weight(1f)
             .clickable(onClick = onClick),
     ) {
-        Text(
-            text,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurface,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.padding(vertical = 10.dp),
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurface)
+            Spacer(Modifier.size(4.dp))
+            Text(text, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface)
+        }
     }
 }
 
@@ -211,7 +219,7 @@ internal fun RoleCardItem(role: RoleCard, modifier: Modifier = Modifier) {
                         .clip(RoundedCornerShape(12.dp))
                         .background(roleAccent.accent),
                     contentAlignment = Alignment.Center,
-                ) { Text(role.icon, style = MaterialTheme.typography.titleLarge) }
+                ) { Icon(RoleIcons.getRoleIcon(role.icon), contentDescription = role.name, modifier = Modifier.size(24.dp), tint = Color.White) }
 
                 Spacer(Modifier.size(14.dp))
                 Column(Modifier.weight(1f)) {

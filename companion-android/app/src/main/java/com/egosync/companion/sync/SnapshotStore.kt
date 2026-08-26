@@ -134,7 +134,7 @@ object SnapshotStore {
         RoleCard(
             id = "role-pm",
             name = "产品经理",
-            icon = "🎯",
+            icon = "target",
             domain = RoleDomain.WORK,
             energy = 82,
             pendingCount = 3,
@@ -146,7 +146,7 @@ object SnapshotStore {
         RoleCard(
             id = "role-father",
             name = "父亲",
-            icon = "🏠",
+            icon = "home",
             domain = RoleDomain.FAMILY,
             energy = 56,
             pendingCount = 1,
@@ -158,7 +158,7 @@ object SnapshotStore {
         RoleCard(
             id = "role-learner",
             name = "学习者",
-            icon = "📚",
+            icon = "book-open",
             domain = RoleDomain.LEARN,
             energy = 33,
             pendingCount = 0,

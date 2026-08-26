@@ -1,5 +1,10 @@
 package com.egosync.companion.pairing
 
+import androidx.compose.ui.graphics.vector.ImageVector
+
+import androidx.compose.material3.Icon
+import com.egosync.companion.ui.icons.LucideIcons
+
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -80,7 +85,7 @@ fun PairingScreen(
 
 @Composable
 private fun WelcomeStep(onStartScan: () -> Unit) {
-    Text("🤵", style = MaterialTheme.typography.displaySmall)
+    Icon(LucideIcons.ConciergeBell, contentDescription = "管家", modifier = Modifier.size(32.dp))
     Spacer(Modifier.height(20.dp))
     Text(
         "EgoSync 伴侣",
@@ -95,11 +100,11 @@ private fun WelcomeStep(onStartScan: () -> Unit) {
         textAlign = TextAlign.Center,
     )
     Spacer(Modifier.height(48.dp))
-    FeatureRow("🏠", "桌面唯一事实源", "手机是远程视图与指令入口，数据不离开你的电脑")
+    FeatureRow(LucideIcons.Home, "桌面唯一事实源", "手机是远程视图与指令入口，数据不离开你的电脑")
     Spacer(Modifier.height(18.dp))
-    FeatureRow("🔐", "端到端加密", "局域网直连优先，出网经中继转发且中继无法读取明文")
+    FeatureRow(LucideIcons.ShieldCheck, "端到端加密", "局域网直连优先，出网经中继转发且中继无法读取明文")
     Spacer(Modifier.height(18.dp))
-    FeatureRow("🪨", "诚实降级", "桌面离线时只读缓存 + 速记排队，恢复后自动补齐")
+    FeatureRow(LucideIcons.HardDrive, "诚实降级", "桌面离线时只读缓存 + 速记排队，恢复后自动补齐")
     Spacer(Modifier.height(56.dp))
     Button(onClick = onStartScan, modifier = Modifier.fillMaxWidth()) {
         Text("开始配对")
@@ -107,7 +112,7 @@ private fun WelcomeStep(onStartScan: () -> Unit) {
 }
 
 @Composable
-private fun FeatureRow(icon: String, title: String, body: String) {
+private fun FeatureRow(icon: ImageVector, title: String, body: String) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -115,7 +120,7 @@ private fun FeatureRow(icon: String, title: String, body: String) {
             .background(MaterialTheme.colorScheme.surface)
             .padding(16.dp),
     ) {
-        Text(icon, style = MaterialTheme.typography.titleLarge)
+        Icon(icon, contentDescription = null, modifier = Modifier.size(22.dp), tint = MaterialTheme.colorScheme.onSurface)
         Spacer(Modifier.size(14.dp))
         Column {
             Text(title, style = MaterialTheme.typography.titleMedium)
@@ -323,7 +328,7 @@ private fun SuccessStep(onEnterApp: () -> Unit) {
             .background(BrandGreen.copy(alpha = 0.16f)),
         contentAlignment = Alignment.Center,
     ) {
-        Text("✓", style = MaterialTheme.typography.displaySmall, color = BrandGreen)
+        Icon(LucideIcons.Check, contentDescription = null, modifier = Modifier.size(32.dp), tint = BrandGreen)
     }
     Spacer(Modifier.height(28.dp))
     Text(

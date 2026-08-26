@@ -1,5 +1,8 @@
 package com.egosync.companion.ui.chat
 
+import androidx.compose.material3.Icon
+import com.egosync.companion.ui.icons.LucideIcons
+
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -148,7 +151,7 @@ private fun MessageBubble(message: ChatMessage) {
                     .background(MaterialTheme.colorScheme.primaryContainer),
                 contentAlignment = Alignment.Center,
             ) {
-                Text("🤵", style = MaterialTheme.typography.bodySmall)
+                Icon(LucideIcons.ConciergeBell, contentDescription = "管家", modifier = Modifier.size(16.dp))
             }
             Spacer(Modifier.size(8.dp))
         }
@@ -187,7 +190,7 @@ private fun ThinkingBubble() {
                 .background(MaterialTheme.colorScheme.primary),
             contentAlignment = Alignment.Center,
         ) {
-            Text("🤵", style = MaterialTheme.typography.bodySmall)
+            Icon(LucideIcons.ConciergeBell, contentDescription = "管家", modifier = Modifier.size(16.dp))
         }
         Spacer(Modifier.size(8.dp))
         Surface(
@@ -297,7 +300,7 @@ fun ActionCard(
                             .clip(CircleShape)
                             .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)),
                         contentAlignment = Alignment.Center,
-                    ) { Text("✓", color = MaterialTheme.colorScheme.primary) }
+                    ) { Icon(LucideIcons.Check, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary) }
                     Spacer(Modifier.size(8.dp))
                     Text(
                         "已确认 · 已转交管家执行",

@@ -9,11 +9,13 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -34,6 +36,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.egosync.companion.connection.ConnectionState
 import com.egosync.companion.sync.QuickNoteQueue
+import com.egosync.companion.ui.icons.LucideIcons
 import com.egosync.companion.ui.theme.EgoSyncTheme
 import kotlinx.coroutines.flow.collectLatest
 
@@ -82,7 +85,12 @@ fun DegradedOverlayHost(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Spacer(Modifier.height(24.dp))
-            Text("📴", style = MaterialTheme.typography.displaySmall)
+            Icon(
+                LucideIcons.WifiOff,
+                contentDescription = "离线",
+                modifier = Modifier.size(32.dp),
+                tint = Color(0xFFE8E8ED),
+            )
             Spacer(Modifier.height(12.dp))
             Text(
                 if (state.snapshotAvailable) "降级模式 · 只读缓存" else "离线 · 暂无缓存",

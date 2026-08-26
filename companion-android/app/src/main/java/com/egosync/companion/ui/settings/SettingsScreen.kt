@@ -1,5 +1,9 @@
 package com.egosync.companion.ui.settings
 
+import androidx.compose.material3.Icon
+import androidx.compose.ui.graphics.vector.ImageVector
+import com.egosync.companion.ui.icons.LucideIcons
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -100,8 +104,8 @@ fun SettingsScreen(
                 )
                 Spacer(Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ThemeOption("🌙 深色", ThemeMode.DARK, uiState.themeMode, onSetTheme, Modifier.weight(1f))
-                    ThemeOption("☀️ 浅色", ThemeMode.LIGHT, uiState.themeMode, onSetTheme, Modifier.weight(1f))
+                    ThemeOption(LucideIcons.Moon, "深色", ThemeMode.DARK, uiState.themeMode, onSetTheme, Modifier.weight(1f))
+                    ThemeOption(LucideIcons.Sun, "浅色", ThemeMode.LIGHT, uiState.themeMode, onSetTheme, Modifier.weight(1f))
                 }
             }
         }
@@ -143,7 +147,7 @@ fun SettingsScreen(
                             .clip(CircleShape)
                             .background(MaterialTheme.colorScheme.primaryContainer),
                         contentAlignment = Alignment.Center,
-                    ) { Text("🖥️", style = MaterialTheme.typography.titleLarge) }
+                    ) { Icon(LucideIcons.Monitor, contentDescription = null, modifier = Modifier.size(24.dp)) }
                     Spacer(Modifier.size(12.dp))
                     Column(Modifier.weight(1f)) {
                         Text("桌面端 EgoSync", style = MaterialTheme.typography.titleMedium)
@@ -241,6 +245,7 @@ private fun SectionTitle(text: String) {
 
 @Composable
 private fun ThemeOption(
+    icon: ImageVector,
     label: String,
     mode: ThemeMode,
     current: ThemeMode,
@@ -254,13 +259,15 @@ private fun ThemeOption(
         shape = RoundedCornerShape(10.dp),
         modifier = modifier.clickable { onSetTheme(mode) },
     ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurface,
-            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-            modifier = Modifier.padding(vertical = 10.dp),
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurface)
+            Spacer(Modifier.size(4.dp))
+            Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface)
+        }
     }
 }
 
@@ -310,7 +317,7 @@ private fun DebugModeRow(mode: DebugConnectionMode, selected: Boolean, onClick: 
         )
         if (selected) {
             Spacer(Modifier.weight(1f))
-            Text("✓", color = MaterialTheme.colorScheme.primary)
+            Icon(LucideIcons.Check, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
         }
     }
 }

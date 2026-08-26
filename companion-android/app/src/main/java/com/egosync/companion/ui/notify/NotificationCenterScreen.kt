@@ -1,5 +1,7 @@
 package com.egosync.companion.ui.notify
 
+import com.egosync.companion.ui.icons.LucideIcons
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -110,10 +112,10 @@ fun NotificationCenterScreen(
 @Composable
 private fun LevelHeader(level: NoticeLevel, unreadCount: Int) {
     // 母本 NotificationPanel levelConfig：whisper 灰 / tap 蓝 / knock 红
-    val (icon, color) = when (level) {
-        NoticeLevel.WHISPER -> "🍃" to QuadrantGray
-        NoticeLevel.TAP -> "👋" to BrandBlue
-        NoticeLevel.KNOCK -> "🚪" to BrandError
+    val color = when (level) {
+        NoticeLevel.WHISPER -> QuadrantGray
+        NoticeLevel.TAP -> BrandBlue
+        NoticeLevel.KNOCK -> BrandError
     }
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -121,7 +123,7 @@ private fun LevelHeader(level: NoticeLevel, unreadCount: Int) {
             .fillMaxWidth()
             .padding(top = 10.dp, bottom = 8.dp),
     ) {
-        Text(icon, style = MaterialTheme.typography.titleMedium)
+        Icon(LucideIcons.Bell, contentDescription = level.label, modifier = Modifier.size(20.dp), tint = color)
         Spacer(Modifier.size(8.dp))
         Text(
             "${level.label} · ${level.description}",
@@ -234,11 +236,11 @@ private fun NoticeRow(
                             )
                         }
                     }
-                    true -> Text(
-                        "✓ 已确认",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = BrandGreen,
-                    )
+                    true -> Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(LucideIcons.Check, contentDescription = null, modifier = Modifier.size(16.dp), tint = BrandGreen)
+                        Spacer(Modifier.size(4.dp))
+                        Text("已确认", style = MaterialTheme.typography.labelMedium, color = BrandGreen)
+                    }
                     false -> Text(
                         "已拒绝",
                         style = MaterialTheme.typography.labelMedium,

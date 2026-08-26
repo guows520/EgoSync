@@ -1,5 +1,8 @@
 package com.egosync.companion.ui.tasks
 
+import androidx.compose.material3.Icon
+import com.egosync.companion.ui.icons.LucideIcons
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.border
@@ -150,10 +153,11 @@ internal fun TaskRow(
                 contentAlignment = Alignment.Center,
             ) {
                 if (task.done) {
-                    Text(
-                        "✓",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    Icon(
+                        LucideIcons.Check,
+                        contentDescription = "已完成",
+                        modifier = Modifier.size(14.dp),
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
                     )
                 }
             }

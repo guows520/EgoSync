@@ -1,5 +1,7 @@
 package com.egosync.companion.ui.review
 
+import com.egosync.companion.ui.icons.LucideIcons
+
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -87,7 +89,7 @@ fun WeeklyReviewScreen(
                 shape = RoundedCornerShape(10.dp),
             ) {
                 Row(Modifier.padding(14.dp)) {
-                    Text("🤵", style = MaterialTheme.typography.titleLarge)
+                    Icon(LucideIcons.ConciergeBell, contentDescription = "管家", modifier = Modifier.size(24.dp))
                     Spacer(Modifier.size(12.dp))
                     Text(
                         review.narrative,
@@ -160,10 +162,11 @@ fun WeeklyReviewScreen(
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     review.bigRockResults.forEach { rock ->
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                if (rock.completed) "✓" else "→",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = if (rock.completed) BrandGreen
+                            Icon(
+                                if (rock.completed) LucideIcons.Check else LucideIcons.ArrowRight,
+                                contentDescription = if (rock.completed) "完成" else "推进中",
+                                modifier = Modifier.size(20.dp),
+                                tint = if (rock.completed) BrandGreen
                                 else MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                             Spacer(Modifier.size(10.dp))

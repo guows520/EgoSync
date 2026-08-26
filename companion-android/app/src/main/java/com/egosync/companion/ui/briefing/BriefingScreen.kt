@@ -1,5 +1,8 @@
 package com.egosync.companion.ui.briefing
 
+import com.egosync.companion.ui.icons.LucideIcons
+import androidx.compose.ui.Alignment
+
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -84,7 +87,7 @@ fun BriefingScreen(
                 shape = RoundedCornerShape(10.dp),
             ) {
                 Row(Modifier.padding(14.dp)) {
-                    Text("🤵", style = MaterialTheme.typography.titleLarge)
+                    Icon(LucideIcons.ConciergeBell, contentDescription = "管家", modifier = Modifier.size(24.dp))
                     Spacer(Modifier.size(12.dp))
                     Text(
                         briefing.greeting,
@@ -161,11 +164,11 @@ private fun ActionPointCard(point: BriefingActionPoint, onRespond: (Boolean) -> 
                         OutlinedButton(onClick = { onRespond(false) }) { Text("稍后") }
                     }
                 }
-                true -> Text(
-                    "✓ 已确认",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = BrandGreen,
-                )
+                true -> Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(LucideIcons.Check, contentDescription = null, modifier = Modifier.size(16.dp), tint = BrandGreen)
+                    Spacer(Modifier.size(4.dp))
+                    Text("已确认", style = MaterialTheme.typography.labelMedium, color = BrandGreen)
+                }
                 false -> Text(
                     "已放下",
                     style = MaterialTheme.typography.labelMedium,

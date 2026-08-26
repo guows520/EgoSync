@@ -1,5 +1,9 @@
 package com.egosync.companion.ui
 
+import androidx.compose.material3.Icon
+import com.egosync.companion.ui.icons.LucideIcons
+import androidx.compose.ui.graphics.vector.ImageVector
+
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -44,14 +48,14 @@ import com.egosync.companion.ui.tasks.TasksViewModel
 private data class TabSpec(
     val route: String,
     val label: String,
-    val icon: String, // emoji 图标：与角色卡图标风格一致
+    val icon: ImageVector,
 )
 
 private val tabs = listOf(
-    TabSpec("chat", "管家", "💬"),
-    TabSpec("tasks", "任务", "📋"),
-    TabSpec("dashboard", "仪表盘", "📊"),
-    TabSpec("settings", "我的", "👤"),
+    TabSpec("chat", "管家", LucideIcons.MessageSquare),
+    TabSpec("tasks", "任务", LucideIcons.ListTodo),
+    TabSpec("dashboard", "仪表盘", LucideIcons.LayoutDashboard),
+    TabSpec("settings", "我的", LucideIcons.User),
 )
 
 /** 路由表：pairing 独立根；home 壳内四 Tab + 二级页 push。 */
@@ -163,11 +167,7 @@ private fun MainShellRoute(
                             }
                         },
                         icon = {
-                            Text(
-                                tab.icon,
-                                style = MaterialTheme.typography.titleLarge,
-                                textAlign = TextAlign.Center,
-                            )
+                            Icon(tab.icon, contentDescription = tab.label)
                         },
                         label = { Text(tab.label) },
                         colors = NavigationBarItemDefaults.colors(

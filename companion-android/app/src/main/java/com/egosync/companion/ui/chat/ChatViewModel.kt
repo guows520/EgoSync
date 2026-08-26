@@ -9,6 +9,8 @@ import com.egosync.companion.sync.ChatMessage
 import com.egosync.companion.sync.DecompositionState
 import com.egosync.companion.sync.ExecutionTraceBlock
 import com.egosync.companion.sync.RoleCard
+import com.egosync.companion.sync.RoleProposal
+import com.egosync.companion.sync.RoleProposalState
 import com.egosync.companion.sync.SnapshotStore
 import com.egosync.companion.sync.TaskDecompositionProposal
 import java.util.UUID
@@ -33,6 +35,8 @@ data class ChatUiState(
     val roles: List<RoleCard> = SnapshotStore.roles,
     /** FR-2：对话流内嵌拆分提案卡；null=无提案 */
     val decomposition: TaskDecompositionProposal? = null,
+    /** FR-5：角色涌现提案卡（含处理态）；null=未浮现。属管家对话流（角色视图不承载） */
+    val roleProposal: RoleProposal? = null,
     /** FR-29：按消息挂执行溯源块（Think/Narration/Action） */
     val traceByMessageId: Map<String, List<ExecutionTraceBlock>> = emptyMap(),
     /** FR-33：流式期间工具执行状态行（工具名）；null=无 */
@@ -112,6 +116,7 @@ class ChatViewModel(private val container: AppModelContainer) : ViewModel() {
                 // 提案卡/建议卡属管家对话流；角色视图不承载（镜像桌面按 conversation 隔离）
                 actionCards = if (roleId == null) it.actionCards else emptyList(),
                 decomposition = if (roleId == null) it.decomposition else null,
+                roleProposal = if (roleId == null) it.roleProposal else null,
             )
         }
     }
@@ -215,6 +220,11 @@ class ChatViewModel(private val container: AppModelContainer) : ViewModel() {
                     )
                 )
             }
+        }
+
+        // FR-5：第 2 轮回复后浮现角色涌现提案卡（仅管家对话流，一次性守卫）
+        if (round == 2 && viewKey == null && _uiState.value.roleProposal == null) {
+            _uiState.update { it.copy(roleProposal = container.snapshotStore.roleProposal) }
         }
     }
 
@@ -320,6 +330,50 @@ class ChatViewModel(private val container: AppModelContainer) : ViewModel() {
                     } else {
                         "明白，那这条建议就先放下了。需要时随时叫我。"
                     },
+                ),
+            )
+        }
+        persistCurrentMessages()
+    }
+
+    // ── FR-5 角色涌现提案 ──────────────────────────────────────────────
+
+    /** FR-5 创建角色：提案卡以编辑后的值置已创建态 + 管家回执（mock：仅内存态，不落角色列表）。 */
+    fun confirmRoleProposal(name: String, icon: String, color: String, goal: String) {
+        // 并发守卫：流式/思考中不受理（与其他卡响应一致）
+        if (_uiState.value.thinking || _uiState.value.responding) return
+        val proposal = _uiState.value.roleProposal ?: return
+        if (proposal.state != RoleProposalState.PENDING) return // 双击守卫
+
+        _uiState.update {
+            it.copy(
+                roleProposal = proposal.copy(
+                    name = name, icon = icon, color = color, goal = goal,
+                    state = RoleProposalState.CREATED,
+                ),
+                messages = it.messages + ChatMessage(
+                    id = nextId++.toString(),
+                    fromButler = true,
+                    text = "好的，已创建角色「$name」。以后这类事可以交给它跟进。",
+                ),
+            )
+        }
+        persistCurrentMessages()
+    }
+
+    /** FR-5 不需要（弹窗「不需要」/关闭或卡片按钮）：提案卡置已跳过态 + 管家回执。 */
+    fun skipRoleProposal() {
+        if (_uiState.value.thinking || _uiState.value.responding) return
+        val proposal = _uiState.value.roleProposal ?: return
+        if (proposal.state != RoleProposalState.PENDING) return
+
+        _uiState.update {
+            it.copy(
+                roleProposal = proposal.copy(state = RoleProposalState.SKIPPED),
+                messages = it.messages + ChatMessage(
+                    id = nextId++.toString(),
+                    fromButler = true,
+                    text = "明白，这个角色先不创建。需要时随时跟我说。",
                 ),
             )
         }

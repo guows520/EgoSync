@@ -46,6 +46,30 @@ class RoleIconsTest {
         assertEquals("target", RoleIcons.normalizeIconId("xx"))
     }
 
+    // ── 组 3 FR-5：normalizeColorHex 契约（提案回显走白名单回退）────────
+
+    @Test
+    fun normalizeColorHex_knownPassesThrough() {
+        assertEquals("#4F46E5", RoleIcons.normalizeColorHex("#4F46E5"))
+        assertEquals("#0EA5E9", RoleIcons.normalizeColorHex("#0EA5E9"))
+        assertEquals("#64748B", RoleIcons.normalizeColorHex("#64748B"))
+    }
+
+    @Test
+    fun normalizeColorHex_invalidFallsBackToDefault() {
+        assertEquals("#4F46E5", RoleIcons.normalizeColorHex(null))
+        assertEquals("#4F46E5", RoleIcons.normalizeColorHex(""))
+        assertEquals("#4F46E5", RoleIcons.normalizeColorHex("#123456"))
+        assertEquals("#4F46E5", RoleIcons.normalizeColorHex("red"))
+    }
+
+    @Test
+    fun normalizeColorHex_trimsAndUppercases() {
+        // 桌面契约：trim + 大写后对白名单（后端可能回传小写/带空格的 hex）
+        assertEquals("#0EA5E9", RoleIcons.normalizeColorHex("#0ea5e9"))
+        assertEquals("#EC4899", RoleIcons.normalizeColorHex("  #EC4899  "))
+    }
+
     @Test
     fun roleIcons_whitelistHas24AndMatchesDesktop() {
         // 与 egosync-app/src/lib/roleIcons.ts 的 24 id 逐字一致

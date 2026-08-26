@@ -109,4 +109,18 @@ object LucideIcons {
         )
     }
     val ChevronDown: ImageVector by lazy { lucide("ChevronDown", "m6 9 6 6 6-6") }
+    // ── 组 3 role/memory FR 图标（lucide 官方 path data 逐字移植；circle 按既有约定转 path）──
+    val Trash2: ImageVector by lazy {
+        lucide(
+            "Trash2",
+            "M3 6h18",
+            "M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6",
+            "M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2",
+            // lucide circle cx=12 cy=11 r=1
+            "M11,11A1,1 0 1 0 13,11A1,1 0 1 0 11,11",
+            // lucide circle cx=12 cy=17 r=1
+            "M11,17A1,1 0 1 0 13,17A1,1 0 1 0 11,17",
+        )
+    }
+    val X: ImageVector by lazy { lucide("X", "M18 6 6 18", "m6 6 12 12") }
 }

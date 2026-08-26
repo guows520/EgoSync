@@ -88,4 +88,11 @@ object RoleIcons {
         if (iconId.isNullOrBlank()) return DEFAULT_ICON_ID
         return if (byId.containsKey(iconId)) iconId else DEFAULT_ICON_ID
     }
+
+    /** 校验色值合法；非法/空返回默认 hex。镜像 roleIcons.ts normalizeColorHex（trim+大写后对白名单）。 */
+    fun normalizeColorHex(color: String?): String {
+        if (color.isNullOrBlank()) return DEFAULT_COLOR_HEX
+        val upper = color.trim().uppercase()
+        return if (ROLE_COLORS.any { it.hex == upper }) upper else DEFAULT_COLOR_HEX
+    }
 }

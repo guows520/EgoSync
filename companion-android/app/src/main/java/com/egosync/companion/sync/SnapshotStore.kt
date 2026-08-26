@@ -2,6 +2,10 @@ package com.egosync.companion.sync
 
 import com.egosync.companion.ui.theme.Quadrant
 import com.egosync.companion.ui.theme.RoleDomain
+import java.time.Instant
+import java.time.ZoneOffset
+import java.time.format.DateTimeParseException
+import java.util.Locale
 
 /**
  * 快照数据模型 + 内存 mock。
@@ -204,6 +208,55 @@ sealed interface ActivityWindow {
     data object All : ActivityWindow
     data class Recent(val maxDaysAgo: Int) : ActivityWindow
     data class Custom(val oldestDaysAgo: Int, val newestDaysAgo: Int) : ActivityWindow
+}
+
+// ── 记忆 / 角色涌现（组 3 role/memory FR mock）────────────────────────
+
+/** 记忆类别（FR-8，镜像桌面 types/memory.ts MemoryCategory 与中文标签）。 */
+enum class MemoryCategory(val label: String) {
+    FACT("事实"),
+    PREFERENCE("偏好"),
+    COGNITION_UPDATE("认知模式"),
+    TASK_STATUS("任务状态"),
+}
+
+/** 记忆条目（FR-8/9，镜像桌面 MemoryTab 记忆卡数据；createdAt 为 ISO 8601）。 */
+data class MemoryItem(
+    val id: String,
+    val roleId: String,
+    val category: MemoryCategory,
+    val content: String,
+    val createdAt: String,
+)
+
+/** 记忆来源消息（FR-8，镜像桌面 MemorySourceMessage；role 为 user/assistant）。 */
+data class MemorySourceMessage(
+    val id: String,
+    val role: String,
+    val content: String,
+    val createdAt: String,
+    /** 本条即记忆出处的那条消息（镜像桌面 isSource 高亮） */
+    val isSource: Boolean = false,
+)
+
+/** 角色涌现提案处理态（FR-5）：待处理/已创建/已跳过。 */
+enum class RoleProposalState { PENDING, CREATED, SKIPPED }
+
+/** 角色涌现提案（FR-5，镜像桌面 RoleProposal：name/icon/color/goal，icon/color 走白名单回显）。 */
+data class RoleProposal(
+    val name: String,
+    val icon: String?,
+    val color: String?,
+    val goal: String?,
+    val state: RoleProposalState = RoleProposalState.PENDING,
+)
+
+/** 镜像桌面 formatMemoryTime：ISO 8601 → "yyyy/MM/dd HH:mm"（UTC 口径与桌面 getUTC* 一致）；非法输入原样返回。 */
+fun formatMemoryTime(createdAt: String): String = try {
+    val t = Instant.parse(createdAt).atZone(ZoneOffset.UTC)
+    "%04d/%02d/%02d %02d:%02d".format(Locale.ROOT, t.year, t.monthValue, t.dayOfMonth, t.hour, t.minute)
+} catch (e: DateTimeParseException) {
+    createdAt
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -593,4 +646,69 @@ object SnapshotStore {
         is ActivityWindow.Custom ->
             bounds.first <= window.oldestDaysAgo && bounds.last >= window.newestDaysAgo
     }
+
+    // ── 组 3 role/memory 增补 mock ──────────────────────────────────────
+
+    /**
+     * 角色记忆（FR-8/9）：每角色 3 条可见记忆（fact/preference/cognition_update），
+     * PM 额外一条 task_status 用于锁定「永不显示」契约（桌面 visibleMemories 过滤）。
+     */
+    val memories: List<MemoryItem> = listOf(
+        MemoryItem("mem-pm-1", "role-pm", MemoryCategory.FACT, "boss 的产品评审固定在周二下午 2 点，材料需要提前一天备好。", "2026-08-24T09:12:00Z"),
+        MemoryItem("mem-pm-2", "role-pm", MemoryCategory.PREFERENCE, "boss 倾向用竞品对比表而不是长文档过评审材料。", "2026-08-22T15:40:00Z"),
+        MemoryItem("mem-pm-3", "role-pm", MemoryCategory.COGNITION_UPDATE, "boss 在 OKR 上更看重方向共识，而非精确数字。", "2026-08-20T11:05:00Z"),
+        MemoryItem("mem-pm-4", "role-pm", MemoryCategory.TASK_STATUS, "季度 OKR 草稿已拆分为 3 个任务推进中。", "2026-08-25T08:30:00Z"),
+        MemoryItem("mem-fa-1", "role-father", MemoryCategory.FACT, "女儿的钢琴课在周二 16:30，老师姓陈。", "2026-08-23T18:20:00Z"),
+        MemoryItem("mem-fa-2", "role-father", MemoryCategory.PREFERENCE, "boss 希望家庭事务避开周末上午的家庭时间。", "2026-08-21T20:15:00Z"),
+        MemoryItem("mem-fa-3", "role-father", MemoryCategory.COGNITION_UPDATE, "boss 更愿意亲自到场陪女儿，而不是只安排时间。", "2026-08-18T21:00:00Z"),
+        MemoryItem("mem-le-1", "role-learner", MemoryCategory.FACT, "boss 在读《深度工作》，进度在第 3 章中段。", "2026-08-24T22:45:00Z"),
+        MemoryItem("mem-le-2", "role-learner", MemoryCategory.PREFERENCE, "boss 喜欢在晚上 9 点后写读书笔记，每次 20 分钟。", "2026-08-19T22:10:00Z"),
+    )
+
+    /**
+     * 记忆来源消息（FR-8）：memoryId → 来源对话（首条 isSource=true 镜像桌面高亮）。
+     * mem-le-2 故意缺席 → 演示「来源对话已不可用」分支（桌面三分支归一为该文案）。
+     * mem-pm-4（task_status）永不被查询（UI 不显示该类别）。
+     */
+    val memorySources: Map<String, List<MemorySourceMessage>> = mapOf(
+        "mem-pm-1" to listOf(
+            MemorySourceMessage("src-pm-1-u", "user", "下周的产品评审还是周二下午吗？我怕材料来不及准备。", "2026-08-24T09:10:00Z"),
+            MemorySourceMessage("src-pm-1-a", "assistant", "评审固定在周二下午 2 点，材料我会提前一天备好，您不用惦记。", "2026-08-24T09:12:00Z", isSource = true),
+        ),
+        "mem-pm-2" to listOf(
+            MemorySourceMessage("src-pm-2-u", "user", "评审材料我想直接看竞品对比，别发长文档。", "2026-08-22T15:38:00Z"),
+            MemorySourceMessage("src-pm-2-a", "assistant", "好的，我按竞品对比表准备，重点标出差异点。", "2026-08-22T15:40:00Z", isSource = true),
+        ),
+        "mem-pm-3" to listOf(
+            MemorySourceMessage("src-pm-3-u", "user", "这季度 OKR 我想先对齐方向，数字后面再调。", "2026-08-20T11:03:00Z"),
+            MemorySourceMessage("src-pm-3-a", "assistant", "明白，方向共识优先，我先出三个候选方向给您圈选。", "2026-08-20T11:05:00Z", isSource = true),
+        ),
+        "mem-fa-1" to listOf(
+            MemorySourceMessage("src-fa-1-u", "user", "女儿钢琴课这周还是周二吗？", "2026-08-23T18:18:00Z"),
+            MemorySourceMessage("src-fa-1-a", "assistant", "是的，周二 16:30，陈老师那边已经确认过了。", "2026-08-23T18:20:00Z", isSource = true),
+        ),
+        "mem-fa-2" to listOf(
+            MemorySourceMessage("src-fa-2-u", "user", "家里的事尽量别安排在周末上午，那是我们的家庭时间。", "2026-08-21T20:13:00Z"),
+            MemorySourceMessage("src-fa-2-a", "assistant", "记下了，周末上午留给家庭，其他事项我都避开这个时段。", "2026-08-21T20:15:00Z", isSource = true),
+        ),
+        "mem-fa-3" to listOf(
+            MemorySourceMessage("src-fa-3-u", "user", "女儿的画展我想亲自陪她去，不用安排别人。", "2026-08-18T20:58:00Z"),
+            MemorySourceMessage("src-fa-3-a", "assistant", "明白，这类事您都亲自到场，我只负责提醒和买票。", "2026-08-18T21:00:00Z", isSource = true),
+        ),
+        "mem-le-1" to listOf(
+            MemorySourceMessage("src-le-1-u", "user", "《深度工作》读到第 3 章了，有点慢。", "2026-08-24T22:43:00Z"),
+            MemorySourceMessage("src-le-1-a", "assistant", "不着急，您每晚都有固定的读书时间，按这个节奏这周能读完第 3 章。", "2026-08-24T22:45:00Z", isSource = true),
+        ),
+    )
+
+    /** 按角色查记忆（FR-8）：镜像桌面 useMemories({roleId}) 的过滤语义。 */
+    fun memoriesOf(roleId: String): List<MemoryItem> = memories.filter { it.roleId == roleId }
+
+    /** 角色涌现提案种子（FR-5，mock 触发：管家视图第 2 轮回复后浮现提案卡）。 */
+    val roleProposal: RoleProposal = RoleProposal(
+        name = "策划师",
+        icon = "lightbulb",
+        color = "#8B5CF6",
+        goal = "把零散的想法收敛成可执行的方案",
+    )
 }

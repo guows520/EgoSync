@@ -28,6 +28,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.navigation.NavHostController
+import androidx.navigation.NavType
+import androidx.navigation.navArgument
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -40,6 +42,8 @@ import com.egosync.companion.ui.chat.ChatViewModel
 import com.egosync.companion.ui.components.DegradedOverlayHost
 import com.egosync.companion.ui.dashboard.DashboardScreen
 import com.egosync.companion.ui.dashboard.DashboardViewModel
+import com.egosync.companion.ui.memory.MemoryScreen
+import com.egosync.companion.ui.memory.MemoryViewModel
 import com.egosync.companion.ui.notify.NotificationCenterScreen
 import com.egosync.companion.ui.review.WeeklyReviewScreen
 import com.egosync.companion.ui.settings.SettingsScreen
@@ -71,6 +75,7 @@ object Routes {
     const val BRIEFING = "briefing"
     const val REVIEW = "review"
     const val NOTIFICATIONS = "notifications"
+    const val MEMORY = "memory"
 }
 
 @Composable
@@ -103,6 +108,16 @@ fun AppNavHost(container: AppModelContainer) {
         composable(Routes.BRIEFING) { BriefingRoute(navController) }
         composable(Routes.REVIEW) { WeeklyReviewRoute(navController) }
         composable(Routes.NOTIFICATIONS) { NotificationCenterRoute(navController, container) }
+        // FR-8/9 记忆屏：按角色进入（仪表盘角色卡「查看记忆」入口）
+        composable(
+            route = "${Routes.MEMORY}/{roleId}",
+            arguments = listOf(navArgument("roleId") { type = NavType.StringType }),
+        ) { entry ->
+            val roleId = entry.arguments?.getString("roleId").orEmpty()
+            if (roleId.isNotEmpty()) {
+                MemoryRoute(navController, container, roleId)
+            }
+        }
         }
 
         // 降级态遮罩全局覆盖（含二级页）：离线时任何页面都明示数据截止与引擎禁用
@@ -211,6 +226,8 @@ private fun ChatRoute(container: AppModelContainer) {
         onRoleSelected = vm::selectRole,
         onStopStreaming = vm::stopStreaming,
         onDecompositionRespond = vm::respondDecomposition,
+        onRoleProposalConfirm = vm::confirmRoleProposal,
+        onRoleProposalSkip = vm::skipRoleProposal,
     )
 }
 
@@ -244,6 +261,7 @@ private fun DashboardRoute(navController: NavHostController, container: AppModel
         onOpenNotifications = { navController.navigate(Routes.NOTIFICATIONS) },
         onMetricsScopeSelected = vm::setMetricsScope,
         onActivityWindowSelected = vm::setActivityWindow,
+        onOpenMemory = { roleId -> navController.navigate("${Routes.MEMORY}/$roleId") },
     )
 }
 
@@ -293,5 +311,23 @@ private fun NotificationCenterRoute(navController: NavHostController, container:
         onBack = { navController.popBackStack() },
         onMarkAllRead = container.notifications::markAllRead,
         onRespond = container.notifications::respond,
+    )
+}
+
+@Composable
+private fun MemoryRoute(navController: NavHostController, container: AppModelContainer, roleId: String) {
+    val vm: MemoryViewModel = viewModel(
+        key = "memory-$roleId",
+        factory = viewModelFactory { initializer { MemoryViewModel(container, roleId) } },
+    )
+    val uiState by vm.uiState.collectAsState()
+    MemoryScreen(
+        uiState = uiState,
+        onBack = { navController.popBackStack() },
+        onCategorySelected = vm::setCategory,
+        onToggleSource = vm::toggleSource,
+        onOpenForgetConfirm = vm::openForgetConfirm,
+        onCancelForget = vm::cancelForget,
+        onConfirmForget = vm::confirmForget,
     )
 }

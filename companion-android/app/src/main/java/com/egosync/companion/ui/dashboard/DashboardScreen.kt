@@ -91,6 +91,7 @@ fun DashboardScreen(
     onOpenNotifications: () -> Unit,
     onMetricsScopeSelected: (String) -> Unit,
     onActivityWindowSelected: (ActivityWindow) -> Unit,
+    onOpenMemory: (roleId: String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val pagerState = rememberPagerState(pageCount = { uiState.roles.size })
@@ -134,7 +135,8 @@ fun DashboardScreen(
                 .weight(1f),
             contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp),
         ) { page ->
-            RoleCardItem(role = uiState.roles[page])
+            val role = uiState.roles[page]
+            RoleCardItem(role = role, onOpenMemory = { onOpenMemory(role.id) })
         }
 
         Spacer(Modifier.height(10.dp))
@@ -256,7 +258,7 @@ private fun RowScope.OverviewEntry(icon: ImageVector, text: String, onClick: () 
 // ── 角色卡 ─────────────────────────────────────────────────────────────
 
 @Composable
-internal fun RoleCardItem(role: RoleCard, modifier: Modifier = Modifier) {
+internal fun RoleCardItem(role: RoleCard, onOpenMemory: () -> Unit = {}, modifier: Modifier = Modifier) {
     val roleAccent = role.domain.accent()
     // 母本 App.tsx --role-accent 切换 + index.css --duration-color:300ms 过渡：
     // 域 accent 变化时以 300ms 单次过渡渐变（色温随角色域偏移，功能性 transition）
@@ -326,6 +328,41 @@ internal fun RoleCardItem(role: RoleCard, modifier: Modifier = Modifier) {
                 StatCell("记忆", role.memoryCount, Modifier.weight(1f))
                 StatCell("会话", role.sessionCount, Modifier.weight(1f))
                 StatCell("待办", role.pendingCount, Modifier.weight(1f))
+            }
+
+            Spacer(Modifier.height(14.dp))
+
+            // FR-8/9 记忆入口：二级记忆屏 push 入口（Brain + ChevronRight）
+            Surface(
+                onClick = onOpenMemory,
+                shape = RoundedCornerShape(10.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(
+                    Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        LucideIcons.Brain,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                        tint = roleAccent.accent,
+                    )
+                    Spacer(Modifier.size(8.dp))
+                    Text(
+                        "查看记忆",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Spacer(Modifier.weight(1f))
+                    Icon(
+                        LucideIcons.ChevronRight,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
     }
@@ -756,6 +793,7 @@ private fun DashboardScreenPreview() {
             onOpenNotifications = {},
             onMetricsScopeSelected = {},
             onActivityWindowSelected = {},
+            onOpenMemory = {},
         )
     }
 }

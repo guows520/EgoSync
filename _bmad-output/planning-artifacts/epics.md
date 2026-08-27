@@ -2977,3 +2977,560 @@ So that 我能快速了解整体或特定 Agent 在指定时期内的活动情�
 **When** 执行 Repository、Service、Command、Hook、组件及关键 E2E 测试
 **Then** 覆盖四项指标、会话计数、组合筛选、时间边界、无效条件、空数据与双数据库失败行为。
 
+---
+
+# 增量拆分：手机伴侣（Android）基建（Epic 12 起，2026-08-26 追加）
+
+> **追加说明**：本节为既有 Epic 1～11 之后的增量拆分，不触动上文任何内容。范围仅覆盖 PRD §4.14 手机伴侣（Android）基建：FR-40、FR-41、FR-43，以及一档 18 项核心 FR + 二档 6 项适配 FR 的移动呈现；桌面既有需求已由 Epic 1～11 覆盖，不在此重复。
+>
+> **权威输入**：`architecture.md` 文末「手机伴侣基建（FR-40～FR-43）」六个增量章节（Incremental Project Context Analysis 起，至 Architecture Validation Results 止）；`addendum.md`（四通道模型、已否决备选）；`.decision-log.md` 决策 #17（立项形态）与 #18（基建定案与 FR-42 降级）；`_bmad-output/project-context.md`（基线 100 条规范全量继承）；`companion-android/` 高保真原型（移动端 UI 既定事实）。
+>
+> **FR-42 移动推送已 DEFERRED 出 V1**：不拆任何推送故事，仅保留 NotificationDispatch 接口预留薄故事。
+
+## Requirements Inventory（增量）
+
+### Functional Requirements
+
+来源：`prd-egosync.md` §4.14
+
+- **FR-40**: 桌面配对与连接管理 — 扫码/配对码一次性绑定；局域网 NSD 自动发现直连；离网自动经云中继加密转发、回网自动切回直连；直连/中继/离线三态在手机持续可见；配对持久化、重装重扫即恢复；中继只转发端到端加密流量、不可读明文、不落地存储 `[ASSUMPTION: V1 仅绑定一台桌面]` `[ASSUMPTION: 中继仅为加密流量转发]`
+- **FR-41**: 实时状态同步 — 桌面角色/管家活动、任务推进、仪表盘指标主动推送刷新（核心状态界面无需手动下拉）；手机对话/建议确认拒绝/任务操作作为指令交桌面执行、结果实时回流（含流式对话）；断线重连以最新快照补齐 `[ASSUMPTION: 重连仅补最新快照，不做历史回放]`（原"锁屏快捷操作等效"条款随 FR-42 降级一并延后）
+- **FR-42**: 移动推送通知 `[DEFERRED — 已移出 V1]` — V1 仅应用内通知；NotificationDispatch 抽象层保留 FCM 中继代理 / UnifiedPush 后续可插接入位
+- **FR-43**: 离线降级与速记排队 — 桌面不可达时进入降级态：最后已知状态只读缓存 + 明确标注数据截止时间；仅开放文字速记，重连后自动提交管家处理且无丢失；依赖引擎的功能入口不可交互并说明原因；局域网关机与广域网中断呈现统一降级体验 `[ASSUMPTION: 离线缓存限于最后已知快照+文字速记]`
+
+**移动呈现分档（PRD §4.14；架构含义收敛到连接/状态/指令/推送四通道，不逐 FR 拆故事）：**
+
+- 一档核心 18 项：FR-1, 2, 3, 11, 12, 14, 15, 16, 18, 19, 20, 21, 22, 24, 29, 30, 33, 38
+- 二档适配 6 项（查看/轻操作）：FR-5, 7, 8, 9, 17, 23 — 其中 FR-7/8/9（记忆）**不入快照缓存，走指令通道现查现显**
+- 桌面优先 9 项（不进手机）：FR-4（仅查看/归档）、FR-6, 13, 26, 27, 28, 34, 37, 39
+- 引擎持有 6 项（仅状态可见）：FR-10, 25, 31, 32, 35, 36
+
+### NonFunctional Requirements
+
+来源：`architecture.md` 手机伴侣增量章节 + PRD Privacy/Cost/Platform 守则
+
+- **NFR-M1 零知识中继**：只转发端到端加密流量、无法读明文、零落地存储；进程重启注册表即清空（隐私=技术不可能性）
+- **NFR-M2 成本红线**：单 VPS Docker 无状态部署、$5/月级起步、单实例承载数百并发长连接
+- **NFR-M3 诚实代价**：桌面关机=只读快照+速记排队是本地优先架构的固有属性，UI 必须明示而非掩盖
+- **NFR-M4 桌面零回归**：全部为增量模块；现有 services 对伴侣一无所知；不动三层架构/双库/keyring
+- **NFR-M5 桌面唯一事实源**：手机无业务库主权，仅加密快照缓存+速记队列；引擎/DB/keyring/opencode 全留桌面
+- **NFR-M6 V1 单对单**：一台手机 ↔ 一台桌面
+- **NFR-M7 基线规范全量继承**：project-context.md 100 条规则延伸到新模块；帧内容明文永不入日志（零知识纪律）
+
+### Additional Requirements
+
+来源：`architecture.md` 手机伴侣增量章节（技术需求，拆故事的直接依据）
+
+1. **协议 crate 先行**：`crates/companion-proto`（Rust 侧唯一可触碰 Noise 库之处；Android 侧 noise-java 限 pairing/connection 换装层）；8 种帧类型冻结（HELLO / SNAPSHOT / STATE_DELTA / COMMAND / COMMAND_RESULT / STREAM_TOKEN / NOTICE / PING）；长度前缀二进制 Noise 传输消息 + 内层 camelCase JSON payload；HELLO 必带 protocolVersion；snow↔noise-java 互通冒烟（建议 Noise_XX_25519_ChaChaPoly_BLAKE2s，首故事验证后冻结写入 schema.json）；协议契约单一 schema 为事实源
+2. **桌面四个新 service**：`companion_pairing`（QR 生成、Noise XX 握手编排、paired_devices 读写）、`companion_connection`（NSD 广播、WS 监听、连接状态机、通道切换）、`companion_snapshot`（快照节流重建、SNAPSHOT 帧下发）、`companion_dispatch`（COMMAND 解析 → 既有 services 调用 → RESULT 回流；NotificationDispatch 抽象）+ 薄层 `commands/companion.rs` + `db/paired_devices.rs` + `models/companion.rs` + `migrations/031_paired_devices.sql`
+3. **relay-server**：axum 0.8 + tokio + tokio-tungstenite；内存注册表 {relay_id → 连接} 零持久化；注册时挑战-应答证明私钥持有（防 ID 抢占）；多阶段 Dockerfile + docker compose + /healthz + tracing 结构化日志
+4. **配对信任链**：QR = {relay_addr, desktop_static_pubkey, relay_id(=pubkey 哈希), pairing_nonce}；Noise XX 握手内双向认证防中间人；手机静态私钥入 Android Keystore；桌面静态密钥入系统 keyring（与 LLM API Key 同级管理）；手机快照缓存 Keystore 派生 AES 加密
+5. **连接策略**：NSD/mDNS `_egosync._tcp` 局域网发现；同协议双承载（WS 直连桌面端口 / WS 连中继按 relay_id 转发）；prefer-direct 切换滞回（NSD 消失后探测 3s 才回落中继，防抖动）；重连指数退避 1s→30s 封顶 + 随机抖动
+6. **快照口径（已裁决落死）**：角色卡状态（含能量）+ 四象限任务 + 仪表盘指标 + 活跃及近期会话各最近 200 条消息 + 本季度晨间简报/周复盘 + 未读通知；**记忆库不上机**；总量上限 10MB，超限按最旧截断并在 UI 明示数据截止时间；桌面相关写操作后 debounce 重建、内存持有不持久化（重启后首次连接现生成）；全量替换式下发；手机单一版本化文件存储 + 元数据（禁 Room）
+7. **速记队列**：手机本地持久化 FIFO、每条幂等 ID；恢复连接后逐条提交为管家指令、桌面确认入库后删队、无丢失
+8. **错误与事件**：`AppError` 新增 PairingError / ConnectionError / ProtocolError 变体（序列化形状不变，用户可见文案中文不暴露技术细节）；Tauri Events 用 `companion:` 命名空间（companion:paired / companion:connected / companion:disconnected / quicknote:submitted）；paired_devices 表纳入 data_export 导入导出与销毁清单
+9. **CI**：`android-ci.yml` + `relay-docker.yml`；中继集成测试含"零持久化"断言（重启后注册表为空）；Android 仅配对冒烟路径进 androidTest
+
+### UX Design Requirements（companion-android 原型约束）
+
+来源：`companion-android/`（高保真原型，README + 代码）
+
+- **UX-M1 UI 零重做**：原型已完整实现配对流（4 步）、四 Tab 主界面（对话/任务/仪表盘/我的）、三个二级页（晨间简报/周复盘/通知中心）、全局降级遮罩 + 底部速记输入条。Story 只允许"换装真实实现"，禁止重新设计样式与交互
+- **UX-M2 装配缝换装**：`ConnectionClient` 接口签名不变（FakeConnectionClient → NSD+WS+Noise 真实现）；`SnapshotStore` mock → 帧驱动实现；`AppModelContainer` 为唯一换装点，UI 层零改动
+- **UX-M3 视觉零回归是验收硬条件**：换装前后界面截图一致（对照原型 README 页面地图逐屏比对）
+- **UX-M4 mock 替换清单**：配对页「模拟扫码成功」按钮 → 真实扫码（ML Kit Barcode 候选）；QuickNoteQueue 的 mock flush → 真实 COMMAND 幂等提交；设置页 Debug 四态模拟（DIRECT/RELAY/OFFLINE/DEGRADED）保留为开发工具
+- **UX-M5 记忆页数据通道防呆**：原型把 memories mock 放在 `SnapshotStore` 内纯属展示便利；真实换装时记忆页严禁接入真实快照，必须走 COMMAND 现查现显（FR-7/8/9 适配路径）；降级态记忆入口置灰并说明原因
+
+## Epic List（增量）
+
+### Epic 12: 手机伴侣配对与加密连接（Pairing & Encrypted Connection）
+
+用户在桌面显示配对二维码，用手机扫码完成一次性绑定；此后手机在同一局域网自动直连桌面引擎，离网经云中继加密转发、回网自动切回；直连/中继/离线三态随时可见；重装 App 重扫即恢复，无需桌面端重置；中继不可读明文。完成后手机↔桌面之间有一条端到端加密的可靠通道（FR-40 全部六条验收 + NFR-M1/M2/M6），作为后续所有 Epic 的通道底座。
+
+**FRs covered:** FR-40；NFR-M1, NFR-M2, NFR-M4, NFR-M6, NFR-M7
+**Additional reqs covered:** 1, 2, 3, 4, 5, 8, 9
+**UX-DRs covered:** UX-M1, UX-M2, UX-M3, UX-M4
+
+**Story 列表（顺序=架构 Implementation Sequence 步骤 1～4）：**
+- **12.1** `companion-proto` 协议 crate——8 种帧 schema 冻结 + Noise XX 封装 + snow↔noise-java 互通冒烟 + 参数套件写入 schema.json（风险出清点，独立优先）
+- **12.2** 桌面配对与连接服务——`companion_pairing` + `companion_connection` + commands/db/models/migration + keyring 静态密钥 + QR 生成 + NSD 广播 + WS 监听 + 连接状态机 + 设置页配对入口
+- **12.3** `relay-server` 无状态中继——内存注册表 + 挑战-应答鉴权 + Docker 化 + /healthz + CI + 零持久化断言
+- **12.4** Android 扫码配对与三态连接——真实 `ConnectionClient` 换装：ML Kit 扫码 + noise-java 握手 + Keystore 私钥 + NSD 发现 + 直连/中继双承载 + prefer-direct 滞回 + 指数退避 + 三态可视
+
+---
+
+### Epic 13: 手机实时视图与远程操作（Live View & Remote Commands）
+
+用户在手机上看到与桌面一致的实时状态——角色卡/能量、四象限任务、仪表盘指标、会话消息、晨间简报/周复盘、未读通知——变化主动推送、核心状态界面无需手动下拉；手机发起对话由桌面引擎执行并流式回流；任务操作、建议确认/拒绝、记忆查询作为指令交桌面执行、结果实时回流；断线重连以最新快照补齐。完成后 = 一档 18 项核心 FR + 二档 6 项适配 FR 的移动呈现全部就位（经四通道承载，不逐 FR 拆）。
+
+**FRs covered:** FR-41；一档核心 FR-1,2,3,11,12,14,15,16,18,19,20,21,22(数据),24,29,30,33,38；二档适配 FR-5,7,8,9,17,23 的移动呈现
+**NFRs covered:** NFR-M3, NFR-M4, NFR-M5, NFR-M7
+**Additional reqs covered:** 2, 6, 8
+**UX-DRs covered:** UX-M1, UX-M2, UX-M3, UX-M5
+
+**Story 列表（顺序=架构 Implementation Sequence 步骤 5～6）：**
+- **13.1** 桌面快照引擎与状态推送——`companion_snapshot`：口径落死 + debounce 重建 + 10MB 截断明示 + SNAPSHOT 全量下发 + STATE_DELTA 主动推送
+- **13.2** 手机实时快照视图——SnapshotStore 帧驱动换装 + Keystore AES 加密缓存 + 各屏真实数据 + 重连快照补齐
+- **13.3** 指令通道与流式对话——`companion_dispatch` 注入既有 services + COMMAND/COMMAND_RESULT + STREAM_TOKEN 流式镜像 + 对话/任务操作/建议确认拒绝/记忆现查全换装
+
+---
+
+### Epic 14: 离线降级、速记与通知（Offline Resilience & In-App Notices）
+
+桌面不可达时手机进入统一降级态：最后已知状态只读缓存 + 明确标注数据截止时间、依赖引擎的入口不可交互并说明原因（含记忆入口置灰）；速记本地排队、重连自动提交管家处理且无丢失；桌面通知以应用内形式呈现（三级分组/未读角标）。完成后手机在桌面关机/断网场景下"诚实可用"（FR-43 全部四条验收）；NotificationDispatch 抽象层冻结为后续系统推送预留位（FR-42 DEFERRED 的薄故事）。
+
+**FRs covered:** FR-43；FR-42（仅 NotificationDispatch 接口预留，DEFERRED）
+**NFRs covered:** NFR-M3, NFR-M5, NFR-M7
+**Additional reqs covered:** 6(快照口径之降级部分), 7, 8
+**UX-DRs covered:** UX-M1, UX-M2, UX-M3
+
+**Story 列表（顺序=架构 Implementation Sequence 步骤 7～8）：**
+- **14.1** 降级态与速记排队——局域网关机与广域网中断统一降级 + 截止时间标注 + 入口禁用说明原因 + 持久化 FIFO 队列 + 幂等 ID + 重连逐条提交 + 桌面确认删队 + `quicknote:submitted` 事件
+- **14.2** 应用内通知与 NotificationDispatch 接口预留——NOTICE 帧 → InAppNotificationAdapter → 通知中心/未读角标；接口冻结为 FCM 中继代理 / UnifiedPush 预留位
+
+---
+
+## Epic 依赖图（增量）
+
+```
+E12 (配对+连接) ──→ E13 (实时视图+指令) ──→ E14 (降级+速记+通知)
+   └─ 依赖桌面既有 Epic 1～11 已实现的 services（companion_dispatch 的注入对象）
+
+Story 间序列（同一架构约束，强顺序）：
+12.1 → {12.2, 12.3, 12.4} → 13.1 → 13.2 → 13.3 → 14.1 → 14.2
+（12.2/12.3/12.4 依赖 12.1 协议；12.3 中继可与 12.2 并行；12.4 依赖 12.2+12.3；
+ 13.x 依赖 12.4 已建立连接；14.x 依赖 13.x 快照/指令基建）
+```
+
+## FR Coverage Map（增量）
+
+| 需求 | 归属 Epic / Story | 验收对应 |
+|------|----------------|----------|
+| FR-40 配对与连接 | E12（12.1–12.4） | 扫码绑定 / NSD 自动发现 / 直连↔中继滞回切换 / 三态可见 / paired_devices 持久化 / 重装重扫恢复 / 中继不可读明文 —— 六条逐条落位 |
+| FR-41 实时状态同步 | E13（13.1–13.3） | STATE_DELTA 推送 / COMMAND 执行回流 / STREAM_TOKEN 流式镜像 / 重连最新快照补齐 —— 四条逐条落位 |
+| FR-42 移动推送 `[DEFERRED]` | E14 / 14.2 | 仅 NotificationDispatch 接口预留；FCM/UnifiedPush 后续可插；不拆推送功能 |
+| FR-43 离线降级 | E14 / 14.1 | 三态状态机统一覆盖局域网关机与广域网中断 / 只读缓存+截止时间标注 / 幂等速记队列无丢失 / 入口禁用说明原因 —— 四条逐条落位 |
+| 18 项核心 FR 移动呈现 | E13（13.2 主界面快照 + 13.3 指令/流式） | 经四通道承载；FR-22 通知数据在 13.2，实时通知在 14.2 |
+| 6 项适配 FR 移动呈现 | E13 / 13.3 | FR-7/8/9 记忆走 COMMAND 现查现显（UX-M5 防呆）；FR-5/17/23 经快照/指令呈现 |
+
+### NFR / Additional / UX 覆盖核查
+
+| 项 | 归属 |
+|----|------|
+| NFR-M1 零知识中继 | 12.1（Noise 仅两端持密钥）+ 12.3（零持久化断言） |
+| NFR-M2 成本红线 | 12.3（单 VPS Docker + $5/月级） |
+| NFR-M3 诚实代价 | 14.1（降级明示） |
+| NFR-M4 桌面零回归 | 所有桌面 Story 的验收硬条件（现有 services 对伴侣一无所知） |
+| NFR-M5 桌面唯一事实源 | 13.1/13.2（快照口径，记忆库不上机）+ 14.1（队列本地、提交回桌面） |
+| NFR-M6 V1 单对单 | 12.2（paired_devices 单设备模型） |
+| NFR-M7 基线规范全量继承 | 全部 Story（命名/IPC/错误/keyring + 帧明文不入日志） |
+| Additional 1～9 | 1→12.1；2→12.2/13.1/13.3；3→12.3；4→12.1/12.2/12.4；5→12.2/12.4；6→13.1/13.2/14.1；7→14.1；8→各桌面 Story；9→12.3/12.4 |
+| UX-M1～M5 | 12.4（配对/三态换装）/ 13.2（主界面换装）/ 13.3（对话/操作换装）/ 14.1（速记+降级）/ 14.2（通知）；UX-M3 截图零回归覆盖全部换装 Story；UX-M5 记忆通道防呆落在 13.3 |
+
+---
+
+## Epic 12: 手机伴侣配对与加密连接（Pairing & Encrypted Connection）
+
+用户在桌面显示配对二维码，用手机扫码完成一次性绑定；此后手机在同一局域网自动直连桌面引擎，离网经云中继加密转发、回网自动切回；直连/中继/离线三态随时可见；重装 App 重扫即恢复；中继不可读明文。完成后手机↔桌面之间有一条端到端加密的可靠通道。
+
+**FRs covered:** FR-40；NFR-M1, NFR-M2, NFR-M4, NFR-M6, NFR-M7
+
+### Story 12.1: `companion-proto` 协议 crate——帧 schema 冻结与跨语言加密互通
+
+As a 伴侣基建开发者,
+I want 一个三端共享的加密协议 crate，冻结 8 种帧类型 schema 与 Noise XX 参数套件，并用黄金测试向量验证 snow↔noise-java 互通,
+So that 桌面/中继/Android 三端在后续 Story 中只依赖同一份协议事实源，跨语言加密互通这一最大技术风险被最先出清。
+
+**FRs covered:** FR-40（协议底座）；Additional 1、4（部分）
+**NFRs covered:** NFR-M1、NFR-M7
+
+**Acceptance Criteria:**
+
+**Given** 仓库根目录
+**When** 查看 `crates/companion-proto/`
+**Then** 存在 `src/{lib.rs, frames.rs, crypto.rs}` 与 `src/schema.json`，package 名 `companion-proto`、lib 名 `companion_proto`，且**未**在仓库根创建 Cargo workspace
+**And** `crypto.rs` 是全仓唯一依赖 `snow` 的位置（协议契约：三端其余代码只操作帧类型，不见密码学细节）
+
+**Given** `frames.rs` 的帧类型定义
+**When** 编译并运行 `cargo test`
+**Then** 8 种帧类型 `HELLO / SNAPSHOT / STATE_DELTA / COMMAND / COMMAND_RESULT / STREAM_TOKEN / NOTICE / PING` 全部定义，枚举值为小写字符串、payload 字段 camelCase（serde `rename_all` 与基线一致）
+**And** 编码为长度前缀二进制 Noise 传输消息，encode→decode 往返测试逐帧类型通过
+**And** `HELLO` 帧必含 `protocolVersion: u16` 字段，缺版本字段的解码被拒绝
+
+**Given** `schema.json`（协议单一事实源）
+**When** 查看其内容
+**Then** Noise 参数套件冻结为 `Noise_XX_25519_ChaChaPoly_BLAKE2s`，并记录 8 种帧的 payload schema 与版本号
+**And** 任何帧类型/payload 变更的流程约束（bump protocolVersion + 同步 schema.json）以文档注释写入 `lib.rs`
+
+**Given** Noise XX 握手（snow 双角色自测）
+**When** 运行 `cargo test`
+**Then** 发起方/响应方在进程内完成 XX 握手、派生会话密钥、互发加密帧且解密一致，测试通过
+
+**Given** 跨语言互通黄金向量
+**When** 执行本 Story 的向量导出/验证步骤
+**Then** crate 测试内置由 snow 生成的握手转录 + 加密帧黄金向量 fixtures，且能验证由 noise-java 生成（开发期手动产出、随测试提交）的等价向量
+**And** 两侧向量验证均进 `cargo test`，CI 中自动执行——snow↔noise-java 互通风险在此 Story 内出清
+
+**Given** 日志纪律（NFR-M7）
+**When** 检查 crate 内所有 `tracing` 调用
+**Then** 帧内容明文与会话密钥材料永不进入日志输出
+
+---
+
+### Story 12.2: 桌面配对与连接服务——QR 生成、Noise XX 握手、NSD 广播与 WS 监听
+
+As a 桌面用户,
+I want 在桌面设置页生成配对二维码，完成与手机的绑定，并在局域网内自动广播桌面引擎供手机直连,
+So that 我的手机无需手动输入任何网络配置就能安全连上这台唯一事实源。
+
+**FRs covered:** FR-40（扫码绑定、自动发现直连、配对持久化、重装无需桌面重置）；Additional 2、4、5、8
+**NFRs covered:** NFR-M4、NFR-M5、NFR-M6、NFR-M7
+
+**Acceptance Criteria:**
+
+**Given** 桌面端增量模块结构
+**When** 实现完成
+**Then** 存在 `services/companion_pairing.rs`（QR 生成、Noise XX 握手编排、paired_devices 读写）、`services/companion_connection.rs`（NSD 广播、WS 监听、连接状态机）、`commands/companion.rs`（`pairing_generate_qr / pairing_confirm / paired_device_list / paired_device_remove / companion_get_status`，薄层无业务逻辑）、`db/paired_devices.rs`、`models/companion.rs`、`migrations/031_paired_devices.sql`
+**And** `paired_devices` 表含 `id, device_name, device_pubkey, paired_at, last_seen_at`，并被纳入 data_export 导入导出与销毁清单
+**And** 现有 services 文件零改动（桌面零回归；伴侣感知只存在于 companion_* 新模块内）
+
+**Given** 用户在桌面设置页打开配对入口
+**When** 调用 `pairing_generate_qr`
+**Then** 桌面静态密钥经系统 keyring 读写（与 LLM API Key 同级管理，不落明文文件），QR payload 含 `{relay_addr, desktop_static_pubkey, relay_id(=pubkey 哈希), pairing_nonce}`
+**And** 前端以 `services/` 封装 invoke、经 `useTauriCommand`/hook 调用，组件放域目录，遵循桌面既有前端规范
+
+**Given** 手机侧发起 Noise XX 握手（Story 12.4 之前以协议 crate 测试客户端模拟）
+**When** `companion_pairing` 完成握手
+**Then** 双向身份认证通过后写入 `paired_devices`，并发出 Tauri Event `companion:paired`
+**And** 错误路径返回 `AppError` 新增变体 `PairingError / ConnectionError / ProtocolError`（序列化形状与既有 `AppError` 约定一致，用户可见文案为中文、不暴露技术细节）
+
+**Given** 已配对设备再次连接
+**When** `companion_connection` 识别其静态公钥
+**Then** 免配对直接进入加密会话，状态机进入直连态，发出 `companion:connected` / 断开时 `companion:disconnected`
+**And** `companion_get_status` 可随时返回当前连接状态与最后配对信息
+
+**Given** 桌面应用启动且配对过至少一台设备
+**When** 应用处于局域网内
+**Then** NSD/mDNS 以 `_egosync._tcp` 持续广播，WS 监听端口策略（固定端口或动态+注册约定）在 README/设置页中文说明，Windows 防火墙首次弹窗的用户引导文案已备妥
+**And** 手机移除配对（`paired_device_remove`）后，该设备公钥不再被接受
+
+**Given** Story 12.2 自动化测试运行
+**When** 执行 `cargo test`（含 `tests/test_companion.rs`）与桌面前端构建
+**Then** 覆盖 QR payload 字段、握手成功/失败路径、paired_devices CRUD、免配对重连、事件发射与状态查询
+**And** `npm run test:all` 全绿（桌面零回归）
+
+---
+
+### Story 12.3: `relay-server` 无状态加密中继与 Docker 部署
+
+As a 出网在外的伴侣用户,
+I want 一台自托管的云中继在我离开局域网时转发手机与桌面之间的端到端加密流量,
+So that 我在户外也能安全使用手机伴侣，且中继对传输内容零知识、成本可控。
+
+**FRs covered:** FR-40（云中继加密转发、中继不可读明文、不落地存储）；Additional 3、9
+**NFRs covered:** NFR-M1、NFR-M2、NFR-M7
+
+**Acceptance Criteria:**
+
+**Given** `relay-server/` 子项目
+**When** 实现完成
+**Then** 基于 axum 0.8 + tokio + tokio-tungstenite，含 `src/{main.rs, registry.rs, forward.rs, auth.rs}`，与桌面共享 `crates/companion-proto`（path 依赖）
+**And** 监听 `ws://0.0.0.0:7333`（端口可配），提供 `GET /healthz` 返回 200
+
+**Given** 两个客户端（桌面与手机）以同一 `relay_id` 连接中继
+**When** 注册阶段
+**Then** 中继以挑战-应答要求连接方证明持有对应静态私钥，验证通过才登记 `{relay_id → 连接}`；应答错误被拒绝且不登记（防 ID 抢占）
+**And** 双方就绪后，中继仅按 `relay_id` 做纯二进制密文帧转发，不解析、不修改帧内容
+
+**Given** 中继运行任意时长
+**When** 检查其行为与文件系统
+**Then** 注册表只存在于内存，零数据库、零磁盘写、断线即丢（不做离线投递）
+**And** 集成测试断言：进程重启后注册表为空（"零持久化"验收进 `tests/`）
+**And** tracing 日志只含连接/转发事件元数据（relay_id、字节数），帧明文永不入日志
+
+**Given** 部署产物
+**When** 执行 `docker compose up`
+**Then** 多阶段 Dockerfile 构建成功并启动服务，`/healthz` 探活通过
+**And** `.github/workflows/relay-docker.yml` 在推送时构建并发布镜像，CI 含 `cargo test`
+
+**Given** 单 VPS 部署（$5/月级）
+**When** 数百并发长连接压测（Story 内以基准测试或文档化压测脚本验证）
+**Then** 服务无状态运行，内存占用与连接数线性、无持久化增长，转发延迟在可接受范围
+
+---
+
+### Story 12.4: Android 扫码配对与三态连接换装
+
+As a 手机用户,
+I want 用手机扫描桌面二维码完成配对，之后自动在直连与中继之间切换并随时看到连接状态,
+So that 我不用关心网络细节，始终有一条安全通道连着桌面引擎。
+
+**FRs covered:** FR-40（扫码绑定、自动发现直连、中继切换与切回、三态可见、重装重扫恢复、配对持久化）
+**NFRs covered:** NFR-M5、NFR-M6、NFR-M7
+**UX-DRs covered:** UX-M1、UX-M2、UX-M3、UX-M4
+
+**Acceptance Criteria:**
+
+**Given** `companion-android/` 原型（UI 零重做约束）
+**When** 实现完成
+**Then** 新增真实实现放 `connection/` 包（`NsdDiscovery / RelayClient` 等，沿用架构命名），`ConnectionClient` 接口签名不变，`AppModelContainer` 仅替换 `connection` 装配，UI 层零改动
+**And** 配对页「模拟扫码成功」按钮替换为真实扫码（候选 ML Kit Barcode；依赖加入白名单需在 Story 内说明理由），配对流四步样式与交互不变
+
+**Given** noise-java 引入 Android 端
+**When** 单元测试运行（`src/test/`）
+**Then** noise-java 完成的 Noise XX 握手与加解密结果，与 Story 12.1 冻结的黄金向量互验通过（`Noise_XX_25519_ChaChaPoly_BLAKE2s`）
+**And** 手机静态私钥存入 Android Keystore，导出/日志均不可见私钥材料
+
+**Given** 已配对手机与桌面处于同一局域网
+**When** 手机启动或网络恢复
+**Then** NsdManager 发现 `_egosync._tcp` 服务后经 WS 直连桌面，状态栏显示「局域网直连」
+**And** 断开时以指数退避重连（1s→30s 封顶 + 随机抖动）
+
+**Given** 手机离开局域网（NSD 无响应）
+**When** 探测 3 秒仍不可达（prefer-direct 滞回，防抖动）
+**Then** 自动切换经中继 WS（按 QR 中的 relay_addr + relay_id）建立加密转发，状态栏显示「中继转发」
+**And** 回到局域网后自动切回直连，全程无需人工干预
+
+**Given** 桌面关机或网络全断
+**When** 直连与中继均不可达
+**Then** 状态进入 Offline（降级体验在 Epic 14 完善，本 Story 保证状态可见不误报）
+**And** 设置页配对设备卡的连接状态圆点实时反映三态
+
+**Given** 用户卸载重装 App（Keystore 密钥随之销毁）
+**When** 重新扫码配对
+**Then** 配对成功且桌面无需任何重置操作（新公钥写入 paired_devices；V1 单对单，新配对按产品口径处理旧记录）
+**And** 解除配对入口清除本地配对状态与密钥，回到未配对首跑流
+
+**Given** 换装前后对比（UX-M3）
+**When** 逐屏截图比对（配对流/四 Tab 主界面/设置页）
+**Then** 视觉与交互零回归（对照原型 README 页面地图）；Debug 四态模拟入口保留为开发工具
+**And** `./gradlew :app:testDebugUnitTest` 全绿，配对冒烟路径进 `src/androidTest/`
+
+---
+
+## Epic 13: 手机实时视图与远程操作（Live View & Remote Commands）
+
+用户在手机上看到与桌面一致的实时状态，变化主动推送、核心状态界面无需手动下拉；手机发起的对话、建议确认/拒绝、任务操作作为指令交桌面引擎执行并实时回流；流式对话跨设备桥接；断线重连以最新快照补齐。完成后 = 一档 18 项核心 FR + 二档 6 项适配 FR 的移动呈现全部就位。
+
+**FRs covered:** FR-41；一档核心 FR-1,2,3,11,12,14,15,16,18,19,20,21,22(数据),24,29,30,33,38；二档适配 FR-5,7,8,9,17,23 的移动呈现
+**NFRs covered:** NFR-M3, NFR-M4, NFR-M5, NFR-M7
+
+### Story 13.1: 桌面快照引擎与状态主动推送
+
+As a 手机用户,
+I want 桌面把角色、任务、仪表盘、会话、简报复盘和未读通知的最新状态主动推到我的手机,
+So that 我打开手机就能看到与桌面一致的状态，变化即时刷新，不需要手动下拉。
+
+**FRs covered:** FR-41（状态通道：主动推送 + 重连最新快照补齐；快照口径内的移动呈现数据源）；Additional 2（snapshot 部分）、6、8
+**NFRs covered:** NFR-M4、NFR-M5、NFR-M7
+
+**Acceptance Criteria:**
+
+**Given** `services/companion_snapshot.rs` 实现
+**When** 快照生成
+**Then** 口径严格为：角色卡状态（含能量）+ 四象限任务 + 仪表盘指标 + 活跃及近期会话各最近 200 条消息 + 本季度晨间简报/周复盘 + 未读通知；**记忆库内容不上机**（角色卡上的记忆条数统计数字属仪表盘指标，允许）
+**And** 快照在内存持有、不持久化；桌面重启后首次连接现生成
+
+**Given** 桌面端发生相关写操作（角色/任务/会话/通知/简报等）
+**When** 写操作完成后
+**Then** 快照引擎经既有事件/通知路径触发 debounce 节流重建，不改现有 services 的业务逻辑（桌面零回归）
+**And** 重建完成后向已连接手机推送 `STATE_DELTA`；手机断线期间积压的变化在重连后以全量 `SNAPSHOT` 替换补齐（不做历史增量回放）
+
+**Given** 已配对手机建立加密连接
+**When** 连接建立（含重连）
+**Then** 桌面下发全量 `SNAPSHOT` 帧（全量替换式）
+**And** 手机在线期间状态变化触发 `STATE_DELTA` 主动推送，核心状态无需手机轮询
+
+**Given** 快照体积达到 10MB 上限
+**When** 重建
+**Then** 按最旧截断，截断信息进快照元数据（数据截止时间字段），供手机 UI 明示
+**And** 截断只影响会话/简报等可截断域，角色/任务/指标等核心状态不缺失
+
+**Given** 帧编码与日志
+**When** SNAPSHOT / STATE_DELTA 下发
+**Then** 帧经 companion-proto 加密承载；payload 字段 camelCase；帧明文不入日志（NFR-M7）
+**And** `tests/test_companion.rs` 覆盖：口径完整性（含"记忆内容不在快照中"的负向断言）、debounce 节流、10MB 截断、断线重连补发最新快照
+
+---
+
+### Story 13.2: 手机实时快照视图换装
+
+As a 手机用户,
+I want 手机的仪表盘、任务、对话历史、简报、复盘和通知中心显示来自桌面的真实数据，并随推送即时更新,
+So that 手机不再是我桌面数据的静态演示，而是活的远程视图。
+
+**FRs covered:** FR-41（状态实时呈现）；18+6 项移动呈现（快照承载部分：FR-19, 20, 21, 22 数据, 23, 24, 33 只读, 38 等）
+**NFRs covered:** NFR-M5、NFR-M7
+**UX-DRs covered:** UX-M1、UX-M2、UX-M3、UX-M5
+
+**Acceptance Criteria:**
+
+**Given** `sync/SnapshotStore` 换装（AppModelContainer 唯一换装点）
+**When** 实现完成
+**Then** SnapshotStore 由帧驱动：`SNAPSHOT` 全量替换、`STATE_DELTA` 经 StateMerger 合并、`PING` 保活；对上层 ViewModel 保持既有取数接口，UI 层零改动
+**And** 快照缓存落盘为单一版本化文件 + 元数据（含数据截止时间），用 Android Keystore 派生 AES 加密；**不引入 Room**（架构反模式）
+
+**Given** 手机与桌面连接期间
+**When** 桌面状态变化推送 `STATE_DELTA`
+**Then** 仪表盘（角色卡/能量条/统计四宫格）、任务四象限、对话会话列表与历史消息、晨间简报、周复盘、通知中心未读数据即时刷新，无需手动下拉
+**And** 呼吸动效/色温过渡等既有动效行为不变（UX-M1）
+
+**Given** 手机断线后重连
+**When** 收到全量 `SNAPSHOT`
+**Then** 各屏以最新快照替换呈现（FR-41 验收：断线期间的变化补齐）
+**And** 快照元数据中的数据截止时间对 UI 可用（降级标注消费方在 Epic 14）
+
+**Given** 快照被 10MB 截断
+**When** 手机渲染
+**Then** 会话/简报等截断域按数据截止时间明示，不以缺失数据冒充完整
+
+**Given** 记忆页数据通道（UX-M5 防呆）
+**When** 换装 SnapshotStore
+**Then** 真实 SnapshotStore 中**不存在**记忆条目内容（mock 的 memories/memorySources 数据源被移除出快照通道）；记忆页改走 Story 13.3 指令通道现查，本 Story 先将记忆页置于"待接指令通道"状态且不显示假数据
+
+**Given** 换装前后对比（UX-M3）
+**When** 逐屏截图比对（四 Tab 主界面 + 三个二级页）
+**Then** 视觉与交互零回归（数据内容由 mock 换为真实快照数据，布局/样式/动效零变化）
+**And** `./gradlew :app:testDebugUnitTest` 全绿（StateMerger 合并逻辑、快照加解密、版本化文件读写、截断元数据）
+
+---
+
+### Story 13.3: 指令通道与流式对话——手机远程操作桌面引擎
+
+As a 手机用户,
+I want 在手机上发对话、勾任务、确认/拒绝建议、查记忆，这些都由桌面引擎真实执行并实时回流结果,
+So that 手机不只是看板，而是桌面引擎的完整遥控入口。
+
+**FRs covered:** FR-41（指令通道：手机操作=远程命令、结果实时回流、流式对话）；移动呈现指令部分（FR-1, 2, 3, 11, 12, 14, 15, 16, 18, 29, 30 的手机端操作面）；FR-5, 7, 8, 9, 17, 23 轻操作
+**NFRs covered:** NFR-M4、NFR-M5、NFR-M7
+**UX-DRs covered:** UX-M1、UX-M2、UX-M3、UX-M5
+
+**Acceptance Criteria:**
+
+**Given** `services/companion_dispatch.rs` 实现（桌面）
+**When** 手机 `COMMAND` 帧到达
+**Then** dispatch 解析指令并调用既有 services（对话发送、任务操作、建议确认/拒绝、记忆查询、简报行动点确认等），结果以 `COMMAND_RESULT` 回流
+**And** dispatch 是手机指令的唯一入口——不出现任何绕过它直调 agent_bridge/opencode/DB 的路径（硬边界 #2）
+**And** 现有 services 零改动（桌面零回归）
+
+**Given** COMMAND 帧
+**When** 编码
+**Then** 每条指令带幂等 ID；桌面对重复 ID 去重（同 ID 二次到达不重复执行，返回首次结果）——为速记队列无丢失（14.1）提供机制底座
+**And** 指令执行失败时 `COMMAND_RESULT` 携带错误分类（AppError 序列化形状），手机展示中文友好文案
+
+**Given** 手机对话页（ChatViewModel 换装）
+**When** 用户发送消息
+**Then** 消息以 `COMMAND` 发往桌面，经 dispatch → 既有对话 services → opencode 执行；回复以 `STREAM_TOKEN` 帧流式回流（镜像桌面 `llm:stream` 语义），手机逐字渲染 + 思考态/光标等既有交互不变
+**And** 流结束以 `COMMAND_RESULT` 收口；中断/超时路径有明确 UI 反馈，不悬挂
+
+**Given** 手机任务页/建议卡/简报行动点
+**When** 用户勾选任务、确认或拒绝建议、确认行动点
+**Then** 均作为 `COMMAND` 由桌面执行，`COMMAND_RESULT` 回流后本地状态经 STATE_DELTA/快照刷新一致
+**And** 建议确认后 ActionCard 呈现既有「✓ 已转交管家执行」态（UX-M1）
+
+**Given** 手机记忆页（UX-M5）
+**When** 用户打开记忆页/筛选类别/展开来源/确认遗忘
+**Then** 记忆列表与来源消息以 `COMMAND` 现查现显（FR-8 溯源、FR-9 遗忘为轻操作指令），**不接入快照通道**；查询期间有加载态，失败有重试入口
+**And** 真实数据接入后，原型「接真实数据后改角色自带 color」的角色域色温按快照角色数据处理
+
+**Given** 换装前后对比（UX-M3）
+**When** 逐屏截图比对（对话/任务/记忆/简报/通知中心）
+**Then** 视觉与交互零回归；`./gradlew :app:testDebugUnitTest` 全绿（ChatViewModel 流式状态机、幂等去重、错误路径）
+**And** 桌面侧 `tests/test_companion.rs` 覆盖：dispatch 路由到既有 services、幂等去重、STREAM_TOKEN 与 `llm:stream` 语义镜像、错误分类回流
+
+---
+
+## Epic 14: 离线降级、速记与通知（Offline Resilience & In-App Notices）
+
+桌面不可达时手机进入统一降级态：最后已知状态只读缓存 + 明确标注数据截止时间、依赖引擎的入口不可交互并说明原因；速记本地排队、重连自动提交管家处理且无丢失；桌面通知以应用内形式呈现（三级分组/未读角标）。NotificationDispatch 抽象层冻结为后续系统推送预留位（FR-42 DEFERRED 薄故事）。
+
+**FRs covered:** FR-43；FR-42（仅 NotificationDispatch 接口预留，DEFERRED）
+**NFRs covered:** NFR-M3, NFR-M5, NFR-M7
+
+### Story 14.1: 降级态与速记排队——断连时诚实可用
+
+As a 手机用户,
+I want 桌面不可达时手机保持诚实可用：看最后已知快照、写文字速记、恢复连接后速记自动提交无丢失，依赖引擎的入口明确禁用并说明原因,
+So that 断连不造成数据丢失，也不会让我误以为某个操作已经生效。
+
+**FRs covered:** FR-43（全部四条验收）；Additional 7、8（quicknote:submitted）
+**NFRs covered:** NFR-M3、NFR-M5、NFR-M7
+**UX-DRs covered:** UX-M1、UX-M2、UX-M3
+
+**Acceptance Criteria:**
+
+**Given** 已配对手机与桌面处于同一局域网，桌面关机
+**When** 手机检测到连接不可达（直连与中继均失败）
+**Then** 进入 Offline 降级态：界面明确标注「离线」与数据截止时间（快照元数据），不以陈旧数据冒充实时的
+**And** 局域网内桌面关机与广域网中断呈现**统一**的降级体验（同一 Offline 状态机路径，无差异化处理）
+
+**Given** 降级态下的全局遮罩与速记条（原型 DegradedOverlay + 底部速记输入条）
+**When** 用户尝试使用依赖引擎的功能（发对话、任务操作、建议确认、记忆查询等）
+**Then** 对应入口不可交互（灰化/拦截）并说明原因（引擎不可达），遮罩样式与交互零回归（UX-M1）
+**And** 记忆入口同步置灰并说明原因（UX-M5：记忆不在快照缓存，离线不可查）
+
+**Given** 降级态下的速记输入条（唯一开放入口）
+**When** 用户提交文字速记
+**Then** 速记写入手机本地**持久化** FIFO 队列（进程重启不丢失），每条带幂等 ID
+**And** 队列持久化机制替换原型 QuickNoteQueue 的内存 mock 实现，接口不变
+
+**Given** 连接恢复（直连或中继任一通道重建）
+**When** 队列非空
+**Then** 队列逐条以 `COMMAND`（幂等 ID）提交管家处理，桌面确认入库后删队，无丢失；提交进度/结果以既有 Snackbar 提示
+**And** 桌面侧完成处理后发出 `quicknote:submitted` Tauri Event（桌面 UI 可见速记已入账）
+
+**Given** 提交过程中再次断线
+**When** 某条速记未收到桌面确认
+**Then** 该条保留在队列中，下次重连重试；幂等 ID 保证桌面去重，不会重复入库（FR-43 无丢失验收 + 13.3 幂等机制联用）
+
+**Given** AppModelContainer 换装（UX-M2）
+**When** 实现完成
+**Then** 原型 init 块中的 mock flush（直接清队 + 提示）替换为真实逐条 COMMAND 提交逻辑，装配点唯一，UI 层零改动
+**And** 降级遮罩/速记条/截止时间标注逐屏截图零回归（UX-M3）
+
+**Given** Story 14.1 自动化测试
+**When** 执行 `./gradlew :app:testDebugUnitTest`
+**Then** 覆盖：持久化队列读写、幂等 ID 唯一性、断连入队、重连逐条提交、确认删队、中途断线重试、两条降级路径（桌面关机/广域网中断）状态一致
+**And** 桌面侧测试覆盖速记指令入库与 `quicknote:submitted` 事件发射
+
+---
+
+### Story 14.2: 应用内通知与 NotificationDispatch 接口预留
+
+As a 手机用户,
+I want 桌面产生的通知（建议提醒、任务提醒、晨间简报提示等）以应用内形式推到手机，按三级分组呈现并带未读角标,
+So that 我不逐页翻找也能在通知中心统一看到桌面想让我知道的事。
+
+**FRs covered:** FR-42 `[DEFERRED]`（仅 NotificationDispatch 接口预留——薄故事，不实现推送）；FR-22 移动呈现（三级通知数据与通知中心）
+**NFRs covered:** NFR-M3、NFR-M7
+**UX-DRs covered:** UX-M1、UX-M2、UX-M3
+
+**Acceptance Criteria:**
+
+**Given** 桌面产生通知（建议生成、任务提醒、晨间简报就绪等）
+**When** 手机连接在线
+**Then** 桌面经 `NOTICE` 帧推送，手机 `notify/InAppNotificationAdapter` 接收并呈现：通知中心三级分组（whisper 灰 / tap 蓝 / knock 红）+ 未读角标，样式与交互零回归（UX-M1）
+**And** 未读通知同时纳入快照口径（13.1），重连后经快照补齐，不依赖中继离线投递
+
+**Given** 桌面应用未运行
+**When** 工作循环不执行
+**Then** 不产生新通知（FR-42 既定边界：推送的产生方永远是桌面）；手机无新 NOTICE、无假通知
+
+**Given** 通知频率
+**When** 当日通知量达到既有上限
+**Then** 遵守每日上限与沉默原则（knock 每日上限 3 次等既有规则约束推送通道），不超发
+
+**Given** NotificationDispatch 抽象层（`notify/NotificationDispatch.kt`）
+**When** 查看接口定义
+**Then** 接口签名冻结：V1 唯一实装 InAppAdapter；FCM 中继代理 / UnifiedPush 适配器位预留——后续接入只增适配器、不改调用方
+**And** 本 Story **不实现**任何系统推送、锁屏操作、FCM 集成（FR-42 DEFERRED 边界，违反即超出范围）
+
+**Given** 手机离线期间桌面发出通知
+**When** 中继零落地（12.3 验收）
+**Then** 离线期间通知不送达手机（不做离线投递）；重连后以快照中未读通知补齐，无重复
+
+**Given** Story 14.2 自动化测试
+**When** 执行
+**Then** 覆盖：NOTICE 帧 → InAppAdapter 呈现、三级分组与角标、上限节流、离线不投递重连补齐、Dispatch 接口对 InAppAdapter 的调用契约
+**And** 通知中心截图零回归（UX-M3）
+

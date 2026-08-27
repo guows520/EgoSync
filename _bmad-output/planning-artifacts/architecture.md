@@ -2203,7 +2203,7 @@ EgoSync/
 ```text
 EgoSync/
 ├── egosync-app/src-tauri/                  # 桌面端增量扩展
-│   ├── migrations/029_paired_devices.sql   # [N]
+│   ├── migrations/031_paired_devices.sql   # [N]
 │   ├── src/
 │   │   ├── commands/companion.rs           # [N] pairing_*/paired_device_*/companion_get_status
 │   │   ├── services/
@@ -2215,7 +2215,7 @@ EgoSync/
 │   │   ├── models/companion.rs             # [N]
 │   │   └── lib.rs                          # [M] 仅注册新 commands
 │   └── tests/test_companion.rs             # [N]
-├── crates/companion-proto/                 # [N] 共享加密协议 crate（唯一可触碰 Noise 库之处）
+├── crates/companion-proto/                 # [N] 共享加密协议 crate（Rust 侧唯一可触碰 Noise 库之处）
 │   ├── Cargo.toml
 │   └── src/{lib.rs, frames.rs, crypto.rs, schema.json}
 ├── relay-server/                           # [N] 零持久化转发服务
@@ -2242,7 +2242,7 @@ EgoSync/
 
 **四条硬边界：**
 
-1. **加密边界**：`crates/companion-proto` 是全仓唯一允许依赖 snow / noise-java 的位置；三端其余代码只操作帧类型，不见密码学细节
+1. **加密边界**：Rust 侧 `snow` 仅允许出现在 `crates/companion-proto`（src-tauri 与 relay-server 经 path 依赖复用）；Android 侧 `noise-java` 仅允许出现在 `pairing/`、`connection/` 换装层；三端其余代码只操作帧类型，不见密码学细节
 2. **桌面边界**：companion_* 四个 service 只能经 `companion_dispatch` 调用既有 services；commands 保持薄层；现有 services 对伴侣一无所知
 3. **中继边界**：只见 relay_id 与密文帧；无 DB、无磁盘写、断线即丢
 4. **Android 边界**：UI 不触达连接实现（经 ViewModel → 连接客户端接口）；`sync/` 对快照只读渲染；速记只能进队列

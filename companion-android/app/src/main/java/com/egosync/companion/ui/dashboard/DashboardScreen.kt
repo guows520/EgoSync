@@ -31,8 +31,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.DropdownMenu
@@ -127,7 +129,8 @@ fun DashboardScreen(
 
         Spacer(Modifier.height(14.dp))
 
-        // 角色卡横向滑动
+        // 角色卡横向滑动（页内垂直滚动：矮屏下卡片固有高度超出页高时可滚至"查看记忆"入口，
+        // 避免统计标签底部被裁——横向翻页与纵向滚动正交，互不冲突）
         HorizontalPager(
             state = pagerState,
             modifier = Modifier
@@ -136,7 +139,9 @@ fun DashboardScreen(
             contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp),
         ) { page ->
             val role = uiState.roles[page]
-            RoleCardItem(role = role, onOpenMemory = { onOpenMemory(role.id) })
+            Box(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                RoleCardItem(role = role, onOpenMemory = { onOpenMemory(role.id) })
+            }
         }
 
         Spacer(Modifier.height(10.dp))
@@ -282,7 +287,10 @@ internal fun RoleCardItem(role: RoleCard, onOpenMemory: () -> Unit = {}, modifie
             .fillMaxWidth()
             .padding(horizontal = 4.dp),
     ) {
-        Column(Modifier.padding(18.dp)) {
+        // 卡内边距与间距压缩（18→12、18/20/14→12/12/10，合计省约 30dp）：
+        // 使卡片固有高度适配矮屏（360×800dp）pager 页高，统计标签不被页底裁切；
+        // 更矮屏幕由外层 verticalScroll 兜底
+        Column(Modifier.padding(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
                     Modifier
@@ -315,12 +323,12 @@ internal fun RoleCardItem(role: RoleCard, onOpenMemory: () -> Unit = {}, modifie
                 }
             }
 
-            Spacer(Modifier.height(18.dp))
+            Spacer(Modifier.height(12.dp))
 
             // 能量条（呼吸动效：活的实体）
             BreathingEnergyBar(energy = role.energy, accent = energyColor(role.energy))
 
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(12.dp))
 
             // 统计数字行（信息密集 · 控制台模式）
             Row(Modifier.fillMaxWidth()) {
@@ -330,7 +338,7 @@ internal fun RoleCardItem(role: RoleCard, onOpenMemory: () -> Unit = {}, modifie
                 StatCell("待办", role.pendingCount, Modifier.weight(1f))
             }
 
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(10.dp))
 
             // FR-8/9 记忆入口：二级记忆屏 push 入口（Brain + ChevronRight）
             Surface(

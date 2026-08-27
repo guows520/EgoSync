@@ -324,4 +324,16 @@
 
 **次级顺手项**（可并入 ① 或单独小改，非必须）：MetricCard 标签补 weight(1f)（Finding 10，一行，防大字体截断）；README 页面地图补 memory/onboarding 屏（Side Finding）。
 
+## 执行日志（2026-05-27，用户裁决全部走 bmad-quick-dev）
+
+| # | 提交 | 结果 | 备注 |
+| - | ---- | ---- | ---- |
+| 前置 | `46a28a5` | FR-24 脏改动（上一会话遗留）单独提交 | 基线单测绿后提交，保持特性隔离 |
+| ① 横幅删除 | `f13cdfe` | 完成 | 对抗评审 6 处过时文案残留全部 patch；状态栏 padding 经字节码级验证无回归 |
+| ② 图标替换 | `3e49fcf` | 完成 | 评审抓出 major：Tauri foreground 无安全区留白（94×88dp 超 66dp）→ PIL 后处理 5 密度缩放居中；hdpi 49×49 异常修复为 72×72；round 死资源删除；monochrome 层/桌面端同源问题记入 deferred-work |
+| ⑤ 角色卡溢出 | `bad7634` | 完成 | 评审抓出 major：纯滚动方案默认视图不改变可见像素 → 叠加压缩卡内间距（省约 30dp ≥ 29dp 溢出），滚动保留为极矮屏兜底 |
+| ③ 任务三件套 | `cad428b` | 完成 | 三路评审（盲猎手/边界猎手/验收审计员）：I/O 矩阵 7 场景全过、Boundaries 零违反；patch 7 项（major：分类中任务豁免象限过滤保「立即上屏」契约；minor：表单离线门禁、rememberSaveable、id 从种子推导、no-op 回退、补 toggleOwner 中间路径与空标题校验测试）；defer 4 项记入 deferred-work.md。66 单测全绿 |
+
+评审拦截价值记录：②⑤ 两个 major 均为初版方案的真实缺陷，若直接提交将分别产生"图标被裁切 1.3 倍"与"首屏仍被裁"的用户可见回归。
+
 **移交建议**：①②⑤改动小且已裁决到位 → bmad-quick-dev 直接执行；③ 涉及三层（Store/VM/UI）+ 既有单测契约 → 建议 bmad-create-story 立故事跟踪后执行。

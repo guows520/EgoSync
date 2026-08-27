@@ -2,9 +2,9 @@ package com.egosync.companion.ui.chat
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.egosync.companion.AppModelContainer
 import com.egosync.companion.sync.ActionCardSuggestion
 import com.egosync.companion.sync.ActionCardState
+import com.egosync.companion.sync.ChatConversation
 import com.egosync.companion.sync.ChatMessage
 import com.egosync.companion.sync.DecompositionState
 import com.egosync.companion.sync.ExecutionTraceBlock
@@ -43,6 +43,10 @@ data class ChatUiState(
     val streamingToolTitle: String? = null,
     /** FR-33：流式打字机进行中（停止按钮可用态） */
     val responding: Boolean = false,
+    /** 多会话：当前视图的会话列表（最新在前，镜像桌面 ChatHeader 历史下拉） */
+    val conversations: List<ChatConversation> = emptyList(),
+    /** 多会话：当前激活会话 id */
+    val currentConversationId: String = "",
 ) {
     companion object {
         fun sample() = ChatUiState(
@@ -63,36 +67,79 @@ data class ChatUiState(
     }
 }
 
+/** 一小时毫秒数（种子会话时间偏移用）。 */
+private const val HOUR_MS = 3_600_000L
+
 /**
  * 管家对话 mock 状态机：发送 → 思考中 → 工具执行状态行 → 流式打字机回复（镜像 llm:stream 语义）。
  * 组 1 chat：FR-1 两段委派、FR-2 拆分提案、FR-20 角色切换、FR-29 溯源、FR-30 低置信、FR-33 工具可视+停止。
- * 初始消息与回复轮换取自容器快照（只读）；接入真实连接层后：发送改为 COMMAND 帧，回复改为 STREAM_TOKEN 帧驱动。
+ * 初始消息与回复轮换取自快照存储（只读）；接入真实连接层后：发送改为 COMMAND 帧，回复改为 STREAM_TOKEN 帧驱动。
  */
-class ChatViewModel(private val container: AppModelContainer) : ViewModel() {
-
-    private val _uiState = MutableStateFlow(
-        ChatUiState(messages = container.snapshotStore.initialChat)
-    )
-    val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
+class ChatViewModel(private val store: SnapshotStore = SnapshotStore) : ViewModel() {
 
     private var replyIndex = 0
     private var nextId = 100
 
-    /** 按视图隔离的已完成回复轮次（评审修正：全局计数会让角色视图绕行吞掉第 2 轮触发）；null 键=管家 */
+    /** 按视图隔离的已完成回复轮次（评审修正：全局计数会让角色视图绕行吞掉第 2 轮触发）；null 键=管家。
+     *  切会话不清轮次：多会话下第 2 轮拆分提案等 mock 触发行为不回归。 */
     private val completedReplyRounds = mutableMapOf<String?, Int>()
 
     /** 委派第一段（交接声明）消息 id：第二段开始前被停止则回滚，防悬空孤气泡 */
     private var pendingHandoffMsgId: String? = null
 
-    /** 按角色视图保存会话（镜像桌面每角色独立 conversation）；null 键=管家 */
-    private val history = mutableMapOf<String?, List<ChatMessage>>()
+    /** 按角色视图保存多会话列表（镜像桌面每角色独立 conversation 列表）；null 键=管家 */
+    private val history: MutableMap<String?, MutableList<ChatConversation>> = mutableMapOf()
+
+    /** 各视图（null=管家）离开时的活跃会话 id：切回视图恢复原会话，不重置为最新。 */
+    private val activeConversationIdByRole = mutableMapOf<String?, String>()
 
     /** 当前流式协程句柄：停止按钮（FR-33 Square）取消之 */
     private var streamJob: Job? = null
     private var streamingMsgId: String? = null
 
+    private val _uiState: MutableStateFlow<ChatUiState>
+    val uiState: StateFlow<ChatUiState>
+
     init {
-        history[null] = container.snapshotStore.initialChat
+        // 种子会话（时间用相对当前时刻偏移，避免硬编码绝对时间）：
+        // 管家 2 条——当前「今日概览」(initialChat) + 一条历史种子会话；各角色 1 条（roleChatSeeds + 标题）
+        val now = System.currentTimeMillis()
+        history[null] = mutableListOf(
+            ChatConversation(
+                id = UUID.randomUUID().toString(),
+                title = store.butlerCurrentConversationTitle,
+                updatedAt = now - 2 * HOUR_MS,
+                messages = store.initialChat,
+            ),
+            ChatConversation(
+                id = UUID.randomUUID().toString(),
+                title = store.butlerHistoryConversationTitle,
+                updatedAt = now - 26 * HOUR_MS,
+                messages = store.butlerHistoryChat,
+            ),
+        )
+        store.roles.forEach { role ->
+            history[role.id] = mutableListOf(
+                ChatConversation(
+                    id = UUID.randomUUID().toString(),
+                    title = store.roleConversationTitles[role.id].orEmpty(),
+                    updatedAt = now - HOUR_MS,
+                    messages = store.roleChatSeeds[role.id] ?: emptyList(),
+                )
+            )
+        }
+        // 初始激活管家的最新会话（即「今日概览」）
+        val butlerConversations = conversationsOf(null)
+        val current = butlerConversations.first()
+        activeConversationIdByRole[null] = current.id
+        _uiState = MutableStateFlow(
+            ChatUiState(
+                messages = current.messages,
+                conversations = butlerConversations,
+                currentConversationId = current.id,
+            )
+        )
+        uiState = _uiState
     }
 
     // ── FR-20 角色切换 ─────────────────────────────────────────────────
@@ -103,13 +150,22 @@ class ChatViewModel(private val container: AppModelContainer) : ViewModel() {
         stopStreaming()
         streamJob?.cancel()
         streamJob = null
+        var conversations = conversationsOf(roleId)
+        // 恢复该视图离开时的会话（不因往返切换丢失用户上下文）；无记忆则取最新
+        var current = conversations.firstOrNull { it.id == activeConversationIdByRole[roleId] }
+            ?: conversations.firstOrNull()
+        if (current == null) {
+            // 该角色无任何会话（未种子化角色）：兜底新建空会话，防消息无处持久
+            current = createConversationIn(roleId)
+            conversations = conversationsOf(roleId)
+        }
+        activeConversationIdByRole[roleId] = current.id
         _uiState.update {
             it.copy(
                 activeRoleId = roleId,
-                messages = history.getOrPut(roleId) {
-                    if (roleId == null) container.snapshotStore.initialChat
-                    else container.snapshotStore.roleChatSeeds[roleId] ?: emptyList()
-                },
+                messages = current.messages,
+                conversations = conversations,
+                currentConversationId = current.id,
                 thinking = false,
                 responding = false,
                 streamingToolTitle = null,
@@ -121,6 +177,106 @@ class ChatViewModel(private val container: AppModelContainer) : ViewModel() {
         }
     }
 
+    // ── 多会话：新建 / 切换 / 删除（移植桌面 ChatHeader 语义）────────────
+
+    /** 新建会话：中断流式（同 selectRole），追加空会话并设为当前。 */
+    fun newConversation() {
+        stopStreaming()
+        streamJob?.cancel()
+        streamJob = null
+        val roleId = _uiState.value.activeRoleId
+        val conversation = createConversationIn(roleId)
+        activeConversationIdByRole[roleId] = conversation.id
+        _uiState.update {
+            it.copy(
+                messages = emptyList(),
+                conversations = conversationsOf(roleId),
+                currentConversationId = conversation.id,
+                thinking = false,
+                responding = false,
+                streamingToolTitle = null,
+                // 卡片态随会话隔离：新空会话不承载旧会话的提案/建议卡（镜像桌面按 conversation 隔离）
+                actionCards = emptyList(),
+                decomposition = null,
+                roleProposal = null,
+            )
+        }
+    }
+
+    /** 在指定角色会话列表中新建空会话并落库（updatedAt 严格最大，防同毫秒排序不稳）。 */
+    private fun createConversationIn(roleId: String?): ChatConversation {
+        val newestExisting = history[roleId].orEmpty().maxOfOrNull { it.updatedAt } ?: 0L
+        val conversation = ChatConversation(
+            id = UUID.randomUUID().toString(),
+            title = "",
+            updatedAt = maxOf(System.currentTimeMillis(), newestExisting + 1),
+        )
+        history.getOrPut(roleId) { mutableListOf() }.add(conversation)
+        return conversation
+    }
+
+    /** 切换会话：中断流式，换消息流；卡片态随会话清空（不跨会话携带）。 */
+    fun selectConversation(id: String) {
+        if (id == _uiState.value.currentConversationId) return
+        // 先校验存在再中断流式：无效 id 不应无谓打断进行中的回复
+        val roleId = _uiState.value.activeRoleId
+        val conversation = history[roleId].orEmpty().find { it.id == id } ?: return
+        stopStreaming()
+        streamJob?.cancel()
+        streamJob = null
+        activeConversationIdByRole[roleId] = id
+        _uiState.update {
+            it.copy(
+                messages = conversation.messages,
+                currentConversationId = id,
+                conversations = conversationsOf(roleId),
+                thinking = false,
+                responding = false,
+                streamingToolTitle = null,
+                // 卡片态随会话隔离：旧会话的提案/建议卡不带入目标会话
+                actionCards = emptyList(),
+                decomposition = null,
+                roleProposal = null,
+            )
+        }
+    }
+
+    /** 删除会话：仅移除；删当前则回退剩余 updatedAt 最新者，无剩余自动新建空会话。 */
+    fun deleteConversation(id: String) {
+        val roleId = _uiState.value.activeRoleId
+        val list = history[roleId] ?: return
+        if (list.none { it.id == id }) return
+        val isCurrent = _uiState.value.currentConversationId == id
+        if (isCurrent) {
+            // 删当前会话先中断流式，防进行中的流式文本回写进回退后的会话
+            stopStreaming()
+            streamJob?.cancel()
+            streamJob = null
+        }
+        list.removeAll { it.id == id }
+        if (!isCurrent) {
+            _uiState.update { it.copy(conversations = conversationsOf(roleId)) }
+            return
+        }
+        val fallback = list.maxByOrNull { it.updatedAt }
+        if (fallback != null) {
+            activeConversationIdByRole[roleId] = fallback.id
+            _uiState.update {
+                it.copy(
+                    messages = fallback.messages,
+                    conversations = conversationsOf(roleId),
+                    currentConversationId = fallback.id,
+                    // 换了当前会话：卡片态随会话清空
+                    actionCards = emptyList(),
+                    decomposition = null,
+                    roleProposal = null,
+                )
+            }
+        } else {
+            newConversation()
+        }
+    }
+
     // ── 发送与流式回复 ────────────────────────────────────────────────
 
     fun sendMessage(text: String) {
@@ -129,11 +285,25 @@ class ChatViewModel(private val container: AppModelContainer) : ViewModel() {
         // 并发守卫：上一条回复未完成（思考中/流式中）时忽略新发送，防打字机交错
         if (_uiState.value.thinking || _uiState.value.responding) return
 
+        // 空会话（title 为空）收到首条用户消息后：标题取前 16 字符，超过加「…」（镜像桌面会话命名）
+        val roleId = _uiState.value.activeRoleId
+        val currentId = _uiState.value.currentConversationId
+        val currentConversation = history[roleId].orEmpty().find { it.id == currentId }
+        if (currentConversation != null && currentConversation.title.isEmpty()) {
+            var title = if (trimmed.length > 16) trimmed.take(16) else trimmed
+            // 防孤立代理：截断落在代理对（emoji/增补平面字符）中间时退一位，避免残破字符
+            if (trimmed.length > 16 && title.isNotEmpty() && Character.isHighSurrogate(title.last())) {
+                title = title.dropLast(1)
+            }
+            if (trimmed.length > 16) title += "…"
+            replaceConversation(currentId, currentConversation.copy(title = title))
+        }
+
         appendMessage(ChatMessage(nextId++.toString(), false, trimmed))
 
         // FR-1：管家视图命中委派关键词 → 两段委派路由
         val delegationRoleId = if (_uiState.value.activeRoleId == null) {
-            container.snapshotStore.delegationKeywords.entries
+            store.delegationKeywords.entries
                 .firstOrNull { trimmed.contains(it.key) }?.value
         } else null
 
@@ -149,7 +319,7 @@ class ChatViewModel(private val container: AppModelContainer) : ViewModel() {
     /** FR-1 两段委派（镜像 ChatStream.tsx streamBubbles 分桶语义）：
      *  气泡一「稍等，我让 X 看一下」（管家）→ 气泡二「来自 X 的反馈…」（角色头像+名）。 */
     private suspend fun runDelegation(roleId: String) {
-        val roleName = container.snapshotStore.roles.find { it.id == roleId }?.name ?: "角色"
+        val roleName = store.roles.find { it.id == roleId }?.name ?: "角色"
         _uiState.update { it.copy(thinking = true, responding = true) }
         delay(600)
         _uiState.update { it.copy(thinking = false) }
@@ -157,14 +327,14 @@ class ChatViewModel(private val container: AppModelContainer) : ViewModel() {
         // 第一段：管家委派声明（即时落定，不走打字机）；记录 id 供中途停止时回滚
         val handoffId = nextId++.toString()
         pendingHandoffMsgId = handoffId
-        appendMessage(ChatMessage(handoffId, true, container.snapshotStore.delegationFirstSegment(roleName)))
+        appendMessage(ChatMessage(handoffId, true, store.delegationFirstSegment(roleName)))
         delay(500)
         currentCoroutineContext().ensureActive()
         pendingHandoffMsgId = null
 
         // 第二段：目标角色反馈（流式打字机）
-        val full = container.snapshotStore.delegationReplies[roleId]
-            ?: container.snapshotStore.butlerReplies[replyIndex++ % container.snapshotStore.butlerReplies.size]
+        val full = store.delegationReplies[roleId]
+            ?: store.butlerReplies[replyIndex++ % store.butlerReplies.size]
         streamTypewriter(full, senderRoleId = roleId)
         _uiState.update { it.copy(responding = false) }
     }
@@ -177,16 +347,16 @@ class ChatViewModel(private val container: AppModelContainer) : ViewModel() {
         _uiState.update { it.copy(thinking = false) }
 
         // FR-33：工具执行过程可视（工具名+运行中状态轮换）
-        for (stage in container.snapshotStore.toolExecutionStages) {
+        for (stage in store.toolExecutionStages) {
             _uiState.update { it.copy(streamingToolTitle = stage) }
             delay(350)
         }
         _uiState.update { it.copy(streamingToolTitle = null) }
 
-        val replies = container.snapshotStore.butlerReplies
+        val replies = store.butlerReplies
         // FR-30：管家视图第 4 轮回复走低置信（mock confidence<0.7）
         val lowConfidence = viewKey == null && replyIndex % replies.size == 3
-        val full = if (lowConfidence) container.snapshotStore.lowConfidenceReply
+        val full = if (lowConfidence) store.lowConfidenceReply
         else replies[replyIndex % replies.size]
         replyIndex++
 
@@ -201,10 +371,10 @@ class ChatViewModel(private val container: AppModelContainer) : ViewModel() {
         // FR-2/FR-29：第 2 轮回复后浮现拆分提案卡，并把执行溯源挂到本条助手消息（仅管家对话流）
         if (round == 2 && viewKey == null) {
             if (_uiState.value.decomposition == null) {
-                _uiState.update { it.copy(decomposition = container.snapshotStore.decompositionProposal) }
+                _uiState.update { it.copy(decomposition = store.decompositionProposal) }
             }
             _uiState.update {
-                it.copy(traceByMessageId = it.traceByMessageId + (msgId to container.snapshotStore.executionTrace))
+                it.copy(traceByMessageId = it.traceByMessageId + (msgId to store.executionTrace))
             }
         }
 
@@ -224,7 +394,7 @@ class ChatViewModel(private val container: AppModelContainer) : ViewModel() {
 
         // FR-5：第 2 轮回复后浮现角色涌现提案卡（仅管家对话流，一次性守卫）
         if (round == 2 && viewKey == null && _uiState.value.roleProposal == null) {
-            _uiState.update { it.copy(roleProposal = container.snapshotStore.roleProposal) }
+            _uiState.update { it.copy(roleProposal = store.roleProposal) }
         }
     }
 
@@ -393,7 +563,33 @@ class ChatViewModel(private val container: AppModelContainer) : ViewModel() {
         }
     }
 
+    /** 回写当前会话的 messages 与 updatedAt（流式终态/卡片回执等落定点）。 */
     private fun persistCurrentMessages() {
-        history[_uiState.value.activeRoleId] = _uiState.value.messages
+        val roleId = _uiState.value.activeRoleId
+        val currentId = _uiState.value.currentConversationId
+        if (currentId.isEmpty()) return
+        val list = history[roleId] ?: return
+        val index = list.indexOfFirst { it.id == currentId }
+        if (index < 0) return
+        list[index] = list[index].copy(
+            messages = _uiState.value.messages,
+            updatedAt = System.currentTimeMillis(),
+        )
+        // 同步刷新会话列表快照：updatedAt 变化影响「最新在前」排序与相对时间显示
+        _uiState.update { it.copy(conversations = conversationsOf(roleId)) }
     }
+
+    /** 替换指定会话（保持列表位置不变），并刷新 UiState.conversations。 */
+    private fun replaceConversation(conversationId: String, conversation: ChatConversation) {
+        val roleId = _uiState.value.activeRoleId
+        val list = history[roleId] ?: return
+        val index = list.indexOfFirst { it.id == conversationId }
+        if (index < 0) return
+        list[index] = conversation
+        _uiState.update { it.copy(conversations = conversationsOf(roleId)) }
+    }
+
+    /** 当前视图的会话列表（最新在前，镜像桌面 ConversationList 排序）。 */
+    private fun conversationsOf(roleId: String?): List<ChatConversation> =
+        history[roleId].orEmpty().sortedByDescending { it.updatedAt }
 }

@@ -242,7 +242,7 @@ private fun OnboardingBubble(message: ChatMessage) {
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    LucideIcons.ConciergeBell,
+                    LucideIcons.Home,
                     contentDescription = "管家",
                     modifier = Modifier.size(16.dp),
                     tint = MaterialTheme.colorScheme.onPrimary,
@@ -287,7 +287,7 @@ private fun ThinkingIndicator() {
                 .background(MaterialTheme.colorScheme.primary),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(LucideIcons.ConciergeBell, contentDescription = "管家", modifier = Modifier.size(16.dp))
+            Icon(LucideIcons.Home, contentDescription = "管家", modifier = Modifier.size(16.dp))
         }
         Spacer(Modifier.size(8.dp))
         Surface(

@@ -156,6 +156,18 @@ data class ChatMessage(
     val lowConfidence: Boolean = false,
 )
 
+/**
+ * 会话（多会话 mock，镜像桌面 Conversation 类型）：
+ * id 唯一；title 由首条用户消息生成（空=尚未命名，列表显示「新对话」）；
+ * updatedAt 为毫秒时间戳，驱动相对时间显示与列表排序（最新在前）。
+ */
+data class ChatConversation(
+    val id: String,
+    val title: String,
+    val updatedAt: Long,
+    val messages: List<ChatMessage> = emptyList(),
+)
+
 data class ActionCardSuggestion(
     val id: String,
     val title: String,
@@ -605,6 +617,37 @@ object SnapshotStore {
     /** 低置信回复（FR-30：confidence<0.7 → 气泡尾部内联标注）。 */
     val lowConfidenceReply: String =
         "我猜你可能是想问下周的安排，但我不太确定具体指哪一天。你可以再说明一下吗？"
+
+    /**
+     * 管家历史种子会话消息（多会话 mock：「今日概览」之外的老会话，
+     * 老管家语气，围绕上季度 OKR 整理）。
+     */
+    val butlerHistoryChat: List<ChatMessage> = listOf(
+        ChatMessage(
+            id = "h-1",
+            fromButler = false,
+            text = "帮我把上季度 OKR 整理一下，周五复盘要用。",
+        ),
+        ChatMessage(
+            id = "h-2",
+            fromButler = true,
+            text = "好的，我按三个 O 分别列了完成度与偏差原因，关键结果逐条附了证据链接，已放进您的工作台。",
+        ),
+        ChatMessage(
+            id = "h-3",
+            fromButler = true,
+            text = "顺带提醒：第二个 O 的 KR2 只完成了六成，复盘时建议重点讲资源缺口，而不是目标定高。",
+        ),
+    )
+
+    /** 各会话标题常量（与 initialChat / butlerHistoryChat / roleChatSeeds 内容语义贴合）。 */
+    val butlerCurrentConversationTitle: String = "今日概览"
+    val butlerHistoryConversationTitle: String = "上季度 OKR 整理"
+    val roleConversationTitles: Map<String, String> = mapOf(
+        "role-pm" to "评审材料准备",
+        "role-father" to "钢琴课与周末安排",
+        "role-learner" to "深度工作笔记",
+    )
 
     /** 角色会话种子（FR-20：切到角色视图时的初始消息流）。 */
     val roleChatSeeds: Map<String, List<ChatMessage>> = mapOf(

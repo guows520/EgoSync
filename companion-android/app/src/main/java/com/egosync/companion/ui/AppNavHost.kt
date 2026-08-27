@@ -10,6 +10,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
@@ -61,7 +62,7 @@ private data class TabSpec(
 )
 
 private val tabs = listOf(
-    TabSpec("chat", "管家", LucideIcons.MessageSquare),
+    TabSpec("chat", "对话", LucideIcons.MessageSquare),
     TabSpec("tasks", "任务", LucideIcons.ListTodo),
     TabSpec("dashboard", "仪表盘", LucideIcons.LayoutDashboard),
     TabSpec("settings", "我的", LucideIcons.User),
@@ -207,6 +208,10 @@ private fun MainShellRoute(
 ) {
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
+        // 修复顶部双重 inset：外层 MainActivity Scaffold 的默认 contentWindowInsets
+        // 已把系统栏留白计入 content padding；内层 Scaffold 若再叠加默认值，
+        // 四个 Tab 顶部会被推下两次（约 2× 状态栏高度），故此处显式置零。
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         bottomBar = {
             val backStackEntry by navController.currentBackStackEntryAsState()
             val currentRoute = backStackEntry?.destination?.route
@@ -250,7 +255,7 @@ private fun MainShellRoute(
 @Composable
 private fun ChatRoute(container: AppModelContainer) {
     val vm: ChatViewModel = viewModel(
-        factory = viewModelFactory { initializer { ChatViewModel(container) } }
+        factory = viewModelFactory { initializer { ChatViewModel(container.snapshotStore) } }
     )
     val uiState by vm.uiState.collectAsState()
     val connectionState by container.connection.state.collectAsState()
@@ -264,6 +269,9 @@ private fun ChatRoute(container: AppModelContainer) {
         onDecompositionRespond = vm::respondDecomposition,
         onRoleProposalConfirm = vm::confirmRoleProposal,
         onRoleProposalSkip = vm::skipRoleProposal,
+        onNewConversation = vm::newConversation,
+        onSelectConversation = vm::selectConversation,
+        onDeleteConversation = vm::deleteConversation,
     )
 }
 

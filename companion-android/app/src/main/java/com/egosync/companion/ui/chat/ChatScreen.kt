@@ -23,6 +23,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -30,6 +32,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -46,6 +49,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.egosync.companion.sync.ActionCardSuggestion
 import com.egosync.companion.sync.ActionCardState
+import com.egosync.companion.sync.ChatConversation
 import com.egosync.companion.sync.ChatMessage
 import com.egosync.companion.sync.DecompositionState
 import com.egosync.companion.sync.ExecutionTraceBlock
@@ -63,6 +67,8 @@ import com.egosync.companion.ui.theme.EgoSyncTheme
 import com.egosync.companion.ui.theme.InfoDensity
 import com.egosync.companion.ui.theme.accent
 import com.egosync.companion.ui.theme.densitySpec
+import java.util.Calendar
+import java.util.Locale
 
 /**
  * ① 管家对话 Tab：消息流（用户/管家气泡、思考中态、流式打字机）、输入框、
@@ -82,6 +88,9 @@ fun ChatScreen(
     onDecompositionRespond: (proposalId: String, accepted: Boolean) -> Unit,
     onRoleProposalConfirm: (name: String, icon: String, color: String, goal: String) -> Unit,
     onRoleProposalSkip: () -> Unit,
+    onNewConversation: () -> Unit,
+    onSelectConversation: (conversationId: String) -> Unit,
+    onDeleteConversation: (conversationId: String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var input by remember { mutableStateOf("") }
@@ -117,6 +126,15 @@ fun ChatScreen(
             .fillMaxSize()
             .imePadding(),
     ) {
+        // 会话头：移植桌面 ChatHeader（新对话 + 历史对话下拉）
+        ChatHeaderRow(
+            conversations = uiState.conversations,
+            currentConversationId = uiState.currentConversationId,
+            onNewConversation = onNewConversation,
+            onSelectConversation = onSelectConversation,
+            onDeleteConversation = onDeleteConversation,
+        )
+
         // FR-20 角色切换器：桌面 64px 侧栏的移动语义适配（顶部水平滚动）
         RoleSwitcherRow(
             activeRoleId = uiState.activeRoleId,
@@ -248,6 +266,120 @@ fun ChatScreen(
                 onRoleProposalSkip()
             },
         )
+    }
+}
+
+// ── 会话头：新对话 + 历史对话下拉（移植桌面 ChatHeader）────────────────
+
+/** 相对时间显示，镜像桌面 ConversationList.tsx formatRelativeTime。 */
+private fun formatRelativeTime(nowMs: Long, updatedAt: Long): String {
+    val diff = nowMs - updatedAt
+    val minutes = diff / 60_000L
+    if (minutes < 1) return "刚刚"
+    if (minutes < 60) return "${minutes}分钟前"
+    val hours = minutes / 60
+    if (hours < 24) return "${hours}小时前"
+    val cal = Calendar.getInstance().apply { timeInMillis = updatedAt }
+    val month = cal.get(Calendar.MONTH) + 1
+    val day = cal.get(Calendar.DAY_OF_MONTH)
+    val hh = "%02d".format(Locale.ROOT, cal.get(Calendar.HOUR_OF_DAY))
+    val mm = "%02d".format(Locale.ROOT, cal.get(Calendar.MINUTE))
+    return "${month}月${day}日 $hh:$mm"
+}
+
+/**
+ * 会话头（镜像桌面 ChatHeader.tsx）：M3 小号文本按钮「新对话」(Plus 14dp) +
+ * 「历史对话」(History 14dp) → DropdownMenu 列出当前角色会话（标题+相对时间+删除）。
+ */
+@Composable
+private fun ChatHeaderRow(
+    conversations: List<ChatConversation>,
+    currentConversationId: String,
+    onNewConversation: () -> Unit,
+    onSelectConversation: (conversationId: String) -> Unit,
+    onDeleteConversation: (conversationId: String) -> Unit,
+) {
+    var showHistory by remember { mutableStateOf(false) }
+    val nowMs = System.currentTimeMillis()
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        TextButton(onClick = onNewConversation) {
+            Icon(
+                LucideIcons.Plus,
+                contentDescription = null,
+                modifier = Modifier.size(14.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.size(6.dp))
+            Text("新对话", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+
+        Box {
+            TextButton(onClick = { showHistory = !showHistory }) {
+                Icon(
+                    LucideIcons.History,
+                    contentDescription = null,
+                    modifier = Modifier.size(14.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.size(6.dp))
+                Text("历史对话", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            DropdownMenu(
+                expanded = showHistory,
+                onDismissRequest = { showHistory = false },
+            ) {
+                if (conversations.isEmpty()) {
+                    // 空态：一条禁用项（镜像桌面「暂无历史对话」）
+                    DropdownMenuItem(
+                        text = { Text("暂无历史对话") },
+                        onClick = {},
+                        enabled = false,
+                    )
+                } else {
+                    conversations.forEach { conv ->
+                        DropdownMenuItem(
+                            text = {
+                                Column {
+                                    Text(
+                                        conv.title.ifEmpty { "新对话" },
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = if (conv.id == currentConversationId)
+                                            MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.onSurface,
+                                    )
+                                    Text(
+                                        formatRelativeTime(nowMs, conv.updatedAt),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            },
+                            onClick = {
+                                onSelectConversation(conv.id)
+                                showHistory = false
+                            },
+                            trailingIcon = {
+                                IconButton(onClick = { onDeleteConversation(conv.id) }) {
+                                    Icon(
+                                        LucideIcons.Trash2,
+                                        contentDescription = "删除对话",
+                                        modifier = Modifier.size(14.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            },
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -464,7 +596,7 @@ private fun MessageBubble(message: ChatMessage, senderRole: RoleCard?) {
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    senderRole?.icon?.let { RoleIcons.getRoleIcon(it) } ?: LucideIcons.ConciergeBell,
+                    senderRole?.icon?.let { RoleIcons.getRoleIcon(it) } ?: LucideIcons.Home,
                     contentDescription = senderRole?.name ?: "管家",
                     modifier = Modifier.size(16.dp),
                     tint = if (senderRole != null) MaterialTheme.colorScheme.onPrimary
@@ -556,7 +688,7 @@ private fun ThinkingBubble() {
                 .background(MaterialTheme.colorScheme.primary),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(LucideIcons.ConciergeBell, contentDescription = "管家", modifier = Modifier.size(16.dp))
+            Icon(LucideIcons.Home, contentDescription = "管家", modifier = Modifier.size(16.dp))
         }
         Spacer(Modifier.size(8.dp))
         Surface(
@@ -824,6 +956,9 @@ private fun ChatScreenPreview() {
             onDecompositionRespond = { _, _ -> },
             onRoleProposalConfirm = { _, _, _, _ -> },
             onRoleProposalSkip = {},
+            onNewConversation = {},
+            onSelectConversation = {},
+            onDeleteConversation = {},
         )
     }
 }
@@ -852,6 +987,9 @@ private fun ChatScreenStreamingPreview() {
             onDecompositionRespond = { _, _ -> },
             onRoleProposalConfirm = { _, _, _, _ -> },
             onRoleProposalSkip = {},
+            onNewConversation = {},
+            onSelectConversation = {},
+            onDeleteConversation = {},
         )
     }
 }
@@ -876,6 +1014,9 @@ private fun ChatScreenRoleViewPreview() {
             onDecompositionRespond = { _, _ -> },
             onRoleProposalConfirm = { _, _, _, _ -> },
             onRoleProposalSkip = {},
+            onNewConversation = {},
+            onSelectConversation = {},
+            onDeleteConversation = {},
         )
     }
 }
@@ -897,6 +1038,9 @@ private fun ChatScreenRoleProposalPreview() {
             onDecompositionRespond = { _, _ -> },
             onRoleProposalConfirm = { _, _, _, _ -> },
             onRoleProposalSkip = {},
+            onNewConversation = {},
+            onSelectConversation = {},
+            onDeleteConversation = {},
         )
     }
 }

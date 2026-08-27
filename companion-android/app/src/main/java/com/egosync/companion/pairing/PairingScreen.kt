@@ -77,7 +77,7 @@ fun PairingScreen(
 
 @Composable
 private fun WelcomeStep(onStartScan: () -> Unit) {
-    Icon(LucideIcons.ConciergeBell, contentDescription = "管家", modifier = Modifier.size(32.dp))
+    Icon(LucideIcons.Home, contentDescription = "管家", modifier = Modifier.size(32.dp))
     Spacer(Modifier.height(20.dp))
     Text(
         "EgoSync 伴侣",

@@ -52,6 +52,7 @@ object LucideIcons {
     val Compass: ImageVector by lazy { lucide("Compass", "M2,12A10,10 0 1 0 22,12A10,10 0 1 0 2,12", "m16.24 7.76-1.804 5.411a2 2 0 0 1-1.265 1.265L7.76 16.24l1.804-5.411a2 2 0 0 1 1.265-1.265z") }
     val Wallet: ImageVector by lazy { lucide("Wallet", "M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1", "M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4") }
     val ConciergeBell: ImageVector by lazy { lucide("ConciergeBell", "M3 20a1 1 0 0 1-1-1v-1a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v1a1 1 0 0 1-1 1Z", "M20 16a8 8 0 1 0-16 0", "M12 4v4", "M10 4h4") }
+    val History: ImageVector by lazy { lucide("History", "M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8", "M3 3v5h5", "M12 7v5l4 2") }
     val MessageSquare: ImageVector by lazy { lucide("MessageSquare", "M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z") }
     val ListTodo: ImageVector by lazy { lucide("ListTodo", "M13 5h8", "M13 12h8", "M13 19h8", "m3 17 2 2 4-4", "M4,4h4a1,1 0 0 1 1,1v4a1,1 0 0 1 -1,1h-4a1,1 0 0 1 -1,-1v-4a1,1 0 0 1 1,-1z") }
     val LayoutDashboard: ImageVector by lazy { lucide("LayoutDashboard", "M4,3h5a1,1 0 0 1 1,1v7a1,1 0 0 1 -1,1h-5a1,1 0 0 1 -1,-1v-7a1,1 0 0 1 1,-1z", "M15,3h5a1,1 0 0 1 1,1v3a1,1 0 0 1 -1,1h-5a1,1 0 0 1 -1,-1v-3a1,1 0 0 1 1,-1z", "M15,12h5a1,1 0 0 1 1,1v7a1,1 0 0 1 -1,1h-5a1,1 0 0 1 -1,-1v-7a1,1 0 0 1 1,-1z", "M4,16h5a1,1 0 0 1 1,1v3a1,1 0 0 1 -1,1h-5a1,1 0 0 1 -1,-1v-3a1,1 0 0 1 1,-1z") }

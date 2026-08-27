@@ -87,7 +87,7 @@ fun BriefingScreen(
                 shape = RoundedCornerShape(10.dp),
             ) {
                 Row(Modifier.padding(14.dp)) {
-                    Icon(LucideIcons.ConciergeBell, contentDescription = "管家", modifier = Modifier.size(24.dp))
+                    Icon(LucideIcons.Home, contentDescription = "管家", modifier = Modifier.size(24.dp))
                     Spacer(Modifier.size(12.dp))
                     Text(
                         briefing.greeting,

@@ -203,7 +203,7 @@ private fun ButlerOverviewCard(
                         .clip(CircleShape)
                         .background(MaterialTheme.colorScheme.primaryContainer),
                     contentAlignment = Alignment.Center,
-                ) { Icon(LucideIcons.ConciergeBell, contentDescription = "管家", modifier = Modifier.size(24.dp)) }
+                ) { Icon(LucideIcons.Home, contentDescription = "管家", modifier = Modifier.size(24.dp)) }
                 Spacer(Modifier.size(12.dp))
                 Column(Modifier.weight(1f)) {
                     Text("管家 · 全局概览", style = MaterialTheme.typography.titleMedium)

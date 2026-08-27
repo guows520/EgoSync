@@ -34,6 +34,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.RoundRect
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
@@ -41,6 +48,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.egosync.companion.sync.SnapshotStore
 import com.egosync.companion.sync.TaskItem
+import com.egosync.companion.sync.TaskProtectionStatus
 import com.egosync.companion.ui.theme.BrandIndigo
 import com.egosync.companion.ui.theme.BrandWarn
 import com.egosync.companion.ui.theme.EgoSyncTheme
@@ -236,6 +244,11 @@ internal fun TaskRow(
         shape = RoundedCornerShape(10.dp),
         modifier = modifier
             .fillMaxWidth()
+            .then(
+                // FR-24 at_risk 左边框（母本 TaskOverviewTab.tsx:86 border-l-4 border-l-amber-400）
+                if (task.protectionStatus == TaskProtectionStatus.AT_RISK) Modifier.atRiskLeftBorder()
+                else Modifier
+            )
             .then(if (enabled) Modifier.clickable(onClick = onToggle) else Modifier),
     ) {
         Row(
@@ -294,6 +307,10 @@ internal fun TaskRow(
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                    }
+                    if (task.protectionStatus == TaskProtectionStatus.AT_RISK) {
+                        Spacer(Modifier.size(6.dp))
+                        AtRiskBadge()
                     }
                     if (isClassifying) {
                         Spacer(Modifier.size(6.dp))
@@ -369,6 +386,52 @@ private fun SpinningLoader(modifier: Modifier = Modifier) {
     )
 }
 
+/** 「被挤压」徽章 — 母本：TaskOverviewTab.tsx:115-123（amber 底 + AlertTriangle 11px + 文案；aria=重要任务被持续挤压）。 */
+@Composable
+internal fun AtRiskBadge(modifier: Modifier = Modifier) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(BrandWarn.copy(alpha = 0.08f))
+            .border(1.dp, BrandWarn.copy(alpha = 0.25f), RoundedCornerShape(4.dp))
+            .padding(horizontal = 5.dp, vertical = 1.dp),
+    ) {
+        Icon(
+            LucideIcons.AlertTriangle,
+            contentDescription = "重要任务被持续挤压，建议尽快处理",
+            modifier = Modifier.size(11.dp),
+            tint = BrandWarn,
+        )
+        Spacer(Modifier.size(3.dp))
+        Text(
+            "被挤压",
+            style = MaterialTheme.typography.labelSmall,
+            color = BrandWarn,
+        )
+    }
+}
+
+/**
+ * at_risk 卡片 4dp 琥珀左边条 — 母本 TaskOverviewTab.tsx:86 border-l-4 border-l-amber-400。
+ * 在 Surface 内容之上按卡片圆角裁剪绘制，跟随左边圆弧（仅遮左侧 4dp 内边距区域，不覆盖正文）。
+ */
+private fun Modifier.atRiskLeftBorder(): Modifier = drawWithContent {
+    drawContent()
+    val radius = 10.dp.toPx()
+    clipPath(
+        Path().apply {
+            addRoundRect(RoundRect(0f, 0f, size.width, size.height, CornerRadius(radius)))
+        },
+    ) {
+        drawRect(
+            color = BrandWarn,
+            topLeft = Offset.Zero,
+            size = Size(4.dp.toPx(), size.height),
+        )
+    }
+}
+
 // ── Preview ────────────────────────────────────────────────────────────
 
 @Preview(showBackground = true)
@@ -403,6 +466,12 @@ private fun TaskRowPreview() {
                 task = SnapshotStore.tasks.first(),
                 enabled = true,
                 isClassifying = true,
+                onToggle = {},
+            )
+            // FR-24：at_risk 任务卡（左边框 + 被挤压徽章）
+            TaskRow(
+                task = SnapshotStore.tasks.first { it.protectionStatus == TaskProtectionStatus.AT_RISK },
+                enabled = true,
                 onToggle = {},
             )
         }

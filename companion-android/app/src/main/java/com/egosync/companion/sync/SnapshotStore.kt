@@ -33,6 +33,9 @@ data class RoleCard(
 
 // ── 四象限任务 ─────────────────────────────────────────────────────────
 
+/** Q2 保护状态（FR-24，镜像桌面 types/task.ts:2 TaskProtectionStatus）。 */
+enum class TaskProtectionStatus { NORMAL, AT_RISK }
+
 data class TaskItem(
     val id: String,
     val title: String,
@@ -42,6 +45,8 @@ data class TaskItem(
     /** 大石头：本周不可妥协的优先项（每角色每周 1~2 件） */
     val bigRock: Boolean,
     val done: Boolean = false,
+    /** Q2 保护提醒（FR-24）：at_risk = 重要任务被持续挤压（母本 q2_protection_reminder.rs 检测）。 */
+    val protectionStatus: TaskProtectionStatus = TaskProtectionStatus.NORMAL,
 )
 
 // ── 晨间简报 ───────────────────────────────────────────────────────────
@@ -331,6 +336,8 @@ object SnapshotStore {
             roleName = "学习者",
             due = "本周日",
             bigRock = true,
+            // FR-24：学习者角色 4 天未活跃（≥ AT_RISK_DAYS=3），Q2 大石头被持续挤压
+            protectionStatus = TaskProtectionStatus.AT_RISK,
         ),
         TaskItem(
             id = "t-4",
@@ -440,6 +447,15 @@ object SnapshotStore {
             time = "2 小时前",
             actionable = true,
             read = true,
+        ),
+        // FR-24 Q2 保护提醒（母本 q2_protection_reminder.rs:122-135：轻触级通知、文案逐字镜像，
+        // 与 at_risk 任务 t-3 对应）
+        NoticeItem(
+            id = "n-tap-3",
+            level = NoticeLevel.TAP,
+            text = "你的'读完《深度工作》第 3 章并写笔记'任务已经 3 天没动了，要不要今天安排一下？",
+            fromRole = "学习者",
+            time = "1 小时前",
         ),
         NoticeItem(
             id = "n-tap-1",

@@ -128,4 +128,6 @@ object LucideIcons {
     val Loader2: ImageVector by lazy { lucide("Loader2", "M21 12a9 9 0 1 1-6.219-8.56") }
     // ── 组 5 review FR-17 图标（lucide 官方 path data 逐字移植）──
     val Plus: ImageVector by lazy { lucide("Plus", "M5 12h14", "M12 5v14") }
+    // ── 组 7 notify FR-24 图标（lucide 官方 path data 逐字移植）──
+    val AlertTriangle: ImageVector by lazy { lucide("AlertTriangle", "m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3", "M12 9v4", "M12 17h.01") }
 }

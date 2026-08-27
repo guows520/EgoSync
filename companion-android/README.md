@@ -31,7 +31,6 @@
      ③ 连接中动画（发现设备 → 交换密钥 → 验证身份 三阶段高亮）
      ④ 配对成功 → 进入主界面（配对关系持久化，再次启动直达）
  └─ 已配对 → 主界面
-     ├─ 顶部：三态连接横幅（局域网直连🟢 / 中继转发🔵 / 离线🔴，三色+圆点）
      ├─ 💬 管家（Tab 1）
      │    ├─ 消息流：用户/管家气泡、思考中态、流式打字机（逐字浮现+光标）
      │    ├─ 输入框（降级态禁用并说明原因）
@@ -53,7 +52,6 @@
           └─ 🔔 通知中心：whisper/tap/knock 三级分组 + 未读圆点 + 敲门级确认/拒绝
 
 全局组件
- ├─ 三态连接横幅：direct 绿 / relay 蓝 / offline 红（含缓存数据截至时间）
  └─ 降级态遮罩（offline/degraded 时覆盖主界面）：
      灰色蒙层（拦截交互=引擎功能禁用）+ 数据截止时间标注 + 说明文案
      + 底部速记输入条（唯一开放入口；恢复连接后自动提交管家，Snackbar 提示）
@@ -110,12 +108,12 @@
 
 | 档位 | 效果 |
 |------|------|
-| 局域网直连 direct | 横幅绿色「局域网直连」；全部功能可用 |
-| 中继转发 relay | 横幅蓝色「中继转发 · 端到端加密」；全部功能可用 |
-| 离线 · 无缓存 offline | 横幅红色；遮罩显示「离线 · 暂无缓存」+ 速记条 |
-| 降级 · 只读缓存 degraded | 横幅红色；遮罩显示「数据截至 今天 08:15」+ 速记条 |
+| 局域网直连 direct | 全部功能可用 |
+| 中继转发 relay | 全部功能可用 |
+| 离线 · 无缓存 offline | 遮罩显示「离线 · 暂无缓存」+ 速记条 |
+| 降级 · 只读缓存 degraded | 遮罩显示「数据截至 今天 08:15」+ 速记条 |
 
-切换即时生效，驱动横幅、降级遮罩、对话/任务/通知的操作禁用态全局变化。
+切换即时生效，驱动降级遮罩、对话/任务/通知的操作禁用态全局变化（连接状态可在「我的」页配对设备卡查看）。
 
 ### 速记队列（FR-43 演示）
 
@@ -158,7 +156,7 @@ sealed interface ConnectionState {
 ```
 
 真实实现职责：NSD/mDNS 发现（`_egosync._tcp`）→ Noise XX 握手 → 同一加密帧协议双承载（直连 WS / 中继 WS）→ 断线重连发最新快照补齐（SNAPSHOT 帧）。
-UI 已订阅 `state` 流：横幅、降级遮罩、引擎可用性（`engineAvailable`）全部由该流驱动。
+UI 已订阅 `state` 流：降级遮罩、引擎可用性（`engineAvailable`）、「我的」页配对设备卡状态全部由该流驱动。
 
 ### 2. `sync/SnapshotStore.kt` — 快照数据（mock → SNAPSHOT/STATE_DELTA 帧驱动）
 
@@ -209,7 +207,7 @@ companion-android/
 ├── app/src/main/java/com/egosync/companion/
 │   ├── MainActivity.kt / AppModelContainer.kt
 │   ├── pairing/        # 配对流（PairingScreen / PairingViewModel）
-│   ├── connection/     # ConnectionState / ConnectionClient / Fake / 横幅
+│   ├── connection/     # ConnectionState / ConnectionClient / Fake
 │   ├── sync/           # SnapshotStore（mock 快照）/ QuickNoteQueue
 │   ├── notify/         # NotificationDispatch / InAppNotificationAdapter
 │   └── ui/

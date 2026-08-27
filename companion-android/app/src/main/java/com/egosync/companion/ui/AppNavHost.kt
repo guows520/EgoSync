@@ -35,7 +35,6 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.egosync.companion.AppModelContainer
-import com.egosync.companion.connection.ConnectionStatusBanner
 import com.egosync.companion.ui.briefing.BriefingScreen
 import com.egosync.companion.ui.chat.ChatScreen
 import com.egosync.companion.ui.chat.ChatViewModel
@@ -198,7 +197,7 @@ private fun OnboardingRoute(navController: NavHostController, container: AppMode
     )
 }
 
-// ── 主界面壳：连接横幅 + 内容 + 底部四 Tab ──────────────────────────────
+// ── 主界面壳：内容 + 底部四 Tab ─────────────────────────────────────────
 
 @Composable
 private fun MainShellRoute(
@@ -206,11 +205,8 @@ private fun MainShellRoute(
     container: AppModelContainer,
     currentTab: String,
 ) {
-    val connectionState by container.connection.state.collectAsState()
-
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
-        topBar = { ConnectionStatusBanner(state = connectionState) },
         bottomBar = {
             val backStackEntry by navController.currentBackStackEntryAsState()
             val currentRoute = backStackEntry?.destination?.route

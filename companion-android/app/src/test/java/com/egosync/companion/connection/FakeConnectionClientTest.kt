@@ -8,8 +8,8 @@ import org.junit.Test
 
 /**
  * FakeConnectionClient 意图验证：
- * 四档 debug 预设必须准确映射到横幅三态 + 降级信息，
- * 驱动全局横幅与降级遮罩的实时切换是状态模拟入口的契约。
+ * 四档 debug 预设必须准确映射到连接三态 + 降级信息，
+ * 驱动全局降级遮罩与操作禁用态的实时切换是状态模拟入口的契约。
  */
 class FakeConnectionClientTest {
 

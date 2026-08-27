@@ -82,7 +82,7 @@ class SettingsViewModel(
         }
     }
 
-    /** Debug 预览：四态手动切换，驱动连接横幅与降级态实时变化。 */
+    /** Debug 预览：四态手动切换，驱动降级态与操作禁用态实时变化。 */
     fun selectDebugMode(mode: DebugConnectionMode) {
         container.connection.setDebugMode(mode)
         _uiState.update { it.copy(debugMode = mode) }

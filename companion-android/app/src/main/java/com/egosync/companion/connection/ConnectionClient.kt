@@ -44,7 +44,7 @@ enum class DebugConnectionMode(val label: String) {
  */
 interface ConnectionClient {
 
-    /** 连接状态流：UI（横幅/降级遮罩/引擎可用性）订阅此流实时响应。 */
+    /** 连接状态流：UI（降级遮罩/引擎可用性/「我的」页配对设备卡）订阅此流实时响应。 */
     val state: StateFlow<ConnectionState>
 
     /** 是否已完成配对（决定首跑进入配对流还是主界面）。 */

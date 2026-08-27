@@ -229,7 +229,7 @@ fun SettingsScreen(
             Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(10.dp)) {
                 Column(Modifier.padding(16.dp)) {
                     Text(
-                        "手动切换连接状态，驱动顶部横幅与降级态遮罩实时变化。",
+                        "手动切换连接状态，驱动降级态遮罩与操作禁用态实时变化。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

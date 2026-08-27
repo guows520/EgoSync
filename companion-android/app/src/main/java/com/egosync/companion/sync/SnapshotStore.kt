@@ -36,17 +36,43 @@ data class RoleCard(
 /** Q2 保护状态（FR-24，镜像桌面 types/task.ts:2 TaskProtectionStatus）。 */
 enum class TaskProtectionStatus { NORMAL, AT_RISK }
 
+/** 任务归属（镜像桌面 types/task.ts:8 TaskOwnerType）。 */
+enum class TaskOwner { BUTLER, ROLE }
+
+/** 归属筛选稳定键：管家固定 "butler"（镜像桌面 TaskOverviewTab.tsx:34-36 ownerKey）。 */
+const val TASK_OWNER_BUTLER_KEY = "butler"
+
 data class TaskItem(
     val id: String,
     val title: String,
     val quadrant: Quadrant,
     val roleName: String,
+    /** 结构化归属（镜像桌面 types/task.ts:12-13）：ownerType + roleId 是归属筛选的稳定标识；roleName 仅为展示字符串。 */
+    val ownerType: TaskOwner,
+    val roleId: String?,
     val due: String?,
     /** 大石头：本周不可妥协的优先项（每角色每周 1~2 件） */
     val bigRock: Boolean,
     val done: Boolean = false,
     /** Q2 保护提醒（FR-24）：at_risk = 重要任务被持续挤压（母本 q2_protection_reminder.rs 检测）。 */
     val protectionStatus: TaskProtectionStatus = TaskProtectionStatus.NORMAL,
+)
+
+/** 归属筛选键（镜像桌面 ownerKey）：管家恒为 "butler"，角色取 roleId，缺失归 "unknown"。 */
+fun TaskItem.ownerKey(): String =
+    if (ownerType == TaskOwner.BUTLER) TASK_OWNER_BUTLER_KEY else roleId ?: "unknown"
+
+/**
+ * 新建任务输入（镜像桌面 types/task.ts:44-52 CreateTaskInput 的移动端子集）：
+ * quadrant = null 表示「智能判断」——不指定象限，由后台异步分类（原型以 classifying 过渡态模拟）。
+ */
+data class CreateTaskInput(
+    val title: String,
+    val ownerType: TaskOwner,
+    val roleId: String? = null,
+    val quadrant: Quadrant? = null,
+    val due: String? = null,
+    val bigRock: Boolean = false,
 )
 
 // ── 晨间简报 ───────────────────────────────────────────────────────────
@@ -318,6 +344,8 @@ object SnapshotStore {
             title = "产品评审会议材料",
             quadrant = Quadrant.Q1,
             roleName = "产品经理",
+            ownerType = TaskOwner.ROLE,
+            roleId = "role-pm",
             due = "今天 14:00",
             bigRock = false,
         ),
@@ -326,6 +354,8 @@ object SnapshotStore {
             title = "回复供应商询价邮件",
             quadrant = Quadrant.Q1,
             roleName = "产品经理",
+            ownerType = TaskOwner.ROLE,
+            roleId = "role-pm",
             due = "今天 17:00 前",
             bigRock = false,
         ),
@@ -334,6 +364,8 @@ object SnapshotStore {
             title = "读完《深度工作》第 3 章并写笔记",
             quadrant = Quadrant.Q2,
             roleName = "学习者",
+            ownerType = TaskOwner.ROLE,
+            roleId = "role-learner",
             due = "本周日",
             bigRock = true,
             // FR-24：学习者角色 4 天未活跃（≥ AT_RISK_DAYS=3），Q2 大石头被持续挤压
@@ -344,6 +376,8 @@ object SnapshotStore {
             title = "预约女儿的钢琴课时间",
             quadrant = Quadrant.Q2,
             roleName = "父亲",
+            ownerType = TaskOwner.ROLE,
+            roleId = "role-father",
             due = null,
             bigRock = true,
         ),
@@ -352,6 +386,8 @@ object SnapshotStore {
             title = "整理季度 OKR 草稿",
             quadrant = Quadrant.Q2,
             roleName = "产品经理",
+            ownerType = TaskOwner.ROLE,
+            roleId = "role-pm",
             due = "周五",
             bigRock = false,
         ),
@@ -360,6 +396,8 @@ object SnapshotStore {
             title = "给母亲回电话",
             quadrant = Quadrant.Q3,
             roleName = "父亲",
+            ownerType = TaskOwner.ROLE,
+            roleId = "role-father",
             due = "今晚",
             bigRock = false,
         ),
@@ -368,6 +406,9 @@ object SnapshotStore {
             title = "取干洗衣物",
             quadrant = Quadrant.Q3,
             roleName = "管家",
+            // 管家归属任务：ownerType=BUTLER + roleId=null（桌面 ownerKey 恒为 "butler"）
+            ownerType = TaskOwner.BUTLER,
+            roleId = null,
             due = "今天",
             bigRock = false,
         ),
@@ -376,6 +417,8 @@ object SnapshotStore {
             title = "刷 20 分钟行业资讯",
             quadrant = Quadrant.Q4,
             roleName = "产品经理",
+            ownerType = TaskOwner.ROLE,
+            roleId = "role-pm",
             due = null,
             bigRock = false,
         ),

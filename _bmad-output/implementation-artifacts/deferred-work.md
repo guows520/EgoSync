@@ -1,5 +1,12 @@
 # Deferred Work
 
+## Deferred from: companion-android 任务屏补齐三路评审 (2026-05-27)
+
+- **VM 编排层测试缺口（createTask/4s delay 无测试）**：`TasksViewModel.createTask` 的 id 序列、roleName 回查（未知角色回退「未知角色」）、4s delay→applyClassified 固定归 Q2 均只有静态核对。需以 TestDispatcher 注入 delay（或抽 orchestrateCreateTask 纯化）补 VM 级测试，锁定「智能判断 4s 后必归组、指定象限永不被改」两条路径。仓库有 PairingViewModelTest 先例可循。
+- **离线蒙层拦截纯前端筛选（既有机制）**：DegradedOverlay 消费全部指针事件，象限/大石头/归属筛选在离线只读态一律不可操作——筛选本不依赖引擎。需产品决策：为筛选区留交互豁免，或蒙层文案明示「筛选不可用」。
+- **ownerKey() "unknown" 回退键不可控（真实层前置问题）**：ownerType=ROLE 且 roleId=null 的任务 ownerKey 归 "unknown"，不在 ownerKeys()（管家+roles）内——solo 语义排除不到它、无 chip 可控。当前 mock 不可构造该状态；接真实层前应将 "unknown" 纳入 allOwnerKeys 或在 TaskItem 层约束 ROLE 必须携带 roleId。
+- **新建任务 mock 生命周期不对称（spec 冻结语义内）**：新建任务只落 uiState 不落 SnapshotStore，VM 重建后种子任务重现而用户创建的任务消失（mock 既定语义，代码注释已声明）。接真实层（COMMAND 帧）时自然消除。
+
 ## Deferred from: companion-android 图标替换对抗评审 (2026-05-27)
 
 - **adaptive icon 缺 `<monochrome>` 层（pre-existing，非本次引入）**：`mipmap-anydpi-v26/ic_launcher.xml` 无 monochrome drawable，Android 13+ 主题化图标（Themed Icons）不生效、launcher 开启主题图标时本应用回退默认表现。旧版矢量图标同样缺失，非本次回归。建议：增加 `<monochrome android:drawable="@mipmap/ic_launcher_foreground"/>`（或专用单色前景）。

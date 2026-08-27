@@ -276,9 +276,14 @@ private fun TasksRoute(container: AppModelContainer) {
     val connectionState by container.connection.state.collectAsState()
     TasksScreen(
         uiState = uiState,
+        roles = container.snapshotStore.roles,
         engineAvailable = connectionState.engineAvailable,
         onToggleTask = vm::toggleTask,
         onQuadrantFilterSelected = vm::selectQuadrantFilter,
+        onToggleBigRocksOnly = vm::toggleBigRocksOnly,
+        onToggleOwner = vm::toggleOwner,
+        onToggleAllOwners = vm::toggleAllOwners,
+        onCreateTask = vm::createTask,
     )
 }
 

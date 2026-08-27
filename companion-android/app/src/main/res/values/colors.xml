@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="app_background">#0F1117</color>
-    <color name="ic_launcher_background">#0F1117</color>
+    <!-- 桌面版图标背景（与 egosync-app/src-tauri/icons/android/values 一致） -->
+    <color name="ic_launcher_background">#fff</color>
 </resources>

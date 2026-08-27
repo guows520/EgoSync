@@ -1,5 +1,11 @@
 # Deferred Work
 
+## Deferred from: companion-android 图标替换对抗评审 (2026-05-27)
+
+- **adaptive icon 缺 `<monochrome>` 层（pre-existing，非本次引入）**：`mipmap-anydpi-v26/ic_launcher.xml` 无 monochrome drawable，Android 13+ 主题化图标（Themed Icons）不生效、launcher 开启主题图标时本应用回退默认表现。旧版矢量图标同样缺失，非本次回归。建议：增加 `<monochrome android:drawable="@mipmap/ic_launcher_foreground"/>`（或专用单色前景）。
+- **桌面端 egosync-app 的 foreground 安全区问题（同源）**：本次移动端已对 foreground PNG 做安全区后处理（缩放居中至 66dp），但桌面端 `egosync-app/src-tauri/icons/android/` 的源 PNG 仍是 Tauri 生成器原样（内容 94×88dp 超出 66dp 安全区）。待桌面端用尊重安全区的工具重新生成后，移动端可重新同步而无需本地后处理。
+- **companion-android/.kotlin/ 未进 .gitignore（pre-existing）**：Kotlin 编译器 session 目录以 untracked 出现在 `git status`，易被误提交。建议 `companion-android/.gitignore` 追加 `.kotlin/` 一行。
+
 ## Deferred from: code review of Epic 9 (9-5-task-time-picker) (2026-07-22)
 
 - **TaskModal deadline 时区处理为"本地时间当作 UTC"（既有行为，非本次引入）**：`TaskModal.tsx:26-32` 的 `datetimeLocalToIso` 直接给本地 `datetime-local` 值追加 `:00Z`（视为 UTC），`isoToDatetimeLocal` 简单剥离时区后缀。经 `git show HEAD` 确认这两个转换函数在本次改动前已存在且完全未变，Story 9.5 仅替换了选择器 UI，deadline 数据契约保持不变（满足 9-5 AC-4）。已完成取证调查（见 `investigations/task-deadline-timezone-investigation.md`）：唯一确定性消费方是"临期升 Q1"后台任务，按 UTC 日末字符串（日粒度）比较，实际影响为 UTC 日界偏移（非均匀提前 8 小时），其余 now 比较逻辑不碰 deadline。**2026-07-22 用户决策：影响小、暂不修复，延后单独排期**；未来推荐方案 A（deadline 明确为本地墙钟，后端阈值改用本地日期）。

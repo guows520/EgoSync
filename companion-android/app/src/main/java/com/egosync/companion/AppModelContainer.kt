@@ -66,6 +66,13 @@ class AppModelContainer private constructor(context: Context) {
         prefs.edit().putBoolean(KEY_PAIRED, true).apply()
     }
 
+    /** FR-21：引导完成标记（镜像桌面 isFirstLaunch 语义；prefs 布尔等价）。 */
+    fun isOnboarded(): Boolean = prefs.getBoolean(KEY_ONBOARDED, false)
+
+    fun completeOnboarding() {
+        prefs.edit().putBoolean(KEY_ONBOARDED, true).apply()
+    }
+
     fun unpair() {
         connection.unpair()
         prefs.edit().putBoolean(KEY_PAIRED, false).apply()
@@ -85,6 +92,7 @@ class AppModelContainer private constructor(context: Context) {
             }
 
         private const val KEY_PAIRED = "paired"
+        private const val KEY_ONBOARDED = "onboarded"
         private const val KEY_THEME = "theme"
         const val VALUE_DARK = "dark"
         const val VALUE_LIGHT = "light"

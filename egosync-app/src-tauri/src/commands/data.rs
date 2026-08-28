@@ -74,7 +74,16 @@ pub async fn data_destroy(
         .app_data_dir()
         .map_err(|e| AppError::ValidationError(format!("获取应用数据目录失败: {}", e)))?;
 
-    destroy_all_data(&pool, &conv_pool, &app_data_dir).await
+    destroy_all_data(&pool, &conv_pool, &app_data_dir).await?;
+
+    // 销毁后回收手机伴侣运行时状态（keyring 不可用时 state 未管理，跳过）：
+    // 终止会话、清 pending/配对窗口、注销 NSD、删除静态密钥
+    if let Some(companion) =
+        app_handle.try_state::<std::sync::Arc<crate::services::companion_connection::CompanionState>>()
+    {
+        crate::services::companion_connection::reset_after_data_destroy(&pool, &companion).await;
+    }
+    Ok(())
 }
 
 #[tauri::command]

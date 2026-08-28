@@ -1345,7 +1345,7 @@ mod tests {
         assert!(prompt.contains("[自定义 Skill]"));
         assert!(prompt.contains("daily-review"));
         assert!(prompt.contains("日复盘助手"));
-        assert!(prompt.contains("必须通过原生 skill 工具加载"));
+        assert!(prompt.contains("必须通过原生 skill 工具按名称加载"));
         assert!(!prompt.contains("skill-1"));
         assert_eq!(entry["permission"]["skill"]["daily-review"], "allow");
     }
@@ -1398,7 +1398,7 @@ mod tests {
         assert!(entry.get("name").is_none());
         assert_eq!(entry["mode"], "primary");
         let prompt = entry["prompt"].as_str().unwrap();
-        assert!(prompt.contains("你是EgoSync管家"));
+        assert!(prompt.contains("你是数字分身管家"));
         assert!(prompt.contains("find-skills"));
         assert!(!prompt.contains("skill-creator"));
         assert!(prompt.contains("已启用"));
@@ -1476,11 +1476,11 @@ mod tests {
 
         let config = svc.load().unwrap();
         let prompt = config["agent"]["butler"]["prompt"].as_str().unwrap();
-        assert!(prompt.contains("你是EgoSync管家"));
+        assert!(prompt.contains("你是数字分身管家"));
         assert!(prompt.contains("[自定义 Skill]"));
         assert!(prompt.contains("daily-review"));
         assert!(prompt.contains("日复盘助手"));
-        assert!(prompt.contains("必须通过原生 skill 工具加载"));
+        assert!(prompt.contains("必须通过原生 skill 工具按名称加载"));
         assert!(!prompt.contains("ghost-id"));
         assert_eq!(
             config["agent"]["butler"]["permission"],
@@ -1496,7 +1496,9 @@ mod tests {
             enabled_skill_ids: Vec::new(),
         });
         let prompt = entry["prompt"].as_str().unwrap();
-        assert!(!prompt.contains("find-skills"));
+        // 静态 prompt 的[工具使用边界]常驻提及 find-skills，禁用语义由
+        // 「无元 Skill 配置段」与权限表共同表达
+        assert!(!prompt.contains("[元 Skill 配置]"));
         assert!(!prompt.contains("skill-creator"));
         assert_eq!(
             entry["permission"],
@@ -1600,7 +1602,10 @@ mod tests {
         assert!(config["agent"]["butler"].get("name").is_none());
         assert_eq!(config["agent"]["butler"]["mode"], "primary");
         assert_eq!(config["agent"]["butler"]["permission"]["*"], "allow");
-        assert_eq!(config["agent"]["butler"]["permission"]["skill"], "deny");
+        assert_eq!(
+            config["agent"]["butler"]["permission"]["skill"],
+            json!({ "*": "deny" })
+        );
         assert_eq!(config["agent"]["butler"]["permission"]["question"], "deny");
     }
 

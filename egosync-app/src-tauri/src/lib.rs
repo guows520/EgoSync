@@ -6,12 +6,14 @@ use tokio_util::sync::CancellationToken;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
-mod commands;
-mod db;
-mod error;
+// Story 12.2: db/services/models/error 声明为 pub 以供 tests/test_companion.rs
+// 集成测试访问（rlib 仅被测试消费，无运行时影响）
+pub mod commands;
+pub mod db;
+pub mod error;
 mod llm;
-mod models;
-mod services;
+pub mod models;
+pub mod services;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -296,6 +298,30 @@ pub fn run() {
             // 内部错误只 warn，不阻塞 Tauri setup。
             services::task_protection_watch::spawn_hourly_watch(pool.clone());
 
+            // ── Story 12.2: 手机伴侣 WS 监听 + NSD 广播（非阻塞降级） ──
+            // keyring 不可用时降级：companion_* 命令调用会因 state 未管理而失败，
+            // 不影响桌面其余功能。
+            match services::companion_connection::CompanionState::new(Some(app.handle().clone())) {
+                Ok(companion_state) => {
+                    let companion_state = Arc::new(companion_state);
+                    app.manage(companion_state.clone());
+                    let pool_c = pool.clone();
+                    tauri::async_runtime::spawn(async move {
+                        if let Err(e) =
+                            services::companion_connection::start_companion_listener(
+                                pool_c, companion_state.clone(),
+                            )
+                            .await
+                        {
+                            // 监听失败如实标记（状态查询不再伪装 Listening）
+                            companion_state.set_failed();
+                            tracing::warn!("companion 连接服务启动失败（降级继续）: {}", e);
+                        }
+                    });
+                }
+                Err(e) => tracing::warn!("companion 状态初始化失败（降级继续）: {}", e),
+            }
+
             // Story 4.1: 角色后台调度器，按 proactivity_level 配置频率运行工作循环。
             // 60 秒基础 tick，每次 tick 动态查询角色列表，passive 跳过。
             // 内部错误只 warn，不阻塞 Tauri setup。
@@ -419,6 +445,11 @@ pub fn run() {
             commands::data::data_destroy,
             commands::data::pick_import_file,
             commands::data::data_import,
+            commands::companion::pairing_generate_qr,
+            commands::companion::pairing_confirm,
+            commands::companion::paired_device_list,
+            commands::companion::paired_device_remove,
+            commands::companion::companion_get_status,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

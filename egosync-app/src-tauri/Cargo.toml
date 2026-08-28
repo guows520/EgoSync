@@ -36,6 +36,9 @@ chrono = "0.4"
 tokio-util = "0.7"
 rfd = "0.15"
 indexmap = { version = "1", features = ["std"] }
+companion-proto = { version = "0.1.0", path = "../../crates/companion-proto" }
+tokio-tungstenite = "0.29.0"
+mdns-sd = "0.21.0"
 
 [dev-dependencies]
 tempfile = "3"

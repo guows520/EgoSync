@@ -24,6 +24,15 @@ pub enum AppError {
     /// Story 10.1: Skill 已添加到作用域但被关闭（不在 enabledSkillIds 中）。
     #[error("Skill disabled: {0}")]
     SkillDisabled(String),
+    /// Story 12.2: 手机伴侣配对流程失败。
+    #[error("配对失败: {0}")]
+    PairingError(String),
+    /// Story 12.2: 手机伴侣连接管理失败。
+    #[error("连接服务异常: {0}")]
+    ConnectionError(String),
+    /// Story 12.2: 伴侣协议帧处理失败。
+    #[error("通信协议错误: {0}")]
+    ProtocolError(String),
 }
 
 impl serde::Serialize for AppError {
@@ -44,6 +53,9 @@ impl serde::Serialize for AppError {
             AppError::SkillNotFound(msg) => map.serialize_entry("SkillNotFound", msg)?,
             AppError::SkillNotAddedToScope(msg) => map.serialize_entry("SkillNotAddedToScope", msg)?,
             AppError::SkillDisabled(msg) => map.serialize_entry("SkillDisabled", msg)?,
+            AppError::PairingError(msg) => map.serialize_entry("PairingError", msg)?,
+            AppError::ConnectionError(msg) => map.serialize_entry("ConnectionError", msg)?,
+            AppError::ProtocolError(msg) => map.serialize_entry("ProtocolError", msg)?,
         }
         map.end()
     }
@@ -74,6 +86,9 @@ mod tests {
             AppError::SkillNotFound("x".into()),
             AppError::SkillNotAddedToScope("x".into()),
             AppError::SkillDisabled("x".into()),
+            AppError::PairingError("x".into()),
+            AppError::ConnectionError("x".into()),
+            AppError::ProtocolError("x".into()),
         ];
         for err in cases {
             let json = serde_json::to_string(&err).expect("serialize should succeed");

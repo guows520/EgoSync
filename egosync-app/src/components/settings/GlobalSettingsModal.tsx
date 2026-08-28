@@ -7,6 +7,7 @@ import { mcpService } from '../../services/mcpService';
 import { schedulerService } from '../../services/schedulerService';
 import { appService } from '../../services/appService';
 import { dataService } from '../../services/dataService';
+import { CompanionPairingSection } from './CompanionPairingSection';
 import type { ExportFormat, ExportResult, ImportResult } from '../../services/dataService';
 import type { LlmConfig, CreateLlmConfigInput, UpdateLlmConfigInput, LlmProviderType, NetworkLocation } from '../../types/settings';
 import type { McpServer, McpServerType } from '../../types/mcp';
@@ -571,10 +572,11 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
           <button onClick={() => { setTab('mcp'); setIsEditing(false); setIsEditingMcp(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'mcp' ? "bg-white dark:bg-slate-900 text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-700/50")}>MCP Server</button>
           <button onClick={() => { setTab('scheduler'); setIsEditing(false); setIsEditingMcp(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'scheduler' ? "bg-white dark:bg-slate-900 text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-700/50")}>调度时间</button>
           <button onClick={() => { setTab('data'); setIsEditing(false); setIsEditingMcp(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'data' ? "bg-white dark:bg-slate-900 text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-700/50")}>数据与隐私</button>
+          <button onClick={() => { setTab('companion'); setIsEditing(false); setIsEditingMcp(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'companion' ? "bg-white dark:bg-slate-900 text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-700/50")}>手机伴侣</button>
         </div>
         <div className="flex-1 p-10 overflow-y-auto">
           <div className="flex justify-between items-center mb-8">
-            <h3 className="text-[24px] font-semibold text-slate-800 dark:text-slate-100">{tab === 'llm' ? 'LLM Provider 配置' : tab === 'mcp' ? 'MCP Server配置' : tab === 'scheduler' ? '调度时间配置' : '数据与隐私'}</h3>
+            <h3 className="text-[24px] font-semibold text-slate-800 dark:text-slate-100">{tab === 'llm' ? 'LLM Provider 配置' : tab === 'mcp' ? 'MCP Server配置' : tab === 'scheduler' ? '调度时间配置' : tab === 'companion' ? '手机伴侣' : '数据与隐私'}</h3>
             <button
               onClick={() => {
                 if (tab === 'mcp' && isEditingMcp) {
@@ -1174,6 +1176,10 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
                 )}
               </div>
             </div>
+          )}
+
+          {tab === 'companion' && (
+            <CompanionPairingSection />
           )}
         </div>
       </div>

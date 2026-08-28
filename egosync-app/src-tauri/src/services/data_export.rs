@@ -54,6 +54,10 @@ pub struct ExportData {
     pub role_mcp_server_bindings: Vec<serde_json::Value>,
     #[serde(default)]
     pub butler_mcp_servers: Vec<serde_json::Value>,
+    /// Story 12.2: 已配对手机设备（#[serde(default)] 旧档导入兼容）。
+    /// 不进 markdown 用户报告（含公钥技术数据，无消费价值）。
+    #[serde(default)]
+    pub paired_devices: Vec<serde_json::Value>,
     pub conversations: Vec<Conversation>,
     pub messages: Vec<Message>,
     pub exported_at: String,
@@ -292,6 +296,29 @@ async fn query_butler_mcp_servers(pool: &DbPool) -> Result<Vec<serde_json::Value
         .collect())
 }
 
+async fn query_paired_devices(pool: &DbPool) -> Result<Vec<serde_json::Value>, AppError> {
+    let rows = sqlx::query(
+        "SELECT id, device_name, device_pubkey, paired_at, last_seen_at
+         FROM paired_devices ORDER BY paired_at ASC",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| AppError::DbError(format!("查询配对设备失败: {}", e)))?;
+
+    Ok(rows
+        .iter()
+        .map(|row| {
+            serde_json::json!({
+                "id": row.get::<String, _>("id"),
+                "deviceName": row.get::<String, _>("device_name"),
+                "devicePubkey": row.get::<String, _>("device_pubkey"),
+                "pairedAt": row.get::<String, _>("paired_at"),
+                "lastSeenAt": row.get::<String, _>("last_seen_at"),
+            })
+        })
+        .collect())
+}
+
 pub async fn gather_export_data(
     pool: &DbPool,
     conv_pool: &ConversationsPool,
@@ -315,6 +342,7 @@ pub async fn gather_export_data(
     let forgotten_memory_sources = query_forgotten_memory_sources(pool).await?;
     let role_mcp_server_bindings = query_role_mcp_server_bindings(pool).await?;
     let butler_mcp_servers = query_butler_mcp_servers(pool).await?;
+    let paired_devices = query_paired_devices(pool).await?;
     let conversations = conversations::list_all_conversations(conv_pool).await?;
     let messages = conversations::list_all_messages(conv_pool).await?;
 
@@ -338,6 +366,7 @@ pub async fn gather_export_data(
         forgotten_memory_sources,
         role_mcp_server_bindings,
         butler_mcp_servers,
+        paired_devices,
         conversations,
         messages,
         exported_at: crate::db::settings::chrono_now_pub(),
@@ -737,6 +766,7 @@ const MAIN_DB_TABLES: &[&str] = &[
     "mcp_servers",
     "role_mcp_server_bindings",
     "butler_mcp_servers",
+    "paired_devices",
     "skills",
     "skill_role_bindings",
 ];
@@ -969,6 +999,11 @@ pub async fn import_json_data(
         .map_err(|e| AppError::DbError(format!("插入 butler_mcp_servers 失败: {}", e)))?;
     }
 
+    // paired_devices：不恢复（Story 12.2 评审裁决 D3）——配对绑定与桌面静态
+    // 密钥（keyring，不随档迁移）绑定，跨机恢复必然不可用且会把新机首配
+    // 降级为换绑确认；表已随上方 MAIN_DB_TABLES 清空，恢复后需重新扫码配对。
+    // 导出仍包含该字段（完整备份）。
+
     // skills
     for s in &data.skills {
         let id = json_req_str(s, "id", "skills")?;
@@ -1162,6 +1197,11 @@ pub async fn import_sqlite_data(
             if *table == "butler_mcp_servers" && !has_butler_mcp_servers {
                 continue;
             }
+            // paired_devices：不恢复（评审裁决 D3，同 JSON 导入路径——配对绑定
+            // 不可跨机迁移），既不校验也不复制
+            if *table == "paired_devices" {
+                continue;
+            }
             let exists: Option<String> = sqlx::query_scalar(
                 "SELECT name FROM imported.sqlite_master WHERE type = 'table' AND name = ?1",
             )
@@ -1187,6 +1227,10 @@ pub async fn import_sqlite_data(
                 .await
                 .map_err(|e| AppError::DbError(format!("清空表 {} 失败: {}", table, e)))?;
             if *table == "butler_mcp_servers" && !has_butler_mcp_servers {
+                continue;
+            }
+            // paired_devices：清空但不复制（配对绑定不随导入迁移，恢复后需重新配对）
+            if *table == "paired_devices" {
                 continue;
             }
             sqlx::query(&format!("INSERT INTO {} SELECT * FROM imported.{}", table, table))
@@ -1484,6 +1528,7 @@ mod tests {
             forgotten_memory_sources: vec![],
             role_mcp_server_bindings: vec![],
             butler_mcp_servers: vec![],
+            paired_devices: vec![],
             conversations: vec![],
             messages: vec![],
             exported_at: "2026-01-01T00:00:00Z".to_string(),
@@ -1568,6 +1613,7 @@ mod tests {
             forgotten_memory_sources: vec![],
             role_mcp_server_bindings: vec![],
             butler_mcp_servers: vec![],
+            paired_devices: vec![],
             conversations: vec![],
             messages: vec![],
             exported_at: "2026-01-01T00:00:00Z".to_string(),
@@ -1660,6 +1706,7 @@ mod tests {
             forgotten_memory_sources: vec![],
             role_mcp_server_bindings: vec![],
             butler_mcp_servers: vec![],
+            paired_devices: vec![],
             conversations: vec![conv],
             messages: vec![msg1, msg2],
             exported_at: "2026-01-01T00:00:00Z".to_string(),
@@ -1696,6 +1743,7 @@ mod tests {
             forgotten_memory_sources: vec![],
             role_mcp_server_bindings: vec![],
             butler_mcp_servers: vec![],
+            paired_devices: vec![],
             conversations: vec![],
             messages: vec![],
             exported_at: "2026-01-01T00:00:00Z".to_string(),
@@ -2096,6 +2144,7 @@ mod tests {
             q2_reminders: vec![], big_rock_protection_reminders: vec![],
             forgotten_memory_sources: vec![], role_mcp_server_bindings: vec![],
             butler_mcp_servers: vec![],
+            paired_devices: vec![],
             conversations: vec![], messages: vec![],
             exported_at: "2026-01-01T00:00:00Z".to_string(),
             export_version: "99.0".to_string(),

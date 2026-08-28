@@ -11,6 +11,7 @@ pub mod settings;
 pub mod skill_bindings;
 pub mod skills;
 pub mod notifications;
+pub mod paired_devices;
 pub mod q2_reminders;
 pub mod suggestions;
 pub mod tasks;

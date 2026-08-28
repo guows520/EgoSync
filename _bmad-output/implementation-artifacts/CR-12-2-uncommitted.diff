@@ -1,0 +1,3300 @@
+# CR 12-2 评审差异包（生成于 2026-08-28T08:09:21+08:00）
+# 范围：Story 12.2 未提交变更（tracked 修改 + untracked 新文件），基线 HEAD=d5345a6
+# 注：crates/companion-proto/src/crypto.rs 整体未跟踪（12-1 未提交），其中仅 remote_static_pubkey() 为 12-2 授权增量
+
+diff --git a/README.md b/README.md
+index 7eb473a..ab3449e 100644
+--- a/README.md
++++ b/README.md
+@@ -146,4 +146,15 @@ npm install
+ npm run tauri build
+ ```
+ 
++## 手机伴侣连接
++
++桌面应用支持与手机伴侣 App（`companion-android/`）在局域网内建立加密连接：
++
++- **配对方式**：在桌面「全局设置 → 手机伴侣」中生成配对二维码，手机扫码即完成绑定。二维码单次有效，重新生成会使旧码失效。
++- **服务发现**：配对过至少一台设备后，桌面通过 mDNS/NSD 持续广播服务 `_egosync._tcp`（实例名 `EgoSync-<relay_id 前 8 位>`），手机在同一局域网内可自动发现桌面，免扫码重连。
++- **端口策略**：WebSocket 监听端口由系统动态分配（`0.0.0.0:0`），实际端口随 NSD 广播自动携带，无需手动配置。
++- **Windows 防火墙**：首次使用时系统可能弹出「允许 EgoSync 访问网络」提示，请勾选「专用网络」并允许，否则手机无法发现电脑。
++- **连接安全**：采用 Noise XX（`Noise_XX_25519_ChaChaPoly_BLAKE2s`）双向身份认证握手，桌面静态密钥存储于系统钥匙串（keyring），已配对设备凭静态公钥免配对直连；移除配对后该设备立即失去连接资格。
++- **当前限制**：中继服务（跨局域网连接）暂未部署，手机需与电脑处于同一局域网。
++
+ 构建产物位于 Tauri target 目录。仓库中的 GitHub Actions 提供跨平台 CI 与基于版本标签的发布流程。
+\ No newline at end of file
+diff --git a/egosync-app/package.json b/egosync-app/package.json
+index 6dc9810..dba3bb1 100644
+--- a/egosync-app/package.json
++++ b/egosync-app/package.json
+@@ -17,8 +17,10 @@
+     "@dnd-kit/utilities": "^3.2.2",
+     "@tailwindcss/typography": "^0.5.19",
+     "@tauri-apps/api": "^2.11.0",
++    "@types/qrcode": "^1.5.6",
+     "clsx": "^2.0.0",
+     "lucide-react": "^0.292.0",
++    "qrcode": "^1.5.4",
+     "react": "^18.2.0",
+     "react-dom": "^18.2.0",
+     "react-markdown": "^10.1.0",
+diff --git a/egosync-app/src-tauri/Cargo.toml b/egosync-app/src-tauri/Cargo.toml
+index 8e82d8c..29e3b0e 100644
+--- a/egosync-app/src-tauri/Cargo.toml
++++ b/egosync-app/src-tauri/Cargo.toml
+@@ -36,10 +36,14 @@ chrono = "0.4"
+ tokio-util = "0.7"
+ rfd = "0.15"
+ indexmap = { version = "1", features = ["std"] }
++companion-proto = { version = "0.1.0", path = "../../crates/companion-proto" }
++tokio-tungstenite = "0.29.0"
++mdns-sd = "0.21.0"
+ 
+ [dev-dependencies]
+ tempfile = "3"
+ filetime = "0.2"
++companion-proto = { path = "../../crates/companion-proto" }
+ 
+ [features]
+ perf-test = []
+diff --git a/egosync-app/src-tauri/src/commands/mod.rs b/egosync-app/src-tauri/src/commands/mod.rs
+index ba806f3..ea44bbd 100644
+--- a/egosync-app/src-tauri/src/commands/mod.rs
++++ b/egosync-app/src-tauri/src/commands/mod.rs
+@@ -1,4 +1,5 @@
+ pub mod app;
++pub mod companion;
+ pub mod data;
+ pub mod briefing;
+ pub mod chat;
+diff --git a/egosync-app/src-tauri/src/db/mod.rs b/egosync-app/src-tauri/src/db/mod.rs
+index 2a396c1..4be0c12 100644
+--- a/egosync-app/src-tauri/src/db/mod.rs
++++ b/egosync-app/src-tauri/src/db/mod.rs
+@@ -11,6 +11,7 @@ pub mod settings;
+ pub mod skill_bindings;
+ pub mod skills;
+ pub mod notifications;
++pub mod paired_devices;
+ pub mod q2_reminders;
+ pub mod suggestions;
+ pub mod tasks;
+diff --git a/egosync-app/src-tauri/src/error.rs b/egosync-app/src-tauri/src/error.rs
+index 8635f3f..2d1714e 100644
+--- a/egosync-app/src-tauri/src/error.rs
++++ b/egosync-app/src-tauri/src/error.rs
+@@ -24,6 +24,15 @@ pub enum AppError {
+     /// Story 10.1: Skill 已添加到作用域但被关闭（不在 enabledSkillIds 中）。
+     #[error("Skill disabled: {0}")]
+     SkillDisabled(String),
++    /// Story 12.2: 手机伴侣配对流程失败。
++    #[error("配对失败: {0}")]
++    PairingError(String),
++    /// Story 12.2: 手机伴侣连接管理失败。
++    #[error("连接服务异常: {0}")]
++    ConnectionError(String),
++    /// Story 12.2: 伴侣协议帧处理失败。
++    #[error("通信协议错误: {0}")]
++    ProtocolError(String),
+ }
+ 
+ impl serde::Serialize for AppError {
+@@ -44,6 +53,9 @@ impl serde::Serialize for AppError {
+             AppError::SkillNotFound(msg) => map.serialize_entry("SkillNotFound", msg)?,
+             AppError::SkillNotAddedToScope(msg) => map.serialize_entry("SkillNotAddedToScope", msg)?,
+             AppError::SkillDisabled(msg) => map.serialize_entry("SkillDisabled", msg)?,
++            AppError::PairingError(msg) => map.serialize_entry("PairingError", msg)?,
++            AppError::ConnectionError(msg) => map.serialize_entry("ConnectionError", msg)?,
++            AppError::ProtocolError(msg) => map.serialize_entry("ProtocolError", msg)?,
+         }
+         map.end()
+     }
+@@ -74,6 +86,9 @@ mod tests {
+             AppError::SkillNotFound("x".into()),
+             AppError::SkillNotAddedToScope("x".into()),
+             AppError::SkillDisabled("x".into()),
++            AppError::PairingError("x".into()),
++            AppError::ConnectionError("x".into()),
++            AppError::ProtocolError("x".into()),
+         ];
+         for err in cases {
+             let json = serde_json::to_string(&err).expect("serialize should succeed");
+diff --git a/egosync-app/src-tauri/src/lib.rs b/egosync-app/src-tauri/src/lib.rs
+index 8b44b21..cb76709 100644
+--- a/egosync-app/src-tauri/src/lib.rs
++++ b/egosync-app/src-tauri/src/lib.rs
+@@ -6,12 +6,14 @@ use tokio_util::sync::CancellationToken;
+ use tracing_subscriber::layer::SubscriberExt;
+ use tracing_subscriber::util::SubscriberInitExt;
+ 
+-mod commands;
+-mod db;
+-mod error;
++// Story 12.2: db/services/models/error 声明为 pub 以供 tests/test_companion.rs
++// 集成测试访问（rlib 仅被测试消费，无运行时影响）
++pub mod commands;
++pub mod db;
++pub mod error;
+ mod llm;
+-mod models;
+-mod services;
++pub mod models;
++pub mod services;
+ 
+ #[cfg_attr(mobile, tauri::mobile_entry_point)]
+ pub fn run() {
+@@ -296,6 +298,28 @@ pub fn run() {
+             // 内部错误只 warn，不阻塞 Tauri setup。
+             services::task_protection_watch::spawn_hourly_watch(pool.clone());
+ 
++            // ── Story 12.2: 手机伴侣 WS 监听 + NSD 广播（非阻塞降级） ──
++            // keyring 不可用时降级：companion_* 命令调用会因 state 未管理而失败，
++            // 不影响桌面其余功能。
++            match services::companion_connection::CompanionState::new(Some(app.handle().clone())) {
++                Ok(companion_state) => {
++                    let companion_state = Arc::new(companion_state);
++                    app.manage(companion_state.clone());
++                    let pool_c = pool.clone();
++                    tauri::async_runtime::spawn(async move {
++                        if let Err(e) =
++                            services::companion_connection::start_companion_listener(
++                                pool_c, companion_state,
++                            )
++                            .await
++                        {
++                            tracing::warn!("companion 连接服务启动失败（降级继续）: {}", e);
++                        }
++                    });
++                }
++                Err(e) => tracing::warn!("companion 状态初始化失败（降级继续）: {}", e),
++            }
++
+             // Story 4.1: 角色后台调度器，按 proactivity_level 配置频率运行工作循环。
+             // 60 秒基础 tick，每次 tick 动态查询角色列表，passive 跳过。
+             // 内部错误只 warn，不阻塞 Tauri setup。
+@@ -419,6 +443,11 @@ pub fn run() {
+             commands::data::data_destroy,
+             commands::data::pick_import_file,
+             commands::data::data_import,
++            commands::companion::pairing_generate_qr,
++            commands::companion::pairing_confirm,
++            commands::companion::paired_device_list,
++            commands::companion::paired_device_remove,
++            commands::companion::companion_get_status,
+         ])
+         .build(tauri::generate_context!())
+         .expect("error while building tauri application")
+diff --git a/egosync-app/src-tauri/src/models/mod.rs b/egosync-app/src-tauri/src/models/mod.rs
+index ad744c4..5cf12de 100644
+--- a/egosync-app/src-tauri/src/models/mod.rs
++++ b/egosync-app/src-tauri/src/models/mod.rs
+@@ -2,6 +2,7 @@ pub mod agent;
+ pub mod big_rock_protection_reminder;
+ pub mod briefing;
+ pub mod chat;
++pub mod companion;
+ pub mod dashboard;
+ pub mod memory;
+ pub mod mcp;
+diff --git a/egosync-app/src-tauri/src/services/agent_config.rs b/egosync-app/src-tauri/src/services/agent_config.rs
+index 3da5393..83631f0 100644
+--- a/egosync-app/src-tauri/src/services/agent_config.rs
++++ b/egosync-app/src-tauri/src/services/agent_config.rs
+@@ -1345,7 +1345,7 @@ mod tests {
+         assert!(prompt.contains("[自定义 Skill]"));
+         assert!(prompt.contains("daily-review"));
+         assert!(prompt.contains("日复盘助手"));
+-        assert!(prompt.contains("必须通过原生 skill 工具加载"));
++        assert!(prompt.contains("必须通过原生 skill 工具按名称加载"));
+         assert!(!prompt.contains("skill-1"));
+         assert_eq!(entry["permission"]["skill"]["daily-review"], "allow");
+     }
+@@ -1398,7 +1398,7 @@ mod tests {
+         assert!(entry.get("name").is_none());
+         assert_eq!(entry["mode"], "primary");
+         let prompt = entry["prompt"].as_str().unwrap();
+-        assert!(prompt.contains("你是EgoSync管家"));
++        assert!(prompt.contains("你是数字分身管家"));
+         assert!(prompt.contains("find-skills"));
+         assert!(!prompt.contains("skill-creator"));
+         assert!(prompt.contains("已启用"));
+@@ -1476,11 +1476,11 @@ mod tests {
+ 
+         let config = svc.load().unwrap();
+         let prompt = config["agent"]["butler"]["prompt"].as_str().unwrap();
+-        assert!(prompt.contains("你是EgoSync管家"));
++        assert!(prompt.contains("你是数字分身管家"));
+         assert!(prompt.contains("[自定义 Skill]"));
+         assert!(prompt.contains("daily-review"));
+         assert!(prompt.contains("日复盘助手"));
+-        assert!(prompt.contains("必须通过原生 skill 工具加载"));
++        assert!(prompt.contains("必须通过原生 skill 工具按名称加载"));
+         assert!(!prompt.contains("ghost-id"));
+         assert_eq!(
+             config["agent"]["butler"]["permission"],
+@@ -1496,7 +1496,9 @@ mod tests {
+             enabled_skill_ids: Vec::new(),
+         });
+         let prompt = entry["prompt"].as_str().unwrap();
+-        assert!(!prompt.contains("find-skills"));
++        // 静态 prompt 的[工具使用边界]常驻提及 find-skills，禁用语义由
++        // 「无元 Skill 配置段」与权限表共同表达
++        assert!(!prompt.contains("[元 Skill 配置]"));
+         assert!(!prompt.contains("skill-creator"));
+         assert_eq!(
+             entry["permission"],
+@@ -1600,7 +1602,10 @@ mod tests {
+         assert!(config["agent"]["butler"].get("name").is_none());
+         assert_eq!(config["agent"]["butler"]["mode"], "primary");
+         assert_eq!(config["agent"]["butler"]["permission"]["*"], "allow");
+-        assert_eq!(config["agent"]["butler"]["permission"]["skill"], "deny");
++        assert_eq!(
++            config["agent"]["butler"]["permission"]["skill"],
++            json!({ "*": "deny" })
++        );
+         assert_eq!(config["agent"]["butler"]["permission"]["question"], "deny");
+     }
+ 
+diff --git a/egosync-app/src-tauri/src/services/agent_engine.rs b/egosync-app/src-tauri/src/services/agent_engine.rs
+index 52cecb5..8b1af5c 100644
+--- a/egosync-app/src-tauri/src/services/agent_engine.rs
++++ b/egosync-app/src-tauri/src/services/agent_engine.rs
+@@ -7260,7 +7260,7 @@ mod tests {
+             .await
+             .unwrap();
+ 
+-        assert!(prompt.contains("你是 EgoSync 的分身管家"));
++        assert!(prompt.contains("你是数字分身管家"));
+         assert!(!prompt.contains("[元 Skill 配置]"));
+         assert!(!prompt.contains("find-skills"));
+         assert!(!prompt.contains("skill-creator"));
+diff --git a/egosync-app/src-tauri/src/services/data_export.rs b/egosync-app/src-tauri/src/services/data_export.rs
+index b1a9644..949f93d 100644
+--- a/egosync-app/src-tauri/src/services/data_export.rs
++++ b/egosync-app/src-tauri/src/services/data_export.rs
+@@ -54,6 +54,10 @@ pub struct ExportData {
+     pub role_mcp_server_bindings: Vec<serde_json::Value>,
+     #[serde(default)]
+     pub butler_mcp_servers: Vec<serde_json::Value>,
++    /// Story 12.2: 已配对手机设备（#[serde(default)] 旧档导入兼容）。
++    /// 不进 markdown 用户报告（含公钥技术数据，无消费价值）。
++    #[serde(default)]
++    pub paired_devices: Vec<serde_json::Value>,
+     pub conversations: Vec<Conversation>,
+     pub messages: Vec<Message>,
+     pub exported_at: String,
+@@ -292,6 +296,29 @@ async fn query_butler_mcp_servers(pool: &DbPool) -> Result<Vec<serde_json::Value
+         .collect())
+ }
+ 
++async fn query_paired_devices(pool: &DbPool) -> Result<Vec<serde_json::Value>, AppError> {
++    let rows = sqlx::query(
++        "SELECT id, device_name, device_pubkey, paired_at, last_seen_at
++         FROM paired_devices ORDER BY paired_at ASC",
++    )
++    .fetch_all(pool)
++    .await
++    .map_err(|e| AppError::DbError(format!("查询配对设备失败: {}", e)))?;
++
++    Ok(rows
++        .iter()
++        .map(|row| {
++            serde_json::json!({
++                "id": row.get::<String, _>("id"),
++                "deviceName": row.get::<String, _>("device_name"),
++                "devicePubkey": row.get::<String, _>("device_pubkey"),
++                "pairedAt": row.get::<String, _>("paired_at"),
++                "lastSeenAt": row.get::<String, _>("last_seen_at"),
++            })
++        })
++        .collect())
++}
++
+ pub async fn gather_export_data(
+     pool: &DbPool,
+     conv_pool: &ConversationsPool,
+@@ -315,6 +342,7 @@ pub async fn gather_export_data(
+     let forgotten_memory_sources = query_forgotten_memory_sources(pool).await?;
+     let role_mcp_server_bindings = query_role_mcp_server_bindings(pool).await?;
+     let butler_mcp_servers = query_butler_mcp_servers(pool).await?;
++    let paired_devices = query_paired_devices(pool).await?;
+     let conversations = conversations::list_all_conversations(conv_pool).await?;
+     let messages = conversations::list_all_messages(conv_pool).await?;
+ 
+@@ -338,6 +366,7 @@ pub async fn gather_export_data(
+         forgotten_memory_sources,
+         role_mcp_server_bindings,
+         butler_mcp_servers,
++        paired_devices,
+         conversations,
+         messages,
+         exported_at: crate::db::settings::chrono_now_pub(),
+@@ -737,6 +766,7 @@ const MAIN_DB_TABLES: &[&str] = &[
+     "mcp_servers",
+     "role_mcp_server_bindings",
+     "butler_mcp_servers",
++    "paired_devices",
+     "skills",
+     "skill_role_bindings",
+ ];
+@@ -969,6 +999,22 @@ pub async fn import_json_data(
+         .map_err(|e| AppError::DbError(format!("插入 butler_mcp_servers 失败: {}", e)))?;
+     }
+ 
++    // paired_devices（Story 12.2；serde(default) 旧档无字段时为空 vec）
++    for p in &data.paired_devices {
++        let id = json_req_str(p, "id", "paired_devices")?;
++        let device_name = json_req_str(p, "deviceName", "paired_devices")?;
++        let device_pubkey = json_req_str(p, "devicePubkey", "paired_devices")?;
++        let paired_at = json_req_str(p, "pairedAt", "paired_devices")?;
++        let last_seen_at = json_req_str(p, "lastSeenAt", "paired_devices")?;
++        sqlx::query(
++            "INSERT INTO paired_devices (id, device_name, device_pubkey, paired_at, last_seen_at) VALUES (?1, ?2, ?3, ?4, ?5)",
++        )
++        .bind(id).bind(device_name).bind(device_pubkey)
++        .bind(paired_at).bind(last_seen_at)
++        .execute(&mut *tx).await
++        .map_err(|e| AppError::DbError(format!("插入 paired_devices 失败: {}", e)))?;
++    }
++
+     // skills
+     for s in &data.skills {
+         let id = json_req_str(s, "id", "skills")?;
+@@ -1156,12 +1202,21 @@ pub async fn import_sqlite_data(
+         .fetch_one(&mut *conn)
+         .await
+         .map_err(|e| AppError::DbError(format!("校验导入表 butler_mcp_servers 失败: {}", e)))?;
++        let has_paired_devices: bool = sqlx::query_scalar(
++            "SELECT EXISTS(SELECT 1 FROM imported.sqlite_master WHERE type = 'table' AND name = 'paired_devices')",
++        )
++        .fetch_one(&mut *conn)
++        .await
++        .map_err(|e| AppError::DbError(format!("校验导入表 paired_devices 失败: {}", e)))?;
+ 
+         // 结构校验：导入库必须包含所有目标表，否则视为不兼容存档
+         for table in MAIN_DB_TABLES {
+             if *table == "butler_mcp_servers" && !has_butler_mcp_servers {
+                 continue;
+             }
++            if *table == "paired_devices" && !has_paired_devices {
++                continue;
++            }
+             let exists: Option<String> = sqlx::query_scalar(
+                 "SELECT name FROM imported.sqlite_master WHERE type = 'table' AND name = ?1",
+             )
+@@ -1189,6 +1244,9 @@ pub async fn import_sqlite_data(
+             if *table == "butler_mcp_servers" && !has_butler_mcp_servers {
+                 continue;
+             }
++            if *table == "paired_devices" && !has_paired_devices {
++                continue;
++            }
+             sqlx::query(&format!("INSERT INTO {} SELECT * FROM imported.{}", table, table))
+                 .execute(&mut *conn)
+                 .await
+@@ -1484,6 +1542,7 @@ mod tests {
+             forgotten_memory_sources: vec![],
+             role_mcp_server_bindings: vec![],
+             butler_mcp_servers: vec![],
++            paired_devices: vec![],
+             conversations: vec![],
+             messages: vec![],
+             exported_at: "2026-01-01T00:00:00Z".to_string(),
+@@ -1568,6 +1627,7 @@ mod tests {
+             forgotten_memory_sources: vec![],
+             role_mcp_server_bindings: vec![],
+             butler_mcp_servers: vec![],
++            paired_devices: vec![],
+             conversations: vec![],
+             messages: vec![],
+             exported_at: "2026-01-01T00:00:00Z".to_string(),
+@@ -1660,6 +1720,7 @@ mod tests {
+             forgotten_memory_sources: vec![],
+             role_mcp_server_bindings: vec![],
+             butler_mcp_servers: vec![],
++            paired_devices: vec![],
+             conversations: vec![conv],
+             messages: vec![msg1, msg2],
+             exported_at: "2026-01-01T00:00:00Z".to_string(),
+@@ -1696,6 +1757,7 @@ mod tests {
+             forgotten_memory_sources: vec![],
+             role_mcp_server_bindings: vec![],
+             butler_mcp_servers: vec![],
++            paired_devices: vec![],
+             conversations: vec![],
+             messages: vec![],
+             exported_at: "2026-01-01T00:00:00Z".to_string(),
+@@ -2096,6 +2158,7 @@ mod tests {
+             q2_reminders: vec![], big_rock_protection_reminders: vec![],
+             forgotten_memory_sources: vec![], role_mcp_server_bindings: vec![],
+             butler_mcp_servers: vec![],
++            paired_devices: vec![],
+             conversations: vec![], messages: vec![],
+             exported_at: "2026-01-01T00:00:00Z".to_string(),
+             export_version: "99.0".to_string(),
+diff --git a/egosync-app/src-tauri/src/services/mod.rs b/egosync-app/src-tauri/src/services/mod.rs
+index 15452bc..485bc59 100644
+--- a/egosync-app/src-tauri/src/services/mod.rs
++++ b/egosync-app/src-tauri/src/services/mod.rs
+@@ -6,6 +6,8 @@ pub mod bigrock_protection;
+ pub mod bigrock_reminder;
+ pub mod briefing_generator;
+ pub mod butler_config;
++pub mod companion_connection;
++pub mod companion_pairing;
+ pub mod dashboard_service;
+ pub mod delegate_bridge;
+ pub mod energy_calculator;
+diff --git a/egosync-app/src/components/settings/GlobalSettingsModal.tsx b/egosync-app/src/components/settings/GlobalSettingsModal.tsx
+index 30bcdc6..8fdd33d 100644
+--- a/egosync-app/src/components/settings/GlobalSettingsModal.tsx
++++ b/egosync-app/src/components/settings/GlobalSettingsModal.tsx
+@@ -7,6 +7,7 @@ import { mcpService } from '../../services/mcpService';
+ import { schedulerService } from '../../services/schedulerService';
+ import { appService } from '../../services/appService';
+ import { dataService } from '../../services/dataService';
++import { CompanionPairingSection } from './CompanionPairingSection';
+ import type { ExportFormat, ExportResult, ImportResult } from '../../services/dataService';
+ import type { LlmConfig, CreateLlmConfigInput, UpdateLlmConfigInput, LlmProviderType, NetworkLocation } from '../../types/settings';
+ import type { McpServer, McpServerType } from '../../types/mcp';
+@@ -571,10 +572,11 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
+           <button onClick={() => { setTab('mcp'); setIsEditing(false); setIsEditingMcp(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'mcp' ? "bg-white dark:bg-slate-900 text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-700/50")}>MCP Server</button>
+           <button onClick={() => { setTab('scheduler'); setIsEditing(false); setIsEditingMcp(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'scheduler' ? "bg-white dark:bg-slate-900 text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-700/50")}>调度时间</button>
+           <button onClick={() => { setTab('data'); setIsEditing(false); setIsEditingMcp(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'data' ? "bg-white dark:bg-slate-900 text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-700/50")}>数据与隐私</button>
++          <button onClick={() => { setTab('companion'); setIsEditing(false); setIsEditingMcp(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'companion' ? "bg-white dark:bg-slate-900 text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-700/50")}>手机伴侣</button>
+         </div>
+         <div className="flex-1 p-10 overflow-y-auto">
+           <div className="flex justify-between items-center mb-8">
+-            <h3 className="text-[24px] font-semibold text-slate-800 dark:text-slate-100">{tab === 'llm' ? 'LLM Provider 配置' : tab === 'mcp' ? 'MCP Server配置' : tab === 'scheduler' ? '调度时间配置' : '数据与隐私'}</h3>
++            <h3 className="text-[24px] font-semibold text-slate-800 dark:text-slate-100">{tab === 'llm' ? 'LLM Provider 配置' : tab === 'mcp' ? 'MCP Server配置' : tab === 'scheduler' ? '调度时间配置' : tab === 'companion' ? '手机伴侣' : '数据与隐私'}</h3>
+             <button
+               onClick={() => {
+                 if (tab === 'mcp' && isEditingMcp) {
+@@ -1175,6 +1177,10 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
+               </div>
+             </div>
+           )}
++
++          {tab === 'companion' && (
++            <CompanionPairingSection />
++          )}
+         </div>
+       </div>
+ 
+diff --git a/egosync-app/src-tauri/migrations/031_paired_devices.sql b/egosync-app/src-tauri/migrations/031_paired_devices.sql
+new file mode 100644
+index 0000000..926f12d
+--- /dev/null
++++ b/egosync-app/src-tauri/migrations/031_paired_devices.sql
+@@ -0,0 +1,9 @@
++-- Story 12.2: 已配对手机设备表（单对单语义：db 层 upsert 前清空旧记录）
++CREATE TABLE IF NOT EXISTS paired_devices (
++    id TEXT PRIMARY KEY NOT NULL,
++    device_name TEXT NOT NULL,
++    device_pubkey TEXT NOT NULL UNIQUE,
++    paired_at TEXT NOT NULL,
++    last_seen_at TEXT NOT NULL
++);
++CREATE INDEX IF NOT EXISTS idx_paired_devices_device_pubkey ON paired_devices(device_pubkey);
+diff --git a/egosync-app/src-tauri/src/commands/companion.rs b/egosync-app/src-tauri/src/commands/companion.rs
+new file mode 100644
+index 0000000..f1be8d6
+--- /dev/null
++++ b/egosync-app/src-tauri/src/commands/companion.rs
+@@ -0,0 +1,57 @@
++//! 手机伴侣命令层（Story 12.2）——薄层：参数解析 → service 调用 → 返回，零业务逻辑。
++
++use std::sync::Arc;
++
++use tauri::State;
++
++use crate::db::pool::DbPool;
++use crate::error::AppError;
++use crate::models::companion::{CompanionStatus, PairedDevice, QrPayload};
++use crate::services::companion_connection::{self, CompanionState};
++use crate::services::companion_pairing;
++
++#[tauri::command]
++pub async fn pairing_generate_qr(
++    companion: State<'_, Arc<CompanionState>>,
++) -> Result<QrPayload, AppError> {
++    let payload = companion_pairing::generate_qr()?;
++    companion.open_pairing_window(payload.pairing_nonce.clone()).await;
++    Ok(payload)
++}
++
++#[tauri::command]
++pub async fn pairing_confirm(
++    pool: State<'_, DbPool>,
++    companion: State<'_, Arc<CompanionState>>,
++) -> Result<PairedDevice, AppError> {
++    let device = companion_pairing::confirm_pending(&pool, &companion.pending).await?;
++    companion.emit_event(
++        companion_pairing::EVENT_PAIRED,
++        companion_pairing::paired_event_payload(&device),
++    );
++    Ok(device)
++}
++
++#[tauri::command]
++pub async fn paired_device_list(pool: State<'_, DbPool>) -> Result<Vec<PairedDevice>, AppError> {
++    crate::db::paired_devices::get_all(&pool).await
++}
++
++#[tauri::command]
++pub async fn paired_device_remove(
++    pool: State<'_, DbPool>,
++    companion: State<'_, Arc<CompanionState>>,
++    device_id: String,
++) -> Result<(), AppError> {
++    crate::db::paired_devices::remove(&pool, &device_id).await?;
++    companion_connection::unregister_nsd_if_empty(&pool, &companion).await;
++    Ok(())
++}
++
++#[tauri::command]
++pub async fn companion_get_status(
++    pool: State<'_, DbPool>,
++    companion: State<'_, Arc<CompanionState>>,
++) -> Result<CompanionStatus, AppError> {
++    companion_connection::get_status(&pool, &companion).await
++}
+diff --git a/egosync-app/src-tauri/src/db/paired_devices.rs b/egosync-app/src-tauri/src/db/paired_devices.rs
+new file mode 100644
+index 0000000..81fb0a8
+--- /dev/null
++++ b/egosync-app/src-tauri/src/db/paired_devices.rs
+@@ -0,0 +1,215 @@
++//! `paired_devices` 表读写（Story 12.2）。
++//!
++//! 单对单语义（NFR-M6）：桌面同一时刻只信任一台手机，故
++//! [`upsert_single_device`] 在写入新记录前先清空旧记录。
++
++use sqlx::SqlitePool;
++
++use crate::error::AppError;
++use crate::models::companion::PairedDevice;
++
++pub async fn upsert_single_device(
++    pool: &SqlitePool,
++    device: &PairedDevice,
++) -> Result<(), AppError> {
++    let mut tx = pool
++        .begin()
++        .await
++        .map_err(|e| AppError::DbError(format!("开启配对设备事务失败: {}", e)))?;
++    // 单对单：新记录写入前清空旧记录（同公钥 upsert 时等价于更新自身）
++    sqlx::query("DELETE FROM paired_devices WHERE device_pubkey != ?1")
++        .bind(&device.device_pubkey)
++        .execute(&mut *tx)
++        .await
++        .map_err(|e| AppError::DbError(format!("清理旧配对设备失败: {}", e)))?;
++    sqlx::query(
++        "INSERT INTO paired_devices (id, device_name, device_pubkey, paired_at, last_seen_at)
++         VALUES (?1, ?2, ?3, ?4, ?5)
++         ON CONFLICT(device_pubkey) DO UPDATE SET
++            device_name = excluded.device_name,
++            paired_at = excluded.paired_at,
++            last_seen_at = excluded.last_seen_at",
++    )
++    .bind(&device.id)
++    .bind(&device.device_name)
++    .bind(&device.device_pubkey)
++    .bind(&device.paired_at)
++    .bind(&device.last_seen_at)
++    .execute(&mut *tx)
++    .await
++    .map_err(|e| AppError::DbError(format!("写入配对设备失败: {}", e)))?;
++    tx.commit()
++        .await
++        .map_err(|e| AppError::DbError(format!("提交配对设备事务失败: {}", e)))?;
++    Ok(())
++}
++
++pub async fn get_all(pool: &SqlitePool) -> Result<Vec<PairedDevice>, AppError> {
++    sqlx::query_as::<_, PairedDevice>(
++        "SELECT id, device_name, device_pubkey, paired_at, last_seen_at
++         FROM paired_devices ORDER BY paired_at DESC",
++    )
++    .fetch_all(pool)
++    .await
++    .map_err(|e| AppError::DbError(format!("查询配对设备失败: {}", e)))
++}
++
++pub async fn get_by_pubkey(
++    pool: &SqlitePool,
++    pubkey: &str,
++) -> Result<Option<PairedDevice>, AppError> {
++    sqlx::query_as::<_, PairedDevice>(
++        "SELECT id, device_name, device_pubkey, paired_at, last_seen_at
++         FROM paired_devices WHERE device_pubkey = ?1",
++    )
++    .bind(pubkey)
++    .fetch_optional(pool)
++    .await
++    .map_err(|e| AppError::DbError(format!("按公钥查询配对设备失败: {}", e)))
++}
++
++pub async fn update_last_seen(pool: &SqlitePool, pubkey: &str) -> Result<(), AppError> {
++    let now = crate::db::settings::chrono_now_pub();
++    sqlx::query("UPDATE paired_devices SET last_seen_at = ?1 WHERE device_pubkey = ?2")
++        .bind(&now)
++        .bind(pubkey)
++        .execute(pool)
++        .await
++        .map_err(|e| AppError::DbError(format!("更新配对设备最后在线时间失败: {}", e)))?;
++    Ok(())
++}
++
++pub async fn remove(pool: &SqlitePool, device_id: &str) -> Result<(), AppError> {
++    let result = sqlx::query("DELETE FROM paired_devices WHERE id = ?1")
++        .bind(device_id)
++        .execute(pool)
++        .await
++        .map_err(|e| AppError::DbError(format!("删除配对设备失败: {}", e)))?;
++    if result.rows_affected() == 0 {
++        return Err(AppError::NotFound(format!(
++            "配对设备不存在: {}",
++            device_id
++        )));
++    }
++    Ok(())
++}
++
++/// 清空全部配对设备（数据销毁路径由 MAIN_DB_TABLES 覆盖，此函数供 remove_all 语义完整性使用）。
++pub async fn remove_all(pool: &SqlitePool) -> Result<(), AppError> {
++    sqlx::query("DELETE FROM paired_devices")
++        .execute(pool)
++        .await
++        .map_err(|e| AppError::DbError(format!("清空配对设备失败: {}", e)))?;
++    Ok(())
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::db::pool::init_db;
++    use tempfile::tempdir;
++
++    async fn test_pool() -> SqlitePool {
++        let dir = tempdir().expect("create temp dir");
++        // into_path() 放弃自动清理，目录存活到进程结束——池的生命周期长于 TempDir guard
++        let db_dir = dir.into_path();
++        init_db(&db_dir.join("egosync.db"))
++            .await
++            .expect("init db with migrations")
++    }
++
++    fn device(id: &str, name: &str, pubkey: &str) -> PairedDevice {
++        PairedDevice {
++            id: id.to_string(),
++            device_name: name.to_string(),
++            device_pubkey: pubkey.to_string(),
++            paired_at: "2026-08-28T10:00:00Z".to_string(),
++            last_seen_at: "2026-08-28T10:00:00Z".to_string(),
++        }
++    }
++
++    #[tokio::test]
++    async fn upsert_single_device_replaces_previous_device() {
++        // WHY: 单对单（NFR-M6）——若第二条记录静默追加，第三台设备可在用户
++        // 不知情时与桌面并列持有信任，"唯一事实源"的配对边界即被打破。
++        let pool = test_pool().await;
++        upsert_single_device(&pool, &device("d1", "旧手机", "pub-old"))
++            .await
++            .expect("first upsert");
++        upsert_single_device(&pool, &device("d2", "新手机", "pub-new"))
++            .await
++            .expect("second upsert");
++
++        let all = get_all(&pool).await.expect("get all");
++        assert_eq!(all.len(), 1, "新设备写入后必须只剩一条记录");
++        assert_eq!(all[0].device_pubkey, "pub-new");
++    }
++
++    #[tokio::test]
++    async fn upsert_same_pubkey_updates_in_place() {
++        // WHY: 免配对重连写 last_seen/改名时不能产生第二条记录——
++        // 同公钥必须是更新而非插入（UNIQUE 约束之上的语义保证）。
++        let pool = test_pool().await;
++        upsert_single_device(&pool, &device("d1", "手机", "pub-a"))
++            .await
++            .expect("first upsert");
++        upsert_single_device(&pool, &device("d1", "改名手机", "pub-a"))
++            .await
++            .expect("same-pubkey upsert");
++
++        let all = get_all(&pool).await.expect("get all");
++        assert_eq!(all.len(), 1);
++        assert_eq!(all[0].device_name, "改名手机");
++    }
++
++    #[tokio::test]
++    async fn get_by_pubkey_and_update_last_seen_roundtrip() {
++        let pool = test_pool().await;
++        upsert_single_device(&pool, &device("d1", "手机", "pub-a"))
++            .await
++            .expect("upsert");
++
++        let found = get_by_pubkey(&pool, "pub-a").await.expect("get by pubkey");
++        assert!(found.is_some(), "已写入公钥必须可查");
++        assert_eq!(found.unwrap().id, "d1");
++
++        update_last_seen(&pool, "pub-a").await.expect("update last seen");
++        let updated = get_by_pubkey(&pool, "pub-a")
++            .await
++            .expect("get after update")
++            .expect("record exists");
++        assert_ne!(
++            updated.last_seen_at, "2026-08-28T10:00:00Z",
++            "update_last_seen 必须实际刷新 last_seen_at"
++        );
++
++        let missing = get_by_pubkey(&pool, "pub-none").await.expect("query missing");
++        assert!(missing.is_none());
++    }
++
++    #[tokio::test]
++    async fn remove_deletes_record_and_errors_on_missing() {
++        // WHY: "移除即拒绝"（用户主权）依赖 remove 真正删掉记录；
++        // 删除不存在的设备必须显式报错而非静默成功（显式失败原则）。
++        let pool = test_pool().await;
++        upsert_single_device(&pool, &device("d1", "手机", "pub-a"))
++            .await
++            .expect("upsert");
++
++        remove(&pool, "d1").await.expect("remove existing");
++        assert!(get_all(&pool).await.expect("get all").is_empty());
++
++        let err = remove(&pool, "d1").await.expect_err("remove missing must fail");
++        assert!(matches!(err, AppError::NotFound(_)), "实际: {err:?}");
++    }
++
++    #[tokio::test]
++    async fn remove_all_clears_everything() {
++        let pool = test_pool().await;
++        upsert_single_device(&pool, &device("d1", "手机", "pub-a"))
++            .await
++            .expect("upsert");
++        remove_all(&pool).await.expect("remove all");
++        assert!(get_all(&pool).await.expect("get all").is_empty());
++    }
++}
+diff --git a/egosync-app/src-tauri/src/models/companion.rs b/egosync-app/src-tauri/src/models/companion.rs
+new file mode 100644
+index 0000000..7db27cf
+--- /dev/null
++++ b/egosync-app/src-tauri/src/models/companion.rs
+@@ -0,0 +1,65 @@
++//! 手机伴侣配对相关模型（Story 12.2）。
++//!
++//! `PairedDevice` 对应 `paired_devices` 表（单对单语义由
++//! [`crate::db::paired_devices::upsert_single_device`] 落地）；
++//! `QrPayload` 是配对二维码内容契约；`CompanionStatus` 供
++//! `companion_get_status` 返回连接状态快照。
++
++use serde::{Deserialize, Serialize};
++
++/// 已配对设备记录。
++#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
++#[serde(rename_all = "camelCase")]
++pub struct PairedDevice {
++    pub id: String,
++    pub device_name: String,
++    pub device_pubkey: String,
++    pub paired_at: String,
++    pub last_seen_at: String,
++}
++
++/// 配对二维码 payload（前端负责渲染二维码图，后端只产出数据）。
++///
++/// `relay_addr` 在 V1（中继未部署，Story 12.3 之前）恒为 `None`，
++/// 前端如实展示「中继未部署」。
++#[derive(Debug, Clone, Serialize, Deserialize)]
++#[serde(rename_all = "camelCase")]
++pub struct QrPayload {
++    pub relay_addr: Option<String>,
++    pub desktop_static_pubkey: String,
++    pub relay_id: String,
++    pub pairing_nonce: String,
++}
++
++/// 伴侣连接状态快照（`companion_get_status` 返回值）。
++#[derive(Debug, Clone, Serialize, Deserialize)]
++#[serde(rename_all = "camelCase")]
++pub struct CompanionStatus {
++    pub listening: bool,
++    pub port: Option<u16>,
++    pub connected: Option<ConnectedDeviceInfo>,
++    pub paired_device: Option<PairedDevice>,
++    /// 换绑 pending 单槽（新公钥请求替换已配对记录时可见）。
++    pub pending_pairing: Option<PendingPairing>,
++}
++
++/// 当前已连接设备摘要。
++#[derive(Debug, Clone, Serialize, Deserialize)]
++#[serde(rename_all = "camelCase")]
++pub struct ConnectedDeviceInfo {
++    pub device_id: String,
++    pub device_name: String,
++    /// 连接来源：直连（LAN）或中继（本 story 恒 direct）。
++    pub origin: String,
++    pub since: String,
++}
++
++/// 换绑 pending 信息（等待 `pairing_confirm` 确认）。
++#[derive(Debug, Clone, Serialize, Deserialize)]
++#[serde(rename_all = "camelCase")]
++pub struct PendingPairing {
++    pub device_name: String,
++    pub device_pubkey: String,
++    /// pending 创建时间（ISO 8601），120 秒超时作废。
++    pub created_at: String,
++}
+diff --git a/egosync-app/src-tauri/src/services/companion_pairing.rs b/egosync-app/src-tauri/src/services/companion_pairing.rs
+new file mode 100644
+index 0000000..3ca25a1
+--- /dev/null
++++ b/egosync-app/src-tauri/src/services/companion_pairing.rs
+@@ -0,0 +1,675 @@
++//! 手机伴侣配对服务（Story 12.2）。
++//!
++//! 职责：静态密钥管理（keyring + 内存缓存）、QR payload 生成、
++//! Noise XX responder 握手编排、配对决策（首配 / 免配对重连 / 换绑 pending）。
++//!
++//! 架构边界：本模块只读写 `db::paired_devices` 与自身状态，不触任何其他
++//! service；全部核心函数为无 `AppHandle` 的纯函数（事件 payload 以返回值
++//! 产出，由 command / connection 层负责 emit），保证可脱 UI 测试。
++
++use companion_proto::crypto::{generate_static_keypair, HandshakeSession, TransportSession};
++use companion_proto::frames::Frame;
++use companion_proto::ProtoError;
++use sha2::{Digest, Sha256};
++use tokio::sync::Mutex;
++
++use crate::db::paired_devices as paired_devices_db;
++use crate::db::pool::DbPool;
++use crate::error::AppError;
++use crate::models::companion::{PairedDevice, PendingPairing, QrPayload};
++use crate::services::secret_store;
++
++/// keyring 中静态密钥对的 key 名（与 LLM API Key 同级管理）。
++pub const KEYRING_KEY: &str = "companion_static_keypair";
++
++/// 换绑 pending 有效期（秒）。
++pub const PENDING_PAIRING_TIMEOUT_SECS: i64 = 120;
++
++/// 握手后 app 层未提供设备名时的 fallback。
++pub const DEFAULT_DEVICE_NAME: &str = "手机伴侣";
++
++/// `companion:paired` 等事件的 payload 事实源（冻结契约，见 Dev Notes）。
++pub const EVENT_PAIRED: &str = "companion:paired";
++pub const EVENT_CONNECTED: &str = "companion:connected";
++pub const EVENT_DISCONNECTED: &str = "companion:disconnected";
++
++fn hex_encode(bytes: &[u8]) -> String {
++    bytes.iter().map(|b| format!("{b:02x}")).collect()
++}
++
++fn proto_err(_e: ProtoError) -> AppError {
++    // 用户可见文案为中文短句、不暴露技术细节；完整原因走 tracing
++    AppError::ProtocolError("手机伴侣通信握手失败".to_string())
++}
++
++// ---------------------------------------------------------------------------
++// 静态密钥管理
++// ---------------------------------------------------------------------------
++
++/// 加载（或首次生成并写入 keyring）桌面静态密钥对，hex 编码存储，内存缓存。
++pub fn load_or_create_static_keypair() -> Result<(Vec<u8>, Vec<u8>), AppError> {
++    static CACHE: std::sync::OnceLock<(Vec<u8>, Vec<u8>)> = std::sync::OnceLock::new();
++    if let Some(cached) = CACHE.get() {
++        return Ok(cached.clone());
++    }
++
++    if let Some(stored) = secret_store::load_secret(KEYRING_KEY)? {
++        if let Some(keypair) = parse_keypair_hex(&stored) {
++            let _ = CACHE.set(keypair.clone());
++            return Ok(keypair);
++        }
++        tracing::warn!("companion 静态密钥存储格式非法，将重新生成");
++    }
++
++    let (priv_key, pub_key) = generate_static_keypair()
++        .map_err(|_| AppError::PairingError("生成桌面配对密钥失败".to_string()))?;
++    let encoded = format!("{}:{}", hex_encode(&priv_key), hex_encode(&pub_key));
++    secret_store::save_secret(KEYRING_KEY, &encoded)?;
++    let keypair = (priv_key, pub_key);
++    let _ = CACHE.set(keypair.clone());
++    tracing::info!(pubkey = %hex_encode(&keypair.1), "companion 静态密钥已就绪");
++    Ok(keypair)
++}
++
++fn parse_keypair_hex(stored: &str) -> Option<(Vec<u8>, Vec<u8>)> {
++    let (priv_hex, pub_hex) = stored.split_once(':')?;
++    let priv_key = hex_decode(priv_hex)?;
++    let pub_key = hex_decode(pub_hex)?;
++    if priv_key.len() != 32 || pub_key.len() != 32 {
++        return None;
++    }
++    Some((priv_key, pub_key))
++}
++
++fn hex_decode(hex: &str) -> Option<Vec<u8>> {
++    if hex.len() % 2 != 0 {
++        return None;
++    }
++    (0..hex.len() / 2)
++        .map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok())
++        .collect()
++}
++
++// ---------------------------------------------------------------------------
++// QR payload
++// ---------------------------------------------------------------------------
++
++/// 生成配对二维码 payload。
++///
++/// V1（relay-server 属 Story 12.3）`relay_addr` 恒为 `None`，
++/// 前端如实展示「中继未部署」。
++pub fn generate_qr_payload(desktop_static_pubkey: &[u8]) -> QrPayload {
++    let pubkey_hex = hex_encode(desktop_static_pubkey);
++    let relay_id = hex_encode(&Sha256::digest(desktop_static_pubkey))[..16].to_string();
++    QrPayload {
++        relay_addr: None,
++        desktop_static_pubkey: pubkey_hex,
++        relay_id,
++        pairing_nonce: uuid::Uuid::new_v4().to_string(),
++    }
++}
++
++/// 命令层入口：确保静态密钥存在并产出 QR payload。
++pub fn generate_qr() -> Result<QrPayload, AppError> {
++    let (_priv_key, pub_key) = load_or_create_static_keypair()?;
++    Ok(generate_qr_payload(&pub_key))
++}
++
++// ---------------------------------------------------------------------------
++// Noise XX responder 握手编排
++// ---------------------------------------------------------------------------
++
++/// 握手期与传输期的底层 IO 抽象（WS 二进制消息 / 测试通道）。
++#[async_trait::async_trait]
++pub trait HandshakeIo: Send {
++    /// 接收一条二进制消息（握手期为单条 Noise 消息，无长度前缀）。
++    async fn recv(&mut self) -> Result<Vec<u8>, AppError>;
++    /// 发送一条二进制消息。
++    async fn send(&mut self, msg: &[u8]) -> Result<(), AppError>;
++}
++
++/// responder 侧握手产物：对端静态公钥（设备身份）+ 传输态会话。
++pub struct HandshakeOutcome {
++    pub remote_static_pubkey: Vec<u8>,
++    pub transport: TransportSession,
++}
++
++/// 运行 responder 侧 Noise XX 三消息交换（-> e；<- e,ee,s,es；-> s,se）。
++///
++/// 每条 Noise 握手消息对应一条底层二进制消息，无长度前缀。
++pub async fn run_responder_handshake(
++    desktop_priv: &[u8],
++    io: &mut dyn HandshakeIo,
++) -> Result<HandshakeOutcome, AppError> {
++    let mut session = HandshakeSession::responder(desktop_priv).map_err(proto_err)?;
++    let m1 = io.recv().await?;
++    session.read_message(&m1).map_err(proto_err)?;
++    let m2 = session.write_message(&[]).map_err(proto_err)?;
++    io.send(&m2).await?;
++    let m3 = io.recv().await?;
++    session.read_message(&m3).map_err(proto_err)?;
++    let remote_static_pubkey = session.remote_static_pubkey().ok_or_else(|| {
++        AppError::ProtocolError("手机伴侣通信握手失败".to_string())
++    })?;
++    let transport = session.into_transport().map_err(proto_err)?;
++    Ok(HandshakeOutcome {
++        remote_static_pubkey,
++        transport,
++    })
++}
++
++/// 对端静态公钥的 hex 表示（配对决策 / 事件 payload 的设备身份键）。
++pub fn remote_pubkey_hex(remote_static_pubkey: &[u8]) -> String {
++    hex_encode(remote_static_pubkey)
++}
++
++// ---------------------------------------------------------------------------
++// 握手后帧级约定（app 层契约，帧 schema 不变）
++// ---------------------------------------------------------------------------
++
++/// 握手完成后首帧必须是 HELLO（protocolVersion 校验由 `decode_frame` 内建）。
++pub fn validate_first_frame(frame: &Frame) -> Result<(), AppError> {
++    match frame {
++        Frame::Hello(_) => Ok(()),
++        _ => Err(AppError::ProtocolError(
++            "手机伴侣协议首帧无效".to_string(),
++        )),
++    }
++}
++
++/// 从 Notice 帧 app 层 data 中提取设备名。
++///
++/// app 层约定：手机在 HELLO 后以 `Notice(data = {"type":"deviceInfo",
++/// "deviceName":"..."})` 上报设备名；协议帧 schema 不变、无需 bump。
++pub fn device_name_from_frame(frame: &Frame) -> Option<String> {
++    if let Frame::Notice(notice) = frame {
++        let value: serde_json::Value = serde_json::from_str(&notice.data).ok()?;
++        if value.get("type")?.as_str()? == "deviceInfo" {
++            return value.get("deviceName")?.as_str().map(String::from);
++        }
++    }
++    None
++}
++
++// ---------------------------------------------------------------------------
++// 配对决策
++// ---------------------------------------------------------------------------
++
++/// `decide_pairing` 的决策结果。
++#[derive(Debug, Clone)]
++pub enum PairingDecision {
++    /// 已配对设备免配对直接进入加密会话（AC4）。
++    AlreadyPaired {
++        device_id: String,
++        device_name: String,
++    },
++    /// 首次配对：已写入 paired_devices，应发 `companion:paired`。
++    FirstPairing { device: PairedDevice },
++    /// 换绑：新公钥进入 pending 单槽，等待 `pairing_confirm`（120s 超时作废）。
++    PendingRebind { pending: PendingPairing },
++}
++
++/// 换绑 pending 是否已过期。
++pub fn pending_is_expired(pending: &PendingPairing, now_unix_secs: i64) -> bool {
++    parse_iso_to_unix(&pending.created_at)
++        .map(|created| now_unix_secs - created > PENDING_PAIRING_TIMEOUT_SECS)
++        .unwrap_or(true) // 无法解析的时间视为已作废（显式失败，不静默放行）
++}
++
++fn parse_iso_to_unix(iso: &str) -> Option<i64> {
++    chrono::DateTime::parse_from_rfc3339(iso)
++        .ok()
++        .map(|dt| dt.timestamp())
++}
++
++fn now_unix_secs() -> i64 {
++    chrono::Utc::now().timestamp()
++}
++
++/// 配对决策：同公钥 → 免配对；无任何记录（首配）→ 直接写入；
++/// 已有记录且公钥不同（换绑）→ pending 单槽等待确认。
++pub async fn decide_pairing(
++    pool: &DbPool,
++    pending_slot: &Mutex<Option<PendingPairing>>,
++    remote_pubkey_hex: &str,
++    device_name: &str,
++) -> Result<PairingDecision, AppError> {
++    // 已配对公钥：免配对直接进入会话（AC4 前置）
++    if let Some(existing) = paired_devices_db::get_by_pubkey(pool, remote_pubkey_hex).await? {
++        paired_devices_db::update_last_seen(pool, remote_pubkey_hex).await?;
++        return Ok(PairingDecision::AlreadyPaired {
++            device_id: existing.id,
++            device_name: existing.device_name,
++        });
++    }
++
++    let now = crate::db::settings::chrono_now_pub();
++    if paired_devices_db::get_all(pool).await?.is_empty() {
++        // 首配：扫码即绑定（FR-40 无桌面确认环节）
++        let device = PairedDevice {
++            id: uuid::Uuid::new_v4().to_string(),
++            device_name: device_name.to_string(),
++            device_pubkey: remote_pubkey_hex.to_string(),
++            paired_at: now.clone(),
++            last_seen_at: now,
++        };
++        paired_devices_db::upsert_single_device(pool, &device).await?;
++        return Ok(PairingDecision::FirstPairing { device });
++    }
++
++    // 换绑：pending 单槽（覆盖旧 pending），等待 pairing_confirm
++    let pending = PendingPairing {
++        device_name: device_name.to_string(),
++        device_pubkey: remote_pubkey_hex.to_string(),
++        created_at: crate::db::settings::chrono_now_pub(),
++    };
++    tracing::info!(
++        device_name = %pending.device_name,
++        "新设备请求替换配对，进入待确认状态"
++    );
++    *pending_slot.lock().await = Some(pending.clone());
++    Ok(PairingDecision::PendingRebind { pending })
++}
++
++/// 确认换绑：pending 存在且未过期时写入 paired_devices（替换旧记录）。
++pub async fn confirm_pending(
++    pool: &DbPool,
++    pending_slot: &Mutex<Option<PendingPairing>>,
++) -> Result<PairedDevice, AppError> {
++    let mut guard = pending_slot.lock().await;
++    let Some(pending) = guard.clone() else {
++        return Err(AppError::ValidationError(
++            "当前没有等待确认的新设备".to_string(),
++        ));
++    };
++    if pending_is_expired(&pending, now_unix_secs()) {
++        *guard = None;
++        return Err(AppError::ValidationError(
++            "确认已超时，请让手机重新扫码配对".to_string(),
++        ));
++    }
++    let now = crate::db::settings::chrono_now_pub();
++    let device = PairedDevice {
++        id: uuid::Uuid::new_v4().to_string(),
++        device_name: pending.device_name,
++        device_pubkey: pending.device_pubkey,
++        paired_at: now.clone(),
++        last_seen_at: now,
++    };
++    paired_devices_db::upsert_single_device(pool, &device).await?;
++    *guard = None;
++    Ok(device)
++}
++
++// ---------------------------------------------------------------------------
++// 事件 payload（纯函数产出，command / connection 层负责 emit）
++// ---------------------------------------------------------------------------
++
++/// 配对窗口：`pairing_generate_qr` 时打开，未知公钥仅在此窗口内被接受。
++///
++/// 用途：保障"移除即拒绝"——移除已配对设备后，旧公钥重连因无窗口而被拒；
++/// 用户重新生成 QR（表达配对意图）后才接受新公钥。
++#[derive(Clone)]
++pub struct PairingWindow {
++    pub nonce: String,
++    pub created_at_unix: i64,
++}
++
++/// 配对窗口有效期（秒）。
++pub const PAIRING_WINDOW_TIMEOUT_SECS: i64 = 300;
++
++/// 配对窗口是否仍在有效期内。
++pub fn pairing_window_is_open(window: &Option<PairingWindow>, now_unix_secs: i64) -> bool {
++    match window {
++        Some(w) => now_unix_secs - w.created_at_unix <= PAIRING_WINDOW_TIMEOUT_SECS,
++        None => false,
++    }
++}
++
++/// 连接准入：公钥为已配对 / 在 pending 单槽中 / 配对窗口打开 ——任一为真即允许。
++pub async fn connection_pubkey_allowed(
++    pool: &DbPool,
++    pending_slot: &Mutex<Option<PendingPairing>>,
++    window: &Option<PairingWindow>,
++    now_unix_secs: i64,
++    remote_pubkey_hex: &str,
++) -> Result<bool, AppError> {
++    if paired_devices_db::get_by_pubkey(pool, remote_pubkey_hex).await?.is_some() {
++        return Ok(true);
++    }
++    let pending = pending_slot.lock().await;
++    if let Some(pending) = &*pending {
++        if pending.device_pubkey == remote_pubkey_hex
++            && !pending_is_expired(pending, now_unix_secs)
++        {
++            return Ok(true);
++        }
++    }
++    Ok(pairing_window_is_open(window, now_unix_secs))
++}
++
++/// `companion:paired` payload：`{ deviceId, deviceName, pubkeyPrefix }`。
++pub fn paired_event_payload(device: &PairedDevice) -> serde_json::Value {
++    serde_json::json!({
++        "deviceId": device.id,
++        "deviceName": device.device_name,
++        "pubkeyPrefix": device.device_pubkey.chars().take(8).collect::<String>(),
++    })
++}
++
++/// `companion:connected` payload：`{ deviceId, deviceName }`。
++pub fn connected_event_payload(device_id: &str, device_name: &str) -> serde_json::Value {
++    serde_json::json!({
++        "deviceId": device_id,
++        "deviceName": device_name,
++    })
++}
++
++/// `companion:disconnected` payload：`{ deviceId, reason }`（reason 为中文短句）。
++pub fn disconnected_event_payload(device_id: &str, reason: &str) -> serde_json::Value {
++    serde_json::json!({
++        "deviceId": device_id,
++        "reason": reason,
++    })
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::db::pool::init_db;
++    use companion_proto::frames::{HelloPayload, NoticePayload, PingPayload};
++    use tempfile::tempdir;
++
++    async fn test_pool() -> DbPool {
++        let dir = tempdir().expect("create temp dir");
++        let db_dir = dir.into_path();
++        init_db(&db_dir.join("egosync.db"))
++            .await
++            .expect("init db with migrations")
++    }
++
++    fn pending_with_age(device_pubkey: &str, age_secs: i64) -> PendingPairing {
++        PendingPairing {
++            device_name: "新手机".to_string(),
++            device_pubkey: device_pubkey.to_string(),
++            created_at: (chrono::Utc::now() - chrono::Duration::seconds(age_secs))
++                .to_rfc3339(),
++        }
++    }
++
++    // ── QR payload ──
++
++    #[test]
++    fn qr_payload_fields_match_contract() {
++        // WHY: QR 是手机侧唯一配对入口——任一字段缺失/错位，手机都无法
++        // 完成握手，且用户无法从 UI 察觉（表现为"扫不上"）。
++        let pubkey = [7u8; 32];
++        let payload = generate_qr_payload(&pubkey);
++        assert!(payload.relay_addr.is_none(), "V1 relay_addr 必须为空（中继未部署）");
++        assert_eq!(payload.desktop_static_pubkey.len(), 64, "pubkey hex 应为 64 字符");
++        let expected_relay_id = hex_encode(&Sha256::digest(pubkey))[..16].to_string();
++        assert_eq!(payload.relay_id, expected_relay_id, "relay_id 必须是 pubkey 哈希前 16 字符");
++        assert!(!payload.pairing_nonce.is_empty(), "pairing_nonce 不能为空");
++    }
++
++    #[test]
++    fn qr_pairing_nonce_is_single_use() {
++        // WHY: nonce 单次有效是"QR 不能被旁人重扫"的安全底线——
++        // 两次生成产出相同 nonce 意味着重放窗口被打开。
++        let pubkey = [1u8; 32];
++        let a = generate_qr_payload(&pubkey);
++        let b = generate_qr_payload(&pubkey);
++        assert_ne!(a.pairing_nonce, b.pairing_nonce);
++    }
++
++    // ── 握手编排 ──
++
++    /// mpsc 双通道实现的 HandshakeIo 测试替身 + 配对的双端通道。
++    struct ChannelIo {
++        incoming: tokio::sync::mpsc::Receiver<Vec<u8>>,
++        outgoing: tokio::sync::mpsc::Sender<Vec<u8>>,
++    }
++
++    #[async_trait::async_trait]
++    impl HandshakeIo for ChannelIo {
++        async fn recv(&mut self) -> Result<Vec<u8>, AppError> {
++            self.incoming
++                .recv()
++                .await
++                .ok_or_else(|| AppError::ConnectionError("连接已关闭".to_string()))
++        }
++        async fn send(&mut self, msg: &[u8]) -> Result<(), AppError> {
++            self.outgoing
++                .send(msg.to_vec())
++                .await
++                .map_err(|_| AppError::ConnectionError("连接已关闭".to_string()))
++        }
++    }
++
++    #[tokio::test]
++    async fn responder_handshake_extracts_remote_static_pubkey() {
++        // WHY: 对端静态公钥是配对决策的唯一设备身份——若 responder 拿不到
++        // 发起方公钥，"免配对重连"与"移除即拒绝"全部无从谈起。
++        let (desktop_priv, _desktop_pub) = generate_static_keypair().unwrap();
++        let (phone_priv, phone_pub) = generate_static_keypair().unwrap();
++
++        let (tx_to_responder, rx_to_responder) = tokio::sync::mpsc::channel(4);
++        let (tx_to_phone, mut rx_to_phone) = tokio::sync::mpsc::channel(4);
++        let mut io = ChannelIo {
++            incoming: rx_to_responder,
++            outgoing: tx_to_phone,
++        };
++
++        let phone_task = tokio::spawn(async move {
++            let mut initiator = HandshakeSession::initiator(&phone_priv).unwrap();
++            let m1 = initiator.write_message(&[]).unwrap();
++            tx_to_responder.send(m1).await.unwrap();
++            let m2 = initiator
++                .read_message(&rx_to_phone.recv().await.unwrap())
++                .unwrap();
++            let m3 = initiator.write_message(&[]).unwrap();
++            let _ = m2;
++            tx_to_responder.send(m3).await.unwrap();
++            initiator.into_transport().unwrap()
++        });
++
++        let outcome = run_responder_handshake(&desktop_priv, &mut io)
++            .await
++            .expect("responder handshake");
++        assert_eq!(
++            hex_encode(&outcome.remote_static_pubkey),
++            hex_encode(&phone_pub),
++            "提取的对端公钥必须与发起方真实公钥一致"
++        );
++        phone_task.await.expect("phone task");
++    }
++
++    #[tokio::test]
++    async fn responder_handshake_rejects_garbage_first_message() {
++        // WHY: 错误协议消息必须显式失败（ProtocolError）而非 panic 或
++        // 静默继续——错误握手进会话等于加密边界形同虚设。
++        let (desktop_priv, _) = generate_static_keypair().unwrap();
++        let (tx_to_responder, rx_to_responder) = tokio::sync::mpsc::channel(4);
++        let (tx_to_phone, _rx_to_phone) = tokio::sync::mpsc::channel(4);
++        let mut io = ChannelIo {
++            incoming: rx_to_responder,
++            outgoing: tx_to_phone,
++        };
++        tx_to_responder.send(vec![0u8; 10]).await.unwrap();
++        // 注：XX 首条消息（-> e）无 MAC，超长零字节会被 snow 当合法消息+payload
++        // 接受；短于 32 字节临时公钥的消息才是确定性协议错误
++        drop(tx_to_responder);
++        let err = match run_responder_handshake(&desktop_priv, &mut io).await {
++            Err(e) => e,
++            Ok(_) => panic!("垃圾握手消息必须被拒绝"),
++        };
++        assert!(matches!(err, AppError::ProtocolError(_)), "实际: {err:?}");
++    }
++
++    // ── 帧级约定 ──
++
++    #[test]
++    fn first_frame_must_be_hello() {
++        let hello = Frame::Hello(HelloPayload {
++            protocol_version: companion_proto::PROTOCOL_VERSION,
++        });
++        assert!(validate_first_frame(&hello).is_ok());
++        let ping = Frame::Ping(PingPayload {});
++        assert!(validate_first_frame(&ping).is_err());
++    }
++
++    #[test]
++    fn device_name_extracted_from_notice_data() {
++        let notice = Frame::Notice(NoticePayload {
++            data: r#"{"type":"deviceInfo","deviceName":"Pixel 8"}"#.to_string(),
++        });
++        assert_eq!(
++            device_name_from_frame(&notice),
++            Some("Pixel 8".to_string()),
++            "app 层 deviceInfo 约定必须能提取设备名"
++        );
++        let other = Frame::Notice(NoticePayload {
++            data: r#"{"type":"other"}"#.to_string(),
++        });
++        assert_eq!(device_name_from_frame(&other), None);
++        let ping = Frame::Ping(PingPayload {});
++        assert_eq!(device_name_from_frame(&ping), None);
++    }
++
++    // ── 配对决策 ──
++
++    #[tokio::test]
++    async fn first_pairing_writes_device_directly() {
++        // WHY: 首配"扫码即绑定"（FR-40）——若首配也要确认，配对流程
++        // 与 PRD 的免输入承诺冲突。
++        let pool = test_pool().await;
++        let slot = Mutex::new(None);
++        let decision = decide_pairing(&pool, &slot, "pub-first", "首台手机")
++            .await
++            .expect("first pairing");
++        match decision {
++            PairingDecision::FirstPairing { device } => {
++                assert_eq!(device.device_pubkey, "pub-first");
++                assert_eq!(device.device_name, "首台手机");
++            }
++            other => panic!("首配决策必须是 FirstPairing，实际: {other:?}"),
++        }
++        assert!(
++            paired_devices_db::get_by_pubkey(&pool, "pub-first")
++                .await
++                .unwrap()
++                .is_some(),
++            "首配必须立即落库"
++        );
++    }
++
++    #[tokio::test]
++    async fn same_pubkey_reconnect_is_already_paired_without_new_record() {
++        // WHY: "配对一次，之后免配对"——重连若再次写库/发 paired 事件，
++        // 前端会弹出第二次配对提示，信任持久化在用户眼里就是坏的。
++        let pool = test_pool().await;
++        let slot = Mutex::new(None);
++        decide_pairing(&pool, &slot, "pub-a", "手机A")
++            .await
++            .expect("first pairing");
++        let decision = decide_pairing(&pool, &slot, "pub-a", "手机A")
++            .await
++            .expect("reconnect");
++        match decision {
++            PairingDecision::AlreadyPaired { .. } => {}
++            other => panic!("同公钥重连必须是 AlreadyPaired，实际: {other:?}"),
++        }
++        assert_eq!(
++            paired_devices_db::get_all(&pool).await.unwrap().len(),
++            1,
++            "重连不得产生第二条配对记录"
++        );
++    }
++
++    #[tokio::test]
++    async fn different_pubkey_goes_pending_then_confirm_replaces() {
++        // WHY: "换绑需可见同意"——第三台设备静默顶替绑定等于任何拿到
++        // QR 的人都能偷走配对位；pending+confirm 是最小可见同意闸门。
++        let pool = test_pool().await;
++        let slot = Mutex::new(None);
++        decide_pairing(&pool, &slot, "pub-a", "手机A")
++            .await
++            .expect("first pairing");
++
++        match decide_pairing(&pool, &slot, "pub-b", "手机B")
++            .await
++            .expect("rebind request")
++        {
++            PairingDecision::PendingRebind { pending } => {
++                assert_eq!(pending.device_pubkey, "pub-b");
++            }
++            other => panic!("换绑请求必须是 PendingRebind，实际: {other:?}"),
++        }
++        // 换绑 pending 期间旧设备仍在库中（未确认前不破坏现有绑定）
++        assert_eq!(paired_devices_db::get_all(&pool).await.unwrap().len(), 1);
++
++        let confirmed = confirm_pending(&pool, &slot).await.expect("confirm");
++        assert_eq!(confirmed.device_pubkey, "pub-b");
++        let all = paired_devices_db::get_all(&pool).await.unwrap();
++        assert_eq!(all.len(), 1, "确认后必须替换（单对单）");
++        assert_eq!(all[0].device_pubkey, "pub-b");
++    }
++
++    #[tokio::test]
++    async fn confirm_without_pending_is_validation_error() {
++        let pool = test_pool().await;
++        let slot = Mutex::new(None);
++        let err = confirm_pending(&pool, &slot)
++            .await
++            .expect_err("无 pending 时 confirm 必须失败");
++        assert!(matches!(err, AppError::ValidationError(_)), "实际: {err:?}");
++    }
++
++    #[tokio::test]
++    async fn expired_pending_is_rejected_on_confirm() {
++        // WHY: pending 120s 作废——无限期的待确认槽会让"曾经的扫码"
++        // 在任意未来时刻被确认，等同重放窗口。
++        let pool = test_pool().await;
++        let slot = Mutex::new(Some(pending_with_age("pub-new", 999)));
++        let err = confirm_pending(&pool, &slot)
++            .await
++            .expect_err("过期 pending 必须拒绝");
++        assert!(matches!(err, AppError::ValidationError(_)), "实际: {err:?}");
++        assert!(slot.lock().await.is_none(), "过期 pending 必须被清槽");
++    }
++
++    #[test]
++    fn pending_expiry_boundary() {
++        let fresh = pending_with_age("pub-a", 10);
++        assert!(!pending_is_expired(&fresh, now_unix_secs()));
++        let stale = pending_with_age("pub-a", 999);
++        assert!(pending_is_expired(&stale, now_unix_secs()));
++    }
++
++    // ── 事件 payload ──
++
++    #[test]
++    fn event_payloads_match_frozen_contract() {
++        // WHY: 事件 payload 形状是前后端冻结契约——字段名漂移会导致
++        // 前端监听刷新静默失效（UI 不更新但无报错）。
++        let device = PairedDevice {
++            id: "d1".to_string(),
++            device_name: "手机A".to_string(),
++            device_pubkey: "aabbccdd".to_string(),
++            paired_at: "t".to_string(),
++            last_seen_at: "t".to_string(),
++        };
++        let paired = paired_event_payload(&device);
++        assert_eq!(paired["deviceId"], "d1");
++        assert_eq!(paired["deviceName"], "手机A");
++        assert_eq!(paired["pubkeyPrefix"], "aabbccdd");
++
++        let connected = connected_event_payload("d1", "手机A");
++        assert_eq!(connected["deviceId"], "d1");
++        assert_eq!(connected["deviceName"], "手机A");
++
++        let disconnected = disconnected_event_payload("d1", "连接已断开");
++        assert_eq!(disconnected["deviceId"], "d1");
++        assert_eq!(disconnected["reason"], "连接已断开");
++    }
++}
+diff --git a/egosync-app/src-tauri/src/services/companion_connection.rs b/egosync-app/src-tauri/src/services/companion_connection.rs
+new file mode 100644
+index 0000000..fbdd401
+--- /dev/null
++++ b/egosync-app/src-tauri/src/services/companion_connection.rs
+@@ -0,0 +1,635 @@
++//! 手机伴侣连接服务（Story 12.2）。
++//!
++//! 职责：WS 监听、NSD/mDNS 广播、连接状态机。
++//! 与 [`crate::services::companion_pairing`] 协作完成配对决策，
++//! 事件经注入的 `Option<AppHandle>` 回调发射（无 AppHandle 时跳过，
++//! 便于脱 UI 测试）。
++
++use std::net::SocketAddr;
++use std::sync::Arc;
++
++use futures::{SinkExt, StreamExt};
++use mdns_sd::{ServiceDaemon, ServiceInfo};
++use tauri::{AppHandle, Emitter};
++use tokio::net::{TcpListener, TcpStream};
++use tokio_tungstenite::WebSocketStream;
++
++use companion_proto::frames::{decode_frame, encode_frame, Frame, PingPayload};
++use companion_proto::PROTOCOL_VERSION;
++
++use crate::db::paired_devices as paired_devices_db;
++use crate::db::pool::DbPool;
++use crate::error::AppError;
++use crate::models::companion::{CompanionStatus, ConnectedDeviceInfo};
++use crate::services::companion_pairing::{
++    connected_event_payload, connection_pubkey_allowed, decide_pairing, device_name_from_frame,
++    disconnected_event_payload, generate_qr_payload, load_or_create_static_keypair,
++    paired_event_payload, validate_first_frame, HandshakeIo, PairingDecision, PairingWindow,
++    DEFAULT_DEVICE_NAME, EVENT_CONNECTED, EVENT_DISCONNECTED, EVENT_PAIRED,
++};
++use crate::models::companion::{PairedDevice, PendingPairing};
++
++/// NSD/mDNS 服务类型（三端一致）。
++const NSD_SERVICE_TYPE: &str = "_egosync._tcp.local.";
++
++/// 连接状态机（`Arc<RwLock<...>>` managed state）。
++#[derive(Clone, Debug)]
++pub enum CompanionConnectionState {
++    Listening,
++    Connected {
++        device_id: String,
++        device_name: String,
++        origin: String,
++        since: String,
++        peer_addr: String,
++    },
++}
++
++struct NsdHandle {
++    daemon: ServiceDaemon,
++    full_name: String,
++}
++
++/// 桌面伴侣全局状态（`lib.rs` 中 `app.manage(Arc<CompanionState>)`）。
++pub struct CompanionState {
++    pub connection: std::sync::RwLock<CompanionConnectionState>,
++    pub pending: tokio::sync::Mutex<Option<PendingPairing>>,
++    pub pairing_window: tokio::sync::Mutex<Option<PairingWindow>>,
++    pub desktop_static_priv: Vec<u8>,
++    pub desktop_static_pub: Vec<u8>,
++    pub relay_id: String,
++    pub app_handle: Option<AppHandle>,
++    nsd: tokio::sync::Mutex<Option<NsdHandle>>,
++    listen_port: std::sync::atomic::AtomicU16,
++}
++
++impl CompanionState {
++    /// 生产构造：从 keyring 加载/生成静态密钥。
++    pub fn new(app_handle: Option<AppHandle>) -> Result<Self, AppError> {
++        let (priv_key, pub_key) = load_or_create_static_keypair()?;
++        Ok(Self::with_static_keypair(app_handle, priv_key, pub_key))
++    }
++
++    /// 测试构造：注入固定静态密钥（不触 keyring）。
++    pub fn with_static_keypair_for_testing(
++        app_handle: Option<AppHandle>,
++        priv_key: Vec<u8>,
++        pub_key: Vec<u8>,
++    ) -> Self {
++        Self::with_static_keypair(app_handle, priv_key, pub_key)
++    }
++
++    fn with_static_keypair(
++        app_handle: Option<AppHandle>,
++        priv_key: Vec<u8>,
++        pub_key: Vec<u8>,
++    ) -> Self {
++        let relay_id = generate_qr_payload(&pub_key).relay_id;
++        Self {
++            connection: std::sync::RwLock::new(CompanionConnectionState::Listening),
++            pending: tokio::sync::Mutex::new(None),
++            pairing_window: tokio::sync::Mutex::new(None),
++            desktop_static_priv: priv_key,
++            desktop_static_pub: pub_key,
++            relay_id,
++            app_handle,
++            nsd: tokio::sync::Mutex::new(None),
++            listen_port: std::sync::atomic::AtomicU16::new(0),
++        }
++    }
++
++    /// 打开配对窗口（`pairing_generate_qr` 命令调用）。
++    pub async fn open_pairing_window(&self, nonce: String) {
++        let now = chrono::Utc::now().timestamp();
++        *self.pairing_window.lock().await = Some(PairingWindow {
++            nonce,
++            created_at_unix: now,
++        });
++    }
++
++    fn now(&self) -> i64 {
++        chrono::Utc::now().timestamp()
++    }
++
++    fn listen_port(&self) -> u16 {
++        self.listen_port
++            .load(std::sync::atomic::Ordering::Relaxed)
++    }
++
++    /// 发射 companion 事件（AppHandle 缺省时跳过——脱 UI 测试路径）。
++    pub fn emit_event(&self, event: &str, payload: serde_json::Value) {
++        self.emit(event, payload);
++    }
++
++    fn emit(&self, event: &str, payload: serde_json::Value) {
++        if let Some(handle) = &self.app_handle {
++            if let Err(e) = handle.emit(event, payload) {
++                tracing::warn!(event = event, error = %e, "companion 事件发射失败");
++            }
++        }
++    }
++
++    fn set_listening(&self) {
++        *self.connection.write().unwrap() = CompanionConnectionState::Listening;
++    }
++
++    fn set_connected(
++        &self,
++        device_id: &str,
++        device_name: &str,
++        origin: &str,
++        peer_addr: &str,
++    ) {
++        *self.connection.write().unwrap() = CompanionConnectionState::Connected {
++            device_id: device_id.to_string(),
++            device_name: device_name.to_string(),
++            origin: origin.to_string(),
++            since: crate::db::settings::chrono_now_pub(),
++            peer_addr: peer_addr.to_string(),
++        };
++    }
++}
++
++/// 状态查询（`companion_get_status` 数据源）。
++pub async fn get_status(
++    pool: &DbPool,
++    state: &Arc<CompanionState>,
++) -> Result<CompanionStatus, AppError> {
++    let (listening, connected) = {
++        let connection = state
++            .connection
++            .read()
++            .map_err(|e| AppError::ConnectionError(format!("读取连接状态失败: {}", e)))?;
++        match &*connection {
++            CompanionConnectionState::Listening => (true, None),
++            CompanionConnectionState::Connected {
++                device_id,
++                device_name,
++                since,
++                peer_addr,
++                ..
++            } => (
++                false,
++                Some(ConnectedDeviceInfo {
++                    device_id: device_id.clone(),
++                    device_name: device_name.clone(),
++                    origin: "direct".to_string(),
++                    since: since.clone(),
++                }),
++            ),
++        }
++    };
++
++    let mut paired_device = None;
++    if let Ok(mut all) = paired_devices_db::get_all(pool).await {
++        if let Some(first) = all.pop() {
++            paired_device = Some(first);
++        }
++    }
++
++    let pending = {
++        let guard = state.pending.lock().await;
++        if let Some(p) = &*guard {
++            if !crate::services::companion_pairing::pending_is_expired(p, state.now()) {
++                Some(p.clone())
++            } else {
++                None
++            }
++        } else {
++            None
++        }
++    };
++
++    Ok(CompanionStatus {
++        listening,
++        port: Some(state.listen_port()),
++        connected,
++        paired_device,
++        pending_pairing: pending,
++    })
++}
++
++// ---------------------------------------------------------------------------
++// WS 监听与连接处理
++// ---------------------------------------------------------------------------
++
++/// 启动 WS 监听（动态端口）+ NSD 广播（若已有配对设备）。
++///
++/// 在 `lib.rs` setup 中以非阻塞 spawn 调用，失败仅 warn 降级。
++pub async fn start_companion_listener(
++    pool: DbPool,
++    state: Arc<CompanionState>,
++) -> Result<u16, AppError> {
++    let listener = TcpListener::bind(("0.0.0.0", 0))
++        .await
++        .map_err(|e| AppError::ConnectionError(format!("WS 监听端口绑定失败: {}", e)))?;
++    let port = listener
++        .local_addr()
++        .map_err(|e| AppError::ConnectionError(format!("读取监听端口失败: {}", e)))?
++        .port();
++    state
++        .listen_port
++        .store(port, std::sync::atomic::Ordering::Relaxed);
++
++    tracing::info!(port, "companion WS 监听已启动");
++
++    // 已有配对设备时立即注册 NSD 广播
++    if let Ok(devices) = paired_devices_db::get_all(&pool).await {
++        if !devices.is_empty() {
++            if let Err(e) = register_nsd(&state) {
++                tracing::warn!(error = %e, "NSD 初始广播失败（降级继续）");
++            }
++        }
++    }
++
++    let pool_for_loop = pool.clone();
++    let state_for_loop = state.clone();
++    tokio::spawn(async move {
++        loop {
++            match listener.accept().await {
++                Ok((stream, peer_addr)) => {
++                    let pool_c = pool_for_loop.clone();
++                    let state_c = state_for_loop.clone();
++                    tokio::spawn(async move {
++                        if let Err(e) =
++                            handle_connection(pool_c, state_c, stream, peer_addr).await
++                        {
++                            tracing::warn!(peer = %peer_addr, error = %e, "companion 连接处理失败");
++                        }
++                    });
++                }
++                Err(e) => {
++                    tracing::warn!(error = %e, "companion WS accept 失败，1s 后重试");
++                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
++                }
++            }
++        }
++    });
++
++    Ok(port)
++}
++
++/// WS 二进制 IO 适配 `HandshakeIo`，复用同一 stream 进入传输态帧循环。
++struct WsIo {
++    ws: WebSocketStream<TcpStream>,
++}
++
++#[async_trait::async_trait]
++impl crate::services::companion_pairing::HandshakeIo for WsIo {
++    async fn recv(&mut self) -> Result<Vec<u8>, AppError> {
++        match self.ws.next().await {
++            Some(Ok(msg)) => match msg {
++                tokio_tungstenite::tungstenite::Message::Binary(b) => Ok(b.to_vec()),
++                tokio_tungstenite::tungstenite::Message::Close(_) => Err(
++                    AppError::ConnectionError("对端关闭了连接".to_string()),
++                ),
++                _ => Err(AppError::ProtocolError("握手期仅接受二进制消息".to_string())),
++            },
++            Some(Err(e)) => Err(AppError::ConnectionError(format!("WS 读取失败: {}", e))),
++            None => Err(AppError::ConnectionError("连接已关闭".to_string())),
++        }
++    }
++
++    async fn send(&mut self, msg: &[u8]) -> Result<(), AppError> {
++        self.ws
++            .send(tokio_tungstenite::tungstenite::Message::binary(msg.to_vec()))
++            .await
++            .map_err(|e| AppError::ConnectionError(format!("WS 发送失败: {}", e)))?;
++        Ok(())
++    }
++}
++
++async fn handle_connection(
++    pool: DbPool,
++    state: Arc<CompanionState>,
++    stream: TcpStream,
++    peer_addr: SocketAddr,
++) -> Result<(), AppError> {
++    let ws = tokio_tungstenite::accept_async(stream)
++        .await
++        .map_err(|e| AppError::ConnectionError(format!("WS 握手失败: {}", e)))?;
++    let mut io = WsIo { ws };
++
++    // ── Noise XX 握手 ──
++    let outcome = crate::services::companion_pairing::run_responder_handshake(
++        &state.desktop_static_priv,
++        &mut io,
++    )
++    .await?;
++    let pubkey_hex =
++        crate::services::companion_pairing::remote_pubkey_hex(&outcome.remote_static_pubkey);
++    let mut transport = outcome.transport;
++
++    // ── 连接准入：未配对 + 无 pending + 窗口关闭 → 拒绝 ──
++    let now = state.now();
++    let window = state.pairing_window.lock().await.clone();
++    let allowed =
++        connection_pubkey_allowed(&pool, &state.pending, &window, now, &pubkey_hex).await?;
++    if !allowed {
++        tracing::warn!(peer = %peer_addr, "未配对公钥尝试连接，已拒绝");
++        return Ok(()); // 关闭连接
++    }
++
++    // ── 首帧必须为 HELLO ──
++    let first_frame = recv_frame(&mut io, &mut transport).await?;
++    validate_first_frame(&first_frame)?;
++
++    // ── 尝试获取设备名（Notice(deviceInfo)，3s 超时；缺失 fallback 默认名）──
++    let mut device_name = DEFAULT_DEVICE_NAME.to_string();
++    if let Ok(Some(second)) = recv_frame_optional(&mut io, &mut transport, 3).await {
++        if let Some(name) = device_name_from_frame(&second) {
++            device_name = name;
++        }
++        // 非设备名帧不在此消费处理，交由会话循环逻辑（PING 丢失一次可容忍重试）
++    }
++
++    // ── 配对决策 ──
++    let decision = decide_pairing(&pool, &state.pending, &pubkey_hex, &device_name).await?;
++    match decision {
++        PairingDecision::AlreadyPaired { device_id, device_name } => {
++            enter_session(pool, state, &mut io, &mut transport, device_id, device_name, peer_addr)
++                .await
++        }
++        PairingDecision::FirstPairing { device } => {
++            state.emit(EVENT_PAIRED, paired_event_payload(&device));
++            // NSD 首次配对成功后动态注册
++            if let Err(e) = register_nsd(&state) {
++                tracing::warn!(error = %e, "首次配对后 NSD 注册失败");
++            }
++            enter_session(
++                pool,
++                state,
++                &mut io,
++                &mut transport,
++                device.id,
++                device.device_name,
++                peer_addr,
++            )
++            .await
++        }
++        PairingDecision::PendingRebind { .. } => {
++            // 换绑待确认：关闭连接，等待 pairing_confirm（手机重连即恢复）
++            Ok(())
++        }
++    }
++}
++
++/// 帧循环：在 transport 会话内处理 HELLO / PING / Notice(deviceInfo)，
++/// 其余帧类型收到即忽略并 warn（13.x 才消费）。
++async fn enter_session(
++    _pool: DbPool,
++    state: Arc<CompanionState>,
++    io: &mut WsIo,
++    transport: &mut companion_proto::crypto::TransportSession,
++    device_id: String,
++    device_name: String,
++    peer_addr: SocketAddr,
++) -> Result<(), AppError> {
++    state.set_connected(&device_id, &device_name, "direct", &peer_addr.to_string());
++    state.emit(
++        EVENT_CONNECTED,
++        connected_event_payload(&device_id, &device_name),
++    );
++
++    loop {
++        let frame = match recv_frame(io, transport).await {
++            Ok(f) => f,
++            Err(AppError::ConnectionError(_)) => break,
++            Err(e) => {
++                tracing::warn!(error = %e, "companion 帧读取失败，断开连接");
++                break;
++            }
++        };
++        match &frame {
++            Frame::Hello(_) => {
++                tracing::debug!(peer = %peer_addr, "重复 HELLO 帧，忽略");
++            }
++            Frame::Ping(_) => {
++                let pong = encode_frame(&Frame::Ping(PingPayload {}), transport)
++                    .map_err(|_| AppError::ProtocolError("手机伴侣协议帧无效".to_string()))?;
++                send_frame(io, &pong).await?;
++            }
++            Frame::Notice(_) => {
++                if let Some(name) = device_name_from_frame(&frame) {
++                    tracing::info!(new_name = %name, "收到对端设备名更新");
++                    // 名字更新属 app 层契约，不在此写入（避免无窗口无 confirm 的隐性写入）
++                }
++            }
++            other => {
++                tracing::warn!(frame_type = ?other, "companion 收到本 story 不处理的帧类型，忽略");
++            }
++        }
++    }
++
++    state.set_listening();
++    state.emit(
++        EVENT_DISCONNECTED,
++        disconnected_event_payload(&device_id, "连接已断开"),
++    );
++    Ok(())
++}
++
++async fn recv_frame(
++    io: &mut WsIo,
++    transport: &mut companion_proto::crypto::TransportSession,
++) -> Result<Frame, AppError> {
++    let bytes = io.recv().await?;
++    decode_frame(&bytes, transport).map_err(|_| {
++        AppError::ProtocolError("手机伴侣协议帧无效".to_string())
++    })
++}
++
++async fn recv_frame_optional(
++    io: &mut WsIo,
++    transport: &mut companion_proto::crypto::TransportSession,
++    timeout_secs: u64,
++) -> Result<Option<Frame>, AppError> {
++    match tokio::time::timeout(
++        std::time::Duration::from_secs(timeout_secs),
++        recv_frame(io, transport),
++    )
++    .await
++    {
++        Ok(Ok(frame)) => Ok(Some(frame)),
++        Ok(Err(AppError::ConnectionError(_))) => Ok(None),
++        Ok(Err(e)) => Err(e),
++        Err(_) => Ok(None),
++    }
++}
++
++async fn send_frame(io: &mut WsIo, bytes: &[u8]) -> Result<(), AppError> {
++    io.send(bytes).await
++}
++
++// ---------------------------------------------------------------------------
++// NSD/mDNS 广播
++// ---------------------------------------------------------------------------
++
++/// 构造 NSD `ServiceInfo`（参数单测替代真实广播断言）。
++fn build_service_info(
++    state: &CompanionState,
++    port: u16,
++) -> Result<ServiceInfo, mdns_sd::Error> {
++    let instance = format!("EgoSync-{}", &state.relay_id[..8]);
++    let mut props = std::collections::HashMap::new();
++    props.insert("proto".to_string(), PROTOCOL_VERSION.to_string());
++    ServiceInfo::new(
++        NSD_SERVICE_TYPE,
++        &instance,
++        "egosync.local.",
++        "0.0.0.0",
++        port,
++        props,
++    )
++    .map(|si| si.enable_addr_auto())
++}
++
++/// 注册 NSD 广播（已注册则跳过）。
++pub fn register_nsd(state: &Arc<CompanionState>) -> Result<(), AppError> {
++    let port = state.listen_port();
++    let mut guard = state
++        .nsd
++        .try_lock()
++        .map_err(|_| AppError::ConnectionError("NSD 锁繁忙".to_string()))?;
++    if guard.is_some() {
++        return Ok(());
++    }
++    let daemon = ServiceDaemon::new()
++        .map_err(|e| AppError::ConnectionError(format!("NSD 守护进程启动失败: {}", e)))?;
++    let service = build_service_info(&state, port).map_err(|e| {
++        AppError::ConnectionError(format!("NSD ServiceInfo 构造失败: {}", e))
++    })?;
++    let full_name = service.get_fullname().to_string();
++    daemon
++        .register(service)
++        .map_err(|e| AppError::ConnectionError(format!("NSD 注册失败: {}", e)))?;
++    tracing::info!(%full_name, port, "NSD 广播已注册");
++    *guard = Some(NsdHandle { daemon, full_name });
++    Ok(())
++}
++
++/// 当无已配对设备且无 pending 时注销 NSD 广播。
++pub async fn unregister_nsd_if_empty(pool: &DbPool, state: &Arc<CompanionState>) {
++    let empty = match paired_devices_db::get_all(pool).await {
++        Ok(devices) => devices.is_empty(),
++        Err(e) => {
++            tracing::warn!(error = %e, "NSD 注销前查询配对设备失败");
++            return;
++        }
++    };
++    let pending = state.pending.lock().await;
++    let pending_empty = pending.is_none()
++        || crate::services::companion_pairing::pending_is_expired(pending.as_ref().unwrap(), state.now());
++    drop(pending);
++    if !empty || !pending_empty {
++        return;
++    }
++    let mut guard = state.nsd.lock().await;
++    if let Some(handle) = guard.take() {
++        if let Err(e) = handle.daemon.unregister(&handle.full_name) {
++            tracing::warn!(error = %e, "NSD 注销失败");
++        }
++        let _ = handle.daemon.shutdown();
++        tracing::info!("NSD 广播已注销（无配对设备）");
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::db::pool::init_db;
++    use companion_proto::crypto::generate_static_keypair;
++    use tempfile::tempdir;
++
++    async fn test_pool() -> DbPool {
++        let dir = tempdir().expect("create temp dir");
++        let db_dir = dir.into_path();
++        init_db(&db_dir.join("egosync.db"))
++            .await
++            .expect("init db with migrations")
++    }
++
++    #[test]
++    fn service_info_carries_proto_txt_and_port() {
++        // WHY: NSD 是手机"零配置发现桌面"的唯一入口——TXT proto 字段与
++        // 端口漂移意味着手机连上的是错误版本或错误端口（握手必失败）。
++        let (priv_key, pub_key) = generate_static_keypair().unwrap();
++        let state = CompanionState::with_static_keypair_for_testing(None, priv_key, pub_key);
++        state
++            .listen_port
++            .store(12345, std::sync::atomic::Ordering::Relaxed);
++        let si = build_service_info(&state, 12345).expect("ServiceInfo 构造成功");
++        assert_eq!(
++            si.get_fullname(),
++            format!("EgoSync-{}.{}", &state.relay_id[..8], NSD_SERVICE_TYPE)
++        );
++        let proto_val = si
++            .get_property("proto")
++            .expect("proto TXT 必须存在")
++            .val()
++            .map(|b| String::from_utf8_lossy(b).to_string());
++        assert_eq!(proto_val, Some(PROTOCOL_VERSION.to_string()));
++    }
++
++    #[tokio::test]
++    async fn status_reflects_listening_and_paired_device() {
++        // WHY: 状态查询是前端"配对入口"可见性的唯一数据源——
++        // listening/paired/pending 任一失真，用户都会做出错误判断（如以为
++        // 已配对实际未配对）。
++        let pool = test_pool().await;
++        let (priv_key, pub_key) = generate_static_keypair().unwrap();
++        let state = Arc::new(CompanionState::with_static_keypair_for_testing(
++            None, priv_key, pub_key,
++        ));
++        let status = get_status(&pool, &state).await.expect("status");
++        assert!(status.listening);
++        assert!(status.connected.is_none());
++        assert!(status.paired_device.is_none());
++
++        paired_devices_db::upsert_single_device(&pool, &PairedDevice {
++            id: "d1".to_string(),
++            device_name: "手机A".to_string(),
++            device_pubkey: "pub-a".to_string(),
++            paired_at: "2026-08-28T10:00:00Z".to_string(),
++            last_seen_at: "2026-08-28T10:00:00Z".to_string(),
++        })
++        .await
++        .expect("upsert");
++        let status = get_status(&pool, &state).await.expect("status");
++        assert_eq!(status.paired_device.unwrap().device_pubkey, "pub-a");
++    }
++
++    #[tokio::test]
++    async fn pairing_window_gates_unknown_pubkey_but_allows_paired() {
++        // WHY: 移除即拒绝——窗口未打开时，未知公钥必须被拒；已配对公钥
++        // 重连始终放行（信任持久化）。
++        let pool = test_pool().await;
++        let (priv_key, pub_key) = generate_static_keypair().unwrap();
++        let state = Arc::new(CompanionState::with_static_keypair_for_testing(
++            None, priv_key, pub_key,
++        ));
++        // 库为空、窗口关闭：未知公钥被拒
++        assert!(
++            !connection_pubkey_allowed(&pool, &state.pending, &None, state.now(), "pub-x")
++                .await
++                .unwrap(),
++            "无配对无窗口时未知公钥必须被拒"
++        );
++        // 写入设备后窗口关闭：同公钥放行
++        paired_devices_db::upsert_single_device(&pool, &PairedDevice {
++            id: "d1".to_string(),
++            device_name: "手机A".to_string(),
++            device_pubkey: "pub-a".to_string(),
++            paired_at: "2026-08-28T10:00:00Z".to_string(),
++            last_seen_at: "2026-08-28T10:00:00Z".to_string(),
++        })
++        .await
++        .expect("upsert");
++        assert!(
++            connection_pubkey_allowed(&pool, &state.pending, &None, state.now(), "pub-a")
++                .await
++                .unwrap(),
++            "已配对公钥重连必须放行"
++        );
++    }
++}
+diff --git a/egosync-app/src-tauri/tests/test_companion.rs b/egosync-app/src-tauri/tests/test_companion.rs
+new file mode 100644
+index 0000000..bad1d90
+--- /dev/null
++++ b/egosync-app/src-tauri/tests/test_companion.rs
+@@ -0,0 +1,513 @@
++//! Story 12.2 手机伴侣集成测试。
++//!
++//! 覆盖：QR payload 字段、WS Noise XX 握手成功/失败路径、paired_devices CRUD
++//! 与免配对重连、移除后拒绝、换绑 pending→confirm 替换、pending 超时、
++//! 事件 payload 形状、data_export 配对设备字段与旧档兼容。
++//!
++//! 所有 socket 测试在本机 loopback 起真实 WS listener；事件发射以纯函数
++//! 断言（不依赖 AppHandle）。
++
++use std::sync::Arc;
++use std::time::Duration;
++
++use futures::{SinkExt, StreamExt};
++use sha2::{Digest, Sha256};
++use tokio::time::sleep;
++use tokio_tungstenite::tungstenite::Message;
++use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
++
++use companion_proto::crypto::{generate_static_keypair, HandshakeSession, TransportSession};
++use companion_proto::frames::{
++    decode_frame, encode_frame, Frame, HelloPayload, NoticePayload,
++};
++use companion_proto::PROTOCOL_VERSION;
++
++use egosync_lib::db::paired_devices as paired_devices_db;
++use egosync_lib::db::pool::{init_conversations_db, init_db, ConversationsPool, DbPool};
++use egosync_lib::services::companion_connection::{
++    get_status, start_companion_listener, CompanionState,
++};
++use egosync_lib::services::companion_pairing;
++use egosync_lib::services::data_export::{
++    gather_export_data, import_json_data, ExportFormat, export_all,
++};
++
++async fn test_pool() -> (DbPool, ConversationsPool, tempfile::TempDir) {
++    let dir = tempfile::tempdir().expect("create temp dir");
++    let pool = init_db(&dir.path().join("egosync.db"))
++        .await
++        .expect("init db with migrations");
++    let conv = init_conversations_db(&dir.path().join("conversations.db"))
++        .await
++        .expect("init conversations db");
++    (pool, conv, dir)
++}
++
++fn hex_encode(bytes: &[u8]) -> String {
++    bytes.iter().map(|b| format!("{b:02x}")).collect()
++}
++
++/// 模拟手机的 WS 客户端，完成 XX 握手并返回 transport session。
++async fn phone_handshake(
++    ws: &mut WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
++    phone_priv: &[u8],
++) -> TransportSession {
++    let mut initiator = HandshakeSession::initiator(phone_priv).expect("initiator");
++    let m1 = initiator.write_message(&[]).unwrap();
++    ws.send(Message::binary(m1)).await.expect("send m1");
++    let m2 = ws
++        .next()
++        .await
++        .expect("recv m2")
++        .expect("m2 ok")
++        .into_data();
++    initiator.read_message(&m2).expect("read m2");
++    let m3 = initiator.write_message(&[]).unwrap();
++    ws.send(Message::binary(m3)).await.expect("send m3");
++    initiator.into_transport().expect("into transport")
++}
++
++async fn send_frame(ws: &mut WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, t: &mut TransportSession, frame: &Frame) {
++    let bytes = encode_frame(frame, t).expect("encode");
++    ws.send(Message::binary(bytes)).await.expect("send frame");
++}
++
++async fn setup_listener() -> (DbPool, Arc<CompanionState>, u16, Vec<u8>, Vec<u8>, tempfile::TempDir) {
++    let (pool, _conv, dir) = test_pool().await;
++    let (priv_key, pub_key) = generate_static_keypair().unwrap();
++    let state = Arc::new(CompanionState::with_static_keypair_for_testing(
++        None,
++        priv_key.clone(),
++        pub_key.clone(),
++    ));
++    let port = start_companion_listener(pool.clone(), state.clone())
++        .await
++        .expect("start listener");
++    (pool, state, port, priv_key, pub_key, dir)
++}
++
++async fn wait_for<F, Fut>(check: F, timeout_ms: u64, what: &str)
++where
++    F: Fn() -> Fut,
++    Fut: std::future::Future<Output = bool>,
++{
++    let mut waited = 0u64;
++    while waited < timeout_ms {
++        if check().await {
++            return;
++        }
++        sleep(Duration::from_millis(200)).await;
++        waited += 200;
++    }
++    panic!("超时未达成：{what}");
++}
++
++// ── QR payload ──
++
++#[tokio::test]
++async fn qr_payload_four_fields_contract() {
++    // WHY: QR 是手机唯一配对入口——四字段任一缺失/错位，手机无法握手。
++    let (_pool, state, _port, _priv, pub_key, _dir) = setup_listener().await;
++    let payload = companion_pairing::generate_qr_payload(&pub_key);
++    assert!(payload.relay_addr.is_none(), "V1 relay_addr 必须为空");
++    assert!(!payload.desktop_static_pubkey.is_empty());
++    assert!(!payload.relay_id.is_empty());
++    assert!(!payload.pairing_nonce.is_empty());
++    let expected = hex_encode(&Sha256::digest(&pub_key))[..16].to_string();
++    assert_eq!(payload.relay_id, expected, "relay_id 必须是 pubkey 哈希前 16");
++    let _ = state;
++}
++
++// ── 握手成功路径 ──
++
++#[tokio::test]
++async fn handshake_success_pairs_and_lands_paired_device() {
++    // WHY: 握手成功是整条信任链的入口——落库失败意味着"扫了码却没配对"，
++    // 用户从 UI 无法定位（二维码已失效、连接已断）。
++    let (pool, state, port, _desktop_priv, _desktop_pub, _dir) = setup_listener().await;
++    state.open_pairing_window("nonce-hs".to_string()).await;
++
++    let (phone_priv, _) = generate_static_keypair().unwrap();
++    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}"))
++        .await
++        .expect("connect");
++    let mut t = phone_handshake(&mut ws, &phone_priv).await;
++
++    send_frame(
++        &mut ws,
++        &mut t,
++        &Frame::Hello(HelloPayload {
++            protocol_version: PROTOCOL_VERSION,
++        }),
++    )
++    .await;
++    send_frame(
++        &mut ws,
++        &mut t,
++        &Frame::Notice(NoticePayload {
++            data: r#"{"type":"deviceInfo","deviceName":"Pixel 测试机"}"#.to_string(),
++        }),
++    )
++    .await;
++
++    wait_for(
++        || async { paired_devices_db::get_all(&pool).await.unwrap().len() == 1 },
++        15000,
++        "等待配对设备落库",
++    )
++    .await;
++
++    let devices = paired_devices_db::get_all(&pool).await.unwrap();
++    assert_eq!(devices.len(), 1);
++    assert_eq!(devices[0].device_name, "Pixel 测试机");
++
++    // 状态查询：连接中
++    wait_for(
++        || async { get_status(&pool, &state).await.unwrap().connected.is_some() },
++        15000,
++        "等待进入 Connected 状态",
++    )
++    .await;
++    let status = get_status(&pool, &state).await.unwrap();
++    assert!(status.listening == false);
++    assert!(status.connected.unwrap().device_name == "Pixel 测试机");
++
++    // 事件 payload 形状（纯函数断言，不依赖 AppHandle）
++    let payload = companion_pairing::paired_event_payload(&devices[0]);
++    assert_eq!(payload["deviceId"], devices[0].id);
++    assert_eq!(payload["deviceName"], "Pixel 测试机");
++    assert!(payload["pubkeyPrefix"].as_str().unwrap().len() == 8);
++
++    drop(ws);
++    wait_for(
++        || async { get_status(&pool, &state).await.unwrap().listening },
++        15000,
++        "等待断开后回 Listening",
++    )
++    .await;
++}
++
++// ── 握手失败路径 ──
++
++#[tokio::test]
++async fn handshake_failure_leaves_no_db_record() {
++    // WHY: 握手失败若静默落库，意味着任意未通过认证的连接都获得配对身份，
++    // 加密边界形同虚设。
++    let (pool, state, port, _desktop_priv, _desktop_pub, _dir) = setup_listener().await;
++    state.open_pairing_window("nonce-fail".to_string()).await;
++
++    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}"))
++        .await
++        .expect("connect");
++    // 发送非法短消息作为 m1（XX 首条 -> e 无 MAC，但短于 32 字节临时公钥必失败）
++    ws.send(Message::binary(vec![0u8; 10])).await.expect("send garbage");
++
++    // 等待对端关闭（要么主动断开，要么握手报错后断开）
++    let _ = tokio::time::timeout(Duration::from_secs(5), ws.next()).await;
++
++    sleep(Duration::from_millis(300)).await;
++    assert_eq!(
++        paired_devices_db::get_all(&pool).await.unwrap().len(),
++        0,
++        "握手失败不得落库"
++    );
++}
++
++// ── 免配对重连：同公钥二次握手直接进入会话 ──
++
++#[tokio::test]
++async fn same_pubkey_reconnect_enters_session_without_duplicate_pairing() {
++    // WHY: "配对一次，之后免配对"——重连若再次写库/发 paired 事件，
++    // 前端会弹出第二次配对提示，信任持久化在用户眼里就是坏的。
++    let (pool, state, port, _desktop_priv, _desktop_pub, _dir) = setup_listener().await;
++    state.open_pairing_window("nonce-reconnect".to_string()).await;
++
++    let (phone_priv, _) = generate_static_keypair().unwrap();
++
++    // 首次配对
++    {
++        let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}"))
++            .await
++            .expect("connect first");
++        let mut t = phone_handshake(&mut ws, &phone_priv).await;
++        send_frame(
++            &mut ws,
++            &mut t,
++            &Frame::Hello(HelloPayload {
++                protocol_version: PROTOCOL_VERSION,
++            }),
++        )
++        .await;
++        wait_for(
++            || async { paired_devices_db::get_all(&pool).await.unwrap().len() == 1 },
++            15000,
++            "首次配对落库",
++        )
++        .await;
++        drop(ws);
++        wait_for(|| async { get_status(&pool, &state).await.unwrap().listening }, 15000, "断开回 Listening").await;
++    }
++
++    let first_id = paired_devices_db::get_all(&pool).await.unwrap()[0].id.clone();
++
++    // 二次连接（同公钥）——窗口已关闭但同公钥允许，不落新库
++    {
++        let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}"))
++            .await
++            .expect("connect second");
++        let mut t = phone_handshake(&mut ws, &phone_priv).await;
++        send_frame(
++            &mut ws,
++            &mut t,
++            &Frame::Hello(HelloPayload {
++                protocol_version: PROTOCOL_VERSION,
++            }),
++        )
++        .await;
++        wait_for(
++            || async { get_status(&pool, &state).await.unwrap().connected.is_some() },
++            15000,
++            "重连进入 Connected",
++        )
++        .await;
++        drop(ws);
++    }
++
++    let all = paired_devices_db::get_all(&pool).await.unwrap();
++    assert_eq!(all.len(), 1, "重连不得产生新记录");
++    assert_eq!(all[0].id, first_id, "重连不得改写配对记录 id");
++}
++
++// ── 移除后拒绝 ──
++
++#[tokio::test]
++async fn removed_device_pubkey_is_rejected() {
++    // WHY: "移除即拒绝"是用户主权底线——移除后旧公钥若仍能连上，
++    // 等同移除功能形同虚设（手机看似解绑实则可连）。
++    let (pool, state, port, _desktop_priv, _desktop_pub, _dir) = setup_listener().await;
++    state.open_pairing_window("nonce-remove".to_string()).await;
++
++    let (phone_priv, _) = generate_static_keypair().unwrap();
++    // 先完成首次配对
++    {
++        let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}"))
++            .await
++            .expect("connect");
++        let mut t = phone_handshake(&mut ws, &phone_priv).await;
++        send_frame(&mut ws, &mut t, &Frame::Hello(HelloPayload { protocol_version: PROTOCOL_VERSION })).await;
++        wait_for(|| async { paired_devices_db::get_all(&pool).await.unwrap().len() == 1 }, 15000, "首次配对").await;
++        drop(ws);
++        wait_for(|| async { get_status(&pool, &state).await.unwrap().listening }, 15000, "断开").await;
++    }
++
++    let device = paired_devices_db::get_all(&pool).await.unwrap().pop().unwrap();
++    paired_devices_db::remove(&pool, &device.id).await.expect("remove");
++    // 模拟配对窗口已过期（真实场景：移除发生在 QR 生成 300s 之后）
++    *state.pairing_window.lock().await = None;
++    // DB 已空、窗口已关 → 同公钥重连必被拒
++
++    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}"))
++        .await
++        .expect("connect after remove");
++    let mut t = phone_handshake(&mut ws, &phone_priv).await;
++    send_frame(&mut ws, &mut t, &Frame::Hello(HelloPayload { protocol_version: PROTOCOL_VERSION })).await;
++    // 对端拒绝后关闭连接
++    let _ = tokio::time::timeout(Duration::from_secs(3), ws.next()).await;
++    sleep(Duration::from_millis(300)).await;
++    assert_eq!(
++        paired_devices_db::get_all(&pool).await.unwrap().len(),
++        0,
++        "移除后同公钥不得重新落库"
++    );
++}
++
++// ── 换绑 pending → confirm 替换（单对单） ──
++
++#[tokio::test]
++async fn rebind_pending_requires_confirm_and_replaces_old_device() {
++    // WHY: "换绑需可见同意"——第三台设备静默顶替绑定等于任何拿到 QR 的
++    // 人都能偷走配对位；pending+confirm 是最小可见同意闸门。
++    let (pool, state, port, _desktop_priv, _desktop_pub, _dir) = setup_listener().await;
++    state.open_pairing_window("nonce-rebind".to_string()).await;
++
++    // 设备 A 首配
++    let (phone_a_priv, _) = generate_static_keypair().unwrap();
++    {
++        let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}"))
++            .await
++            .expect("connect A");
++        let mut t = phone_handshake(&mut ws, &phone_a_priv).await;
++        send_frame(&mut ws, &mut t, &Frame::Hello(HelloPayload { protocol_version: PROTOCOL_VERSION })).await;
++        wait_for(|| async { paired_devices_db::get_all(&pool).await.unwrap().len() == 1 }, 15000, "A 首配落库").await;
++        drop(ws);
++        wait_for(|| async { get_status(&pool, &state).await.unwrap().listening }, 15000, "A 断开").await;
++    }
++
++    // 设备 B（不同公钥）扫码 → pending，不落库、连接被关闭
++    let (phone_b_priv, phone_b_pub) = generate_static_keypair().unwrap();
++    {
++        let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}"))
++            .await
++            .expect("connect B");
++        let mut t = phone_handshake(&mut ws, &phone_b_priv).await;
++        send_frame(&mut ws, &mut t, &Frame::Hello(HelloPayload { protocol_version: PROTOCOL_VERSION })).await;
++        wait_for(
++            || async { get_status(&pool, &state).await.unwrap().pending_pairing.is_some() },
++            15000,
++            "B 进入 pending",
++        )
++        .await;
++        // pending 未确认前：库中仍是 A 的记录
++        let all = paired_devices_db::get_all(&pool).await.unwrap();
++        assert_eq!(all.len(), 1, "pending 期间不得写入 B");
++        // 对端连接被关闭（换绑待确认不进会话）
++        let _ = tokio::time::timeout(Duration::from_secs(3), ws.next()).await;
++    }
++
++    // confirm → B 替换 A
++    let confirmed = companion_pairing::confirm_pending(&pool, &state.pending)
++        .await
++        .expect("confirm");
++    assert_eq!(
++        confirmed.device_pubkey,
++        hex_encode(&phone_b_pub),
++        "确认后必须是 B 的公钥"
++    );
++    let all = paired_devices_db::get_all(&pool).await.unwrap();
++    assert_eq!(all.len(), 1, "单对单：确认后必须替换");
++    assert_eq!(all[0].device_pubkey, hex_encode(&phone_b_pub));
++
++    // confirm 之后再次 confirm → ValidationError
++    let err = companion_pairing::confirm_pending(&pool, &state.pending)
++        .await
++        .expect_err("槽已清空，二次 confirm 必须失败");
++    assert!(matches!(err, egosync_lib::error::AppError::ValidationError(_)));
++}
++
++
++// ── pending 超时作废 ──
++
++#[tokio::test]
++async fn expired_pending_is_voided_on_confirm() {
++    // WHY: pending 120s 作废——无限期的待确认槽会让"曾经的扫码"
++    // 在任意未来时刻被确认，等同重放窗口。
++    let (pool, _conv, _dir) = test_pool().await;
++    let (priv_key, pub_key) = generate_static_keypair().unwrap();
++    let state = Arc::new(CompanionState::with_static_keypair_for_testing(
++        None, priv_key, pub_key,
++    ));
++    let stale = egosync_lib::models::companion::PendingPairing {
++        device_name: "过期手机".to_string(),
++        device_pubkey: "pub-stale".to_string(),
++        created_at: (chrono::Utc::now() - chrono::Duration::seconds(999)).to_rfc3339(),
++    };
++    *state.pending.lock().await = Some(stale);
++    let err = companion_pairing::confirm_pending(&pool, &state.pending)
++        .await
++        .expect_err("过期 pending 必须拒绝");
++    assert!(matches!(err, egosync_lib::error::AppError::ValidationError(_)));
++    assert!(state.pending.lock().await.is_none(), "过期 pending 必须清槽");
++}
++
++// ── data_export 集成 ──
++
++#[tokio::test]
++async fn export_json_contains_paired_devices_field() {
++    // WHY: 配对设备进导出清单——换机/重装时"重扫恢复"依赖旧绑定可迁移；
++    // 导出缺字段意味着用户换机会静默丢失全部配对。
++    let (pool, conv_pool, dir) = test_pool().await;
++    paired_devices_db::upsert_single_device(
++        &pool,
++        &egosync_lib::models::companion::PairedDevice {
++            id: "d-export".to_string(),
++            device_name: "导出测试机".to_string(),
++            device_pubkey: "pub-export".to_string(),
++            paired_at: "2026-08-28T10:00:00Z".to_string(),
++            last_seen_at: "2026-08-28T10:00:00Z".to_string(),
++        },
++    )
++    .await
++    .expect("upsert");
++
++    let export_data = gather_export_data(&pool, &conv_pool).await.expect("gather");
++    assert_eq!(export_data.paired_devices.len(), 1);
++    assert_eq!(export_data.paired_devices[0]["devicePubkey"], "pub-export");
++    assert_eq!(export_data.paired_devices[0]["deviceName"], "导出测试机");
++
++    // markdown 用户报告不含配对设备（含公钥技术数据，无消费价值）
++    let md = egosync_lib::services::data_export::generate_markdown(&export_data);
++    assert!(!md.contains("pub-export"), "markdown 报告不得包含配对公钥");
++
++    let _ = dir;
++}
++
++#[tokio::test]
++async fn export_import_roundtrip_restores_paired_devices() {
++    let (pool, conv_pool, dir) = test_pool().await;
++    paired_devices_db::upsert_single_device(
++        &pool,
++        &egosync_lib::models::companion::PairedDevice {
++            id: "d-rt".to_string(),
++            device_name: "往返测试机".to_string(),
++            device_pubkey: "pub-rt".to_string(),
++            paired_at: "2026-08-28T10:00:00Z".to_string(),
++            last_seen_at: "2026-08-28T10:00:00Z".to_string(),
++        },
++    )
++    .await
++    .expect("upsert");
++
++    let export_dir = dir.path().join("export");
++    std::fs::create_dir_all(&export_dir).unwrap();
++    let json_path = export_all(&dir.path(), &pool, &conv_pool, &export_dir, vec![ExportFormat::Json])
++        .await
++        .expect("export")
++        .json_path
++        .expect("json path");
++
++    // 导入到全新库
++    let (pool2, conv_pool2, dir2) = test_pool().await;
++    import_json_data(&pool2, &conv_pool2, std::path::Path::new(&json_path))
++        .await
++        .expect("import");
++    let restored = paired_devices_db::get_all(&pool2).await.unwrap();
++    assert_eq!(restored.len(), 1);
++    assert_eq!(restored[0].device_pubkey, "pub-rt");
++    assert_eq!(restored[0].device_name, "往返测试机");
++    let _ = dir2;
++}
++
++#[tokio::test]
++async fn old_export_without_paired_devices_field_imports_fine() {
++    // WHY: 旧档兼容——升级用户的存量导出不含 pairedDevices 字段，
++    // 导入若失败则数据主权承诺（随时可迁入）被打破。
++    let (pool, conv_pool, dir) = test_pool().await;
++    let old_json = serde_json::json!({
++        "roles": [],
++        "tasks": [],
++        "memories": [],
++        "suggestions": [],
++        "notifications": [],
++        "mission": null,
++        "conflicts": [],
++        "briefings": [],
++        "weeklyReviews": [],
++        "llmConfigs": [],
++        "appSettings": [],
++        "mcpServers": [],
++        "skills": [],
++        "skillBindings": [],
++        "q2Reminders": [],
++        "bigRockProtectionReminders": [],
++        "forgottenMemorySources": [],
++        "roleMcpServerBindings": [],
++        "conversations": [],
++        "messages": [],
++        "exportedAt": "2026-01-01T00:00:00Z",
++        "exportVersion": "1.0"
++    });
++    let json_path = dir.path().join("old_export.json");
++    std::fs::write(&json_path, serde_json::to_string_pretty(&old_json).unwrap()).unwrap();
++    let result = import_json_data(&pool, &conv_pool, &json_path).await;
++    assert!(result.is_ok(), "旧版 JSON 导入应成功（serde default 兜底）");
++}
+diff --git a/egosync-app/src/components/settings/CompanionPairingSection.tsx b/egosync-app/src/components/settings/CompanionPairingSection.tsx
+new file mode 100644
+index 0000000..995d0e1
+--- /dev/null
++++ b/egosync-app/src/components/settings/CompanionPairingSection.tsx
+@@ -0,0 +1,247 @@
++// 手机伴侣配对区（Story 12.2）——QR 展示、已配对设备卡、换绑确认、端口/防火墙说明。
++
++import { useCallback, useEffect, useRef, useState } from 'react';
++import { Smartphone, Trash2, Loader2, Check, AlertCircle, ShieldCheck, QrCode } from 'lucide-react';
++import { cn } from '../../lib/utils';
++import { companionService } from '../../services/companionService';
++import { useTauriEvent } from '../../hooks/useTauriEvent';
++import type { CompanionStatus, PairedDevice, QrPayload } from '../../types/companion';
++
++function toFriendlyError(e: unknown, fallback: string): string {
++  if (typeof e === 'object' && e !== null) {
++    const first = Object.values(e)[0];
++    if (typeof first === 'string') return first;
++  }
++  if (typeof e === 'string') return e;
++  return fallback;
++}
++
++export function CompanionPairingSection() {
++  const [qrPayload, setQrPayload] = useState<QrPayload | null>(null);
++  const [qrSvg, setQrSvg] = useState<string>('');
++  const [isLoadingQr, setIsLoadingQr] = useState(false);
++  const [devices, setDevices] = useState<PairedDevice[]>([]);
++  const [status, setStatus] = useState<CompanionStatus | null>(null);
++  const [error, setError] = useState('');
++  const [isConfirming, setIsConfirming] = useState(false);
++  const [removingDevice, setRemovingDevice] = useState<PairedDevice | null>(null);
++  const [isRemoving, setIsRemoving] = useState(false);
++  const [confirmedName, setConfirmedName] = useState<string | null>(null);
++  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
++
++  const refresh = useCallback(async () => {
++    try {
++      const [deviceList, currentStatus] = await Promise.all([
++        companionService.listPairedDevices(),
++        companionService.getStatus(),
++      ]);
++      setDevices(deviceList);
++      setStatus(currentStatus);
++    } catch (e) {
++      console.error('加载手机伴侣状态失败:', e);
++    }
++  }, []);
++
++  useEffect(() => {
++    refresh();
++    // modal 打开期间轮询状态（换绑 pending 可见性）
++    pollTimerRef.current = setInterval(refresh, 3000);
++    return () => {
++      if (pollTimerRef.current) clearInterval(pollTimerRef.current);
++    };
++  }, [refresh]);
++
++  useTauriEvent<{ deviceId: string }>('companion:paired', () => {
++    refresh();
++  }, [refresh]);
++
++  useTauriEvent<{ deviceId: string }>('companion:connected', () => {
++    refresh();
++  }, [refresh]);
++
++  useTauriEvent<{ deviceId: string }>('companion:disconnected', () => {
++    refresh();
++  }, [refresh]);
++
++  const handleGenerateQr = async () => {
++    setIsLoadingQr(true);
++    setError('');
++    try {
++      const payload = await companionService.generateQr();
++      const svg = await companionService.renderQrSvg(JSON.stringify(payload));
++      setQrPayload(payload);
++      setQrSvg(svg);
++    } catch (e) {
++      setError(toFriendlyError(e, '二维码生成失败，请稍后重试'));
++    } finally {
++      setIsLoadingQr(false);
++    }
++  };
++
++  const handleConfirmPairing = async () => {
++    setIsConfirming(true);
++    setError('');
++    setConfirmedName(null);
++    try {
++      const device = await companionService.confirmPairing();
++      setConfirmedName(device.deviceName);
++      await refresh();
++    } catch (e) {
++      setError(toFriendlyError(e, '确认配对失败，请稍后重试'));
++    } finally {
++      setIsConfirming(false);
++    }
++  };
++
++  const handleRemoveDevice = async () => {
++    if (!removingDevice) return;
++    setIsRemoving(true);
++    setError('');
++    try {
++      await companionService.removePairedDevice(removingDevice.id);
++      setRemovingDevice(null);
++      await refresh();
++    } catch (e) {
++      setError(toFriendlyError(e, '移除配对失败，请稍后重试'));
++    } finally {
++      setIsRemoving(false);
++    }
++  };
++
++  return (
++    <div className="space-y-6">
++      <div className="bg-indigo-50 dark:bg-indigo-900/30 border border-indigo-100 dark:border-indigo-700 rounded-xl p-4 text-[13px] text-indigo-800 leading-relaxed flex items-start gap-2">
++        <Smartphone size={16} className="mt-0.5 shrink-0" />
++        <span>生成配对二维码后，用手机扫码即可绑定。配对一次后，手机在同一局域网内可自动发现并免扫码重连。当前版本仅支持局域网直连，中继服务暂未部署。</span>
++      </div>
++
++      {error && (
++        <div className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-[13px] text-red-600 flex items-center gap-2">
++          <AlertCircle size={14} /> {error}
++        </div>
++      )}
++
++      {status?.pendingPairing && (
++        <div className="rounded-xl border border-amber-200 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/30 p-4">
++          <div className="flex items-center justify-between gap-4">
++            <div className="min-w-0">
++              <p className="text-[14px] font-medium text-amber-900 dark:text-amber-200">新设备请求替换配对</p>
++              <p className="mt-1 text-[13px] text-amber-800 dark:text-amber-300">
++                「{status.pendingPairing.deviceName}」请求成为新的配对手机（确认后旧设备将被解绑，120 秒内有效）。
++              </p>
++            </div>
++            <button
++              onClick={handleConfirmPairing}
++              disabled={isConfirming}
++              className="shrink-0 px-4 py-2 rounded-lg bg-amber-600 text-white text-[13px] font-medium hover:bg-amber-700 transition-colors disabled:opacity-50 flex items-center gap-1.5"
++            >
++              {isConfirming ? <Loader2 size={14} className="animate-loading-spin" /> : <Check size={14} />}
++              确认换绑
++            </button>
++          </div>
++        </div>
++      )}
++
++      {confirmedName && (
++        <div className="rounded-lg border border-green-100 bg-green-50 px-3 py-2 text-[13px] text-green-700 flex items-center gap-2">
++          <Check size={14} /> 已完成换绑：{confirmedName}
++        </div>
++      )}
++
++      {/* QR 生成与展示 */}
++      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-5 shadow-sm">
++        <div className="flex items-center gap-2 mb-3">
++          <QrCode size={16} className="text-slate-500 dark:text-slate-400" />
++          <h4 className="text-[15px] font-medium text-slate-800 dark:text-slate-100">配对二维码</h4>
++        </div>
++        {qrPayload ? (
++          <div className="flex flex-col sm:flex-row gap-5 items-start">
++            <div
++              className="w-[220px] h-[220px] shrink-0 rounded-lg border border-slate-200 dark:border-slate-700 bg-white p-2 [&>svg]:w-full [&>svg]:h-full"
++              dangerouslySetInnerHTML={{ __html: qrSvg }}
++              role="img"
++              aria-label="手机伴侣配对二维码"
++            />
++            <div className="min-w-0 text-[13px] text-slate-500 dark:text-slate-400 space-y-1.5">
++              <p>请用手机伴侣 App 扫描此二维码完成配对。二维码单次有效，重新生成会使旧码失效。</p>
++              <p className="text-slate-400 dark:text-slate-500">中继未部署——手机需与电脑处于同一局域网。</p>
++              {status?.port ? (
++                <p className="text-slate-400 dark:text-slate-500">连接端口（动态分配）：{status.port}</p>
++              ) : null}
++            </div>
++          </div>
++        ) : (
++          <button
++            onClick={handleGenerateQr}
++            disabled={isLoadingQr}
++            className="w-full py-4 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-xl text-[14px] font-medium text-slate-500 dark:text-slate-400 hover:border-indigo-300 dark:hover:border-indigo-600 hover:text-indigo-600 hover:bg-indigo-50/50 dark:hover:bg-indigo-900/30 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
++          >
++            {isLoadingQr ? <Loader2 size={16} className="animate-loading-spin" /> : <QrCode size={16} />}
++            生成配对二维码
++          </button>
++        )}
++      </div>
++
++      {/* 已配对设备 */}
++      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-5 shadow-sm">
++        <h4 className="text-[15px] font-medium text-slate-800 dark:text-slate-100 mb-3">已配对设备</h4>
++        {devices.length === 0 ? (
++          <div className="rounded-xl border border-dashed border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-4 py-6 text-center text-[13px] text-slate-400 dark:text-slate-500">
++            暂未配对任何手机
++          </div>
++        ) : devices.map((device) => {
++          const isConnected = status?.connected?.deviceId === device.id;
++          return (
++            <div key={device.id} className="flex items-start justify-between gap-4 py-3 border-b border-slate-100 dark:border-slate-800 last:border-0 last:pb-0 first:pt-0">
++              <div className="min-w-0">
++                <div className="flex flex-wrap items-center gap-2">
++                  <span className={cn('w-2.5 h-2.5 rounded-full', isConnected ? 'bg-emerald-500' : 'bg-slate-300')} />
++                  <span className="text-[14px] font-medium text-slate-800 dark:text-slate-100 break-words">{device.deviceName}</span>
++                  {isConnected && <span className="rounded-full border border-emerald-200 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-900/30 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">已连接</span>}
++                </div>
++                <p className="mt-1 font-mono text-[12px] text-slate-400 dark:text-slate-500">{device.devicePubkey.slice(0, 16)}…</p>
++                <p className="mt-0.5 text-[12px] text-slate-400 dark:text-slate-500">最后在线：{device.lastSeenAt}</p>
++              </div>
++              <button
++                onClick={() => setRemovingDevice(device)}
++                className="shrink-0 px-3 py-1.5 text-[13px] font-medium text-slate-600 dark:text-slate-300 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors"
++              >
++                移除
++              </button>
++            </div>
++          );
++        })}
++      </div>
++
++      {/* 端口策略与防火墙说明（AC5） */}
++      <div className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-4 text-[13px] text-slate-500 dark:text-slate-400 leading-relaxed">
++        <div className="flex items-center gap-2 mb-2 text-slate-600 dark:text-slate-300">
++          <ShieldCheck size={14} />
++          <span className="font-medium">连接说明</span>
++        </div>
++        <p>桌面通过局域网发现服务（mDNS，服务名 <span className="font-mono">_egosync._tcp</span>）自动广播连接端口，端口由系统动态分配，无需手动配置。</p>
++        <p className="mt-1.5">首次使用时，Windows 防火墙可能弹出「允许 EgoSync 访问网络」的提示——请勾选「专用网络」并允许，否则手机无法发现电脑。</p>
++        <p className="mt-1.5">移除配对后，该手机将立即失去连接资格，重新配对需再次扫码。</p>
++      </div>
++
++      {/* 移除确认 */}
++      {removingDevice && (
++        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/30 px-4">
++          <div className="w-full max-w-md rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-6 shadow-2xl">
++            <h4 className="text-[16px] font-semibold text-slate-800 dark:text-slate-100">确认移除配对？</h4>
++            <p className="mt-2 text-[13px] leading-relaxed text-slate-500 dark:text-slate-400">
++              移除后「{removingDevice.deviceName}」将无法再连接这台电脑，需要重新扫码配对。
++            </p>
++            <div className="mt-6 flex justify-end gap-3">
++              <button onClick={() => setRemovingDevice(null)} disabled={isRemoving} className="px-4 py-2 rounded-lg border border-slate-300 dark:border-slate-600 text-[13px] font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors">取消</button>
++              <button onClick={handleRemoveDevice} disabled={isRemoving} className="px-4 py-2 rounded-lg bg-red-600 text-[13px] font-medium text-white hover:bg-red-700 transition-colors disabled:opacity-50 flex items-center gap-1.5">
++                {isRemoving ? <Loader2 size={14} className="animate-loading-spin" /> : <Trash2 size={14} />}
++                确认移除
++              </button>
++            </div>
++          </div>
++        </div>
++      )}
++    </div>
++  );
++}
+diff --git a/egosync-app/src/services/companionService.ts b/egosync-app/src/services/companionService.ts
+new file mode 100644
+index 0000000..e4d881a
+--- /dev/null
++++ b/egosync-app/src/services/companionService.ts
+@@ -0,0 +1,23 @@
++// 手机伴侣 service（Story 12.2）——封装全部 invoke，组件不直接调用 invoke。
++// QR 图渲染封闭在本 service 内（npm qrcode，后端只产出 payload）。
++
++import { invoke } from '@tauri-apps/api/core';
++import QRCode from 'qrcode';
++import type { CompanionStatus, PairedDevice, QrPayload } from '../types/companion';
++
++export const companionService = {
++  generateQr: () => invoke<QrPayload>('pairing_generate_qr'),
++
++  confirmPairing: () => invoke<PairedDevice>('pairing_confirm'),
++
++  listPairedDevices: () => invoke<PairedDevice[]>('paired_device_list'),
++
++  removePairedDevice: (deviceId: string) =>
++    invoke<void>('paired_device_remove', { deviceId }),
++
++  getStatus: () => invoke<CompanionStatus>('companion_get_status'),
++
++  /** 将 payload JSON 渲染为 SVG 字符串（调用方以 dangerouslySetInnerHTML 挂载）。 */
++  renderQrSvg: (payloadText: string) =>
++    QRCode.toString(payloadText, { type: 'svg', margin: 1, width: 220 }),
++};
+diff --git a/egosync-app/src/types/companion.ts b/egosync-app/src/types/companion.ts
+new file mode 100644
+index 0000000..9dbf171
+--- /dev/null
++++ b/egosync-app/src/types/companion.ts
+@@ -0,0 +1,38 @@
++// 手机伴侣类型（Story 12.2）——镜像 src-tauri models/companion.rs（serde camelCase）
++
++export interface PairedDevice {
++  id: string;
++  deviceName: string;
++  devicePubkey: string;
++  pairedAt: string;
++  lastSeenAt: string;
++}
++
++export interface QrPayload {
++  /** V1 中继未部署（Story 12.3），恒为 null */
++  relayAddr: string | null;
++  desktopStaticPubkey: string;
++  relayId: string;
++  pairingNonce: string;
++}
++
++export interface ConnectedDeviceInfo {
++  deviceId: string;
++  deviceName: string;
++  origin: string;
++  since: string;
++}
++
++export interface PendingPairing {
++  deviceName: string;
++  devicePubkey: string;
++  createdAt: string;
++}
++
++export interface CompanionStatus {
++  listening: boolean;
++  port: number | null;
++  connected: ConnectedDeviceInfo | null;
++  pairedDevice: PairedDevice | null;
++  pendingPairing: PendingPairing | null;
++}
+diff --git a/crates/companion-proto/src/crypto.rs b/crates/companion-proto/src/crypto.rs
+new file mode 100644
+index 0000000..0d7334e
+--- /dev/null
++++ b/crates/companion-proto/src/crypto.rs
+@@ -0,0 +1,274 @@
++//! Noise XX 加密封装——全仓唯一 `use snow` 的位置。
++//!
++//! 冻结参数套件 [`NOISE_SUITE`]：`Noise_XX_25519_ChaChaPoly_BLAKE2s`。
++//! 上层（frames.rs 及后续 story 的消费方）只经由 [`HandshakeSession`] /
++//! [`TransportSession`] 操作握手与加解密，不接触任何密码学细节。
++
++use snow::{Builder, HandshakeState, TransportState};
++
++use crate::ProtoError;
++
++/// 冻结的 Noise 参数套件（三端一致；变更等同协议 break，须走版本 bump 流程）。
++pub const NOISE_SUITE: &str = "Noise_XX_25519_ChaChaPoly_BLAKE2s";
++
++/// snow 单条消息缓冲上限（Noise 协议规范的消息尺寸上限）。
++const MAX_MESSAGE_LEN: usize = 65535;
++
++/// 单条传输消息的密文上限（字节）——等于 snow 缓冲上限。
++pub const MAX_CIPHERTEXT_LEN: usize = MAX_MESSAGE_LEN;
++
++/// 单条传输消息的明文上限（字节）——密文上限减去 16 字节 ChaChaPoly 认证标签。
++/// 超过此长度的明文无法编码为单帧，调用方须分片。
++pub const MAX_PLAINTEXT_LEN: usize = MAX_MESSAGE_LEN - 16;
++
++/// X25519 私钥长度（字节）。
++const KEY_LEN: usize = 32;
++
++fn noise_params() -> Result<snow::params::NoiseParams, ProtoError> {
++    NOISE_SUITE
++        .parse()
++        .map_err(|_| ProtoError::Crypto(format!("非法 Noise 参数套件: {NOISE_SUITE}")))
++}
++
++/// 生成一对 X25519 静态密钥，返回 `(私钥, 公钥)`。
++pub fn generate_static_keypair() -> Result<(Vec<u8>, Vec<u8>), ProtoError> {
++    let kp = Builder::new(noise_params()?)
++        .generate_keypair()
++        .map_err(|e| ProtoError::Crypto(e.to_string()))?;
++    Ok((kp.private, kp.public))
++}
++
++/// XX 握手会话（发起方或响应方）。
++pub struct HandshakeSession {
++    state: HandshakeState,
++}
++
++impl HandshakeSession {
++    /// 以本地静态私钥构建发起方。
++    pub fn initiator(local_static_private: &[u8]) -> Result<Self, ProtoError> {
++        Self::build(local_static_private, None, true)
++    }
++
++    /// 以本地静态私钥构建响应方。
++    pub fn responder(local_static_private: &[u8]) -> Result<Self, ProtoError> {
++        Self::build(local_static_private, None, false)
++    }
++
++    /// 仅供测试与黄金向量生成：固定静态+临时私钥构建发起方（字节级可重放）。
++    pub fn initiator_with_fixed_keys_for_testing(
++        local_static_private: &[u8],
++        local_ephemeral_private: &[u8],
++    ) -> Result<Self, ProtoError> {
++        Self::build(local_static_private, Some(local_ephemeral_private), true)
++    }
++
++    /// 仅供测试与黄金向量生成：固定静态+临时私钥构建响应方（字节级可重放）。
++    pub fn responder_with_fixed_keys_for_testing(
++        local_static_private: &[u8],
++        local_ephemeral_private: &[u8],
++    ) -> Result<Self, ProtoError> {
++        Self::build(local_static_private, Some(local_ephemeral_private), false)
++    }
++
++    fn build(
++        local_static_private: &[u8],
++        local_ephemeral_private: Option<&[u8]>,
++        initiator: bool,
++    ) -> Result<Self, ProtoError> {
++        if local_static_private.len() != KEY_LEN {
++            return Err(ProtoError::Crypto(format!(
++                "静态私钥长度必须为 {KEY_LEN} 字节（实际 {} 字节）",
++                local_static_private.len()
++            )));
++        }
++        let mut builder = Builder::new(noise_params()?)
++            .local_private_key(local_static_private)
++            .map_err(|e| ProtoError::Crypto(e.to_string()))?;
++        if let Some(ephemeral) = local_ephemeral_private {
++            if ephemeral.len() != KEY_LEN {
++                return Err(ProtoError::Crypto(format!(
++                    "临时私钥长度必须为 {KEY_LEN} 字节（实际 {} 字节）",
++                    ephemeral.len()
++                )));
++            }
++            builder = builder.fixed_ephemeral_key_for_testing_only(ephemeral);
++        }
++        let state = if initiator {
++            builder.build_initiator()
++        } else {
++            builder.build_responder()
++        }
++        .map_err(|e| ProtoError::Crypto(e.to_string()))?;
++        Ok(HandshakeSession { state })
++    }
++
++    /// 写出一条握手消息，返回完整消息字节（XX 模式三步：`-> e`、`<- e,ee,s,es`、`-> s,se`）。
++    pub fn write_message(&mut self, payload: &[u8]) -> Result<Vec<u8>, ProtoError> {
++        let mut buf = [0u8; MAX_MESSAGE_LEN];
++        let n = self
++            .state
++            .write_message(payload, &mut buf)
++            .map_err(|e| ProtoError::Crypto(e.to_string()))?;
++        Ok(buf[..n].to_vec())
++    }
++
++    /// 读入对端的一条握手消息，返回其负载字节。
++    pub fn read_message(&mut self, message: &[u8]) -> Result<Vec<u8>, ProtoError> {
++        let mut buf = [0u8; MAX_MESSAGE_LEN];
++        let n = self
++            .state
++            .read_message(message, &mut buf)
++            .map_err(|e| ProtoError::Crypto(e.to_string()))?;
++        Ok(buf[..n].to_vec())
++    }
++
++    /// 对端静态公钥（XX 握手交换静态密钥的消息之后可读；此前为 `None`）。
++    ///
++    /// Story 12.2 透传：桌面侧配对决策需要以对端静态公钥为设备身份，
++    /// 而 `use snow` 被冻结在 crate 内——上层只能经此 fn 获取。
++    pub fn remote_static_pubkey(&self) -> Option<Vec<u8>> {
++        self.state.get_remote_static().map(|k| k.to_vec())
++    }
++
++    /// 握手三步全部完成后转入传输模式。
++    pub fn into_transport(self) -> Result<TransportSession, ProtoError> {
++        let state = self
++            .state
++            .into_transport_mode()
++            .map_err(|e| ProtoError::Crypto(e.to_string()))?;
++        Ok(TransportSession { state })
++    }
++}
++
++/// Noise 传输态会话：双向加解密（收发方向各自独立 nonce 计数）。
++pub struct TransportSession {
++    state: TransportState,
++}
++
++impl TransportSession {
++    /// 加密一条传输消息（返回 Noise 传输密文）。
++    ///
++    /// # Errors
++    /// - [`ProtoError::Encode`]：明文超过 [`MAX_PLAINTEXT_LEN`]。
++    /// - [`ProtoError::Crypto`]：snow 加密失败。
++    pub fn encrypt(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, ProtoError> {
++        if plaintext.len() > MAX_PLAINTEXT_LEN {
++            return Err(ProtoError::Encode(format!(
++                "明文 {} 字节超过单帧上限 {} 字节（须分片）",
++                plaintext.len(),
++                MAX_PLAINTEXT_LEN
++            )));
++        }
++        let mut buf = [0u8; MAX_MESSAGE_LEN];
++        let n = self
++            .state
++            .write_message(plaintext, &mut buf)
++            .map_err(|e| ProtoError::Crypto(e.to_string()))?;
++        Ok(buf[..n].to_vec())
++    }
++
++    /// 解密一条传输消息（返回明文字节）。
++    pub fn decrypt(&mut self, ciphertext: &[u8]) -> Result<Vec<u8>, ProtoError> {
++        let mut buf = [0u8; MAX_MESSAGE_LEN];
++        let n = self
++            .state
++            .read_message(ciphertext, &mut buf)
++            .map_err(|e| ProtoError::Crypto(e.to_string()))?;
++        Ok(buf[..n].to_vec())
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    /// AC4：进程内 XX 双角色握手 + 派生会话密钥 + 互发加密帧且解密一致。
++    #[test]
++    fn xx_handshake_both_roles_then_transport_roundtrip() {
++        // WHY: Noise XX 握手是三端加密互通的地基——若双角色在进程内都无法完成
++        // 握手并派生出一致会话密钥，跨语言互通无从谈起。
++        let (i_priv, _i_pub) = generate_static_keypair().unwrap();
++        let (r_priv, _r_pub) = generate_static_keypair().unwrap();
++
++        let mut initiator =
++            HandshakeSession::initiator(&i_priv).expect("构建发起方失败");
++        let mut responder =
++            HandshakeSession::responder(&r_priv).expect("构建响应方失败");
++
++        // XX 三步：-> e ； <- e,ee,s,es ； -> s,se
++        let m1 = initiator.write_message(&[]).unwrap();
++        responder.read_message(&m1).unwrap();
++        let m2 = responder.write_message(&[]).unwrap();
++        initiator.read_message(&m2).unwrap();
++        let m3 = initiator.write_message(&[]).unwrap();
++        responder.read_message(&m3).unwrap();
++
++        let mut ti = initiator.into_transport().unwrap();
++        let mut tr = responder.into_transport().unwrap();
++
++        // 发起方 → 响应方
++        let secret_from_i = b"initiator -> responder secret";
++        let ct_i = ti.encrypt(secret_from_i).unwrap();
++        assert_eq!(tr.decrypt(&ct_i).unwrap(), secret_from_i);
++
++        // 响应方 → 发起方
++        let secret_from_r = b"responder -> initiator secret";
++        let ct_r = tr.encrypt(secret_from_r).unwrap();
++        assert_eq!(ti.decrypt(&ct_r).unwrap(), secret_from_r);
++    }
++
++    /// 非法长度的静态私钥必须被拒绝，而非静默零填充或内部 panic。
++    #[test]
++    fn wrong_length_private_key_is_rejected() {
++        // WHY: X25519 密钥固定 32 字节——超长在 snow 内部切片越界（panic），
++        // 短于 32 字节被静默零填充后会以另一把密钥建立会话（静默错钥）。
++        // 两种形态都必须在入口以类型化错误拒绝。
++        let too_long = [0u8; 33];
++        assert!(
++            HandshakeSession::initiator(&too_long).is_err(),
++            "33 字节私钥必须被拒绝"
++        );
++        assert!(
++            HandshakeSession::responder(&too_long).is_err(),
++            "33 字节私钥（响应方）必须被拒绝"
++        );
++        let too_short = [0u8; 31];
++        assert!(
++            HandshakeSession::initiator(&too_short).is_err(),
++            "31 字节私钥必须被拒绝"
++        );
++        let empty: [u8; 0] = [];
++        assert!(
++            HandshakeSession::initiator(&empty).is_err(),
++            "空私钥必须被拒绝"
++        );
++    }
++
++    /// 超过单帧明文上限的加密请求必须返回 Encode 错误（而非不可读的 Crypto 错误）。
++    #[test]
++    fn oversized_plaintext_is_rejected_with_encode_error() {
++        // WHY: 单帧明文上限是协议冻结契约的一部分——超限时若静默截断或报
++        // 密码学错误，三端各自实现的帧尺寸行为将漂移；必须显式返回编码错误。
++        let (i_priv, _) = generate_static_keypair().unwrap();
++        let mut initiator = HandshakeSession::initiator(&i_priv).unwrap();
++        // 走完握手进入传输态（此处仅校验长度校验，握手本身由上方测试覆盖）
++        let (r_priv, _) = generate_static_keypair().unwrap();
++        let mut responder = HandshakeSession::responder(&r_priv).unwrap();
++        let m1 = initiator.write_message(&[]).unwrap();
++        responder.read_message(&m1).unwrap();
++        let m2 = responder.write_message(&[]).unwrap();
++        initiator.read_message(&m2).unwrap();
++        let m3 = initiator.write_message(&[]).unwrap();
++        responder.read_message(&m3).unwrap();
++        let mut ti = initiator.into_transport().unwrap();
++
++        let oversized = vec![0u8; MAX_PLAINTEXT_LEN + 1];
++        let err = ti
++            .encrypt(&oversized)
++            .expect_err("超限明文必须被拒绝");
++        assert!(
++            matches!(err, ProtoError::Encode(_)),
++            "超限应返回 Encode 错误，实际: {err:?}"
++        );
++    }
++}

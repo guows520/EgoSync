@@ -7260,7 +7260,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(prompt.contains("你是 EgoSync 的分身管家"));
+        assert!(prompt.contains("你是数字分身管家"));
         assert!(!prompt.contains("[元 Skill 配置]"));
         assert!(!prompt.contains("find-skills"));
         assert!(!prompt.contains("skill-creator"));

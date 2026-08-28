@@ -219,3 +219,18 @@ jobs:
         with:
           name: egosync-0.1.0-linux
           path: egosync-app/src-tauri/target/release/bundle/appimage/*.AppImage
+
+  # ── companion-proto 协议 crate（Story 12.1，AC5：黄金向量互验进 CI） ──
+  companion-proto:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run companion-proto tests
+        working-directory: crates/companion-proto
+        run: cargo test

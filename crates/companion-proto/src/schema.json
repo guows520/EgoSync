@@ -1,0 +1,60 @@
+{
+  "title": "EgoSync 手机伴侣协议单一事实源",
+  "description": "companion-proto crate 冻结的协议契约。任何变更必须 bump protocolVersion 并同步本文件（变更流程见 src/lib.rs 顶部文档注释）。",
+  "protocolVersion": 1,
+  "noiseSuite": "Noise_XX_25519_ChaChaPoly_BLAKE2s",
+  "transport": {
+    "framing": "[u32 大端长度前缀][Noise 传输密文]",
+    "maxCiphertextBytes": 65535,
+    "maxPlaintextBytes": 65519,
+    "innerEncoding": "JSON（帧对象，含小写 snake_case 的 type 标签与 camelCase 的 payload 字段）"
+  },
+  "frames": {
+    "hello": {
+      "description": "连接建立后的首帧，必含协议版本",
+      "fields": {
+        "protocolVersion": { "type": "u16", "required": true }
+      }
+    },
+    "snapshot": {
+      "description": "全量状态快照（内容对协议层 opaque）",
+      "fields": {
+        "data": { "type": "string", "required": true }
+      }
+    },
+    "state_delta": {
+      "description": "增量状态变化（内容对协议层 opaque）",
+      "fields": {
+        "data": { "type": "string", "required": true }
+      }
+    },
+    "command": {
+      "description": "手机 → 桌面的指令",
+      "fields": {
+        "data": { "type": "string", "required": true }
+      }
+    },
+    "command_result": {
+      "description": "指令执行结果回流",
+      "fields": {
+        "data": { "type": "string", "required": true }
+      }
+    },
+    "stream_token": {
+      "description": "流式对话的逐 token 镜像",
+      "fields": {
+        "data": { "type": "string", "required": true }
+      }
+    },
+    "notice": {
+      "description": "桌面 → 手机的通知",
+      "fields": {
+        "data": { "type": "string", "required": true }
+      }
+    },
+    "ping": {
+      "description": "保活探测，无 payload 字段",
+      "fields": {}
+    }
+  }
+}

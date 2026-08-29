@@ -9,6 +9,22 @@ lifecycleViewmodelCompose = "2.11.0"
 lifecycleViewmodelKtx = "2.11.0"
 coreKtx = "1.19.0"
 junit = "4.13.2"
+# noise-java：JitPack 固定 commit——必须与 12.1 黄金向量生成所用同一 commit
+# （crates/companion-proto/interop/noise-java/run.sh sha256 校验同源），换版本即互验失义。
+noiseJava = "49377b6dfc6a1e75740bce2318118291a57c0d6e"
+# 仅 testImplementation：覆盖 android.jar 的 org.json stub，供 JVM 单测真实解析 JSON。
+# 运行时 JSON 一律用 Android 平台自带 org.json，零新运行时依赖。
+orgJson = "20240303"
+# ── Story 12.4 白名单增项（裁决 2/5，理由见故事文档）────────────────
+# ML Kit Barcode bundled 变体：不依赖 GMS（本地优先哲学）；完全自定义 overlay 满足 UX-M1 视觉零回归
+mlkitBarcode = "17.3.0"
+# CameraX：Preview 自定义取景框 + ImageAnalysis 喂 ML Kit
+camerax = "1.6.2"
+# OkHttp：WS 客户端（裁决 5；架构 Important Gap #2 明示候选）
+okhttp = "5.5.0"
+# ── Story 12.4 Task 8：androidTest 仪器测试 runner（AC7）──
+androidxTestExtJunit = "1.2.1"
+androidxTestRunner = "1.6.2"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -26,6 +42,17 @@ androidx-compose-material-icons-core = { group = "androidx.compose.material", na
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutines" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
+noise-java = { group = "com.github.rweather", name = "noise-java", version.ref = "noiseJava" }
+org-json = { group = "org.json", name = "json", version.ref = "orgJson" }
+mlkit-barcode-scanning = { group = "com.google.mlkit", name = "barcode-scanning", version.ref = "mlkitBarcode" }
+androidx-camera-core = { group = "androidx.camera", name = "camera-core", version.ref = "camerax" }
+androidx-camera-camera2 = { group = "androidx.camera", name = "camera-camera2", version.ref = "camerax" }
+androidx-camera-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "camerax" }
+androidx-camera-view = { group = "androidx.camera", name = "camera-view", version.ref = "camerax" }
+okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
+# Story 12.4 Task 8：androidTest 冒烟仪器依赖
+androidx-test-ext-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxTestExtJunit" }
+androidx-test-runner = { group = "androidx.test", name = "runner", version.ref = "androidxTestRunner" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

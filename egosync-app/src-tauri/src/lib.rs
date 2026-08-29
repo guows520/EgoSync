@@ -450,6 +450,8 @@ pub fn run() {
             commands::companion::paired_device_list,
             commands::companion::paired_device_remove,
             commands::companion::companion_get_status,
+            commands::companion::companion_get_relay_addr,
+            commands::companion::companion_set_relay_addr,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

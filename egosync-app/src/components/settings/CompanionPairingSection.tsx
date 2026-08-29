@@ -40,6 +40,12 @@ export function CompanionPairingSection() {
   const [removingDevice, setRemovingDevice] = useState<PairedDevice | null>(null);
   const [isRemoving, setIsRemoving] = useState(false);
   const [confirmedName, setConfirmedName] = useState<string | null>(null);
+  const [relayAddr, setRelayAddr] = useState<string | null>(null);
+  const [relayAddrInput, setRelayAddrInput] = useState('');
+  const [isSavingRelay, setIsSavingRelay] = useState(false);
+  const [relaySaved, setRelaySaved] = useState(false);
+  // P9：读取失败必须与「未配置」可区分——否则保存空输入会静默清掉既有可用配置
+  const [relayLoadFailed, setRelayLoadFailed] = useState(false);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const refresh = useCallback(async () => {
@@ -66,6 +72,20 @@ export function CompanionPairingSection() {
       if (pollTimerRef.current) clearInterval(pollTimerRef.current);
     };
   }, [refresh]);
+
+  // 中继服务器地址：挂载时读取一次（输入框本地编辑，保存后才回写）
+  useEffect(() => {
+    companionService
+      .getRelayAddr()
+      .then((addr) => {
+        setRelayAddr(addr);
+        setRelayAddrInput(addr ?? '');
+      })
+      .catch(() => {
+        // P9：读取失败不得伪装成「未配置」——空输入 + 保存 = 静默清掉可用配置
+        setRelayLoadFailed(true);
+      });
+  }, []);
 
   useTauriEvent<{ deviceId: string }>('companion:paired', () => {
     refresh();
@@ -147,11 +167,65 @@ export function CompanionPairingSection() {
     }
   };
 
+  const handleSaveRelayAddr = async () => {
+    setIsSavingRelay(true);
+    setError('');
+    setRelaySaved(false);
+    try {
+      const trimmed = relayAddrInput.trim();
+      await companionService.setRelayAddr(trimmed === '' ? null : trimmed);
+      setRelayAddr(trimmed === '' ? null : trimmed);
+      setRelaySaved(true);
+    } catch (e) {
+      setError(toFriendlyError(e, '中继配置保存失败，请稍后重试'));
+    } finally {
+      setIsSavingRelay(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="bg-indigo-50 dark:bg-indigo-900/30 border border-indigo-100 dark:border-indigo-700 rounded-xl p-4 text-[13px] text-indigo-800 leading-relaxed flex items-start gap-2">
         <Smartphone size={16} className="mt-0.5 shrink-0" />
-        <span>生成配对二维码后，用手机扫码即可绑定。配对一次后，手机在同一局域网内可自动发现并免扫码重连。当前版本仅支持局域网直连，中继服务暂未部署。</span>
+        <span>生成配对二维码后，用手机扫码即可绑定。配对一次后，手机在同一局域网内可自动发现并免扫码重连。{relayAddr ? '已配置中继服务器：不在同一局域网时，手机可经中继加密转发连接。' : '未配置中继服务器时仅支持局域网直连，可在下方配置中继地址。'}</span>
+      </div>
+
+      {/* 中继服务器地址（Story 12.4）：留空清除，保存后 ≤5s 生效 */}
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-5 shadow-sm">
+        <div className="flex items-center gap-2 mb-2">
+          <ShieldCheck size={16} className="text-slate-500 dark:text-slate-400" />
+          <h4 className="text-[15px] font-medium text-slate-800 dark:text-slate-100">中继服务器地址</h4>
+        </div>
+        <p className="text-[13px] text-slate-500 dark:text-slate-400 mb-3">
+          可选。配置自建中继（如 ws://relay.example.com:7333）后，手机离开局域网仍可经中继加密转发连接；中继只转发密文，无法解读内容。留空即清除。
+        </p>
+        <div className="flex gap-2">
+          <input
+            value={relayAddrInput}
+            onChange={(e) => { setRelayAddrInput(e.target.value); setRelaySaved(false); }}
+            placeholder="ws://relay.example.com:7333"
+            spellCheck={false}
+            className="flex-1 min-w-0 px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-[13px] text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
+          />
+          <button
+            onClick={handleSaveRelayAddr}
+            disabled={isSavingRelay || relayLoadFailed}
+            className="shrink-0 px-4 py-2 rounded-lg bg-indigo-600 text-white text-[13px] font-medium hover:bg-indigo-700 transition-colors disabled:opacity-50 flex items-center gap-1.5"
+          >
+            {isSavingRelay ? <Loader2 size={14} className="animate-loading-spin" /> : <Check size={14} />}
+            保存
+          </button>
+        </div>
+        {relayLoadFailed && (
+          <p className="mt-2 text-[13px] text-amber-600 dark:text-amber-400 flex items-center gap-1.5">
+            <AlertCircle size={14} /> 读取中继配置失败，为防误清已有配置已暂停保存；请重启应用后重试。
+          </p>
+        )}
+        {relaySaved && (
+          <p className="mt-2 text-[13px] text-green-600 dark:text-green-400 flex items-center gap-1.5">
+            <Check size={14} /> 已保存{relayAddrInput.trim() === '' ? '（中继已停用）' : '，数秒内生效；新二维码将携带中继地址'}
+          </p>
+        )}
       </div>
 
       {error && (
@@ -214,7 +288,11 @@ export function CompanionPairingSection() {
                   二维码 {formatCountdown(qrExpiresAt - nowTick)} 后失效，超时需重新生成。
                 </p>
               )}
-              <p className="text-slate-400 dark:text-slate-500">中继未部署——手机需与电脑处于同一局域网。</p>
+              {qrPayload.relayAddr ? (
+                <p className="text-slate-400 dark:text-slate-500">本二维码含中继地址（{qrPayload.relayAddr}）。首次配对需与电脑处于同一局域网（扫码配对仅支持直连）；配对成功后离开局域网可经中继加密转发连接。</p>
+              ) : (
+                <p className="text-slate-400 dark:text-slate-500">中继未配置——手机需与电脑处于同一局域网。</p>
+              )}
               {status?.port ? (
                 <p className="text-slate-400 dark:text-slate-500">连接端口（动态分配）：{status.port}</p>
               ) : null}

@@ -1,8 +1,10 @@
 package com.egosync.companion
 
 import android.content.Context
+import com.egosync.companion.connection.ConnectionClient
 import com.egosync.companion.connection.ConnectionState
-import com.egosync.companion.connection.FakeConnectionClient
+import com.egosync.companion.connection.PairingConnector
+import com.egosync.companion.connection.RealConnectionClient
 import com.egosync.companion.notify.InAppNotificationAdapter
 import com.egosync.companion.sync.QuickNoteQueue
 import com.egosync.companion.sync.SnapshotStore
@@ -16,14 +18,22 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 /**
- * 手工组装容器（无 DI 框架）：所有 Fake/Mock 单例的唯一持有处。
- * 接入真实连接层时，只需替换 [connection] 的实现——其余代码零改动。
+ * 手工组装容器（无 DI 框架）：所有依赖的唯一持有处。
+ * Story 12.4：[connection] 装配换为 [RealConnectionClient]（唯一换装点，
+ * UX-M2）；[pairingConnector] 同实例二态（真实配对入口）。completePairing/
+ * unpair 委托真实客户端（[PairingStateStore] 持久化真实配对态）。
  */
 class AppModelContainer private constructor(context: Context) {
 
     private val prefs = context.getSharedPreferences("companion_prefs", Context.MODE_PRIVATE)
 
-    val connection = FakeConnectionClient(initialPaired = prefs.getBoolean(KEY_PAIRED, false))
+    /** 组件级协程作用域：先于连接层声明（[RealConnectionClient] 依赖注入）。 */
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    private val realConnection = RealConnectionClient(context, scope)
+    val connection: ConnectionClient = realConnection
+    val pairingConnector: PairingConnector = realConnection
+
     val quickNotes = QuickNoteQueue()
     val notifications = InAppNotificationAdapter()
 
@@ -38,8 +48,6 @@ class AppModelContainer private constructor(context: Context) {
     /** 一次性事件消息（Snackbar），UI 消费后调 [consumeEvent]。 */
     private val _eventMessage = MutableStateFlow<String?>(null)
     val eventMessage: StateFlow<String?> = _eventMessage.asStateFlow()
-
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     init {
         // FR-43：恢复连接后速记自动提交管家（mock：直接清队并提示）
@@ -61,9 +69,9 @@ class AppModelContainer private constructor(context: Context) {
         prefs.edit().putString(KEY_THEME, if (mode == ThemeMode.LIGHT) VALUE_LIGHT else VALUE_DARK).apply()
     }
 
+    /** 委托真实客户端（配对持久化由 PairingStateStore 在配对成功时完成）。 */
     fun completePairing() {
         connection.completePairing()
-        prefs.edit().putBoolean(KEY_PAIRED, true).apply()
     }
 
     /** FR-21：引导完成标记（镜像桌面 isFirstLaunch 语义；prefs 布尔等价）。 */
@@ -73,9 +81,9 @@ class AppModelContainer private constructor(context: Context) {
         prefs.edit().putBoolean(KEY_ONBOARDED, true).apply()
     }
 
+    /** 委托真实客户端（清除信任锚与配对态、终止会话、复位 Debug 覆盖）。 */
     fun unpair() {
         connection.unpair()
-        prefs.edit().putBoolean(KEY_PAIRED, false).apply()
     }
 
     fun consumeEvent() {
@@ -91,7 +99,6 @@ class AppModelContainer private constructor(context: Context) {
                 instance ?: AppModelContainer(context.applicationContext).also { instance = it }
             }
 
-        private const val KEY_PAIRED = "paired"
         private const val KEY_ONBOARDED = "onboarded"
         private const val KEY_THEME = "theme"
         const val VALUE_DARK = "dark"

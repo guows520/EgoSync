@@ -43,6 +43,10 @@ mdns-sd = "0.21.0"
 [dev-dependencies]
 tempfile = "3"
 filetime = "0.2"
+# Story 12.4：进程内拉起 relay（build_router）做中继路径集成测试
+relay-server = { path = "../../relay-server" }
+# axum::serve 在测试中承载 relay 路由（版本对齐 relay-server）
+axum = { version = "0.8", features = ["ws"] }
 
 [features]
 perf-test = []

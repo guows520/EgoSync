@@ -48,10 +48,12 @@ fun PairingScreen(
     step: PairingStep,
     connectStage: Int,
     onStartScan: () -> Unit,
-    onScanCompleted: () -> Unit,
+    onScanCompleted: (String) -> Unit,
     onBack: () -> Unit,
     onEnterApp: () -> Unit,
     modifier: Modifier = Modifier,
+    waitDesktopConfirm: Boolean = false,
+    pairingError: String? = null,
 ) {
     Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(
@@ -64,8 +66,8 @@ fun PairingScreen(
             Spacer(Modifier.height(64.dp))
             when (step) {
                 PairingStep.WELCOME -> WelcomeStep(onStartScan)
-                PairingStep.SCAN -> ScanStep(onScanCompleted, onBack)
-                PairingStep.CONNECTING -> ConnectingStep(connectStage)
+                PairingStep.SCAN -> ScanStep(onScanCompleted, onBack, pairingError)
+                PairingStep.CONNECTING -> ConnectingStep(connectStage, waitDesktopConfirm)
                 PairingStep.SUCCESS -> SuccessStep(onEnterApp)
             }
             Spacer(Modifier.height(48.dp))
@@ -126,10 +128,10 @@ private fun FeatureRow(icon: ImageVector, title: String, body: String) {
     }
 }
 
-// ── ② 扫码取景模拟 ─────────────────────────────────────────────────────
+// ── ② 扫码取景（Story 12.4：真实相机扫码，AC1/裁决 2）────────────────
 
 @Composable
-private fun ScanStep(onScanCompleted: () -> Unit, onBack: () -> Unit) {
+private fun ScanStep(onScanCompleted: (String) -> Unit, onBack: () -> Unit, pairingError: String? = null) {
     Text(
         "扫码配对",
         style = MaterialTheme.typography.headlineSmall,
@@ -142,9 +144,19 @@ private fun ScanStep(onScanCompleted: () -> Unit, onBack: () -> Unit) {
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         textAlign = TextAlign.Center,
     )
+    if (pairingError != null) {
+        // 配对失败原因如实呈现（Story 12.4）：否则用户只看到「退回扫码页」无从定位
+        Spacer(Modifier.height(10.dp))
+        Text(
+            pairingError,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+            textAlign = TextAlign.Center,
+        )
+    }
     Spacer(Modifier.height(40.dp))
 
-    // 取景框（纯模拟，无相机）：静息框 + 四角标记
+    // 取景框：样式逐字保留原型（UX-M1），内容由模拟暗底换为真实相机预览
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -156,8 +168,14 @@ private fun ScanStep(onScanCompleted: () -> Unit, onBack: () -> Unit) {
     ) {
         // 四角取景标记
         CornerMarks()
+        CameraPermissionGate {
+            QrScannerView(
+                modifier = Modifier.fillMaxSize(),
+                onQrScanned = onScanCompleted,
+            )
+        }
         Text(
-            "原型模拟：点击下方按钮完成扫码",
+            "将二维码对准取景框",
             style = MaterialTheme.typography.labelSmall,
             color = Color(0xFF9CA3AF),
             modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 14.dp),
@@ -165,9 +183,6 @@ private fun ScanStep(onScanCompleted: () -> Unit, onBack: () -> Unit) {
     }
 
     Spacer(Modifier.height(40.dp))
-    Button(onClick = onScanCompleted, modifier = Modifier.fillMaxWidth()) {
-        Text("模拟扫码成功")
-    }
     TextButton(onClick = onBack, modifier = Modifier.padding(top = 6.dp)) {
         Text("返回上一步")
     }
@@ -240,7 +255,7 @@ private fun BoxScope.CornerMarks() {
 // ── ③ 连接中动画 ───────────────────────────────────────────────────────
 
 @Composable
-private fun ConnectingStep(stage: Int) {
+private fun ConnectingStep(stage: Int, waitDesktopConfirm: Boolean = false) {
     Spacer(Modifier.height(56.dp))
     CircularProgressIndicator(
         color = MaterialTheme.colorScheme.primary,
@@ -252,6 +267,16 @@ private fun ConnectingStep(stage: Int) {
         style = MaterialTheme.typography.titleMedium,
         color = MaterialTheme.colorScheme.onBackground,
     )
+    if (waitDesktopConfirm) {
+        // PendingRebind（Story 12.4）：桌面已有配对设备，等待人工确认换绑
+        Spacer(Modifier.height(12.dp))
+        Text(
+            "桌面端已有配对设备：请在桌面「设置 · 手机伴侣」确认换绑，确认后手机将自动继续…",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
+    }
     Spacer(Modifier.height(36.dp))
     ConnectStageRow("发现桌面设备（NSD 局域网发现）", stage >= 0)
     Spacer(Modifier.height(14.dp))

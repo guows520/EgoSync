@@ -25,7 +25,7 @@ use crate::services::companion_pairing::{
     connected_event_payload, connection_pubkey_allowed, decide_pairing, device_name_from_frame,
     disconnected_event_payload, generate_qr_payload, load_or_create_static_keypair,
     paired_event_payload, pairing_nonce_from_frame, pending_is_expired,
-    validate_and_consume_window_nonce, validate_first_frame, HandshakeIo, PairingDecision,
+    validate_and_consume_window_nonce, validate_first_frame, PairingDecision,
     PairingWindow, DEFAULT_DEVICE_NAME, EVENT_CONNECTED, EVENT_DISCONNECTED, EVENT_PAIRED,
     PAIRING_WINDOW_TIMEOUT_SECS,
 };
@@ -87,6 +87,8 @@ pub struct CompanionState {
     nsd: tokio::sync::Mutex<Option<NsdHandle>>,
     listen_port: std::sync::atomic::AtomicU16,
     active_session: tokio::sync::Mutex<Option<ActiveSession>>,
+    /// P16：中继注册客户端的启动幂等位（唯一实例由本位保证，不靠调用纪律）。
+    relay_client_started: std::sync::atomic::AtomicBool,
 }
 
 impl CompanionState {
@@ -110,7 +112,7 @@ impl CompanionState {
         priv_key: Vec<u8>,
         pub_key: Vec<u8>,
     ) -> Self {
-        let relay_id = generate_qr_payload(&pub_key).relay_id;
+        let relay_id = generate_qr_payload(&pub_key, None).relay_id;
         Self {
             connection: std::sync::RwLock::new(CompanionConnectionState::Listening),
             pending: tokio::sync::Mutex::new(None),
@@ -122,6 +124,7 @@ impl CompanionState {
             nsd: tokio::sync::Mutex::new(None),
             listen_port: std::sync::atomic::AtomicU16::new(0),
             active_session: tokio::sync::Mutex::new(None),
+            relay_client_started: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -213,6 +216,7 @@ pub async fn get_status(
             CompanionConnectionState::Connected {
                 device_id,
                 device_name,
+                origin,
                 since,
                 ..
             } => (
@@ -220,7 +224,7 @@ pub async fn get_status(
                 Some(ConnectedDeviceInfo {
                     device_id: device_id.clone(),
                     device_name: device_name.clone(),
-                    origin: "direct".to_string(),
+                    origin: origin.clone(),
                     since: since.clone(),
                 }),
             ),
@@ -309,27 +313,213 @@ pub async fn start_companion_listener(
         }
     });
 
+    // 中继注册客户端（Story 12.4 AC4）：配置了 relay_addr 且（已配对 ≥1 或
+    // 配对窗口打开，与 NSD 注册同口径）时经中继建立加密转发；断线指数退避。
+    // P16：幂等守卫——重复调用会 spawn 双实例并因 relay 单槽替换语义互踢抖动
+    if state
+        .relay_client_started
+        .swap(true, std::sync::atomic::Ordering::SeqCst)
+    {
+        tracing::warn!("中继注册客户端已在运行，跳过重复启动");
+    } else {
+        tokio::spawn(run_relay_client(pool.clone(), state));
+    }
+
     Ok(port)
 }
 
+// ---------------------------------------------------------------------------
+// 中继注册客户端（Story 12.4 AC4）
+// ---------------------------------------------------------------------------
+
+/// 中继客户端慢轮询间隔（未启用/未就绪时的配置复查周期）。
+const RELAY_IDLE_TICK_SECS: u64 = 5;
+
+/// 中继重连退避：1s 起步、倍增、30s 封顶（会话成功后复位）。
+const RELAY_BACKOFF_MAX_SECS: u64 = 30;
+
+/// 中继注册客户端主循环（`start_companion_listener` spawn 常驻）。
+///
+/// 门控：`app_settings.companion_relay_addr` 已配置 &&（已配对 ≥1 或配对窗口打开）
+/// ——与 NSD 注册同口径。未启用时以慢轮询复查（设置变更 ≤5s 生效）；
+/// 连接失败按指数退避重试，会话成功后复位。
+pub async fn run_relay_client(pool: DbPool, state: Arc<CompanionState>) {
+    let mut backoff_secs: u64 = 1;
+    loop {
+        let relay_addr = match crate::services::companion_pairing::get_relay_addr(&pool).await {
+            Ok(addr) => addr,
+            Err(e) => {
+                tracing::warn!(error = %e, "读取中继配置失败，慢轮询复查");
+                tokio::time::sleep(std::time::Duration::from_secs(RELAY_IDLE_TICK_SECS)).await;
+                continue;
+            }
+        };
+        let enabled = relay_addr.is_some() && relay_gate_open(&pool, &state).await;
+        match relay_addr.filter(|_| enabled) {
+            Some(addr) => {
+                match relay_connect_and_serve(&pool, &state, &addr).await {
+                    Ok(()) => {
+                        // P8：会话正常结束 → 复位退避（文档口径「会话成功后复位」；
+                        // 此前每轮倍增，正常会话反复结束会把重连拖到 30s 封顶）
+                        tracing::info!("中继转发会话结束，退避复位");
+                        backoff_secs = 1;
+                    }
+                    Err(e) => {
+                        // P24：退避时长随失败日志可见，UAT 可据此度量会合延迟
+                        tracing::warn!(error = %e, backoff_secs, "中继连接/会话失败，退避后重试");
+                        backoff_secs = (backoff_secs * 2).min(RELAY_BACKOFF_MAX_SECS);
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
+            }
+            None => {
+                backoff_secs = 1; // 未启用：复位退避，慢轮询等配置/门控变化
+                tokio::time::sleep(std::time::Duration::from_secs(RELAY_IDLE_TICK_SECS)).await;
+            }
+        }
+    }
+}
+
+/// 中继启用门控：与 NSD 注册同口径（已配对 ≥1 或配对窗口打开）。
+async fn relay_gate_open(pool: &DbPool, state: &Arc<CompanionState>) -> bool {
+    let has_paired = matches!(
+        paired_devices_db::get_all(pool).await,
+        Ok(devices) if !devices.is_empty()
+    );
+    if has_paired {
+        return true;
+    }
+    let window = state.pairing_window.lock().await.clone();
+    match window {
+        Some(w) => state.now() - w.created_at_unix < PAIRING_WINDOW_TIMEOUT_SECS as i64,
+        None => false,
+    }
+}
+
+/// 连接中继：register(role=desktop) → relay 鉴权（XX responder，真实静态私钥）
+/// → 转发态等待手机 E2E 握手 → 复用直连同款会话路径。
+async fn relay_connect_and_serve(
+    pool: &DbPool,
+    state: &Arc<CompanionState>,
+    relay_addr: &str,
+) -> Result<(), AppError> {
+    let url = format!("{}/relay", relay_addr.trim_end_matches('/'));
+    let (ws, _resp) = tokio_tungstenite::connect_async(&url)
+        .await
+        .map_err(|e| AppError::ConnectionError(format!("中继连接失败: {}", e)))?;
+    tracing::info!(relay_addr = %relay_addr, "中继已连接，注册 desktop 槽位");
+
+    // register 首消息（text JSON；relayId = hex(SHA256(pubkey))[..16]，auth.rs 校验）
+    // ——auth.rs 契约：register 必须是 text 帧，binary 会被判 MalformedRegister
+    let mut io = WsIo { ws };
+    let register = serde_json::json!({
+        "type": "register",
+        "relayId": state.relay_id,
+        "role": "desktop",
+    });
+    io.ws
+        .send(tokio_tungstenite::tungstenite::Message::Text(
+            register.to_string().into(),
+        ))
+        .await
+        .map_err(|e| AppError::ConnectionError(format!("中继注册失败: {}", e)))?;
+
+    // relay 鉴权握手：relay 为 initiator（一次性密钥），桌面以真实静态私钥应答
+    // ——完成即证明持有 desktop 槽位对应的密钥（挑战=握手）。鉴权 transport 弃用
+    // （零知识：relay 不参与后续加密）。
+    let _auth = tokio::time::timeout(
+        std::time::Duration::from_secs(HANDSHAKE_TIMEOUT_SECS),
+        crate::services::companion_pairing::run_responder_handshake(
+            &state.desktop_static_priv,
+            &mut io,
+        ),
+    )
+    .await
+    .map_err(|_| AppError::ConnectionError("中继鉴权超时".to_string()))??;
+
+    // 转发态：首条 binary 即手机的 E2E XX initiator m1，按直连同款 responder 握手
+    let outcome = match tokio::time::timeout(
+        std::time::Duration::from_secs(HANDSHAKE_TIMEOUT_SECS),
+        crate::services::companion_pairing::run_responder_handshake(
+            &state.desktop_static_priv,
+            &mut io,
+        ),
+    )
+    .await
+    {
+        Ok(outcome) => outcome?,
+        Err(_) => {
+            // P24（D3/a 裁决）：转发态空等超时是常态 churn 的关键观测点——
+            // 手机经直连在线时，本端每 HANDSHAKE_TIMEOUT_SECS 断连重连一次；
+            // UAT 据此日志与退避时长度量离网会合延迟
+            tracing::info!(
+                relay_addr = %relay_addr,
+                timeout_secs = HANDSHAKE_TIMEOUT_SECS,
+                "中继转发态等待手机 E2E 握手超时（手机可能经直连在线），断连重连"
+            );
+            return Err(AppError::ConnectionError("中继转发握手超时".to_string()));
+        }
+    };
+    let pubkey_hex =
+        crate::services::companion_pairing::remote_pubkey_hex(&outcome.remote_static_pubkey);
+
+    // 早期准入与直连同口径
+    let now = state.now();
+    let window = state.pairing_window.lock().await.clone();
+    let allowed =
+        connection_pubkey_allowed(pool, &state.pending, &window, now, &pubkey_hex).await?;
+    if !allowed {
+        tracing::warn!(relay_addr = %relay_addr, "中继路径未配对公钥尝试连接，已拒绝");
+        return Ok(());
+    }
+
+    tracing::info!("中继转发 E2E 会话已建立");
+    run_authorized_session(
+        pool.clone(),
+        state.clone(),
+        &mut io,
+        outcome.transport,
+        pubkey_hex,
+        "relay",
+        relay_addr.to_string(),
+    )
+    .await
+}
+
 /// WS 二进制 IO 适配 `HandshakeIo`，复用同一 stream 进入传输态帧循环。
-struct WsIo {
-    ws: WebSocketStream<TcpStream>,
+/// 对流类型泛型：服务端直连 `TcpStream` / 客户端中继 `MaybeTlsStream<TcpStream>` 同构。
+struct WsIo<S> {
+    ws: WebSocketStream<S>,
 }
 
 #[async_trait::async_trait]
-impl crate::services::companion_pairing::HandshakeIo for WsIo {
+impl<S> crate::services::companion_pairing::HandshakeIo for WsIo<S>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
+{
     async fn recv(&mut self) -> Result<Vec<u8>, AppError> {
-        match self.ws.next().await {
-            Some(Ok(msg)) => match msg {
-                tokio_tungstenite::tungstenite::Message::Binary(b) => Ok(b.to_vec()),
-                tokio_tungstenite::tungstenite::Message::Close(_) => Err(
-                    AppError::ConnectionError("对端关闭了连接".to_string()),
-                ),
-                _ => Err(AppError::ProtocolError("握手期仅接受二进制消息".to_string())),
-            },
-            Some(Err(e)) => Err(AppError::ConnectionError(format!("WS 读取失败: {}", e))),
-            None => Err(AppError::ConnectionError("连接已关闭".to_string())),
+        loop {
+            match self.ws.next().await {
+                Some(Ok(msg)) => match msg {
+                    tokio_tungstenite::tungstenite::Message::Binary(b) => return Ok(b.to_vec()),
+                    tokio_tungstenite::tungstenite::Message::Close(_) => {
+                        return Err(AppError::ConnectionError("对端关闭了连接".to_string()))
+                    }
+                    // Ping/Pong 为协议层保活（中继 keepalive 首拍即发），
+                    // tungstenite 已自动应答，对上层透明——跳过继续等业务帧
+                    tokio_tungstenite::tungstenite::Message::Ping(_)
+                    | tokio_tungstenite::tungstenite::Message::Pong(_) => continue,
+                    _ => {
+                        return Err(AppError::ProtocolError(
+                            "握手期仅接受二进制消息".to_string(),
+                        ))
+                    }
+                },
+                Some(Err(e)) => {
+                    return Err(AppError::ConnectionError(format!("WS 读取失败: {}", e)))
+                }
+                None => return Err(AppError::ConnectionError("连接已关闭".to_string())),
+            }
         }
     }
 
@@ -365,7 +555,6 @@ async fn handle_connection(
     .map_err(|_| AppError::ConnectionError("手机伴侣握手超时".to_string()))??;
     let pubkey_hex =
         crate::services::companion_pairing::remote_pubkey_hex(&outcome.remote_static_pubkey);
-    let mut transport = outcome.transport;
 
     // ── 早期准入：未配对 + 无 pending + 窗口关闭 → 立即拒绝 ──
     let now = state.now();
@@ -377,10 +566,37 @@ async fn handle_connection(
         return Ok(()); // 关闭连接
     }
 
+    // ── 准入后的共同路径（直连与中继转发同构，Story 12.4 抽取）──
+    run_authorized_session(
+        pool,
+        state,
+        &mut io,
+        outcome.transport,
+        pubkey_hex,
+        "direct",
+        peer_addr.to_string(),
+    )
+    .await
+}
+
+/// 早期准入之后的共同路径：首帧校验 → Notice 收集 → nonce 校验 → 配对决策 → 会话。
+///
+/// `origin` 为会话来源标识（"direct" / "relay"，get_status 如实反映）；
+/// `peer_label` 仅用于日志。
+#[allow(clippy::too_many_arguments)]
+async fn run_authorized_session(
+    pool: DbPool,
+    state: Arc<CompanionState>,
+    io: &mut dyn crate::services::companion_pairing::HandshakeIo,
+    mut transport: companion_proto::crypto::TransportSession,
+    pubkey_hex: String,
+    origin: &'static str,
+    peer_label: String,
+) -> Result<(), AppError> {
     // ── 首帧必须为 HELLO（超时同握手期）──
     let first_frame = tokio::time::timeout(
         std::time::Duration::from_secs(HANDSHAKE_TIMEOUT_SECS),
-        recv_frame(&mut io, &mut transport),
+        recv_frame(io, &mut transport),
     )
     .await
     .map_err(|_| AppError::ConnectionError("等待手机协议首帧超时".to_string()))??;
@@ -414,7 +630,7 @@ async fn handle_connection(
         if remaining.is_zero() {
             break; // 收集窗口截止
         }
-        match tokio::time::timeout(remaining, recv_frame(&mut io, &mut transport)).await {
+        match tokio::time::timeout(remaining, recv_frame(io, &mut transport)).await {
             Ok(Ok(frame)) => {
                 if let Some(name) = device_name_from_frame(&frame) {
                     device_name = name;
@@ -440,7 +656,7 @@ async fn handle_connection(
             validate_and_consume_window_nonce(&mut window, state.now(), submitted_nonce.as_deref())
         };
         if !ok {
-            tracing::warn!(peer = %peer_addr, "配对窗口 nonce 校验失败，已拒绝");
+            tracing::warn!(peer = %peer_label, "配对窗口 nonce 校验失败，已拒绝");
             return Ok(());
         }
         // 新扫码授权取代陈旧 pending（同公钥待确认槽以新时间重建，见 decide_pairing）
@@ -451,7 +667,7 @@ async fn handle_connection(
     let decision = decide_pairing(&pool, &state.pending, &pubkey_hex, &device_name).await?;
     match decision {
         PairingDecision::AlreadyPaired { device_id, device_name } => {
-            enter_session(pool, state, &mut io, &mut transport, device_id, device_name, peer_addr)
+            enter_session(pool, state, io, &mut transport, device_id, device_name, origin, peer_label)
                 .await
         }
         PairingDecision::FirstPairing { device } => {
@@ -461,11 +677,12 @@ async fn handle_connection(
             enter_session(
                 pool,
                 state,
-                &mut io,
+                io,
                 &mut transport,
                 device.id,
                 device.device_name,
-                peer_addr,
+                origin,
+                peer_label,
             )
             .await
         }
@@ -485,11 +702,12 @@ async fn handle_connection(
 async fn enter_session(
     _pool: DbPool,
     state: Arc<CompanionState>,
-    io: &mut WsIo,
+    io: &mut dyn crate::services::companion_pairing::HandshakeIo,
     transport: &mut companion_proto::crypto::TransportSession,
     device_id: String,
     device_name: String,
-    peer_addr: SocketAddr,
+    origin: &'static str,
+    peer_label: String,
 ) -> Result<(), AppError> {
     let (term_tx, mut term_rx) = tokio::sync::watch::channel(false);
     {
@@ -502,7 +720,7 @@ async fn enter_session(
             terminate: term_tx.clone(),
         });
     }
-    state.set_connected(&device_id, &device_name, "direct", &peer_addr.to_string());
+    state.set_connected(&device_id, &device_name, origin, &peer_label);
     state.emit(
         EVENT_CONNECTED,
         connected_event_payload(&device_id, &device_name),
@@ -522,14 +740,14 @@ async fn enter_session(
                     break;
                 }
                 Err(_) => {
-                    tracing::debug!(peer = %peer_addr, "会话空闲超时，断开连接");
+                    tracing::debug!(peer = %peer_label, "会话空闲超时，断开连接");
                     break;
                 }
             },
         };
         match &frame {
             Frame::Hello(_) => {
-                tracing::debug!(peer = %peer_addr, "重复 HELLO 帧，忽略");
+                tracing::debug!(peer = %peer_label, "重复 HELLO 帧，忽略");
             }
             Frame::Ping(_) => {
                 match encode_frame(&Frame::Ping(PingPayload {}), transport) {
@@ -595,7 +813,7 @@ fn frame_type_name(frame: &Frame) -> &'static str {
 }
 
 async fn recv_frame(
-    io: &mut WsIo,
+    io: &mut dyn crate::services::companion_pairing::HandshakeIo,
     transport: &mut companion_proto::crypto::TransportSession,
 ) -> Result<Frame, AppError> {
     let bytes = io.recv().await?;
@@ -604,7 +822,10 @@ async fn recv_frame(
     })
 }
 
-async fn send_frame(io: &mut WsIo, bytes: &[u8]) -> Result<(), AppError> {
+async fn send_frame(
+    io: &mut dyn crate::services::companion_pairing::HandshakeIo,
+    bytes: &[u8],
+) -> Result<(), AppError> {
     io.send(bytes).await
 }
 

@@ -7,3 +7,6 @@ build/
 captures/
 .externalNativeBuild
 .cxx/
+
+# 生成的黄金向量 fixture（copyNoiseVectors 任务产物，单一事实源在 companion-proto crate）
+app/src/test/resources/noise_java_vectors.json

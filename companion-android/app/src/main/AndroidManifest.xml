@@ -1,10 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Story 12.4：WS 直连/中继承载 + 扫码配对 -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.CAMERA" />
+
+    <!-- P6 裁定：明文豁免无法按域名收窄——中继地址是用户可配置的任意
+         ws(s):// 主机（network_security_config 无法枚举动态域名），且 E2E
+         密文本身就是安全边界（NFR-M1 不依赖 TLS）。保留全局豁免并在此
+         声明理由；若未来中继固定域名/升级 TLS，再切换为定向豁免。 -->
     <application
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"
+        android:usesCleartextTraffic="true"
         android:theme="@style/Theme.EgoSyncCompanion">
 
         <activity

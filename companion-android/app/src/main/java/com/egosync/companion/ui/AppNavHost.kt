@@ -146,17 +146,24 @@ fun AppNavHost(container: AppModelContainer) {
 private fun PairingRoute(navController: NavHostController, container: AppModelContainer) {
     val vm: com.egosync.companion.pairing.PairingViewModel = viewModel(
         factory = viewModelFactory {
-            initializer { com.egosync.companion.pairing.PairingViewModel(container.connection) }
+            initializer {
+                com.egosync.companion.pairing.PairingViewModel(
+                    container.connection,
+                    container.pairingConnector,
+                )
+            }
         }
     )
     val step by vm.step.collectAsState()
     val connectStage by vm.connectStage.collectAsState()
+    val waitDesktopConfirm by vm.waitDesktopConfirm.collectAsState()
+    val pairingError by vm.pairingError.collectAsState()
 
     com.egosync.companion.pairing.PairingScreen(
         step = step,
         connectStage = connectStage,
         onStartScan = vm::startScan,
-        onScanCompleted = vm::onScanCompleted,
+        onScanCompleted = vm::onQrScanned,
         onBack = vm::back,
         onEnterApp = {
             container.completePairing()
@@ -167,6 +174,8 @@ private fun PairingRoute(navController: NavHostController, container: AppModelCo
                 launchSingleTop = true
             }
         },
+        waitDesktopConfirm = waitDesktopConfirm,
+        pairingError = pairingError,
     )
 }
 

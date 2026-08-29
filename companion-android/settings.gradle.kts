@@ -17,6 +17,8 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // noise-java（JitPack 固定 commit，与 12.1 黄金向量同源）
+        maven("https://jitpack.io")
     }
 }
 

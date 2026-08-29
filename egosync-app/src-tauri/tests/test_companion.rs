@@ -124,8 +124,8 @@ where
 async fn qr_payload_four_fields_contract() {
     // WHY: QR 是手机唯一配对入口——四字段任一缺失/错位，手机无法握手。
     let (_pool, state, _port, _priv, pub_key, _dir) = setup_listener().await;
-    let payload = companion_pairing::generate_qr_payload(&pub_key);
-    assert!(payload.relay_addr.is_none(), "V1 relay_addr 必须为空");
+    let payload = companion_pairing::generate_qr_payload(&pub_key, None);
+    assert!(payload.relay_addr.is_none(), "未配置中继时 relay_addr 必须为空");
     assert!(!payload.desktop_static_pubkey.is_empty());
     assert!(!payload.relay_id.is_empty());
     assert!(!payload.pairing_nonce.is_empty());
@@ -694,4 +694,166 @@ async fn reconnect_replaces_stale_session_state() {
 
     drop(ws2);
     wait_for(|| async { get_status(&pool, &state).await.unwrap().listening }, 15000, "新连接断开后回 Listening").await;
+}
+
+// ── 中继路径（Story 12.4 AC4）──
+
+/// 进程内拉起 relay（复用 `relay_server::build_router`，完整路由零裁剪）。
+async fn spawn_relay() -> u16 {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind relay");
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        axum::serve(listener, relay_server::build_router())
+            .await
+            .expect("relay serve");
+    });
+    port
+}
+
+/// 经中继转发态取下一条 binary（跳过 relay keepalive 的 Ping/Pong——
+/// tungstenite 自动应答但仍会透传给应用层，与业务帧不可混读）。
+async fn next_binary(
+    ws: &mut WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
+) -> Vec<u8> {
+    loop {
+        match ws.next().await {
+            Some(Ok(Message::Binary(data))) => return data.to_vec(),
+            Some(Ok(Message::Ping(_) | Message::Pong(_))) => continue,
+            Some(Ok(Message::Close(_))) | Some(Err(_)) | None => {
+                panic!("中继连接在等待业务帧时关闭/出错")
+            }
+            Some(Ok(_)) => panic!("转发态收到非 binary 帧"),
+        }
+    }
+}
+
+/// 模拟手机完成中继鉴权：register(text) 已由调用方发送，
+/// 中继为 initiator（m1→m2→m3），手机以真实静态私钥作 responder 应答。
+async fn relay_phone_auth(
+    ws: &mut WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
+    phone_priv: &[u8],
+) {
+    let m1 = next_binary(ws).await;
+    let mut responder = HandshakeSession::responder(phone_priv).expect("responder");
+    responder.read_message(&m1).expect("read m1");
+    let m2 = responder.write_message(&[]).expect("write m2");
+    ws.send(Message::binary(m2)).await.expect("send m2");
+    let m3 = next_binary(ws).await;
+    responder.read_message(&m3).expect("read m3");
+    // 鉴权 transport 弃用（relay 零知识：不参与后续加密）
+    let _ = responder.into_transport();
+}
+
+#[tokio::test]
+async fn relay_path_pairs_and_pings() {
+    // WHY: 离开局域网（无 NSD）时中继是唯一承载——这条链路断一处，
+    // "出门在外手机伴侣永久离线"且用户无从定位。全链路贯通：
+    // desktop register→鉴权→转发态 → 手机 register→鉴权→E2E 握手
+    // →首配落库→PING/PONG→状态 origin=relay（与直连同源决策）。
+    let relay_port = spawn_relay().await;
+    let relay_addr = format!("ws://127.0.0.1:{relay_port}");
+    let (pool, state, _port, _desktop_priv, desktop_pub, _dir) = setup_listener().await;
+
+    // 配置中继 + 打开配对窗口（门控与 NSD 同口径：窗口打开即允许中继注册）
+    egosync_lib::db::app_settings::set_setting(
+        &pool,
+        companion_pairing::RELAY_ADDR_SETTING_KEY,
+        &relay_addr,
+    )
+    .await
+    .expect("set relay addr");
+    state.open_pairing_window("nonce-relay".to_string()).await;
+
+    // 桌面中继客户端：setup_listener → start_companion_listener 已 spawn
+    // run_relay_client（唯一实例；多实例会因 relay 单槽替换语义互踢抖动）。
+    // 配置写入后首个慢轮询周期（≤5s）内连接中继。
+    // 手机侧重试预算（10×2.3s）覆盖该窗口。
+
+    // QR 透出真实中继地址（AC4 前提：手机扫码才知道去哪注册）
+    let payload =
+        companion_pairing::generate_qr_payload(&desktop_pub, Some(relay_addr.clone()));
+    assert_eq!(payload.relay_addr.as_deref(), Some(relay_addr.as_str()));
+
+    // 模拟手机：连中继 → register → 中继鉴权 → E2E initiator 握手（经转发）。
+    // 桌面槽位就绪前发送的 E2E m1 会被 relay 丢弃（无离线投递），故整体重试。
+    let (phone_priv, _) = generate_static_keypair().unwrap();
+    let mut t = None;
+    // 预算 14×~2.3s：覆盖桌面中继客户端首个慢轮询周期（≤5s）+ 并行测试负载
+    for attempt in 0..14 {
+        let (mut ws, _) =
+            tokio_tungstenite::connect_async(format!("{}/relay", relay_addr))
+                .await
+                .expect("phone relay connect");
+        let register = format!(
+            r#"{{"type":"register","relayId":"{}","role":"phone"}}"#,
+            payload.relay_id
+        );
+        ws.send(Message::text(register)).await.expect("register");
+        relay_phone_auth(&mut ws, &phone_priv).await;
+
+        let mut initiator = HandshakeSession::initiator(&phone_priv).expect("initiator");
+        let m1 = initiator.write_message(&[]).expect("m1");
+        ws.send(Message::binary(m1)).await.expect("send e2e m1");
+        let m2 = tokio::time::timeout(Duration::from_secs(2), next_binary(&mut ws)).await;
+        match m2 {
+            Ok(data) => {
+                initiator.read_message(&data).expect("read m2");
+                let m3 = initiator.write_message(&[]).expect("m3");
+                ws.send(Message::binary(m3)).await.expect("send m3");
+                t = Some((ws, initiator.into_transport().expect("transport")));
+                break;
+            }
+            _ => {
+                // 桌面槽位尚未就绪：断开重来（≤10 次 × ~2s）
+                tracing::debug!(attempt, "中继对端未就绪，重试");
+                sleep(Duration::from_millis(300)).await;
+            }
+        }
+    }
+    let (mut ws, mut t) = t.expect("E2E 握手应在重试预算内完成");
+
+    // app 层：HELLO → deviceInfo → pairingAuth（与直连同款序列）
+    send_frame(
+        &mut ws,
+        &mut t,
+        &Frame::Hello(HelloPayload {
+            protocol_version: PROTOCOL_VERSION,
+        }),
+    )
+    .await;
+    send_frame(
+        &mut ws,
+        &mut t,
+        &Frame::Notice(NoticePayload {
+            data: r#"{"type":"deviceInfo","deviceName":"中继测试机"}"#.to_string(),
+        }),
+    )
+    .await;
+    send_pairing_nonce(&mut ws, &mut t, "nonce-relay").await;
+
+    // 首配直接落库（confirm 仅用于换绑，与直连同源决策）
+    wait_for(
+        || async { paired_devices_db::get_all(&pool).await.unwrap().len() == 1 },
+        15000,
+        "等待中继路径配对设备落库",
+    )
+    .await;
+    let devices = paired_devices_db::get_all(&pool).await.unwrap();
+    assert_eq!(devices.len(), 1);
+    assert_eq!(devices[0].device_name, "中继测试机");
+
+    // PING/PONG 往返（转发态全双工，与直连同协议）
+    send_frame(&mut ws, &mut t, &Frame::Ping(companion_proto::frames::PingPayload {})).await;
+    let pong = tokio::time::timeout(Duration::from_secs(10), next_binary(&mut ws))
+        .await
+        .expect("等待 PONG 超时");
+    let frame = decode_frame(&pong, &mut t).expect("decode pong");
+    assert!(matches!(frame, Frame::Ping(_)), "PONG 必须是 Ping 帧");
+
+    // 状态如实反映中继来源（origin=relay，get_status 不得硬编码 direct）
+    let status = get_status(&pool, &state).await.unwrap();
+    let info = status.connected.expect("应处于 Connected");
+    assert_eq!(info.origin, "relay", "中继会话 origin 必须如实标记");
 }

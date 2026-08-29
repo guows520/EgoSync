@@ -14,6 +14,8 @@ android {
         targetSdk = 37
         versionCode = 1
         versionName = "0.1.0"
+        // Story 12.4 Task 8：androidTest 冒烟需 androidx instrumented runner
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
@@ -30,12 +32,27 @@ android {
     buildFeatures {
         compose = true
     }
+
+    testOptions {
+        unitTests {
+            // P7 编排测试在 JVM 跑真实连接客户端：成功/失败路径都会打
+            // CompanionLog（android.util.Log），stub 默认抛 "not mocked" 会让
+            // 日志调用伪装成连接失败——此处降级为 no-op 返回默认值
+            isReturnDefaultValues = true
+        }
+    }
 }
 
 kotlin {
     compilerOptions {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
+}
+
+// 单一事实源：12.1 黄金向量 fixture 由 companion-proto crate 复制而来，禁止手工拷贝副本。
+val copyNoiseVectors = tasks.register<Copy>("copyNoiseVectors") {
+    from(rootDir.resolve("../crates/companion-proto/tests/fixtures/noise_java_vectors.json"))
+    into(layout.projectDirectory.dir("src/test/resources"))
 }
 
 dependencies {
@@ -54,8 +71,34 @@ dependencies {
 
     implementation(libs.kotlinx.coroutines.android)
 
+    implementation(libs.noise.java)
+    implementation(libs.mlkit.barcode.scanning)
+    implementation(libs.androidx.camera.core)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
+    implementation(libs.okhttp)
+
     debugImplementation(libs.androidx.compose.ui.tooling)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.org.json)
+
+    // Story 12.4 Task 8：androidTest 冒烟（真 Keystore 路径 + on-device noise-java 互通）
+    androidTestImplementation(libs.junit)
+    androidTestImplementation(libs.kotlinx.coroutines.test)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+}
+
+// 复制任务写入 src/test/resources，所有消费该目录的任务（JavaRes 处理 + 测试）须显式依赖。
+tasks.matching {
+    it.name in setOf("processDebugUnitTestJavaRes", "processReleaseUnitTestJavaRes")
+}.configureEach {
+    dependsOn(copyNoiseVectors)
+}
+
+tasks.withType<Test>().configureEach {
+    dependsOn(copyNoiseVectors)
 }

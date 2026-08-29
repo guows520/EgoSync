@@ -112,23 +112,45 @@ fn hex_decode(hex: &str) -> Option<Vec<u8>> {
 
 /// 生成配对二维码 payload。
 ///
-/// V1（relay-server 属 Story 12.3）`relay_addr` 恒为 `None`，
-/// 前端如实展示「中继未部署」。
-pub fn generate_qr_payload(desktop_static_pubkey: &[u8]) -> QrPayload {
+/// `relay_addr` 来自 app_settings（`companion_relay_addr`，Story 12.4）：
+/// 未配置时为 `None`，前端/手机如实降级（离网即 Offline）。
+pub fn generate_qr_payload(desktop_static_pubkey: &[u8], relay_addr: Option<String>) -> QrPayload {
     let pubkey_hex = hex_encode(desktop_static_pubkey);
     let relay_id = hex_encode(&Sha256::digest(desktop_static_pubkey))[..16].to_string();
     QrPayload {
-        relay_addr: None,
+        relay_addr,
         desktop_static_pubkey: pubkey_hex,
         relay_id,
         pairing_nonce: uuid::Uuid::new_v4().to_string(),
     }
 }
 
-/// 命令层入口：确保静态密钥存在并产出 QR payload。
-pub fn generate_qr() -> Result<QrPayload, AppError> {
+/// 命令层入口：确保静态密钥存在、读取中继配置并产出 QR payload。
+pub async fn generate_qr(pool: &DbPool) -> Result<QrPayload, AppError> {
     let (_priv_key, pub_key) = load_or_create_static_keypair()?;
-    Ok(generate_qr_payload(&pub_key))
+    let relay_addr = get_relay_addr(pool).await?;
+    Ok(generate_qr_payload(&pub_key, relay_addr))
+}
+
+// ---------------------------------------------------------------------------
+// 中继服务器地址配置（Story 12.4，app_settings key-value 复用）
+// ---------------------------------------------------------------------------
+
+/// app_settings 中的中继服务器地址键。
+pub const RELAY_ADDR_SETTING_KEY: &str = "companion_relay_addr";
+
+/// 读取中继地址（空白视为未配置，返回 `None`）。
+pub async fn get_relay_addr(pool: &DbPool) -> Result<Option<String>, AppError> {
+    Ok(crate::db::app_settings::get_setting(pool, RELAY_ADDR_SETTING_KEY)
+        .await?
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty()))
+}
+
+/// 写入中继地址：`None`/空白清除配置（中继客户端在 ≤5s 内停止连接尝试）。
+pub async fn set_relay_addr(pool: &DbPool, relay_addr: Option<&str>) -> Result<(), AppError> {
+    let value = relay_addr.map(str::trim).filter(|v| !v.is_empty()).unwrap_or("");
+    crate::db::app_settings::set_setting(pool, RELAY_ADDR_SETTING_KEY, value).await
 }
 
 // ---------------------------------------------------------------------------
@@ -470,12 +492,21 @@ mod tests {
         // WHY: QR 是手机侧唯一配对入口——任一字段缺失/错位，手机都无法
         // 完成握手，且用户无法从 UI 察觉（表现为"扫不上"）。
         let pubkey = [7u8; 32];
-        let payload = generate_qr_payload(&pubkey);
-        assert!(payload.relay_addr.is_none(), "V1 relay_addr 必须为空（中继未部署）");
+        // 未配置中继：relay_addr 必须为 None（前端/手机如实降级）
+        let payload = generate_qr_payload(&pubkey, None);
+        assert!(payload.relay_addr.is_none(), "未配置时 relay_addr 必须为空");
         assert_eq!(payload.desktop_static_pubkey.len(), 64, "pubkey hex 应为 64 字符");
         let expected_relay_id = hex_encode(&Sha256::digest(pubkey))[..16].to_string();
         assert_eq!(payload.relay_id, expected_relay_id, "relay_id 必须是 pubkey 哈希前 16 字符");
         assert!(!payload.pairing_nonce.is_empty(), "pairing_nonce 不能为空");
+        // 配置了中继（Story 12.4）：地址必须逐字透出——手机扫码后经它注册中继
+        let with_relay =
+            generate_qr_payload(&pubkey, Some("ws://relay.example.com:7333".to_string()));
+        assert_eq!(
+            with_relay.relay_addr.as_deref(),
+            Some("ws://relay.example.com:7333"),
+            "relay_addr 必须原样透传，不得改写/补路径"
+        );
     }
 
     #[test]
@@ -483,8 +514,8 @@ mod tests {
         // WHY: nonce 单次有效是"QR 不能被旁人重扫"的安全底线——
         // 两次生成产出相同 nonce 意味着重放窗口被打开。
         let pubkey = [1u8; 32];
-        let a = generate_qr_payload(&pubkey);
-        let b = generate_qr_payload(&pubkey);
+        let a = generate_qr_payload(&pubkey, None);
+        let b = generate_qr_payload(&pubkey, None);
         assert_ne!(a.pairing_nonce, b.pairing_nonce);
     }
 

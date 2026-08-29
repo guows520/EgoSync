@@ -56,6 +56,8 @@ egosync-app/tests/e2e/reports/
 
 # companion-proto 协议 crate 本地构建产物
 crates/companion-proto/target/
+# relay-server 本地构建产物（独立 Cargo 项目，同上隔离）
+relay-server/target/
 # noise-java 互验 harness 运行时产物（jar 与 class 文件）
 crates/companion-proto/interop/noise-java/lib/
 crates/companion-proto/interop/noise-java/classes/

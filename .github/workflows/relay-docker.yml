@@ -1,0 +1,84 @@
+name: relay-docker
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - relay-server/**
+      - crates/companion-proto/**
+      - .github/workflows/relay-docker.yml
+  pull_request:
+    paths:
+      - relay-server/**
+      - crates/companion-proto/**
+      - .github/workflows/relay-docker.yml
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── job1：cargo test（单测 + 集成 + 负载冒烟） ──
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: relay-server -> target
+
+      - name: Run relay-server tests
+        working-directory: relay-server
+        run: cargo test --all-targets
+
+  # ── job2：构建并发布 Docker 镜像（main 分支推送时发 ghcr；PR 仅构建） ──
+  docker:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve image name (lowercase owner + sha tag)
+        id: image
+        run: |
+          # GHCR 要求镜像名小写；github.repository_owner 可能含大写 → toLower
+          OWNER_LC="${GITHUB_REPOSITORY_OWNER,,}"
+          SHORT_SHA="${GITHUB_SHA::7}"
+          echo "name=ghcr.io/${OWNER_LC}/egosync-relay" >> "$GITHUB_OUTPUT"
+          echo "sha_tag=sha-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push relay image
+        uses: docker/build-push-action@v6
+        with:
+          # path 依赖要求 context 为仓库根（见 relay-server/Dockerfile 头注）
+          context: .
+          file: relay-server/Dockerfile
+          push: ${{ github.event_name == 'push' }}
+          tags: |
+            ${{ steps.image.outputs.name }}:latest
+            ${{ steps.image.outputs.name }}:${{ steps.image.outputs.sha_tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

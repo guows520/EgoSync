@@ -260,3 +260,12 @@ All items resolved in the same session:
 
 - **自定义时间窗的绝对锚定与未来日期提示（原型粒度降级的接线期事项）**：`ActivityWindow.Custom` 以相对天数（oldest/newestDaysAgo）入状态，跨午夜后标签与窗口整体前移一天（非用户操作所致）；`toDaysAgo()` 把 DatePicker 可选的未来日期静默钳为今天。当前 mock 分桶模型下均为有意降级（Design Notes 已声明），接真实 SNAPSHOT 帧数据时应改为携带绝对日期并给未来日期行内提示。位置：`companion-android/app/src/main/java/com/egosync/companion/ui/dashboard/DashboardScreen.kt`（TimeFilterChip/toDaysAgo）。
 - **新 UI 的 densitySpec 接线观察项**：仪表盘活动统计节与设置页主动性节沿用固定 dp，未接 `densitySpec(InfoDensity)`；与全 app 多数既有组件一致（仅 3 处用 densitySpec），「沿用既有约定」条款两种解读下倾向合规。若后续统一密度双模式改造，这两节应一并纳入。位置：`companion-android/app/src/main/java/com/egosync/companion/ui/dashboard/DashboardScreen.kt:417`、`ui/settings/SettingsScreen.kt:150`。
+
+## Deferred from: code review of 12-3-relay-server-stateless-relay-and-docker (2026-08-28)
+
+- **每帧转发抢全局 Mutex**（relay-server/src/forward.rs:63）：转发循环对每条 binary 帧调用 `registry.peer_sender()` 抢全局 tokio Mutex，数百并发下锁竞争为吞吐瓶颈。修法为本地缓存 peer sender + 槽位替换时刷新（`register()` 返回值正可用于此，当前被丢弃）。AC5 已由现有 20 对测试满足，待 LOADTEST.md 命令修正后有压测证据证瓶颈再优化。
+- **全局连接数上限/速率限制**（relay-server/src/lib.rs:38-43）：无连接信号量/注册表条目上限，公网恶意海量连接可致内存无上限增长。AC5 只要求「数百并发」而非防御海量，属 V1 公网加固项（与 phone 槽抢占防御的 12.4 增强路径相关联）。
+
+## Deferred from: code review of 12-4-android-scan-pairing-and-tri-state-connection (2026-08-28)
+
+- **中继槽位抢占 DoS 与桌面重连放大**（companion-android/.../connection/RelayClient.kt + egosync-app/src-tauri/src/services/companion_connection.rs::relay_connect_and_serve/run_relay_client）：中继鉴权零知识，任何持有 16-hex relayId 的一方可注册为 phone 并把真手机挤出单槽位；桌面被拒后 `return Ok(())` + 无限退避重连，放大为持久握手-拒绝-重连 churn，可致永久中继拒服。根治需改 relay-server（phone 槽换绑/速率限制/连接数上限），与本清单 12.3 评审的「全局连接数上限/速率限制」项合并；V1 本地优先单设备、relayId 仅经面对面扫码流转，暂受风险。

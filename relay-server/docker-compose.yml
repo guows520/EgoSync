@@ -1,0 +1,29 @@
+# relay-server 本地编排（AC4）：docker compose up 后 /healthz 探活通过。
+#
+# 在 relay-server/ 目录下执行：docker compose up -d
+# 探活验证：curl http://localhost:7333/healthz
+
+services:
+  relay:
+    build:
+      # path 依赖要求 build context 为仓库根（见 Dockerfile 头注）
+      context: ..
+      dockerfile: relay-server/Dockerfile
+    ports:
+      - "${RELAY_PORT:-7333}:7333"
+    environment:
+      RELAY_HOST: 0.0.0.0
+      RELAY_PORT: 7333
+      RUST_LOG: ${RUST_LOG:-info}
+    # 评审加固（与零磁盘写纪律自洽：中继运行时本就无任何写路径）
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:7333/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped

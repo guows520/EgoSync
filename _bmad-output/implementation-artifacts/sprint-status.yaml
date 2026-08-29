@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-21
-last_updated: 2026-08-29T09:10:00+08:00
+last_updated: 2026-08-29T08:35:00+08:00
 project: "探索 (EgoSync)"
 project_key: NOKEY
 tracking_system: file-system
@@ -185,15 +185,15 @@ development_status:
   epic-12: in-progress
   12-1-companion-proto-crate-frame-schema-and-interop: done
   12-2-desktop-pairing-and-connection-service: done
-  12-3-relay-server-stateless-relay-and-docker: backlog
-  12-4-android-scan-pairing-and-tri-state-connection: backlog
+  12-3-relay-server-stateless-relay-and-docker: done
+  12-4-android-scan-pairing-and-tri-state-connection: done
   epic-12-retrospective: optional
 
   # ============================================================
   # Epic 13: 手机实时视图与远程操作 (Live View & Remote Commands)
   # ============================================================
-  epic-13: backlog
-  13-1-desktop-snapshot-engine-and-state-push: backlog
+  epic-13: in-progress
+  13-1-desktop-snapshot-engine-and-state-push: review
   13-2-mobile-realtime-snapshot-view: backlog
   13-3-command-channel-and-streaming-chat: backlog
   epic-13-retrospective: optional

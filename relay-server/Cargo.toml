@@ -1,0 +1,20 @@
+[package]
+name = "relay-server"
+version = "0.1.0"
+edition = "2021"
+description = "EgoSync 手机伴侣无状态加密中继：零知识纯转发 + 内存注册表"
+
+[dependencies]
+axum = { version = "0.8", features = ["ws"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time", "net", "sync"] }
+companion-proto = { path = "../crates/companion-proto" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+# 与 axum 0.8 内建的 tokio-tungstenite 同版本（Cargo.lock 实际解析为 0.29），避免双版本并存
+tokio-tungstenite = "0.29"
+futures-util = "0.3"

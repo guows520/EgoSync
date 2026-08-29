@@ -6,7 +6,7 @@ import com.egosync.companion.AppModelContainer
 import com.egosync.companion.sync.ChatMessage
 import com.egosync.companion.sync.RoleProposal
 import com.egosync.companion.sync.RoleProposalState
-import com.egosync.companion.sync.SnapshotStore
+import com.egosync.companion.ui.onboarding.onboardingRoleProposal
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -45,7 +45,7 @@ data class OnboardingUiState(
         /** 输入 placeholder 随步切换。索引直接用 step（镜像桌面 min(step, len-1)）：
          *  首条 placeholder 桌面本身不展示（step 从 1 起），逐字镜像而非“修正”。 */
         fun placeholderFor(step: Int): String =
-            SnapshotStore.onboardingPlaceholders[step.coerceIn(0, SnapshotStore.onboardingPlaceholders.lastIndex)]
+            onboardingPlaceholders[step.coerceIn(0, onboardingPlaceholders.lastIndex)]
     }
 }
 
@@ -90,7 +90,7 @@ class OnboardingViewModel(private val container: AppModelContainer) : ViewModel(
         delay(700)
         _uiState.update { it.copy(thinking = false) }
 
-        val replies = container.snapshotStore.onboardingReplies
+        val replies = onboardingReplies
         val full = replies[replyIndex % replies.size]
         replyIndex++
 
@@ -101,7 +101,7 @@ class OnboardingViewModel(private val container: AppModelContainer) : ViewModel(
         completedRounds++
         // FR-5：第 2 轮完整回复后浮现角色涌现提案卡（一次性守卫）
         if (completedRounds == OnboardingUiState.PROPOSAL_ROUND && _uiState.value.roleProposal == null) {
-            _uiState.update { it.copy(roleProposal = container.snapshotStore.roleProposal) }
+            _uiState.update { it.copy(roleProposal = onboardingRoleProposal) }
         }
     }
 
@@ -196,7 +196,7 @@ class OnboardingViewModel(private val container: AppModelContainer) : ViewModel(
     private fun greetingMessage(): ChatMessage = ChatMessage(
         id = "ob-greeting",
         fromButler = true,
-        text = container.snapshotStore.onboardingGreeting,
+        text = onboardingGreeting,
     )
 
     private fun userMessage(text: String): ChatMessage = ChatMessage(

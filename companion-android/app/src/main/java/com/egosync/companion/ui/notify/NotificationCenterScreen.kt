@@ -37,7 +37,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.egosync.companion.sync.NoticeItem
 import com.egosync.companion.sync.NoticeLevel
-import com.egosync.companion.sync.SnapshotStore
+import com.egosync.companion.ui.previewNotices
 import com.egosync.companion.ui.theme.BrandBlue
 import com.egosync.companion.ui.theme.BrandError
 import com.egosync.companion.ui.theme.BrandGreen
@@ -259,7 +259,7 @@ private fun NoticeRow(
 private fun NotificationCenterScreenPreview() {
     EgoSyncTheme {
         NotificationCenterScreen(
-            notices = SnapshotStore.notices,
+            notices = previewNotices,
             engineAvailable = true,
             onBack = {},
             onMarkAllRead = {},

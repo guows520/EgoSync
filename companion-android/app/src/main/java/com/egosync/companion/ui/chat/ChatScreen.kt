@@ -55,7 +55,7 @@ import com.egosync.companion.sync.DecompositionState
 import com.egosync.companion.sync.ExecutionTraceBlock
 import com.egosync.companion.sync.RoleCard
 import com.egosync.companion.sync.RoleProposalState
-import com.egosync.companion.sync.SnapshotStore
+import com.egosync.companion.ui.previewRoles
 import com.egosync.companion.sync.TaskDecompositionProposal
 import com.egosync.companion.sync.ToolStatus
 import com.egosync.companion.ui.components.RoleConfirmDialog
@@ -81,6 +81,7 @@ import java.util.Locale
 fun ChatScreen(
     uiState: ChatUiState,
     engineAvailable: Boolean,
+    dataCutoffLabel: String? = null,
     onSendMessage: (String) -> Unit,
     onActionCardRespond: (cardId: String, confirmed: Boolean) -> Unit,
     onRoleSelected: (roleId: String?) -> Unit,
@@ -134,6 +135,29 @@ fun ChatScreen(
             onSelectConversation = onSelectConversation,
             onDeleteConversation = onDeleteConversation,
         )
+
+        // T7：conversations 域被 10MB 截断时明示数据截止（不以缺失冒充完整，AC4）
+        if (dataCutoffLabel != null) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    LucideIcons.AlertTriangle,
+                    contentDescription = null,
+                    modifier = Modifier.size(11.dp),
+                    tint = MaterialTheme.colorScheme.error,
+                )
+                Spacer(Modifier.size(4.dp))
+                Text(
+                    "会话数据截至 $dataCutoffLabel（更早消息未随快照下发）",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+        }
 
         // FR-20 角色切换器：桌面 64px 侧栏的移动语义适配（顶部水平滚动）
         RoleSwitcherRow(
@@ -970,7 +994,7 @@ private fun ChatScreenStreamingPreview() {
         ChatScreen(
             uiState = ChatUiState(
                 messages = listOf(
-                    SnapshotStore.initialChat.first(),
+                    previewInitialChat.first(),
                     ChatMessage("u1", false, "今天下午都有什么安排？"),
                     ChatMessage("b2", true, "下午 2 点是产品评审，材料已备好。四点", streaming = true),
                 ),
@@ -998,13 +1022,13 @@ private fun ChatScreenStreamingPreview() {
 @Composable
 private fun ChatScreenRoleViewPreview() {
     EgoSyncTheme {
-        val seed = SnapshotStore.roleChatSeeds.getValue("role-pm")
+        val seed = previewRoleChatSeeds.getValue("role-pm")
         ChatScreen(
             uiState = ChatUiState(
                 messages = seed,
                 activeRoleId = "role-pm",
-                roles = SnapshotStore.roles,
-                traceByMessageId = mapOf(seed.first().id to SnapshotStore.executionTrace),
+                roles = previewRoles,
+                traceByMessageId = mapOf(seed.first().id to executionTrace),
             ),
             engineAvailable = true,
             onSendMessage = {},
@@ -1027,8 +1051,8 @@ private fun ChatScreenRoleProposalPreview() {
     EgoSyncTheme {
         ChatScreen(
             uiState = ChatUiState(
-                messages = SnapshotStore.initialChat,
-                roleProposal = SnapshotStore.roleProposal,
+                messages = previewInitialChat,
+                roleProposal = roleProposal,
             ),
             engineAvailable = true,
             onSendMessage = {},
@@ -1050,7 +1074,7 @@ private fun ChatScreenRoleProposalPreview() {
 private fun RoleConfirmDialogPreview() {
     EgoSyncTheme {
         RoleConfirmDialog(
-            proposal = SnapshotStore.roleProposal,
+            proposal = roleProposal,
             onConfirm = { _, _, _, _ -> },
             onDismiss = {},
         )

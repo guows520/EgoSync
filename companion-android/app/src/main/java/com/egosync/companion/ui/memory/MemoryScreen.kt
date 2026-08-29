@@ -40,8 +40,6 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.egosync.companion.sync.MemoryCategory
 import com.egosync.companion.sync.MemoryItem
-import com.egosync.companion.sync.MemorySourceMessage
-import com.egosync.companion.sync.SnapshotStore
 import com.egosync.companion.sync.formatMemoryTime
 import com.egosync.companion.ui.icons.LucideIcons
 import com.egosync.companion.ui.theme.EgoSyncTheme
@@ -105,9 +103,10 @@ fun MemoryScreen(
             Spacer(Modifier.height(12.dp))
 
             if (visible.isEmpty()) {
-                // 空态文案镜像桌面（role 视图分支）
+                // AC5 契约空态：记忆内容永不进入快照——显示占位而非伪数据，
+                // 记忆查询/溯源走指令通道（13.3 接入）
                 Text(
-                    "还没有记忆，多和这个角色聊聊吧",
+                    "记忆通道尚未接通：内容不随快照下发，查询与溯源将在指令通道就绪后开放",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -170,8 +169,6 @@ private fun MemoryCard(
     onCancelForget: () -> Unit,
     onConfirmForget: () -> Unit,
 ) {
-    val sources = SnapshotStore.memorySources[memory.id].orEmpty()
-
     Surface(
         color = MaterialTheme.colorScheme.surface,
         shape = RoundedCornerShape(12.dp), // 桌面 rounded-xl
@@ -214,10 +211,15 @@ private fun MemoryCard(
             // FR-8 来源触发行
             SourceTriggerRow(memory = memory, expanded = expanded, onClick = onToggleSource)
 
-            // FR-8 展开来源列表
+            // FR-8 展开来源列表：来源对话不随快照下发（AC5 同源裁决），
+            // 展开先明示占位（AC6 视觉基准的交互骨架保留）
             if (expanded) {
                 Spacer(Modifier.size(10.dp))
-                SourceMessageList(sources = sources)
+                Text(
+                    "来源对话待接指令通道后可查",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }
@@ -329,83 +331,6 @@ private fun SourceTriggerRow(memory: MemoryItem, expanded: Boolean, onClick: () 
             }
         }
     }
-}
-
-/** 来源消息列表（镜像桌面：左 indigo 竖线 + 消息卡；空来源 → 已不可用）。 */
-@Composable
-private fun SourceMessageList(sources: List<MemorySourceMessage>) {
-    if (sources.isEmpty()) {
-        // 桌面三分支归一文案（加载失败/来源为空均显示此句）
-        Text(
-            "来源对话已不可用",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        return
-    }
-    Row(Modifier.height(IntrinsicSize.Min)) {
-        // 左竖线（桌面 border-l-2 border-indigo-300 pl-4）
-        Box(
-            Modifier
-                .width(2.dp)
-                .fillMaxHeight()
-                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.4f))
-        )
-        Spacer(Modifier.size(12.dp))
-        Column(
-            Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            sources.forEach { message ->
-                SourceMessageCard(message)
-            }
-        }
-    }
-}
-
-/** 来源消息卡：isSource 高亮着色（桌面 indigo-50/70 底 + border-indigo-200）。 */
-@Composable
-private fun SourceMessageCard(message: MemorySourceMessage) {
-    Surface(
-        color = if (message.isSource) MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
-        else MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(8.dp),
-        border = if (message.isSource) {
-            BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f))
-        } else {
-            BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
-        },
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(Modifier.padding(10.dp)) {
-            Row(Modifier.fillMaxWidth()) {
-                Text(
-                    roleLabel(message.role),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-                Spacer(Modifier.weight(1f))
-                Text(
-                    formatMemoryTime(message.createdAt),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Spacer(Modifier.size(4.dp))
-            Text(
-                message.content,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-        }
-    }
-}
-
-/** 镜像桌面 roleLabel：user→用户、assistant→助手。 */
-private fun roleLabel(role: String): String = when (role) {
-    "user" -> "用户"
-    "assistant" -> "助手"
-    else -> role
 }
 
 // ── Preview ────────────────────────────────────────────────────────────

@@ -1,15 +1,16 @@
 package com.egosync.companion.ui.memory
 
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import com.egosync.companion.AppModelContainer
 import com.egosync.companion.sync.MemoryCategory
 import com.egosync.companion.sync.MemoryItem
 import com.egosync.companion.sync.RoleCard
-import com.egosync.companion.sync.SnapshotStore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 
 data class MemoryUiState(
     val role: RoleCard? = null,
@@ -31,26 +32,40 @@ data class MemoryUiState(
 
     companion object {
         fun sample(roleId: String = "role-pm") = MemoryUiState(
-            role = SnapshotStore.roles.find { it.id == roleId },
-            memories = SnapshotStore.memoriesOf(roleId),
+            // Preview 样例：记忆内容永不入快照（AC5），sample 呈现空态占位
+            role = com.egosync.companion.ui.previewRoles.find { it.id == roleId },
+            memories = emptyList(),
         )
     }
 }
 
 /**
- * 记忆屏状态机（FR-8 查询溯源 / FR-9 选择性遗忘）：按角色载入 mock 记忆，
- * 类别筛选 / 来源展开 / 遗忘确认流。遗忘为内存态移除（mock 无后端调用）；
- * 接入真实连接层后改为 COMMAND 帧驱动。
+ * 记忆屏状态机（FR-8 查询溯源 / FR-9 选择性遗忘）。
+ * 13.2 契约：记忆内容永不进入快照（AC5）——memoriesOf 恒为空，
+ * 记忆屏呈现「待接指令通道」占位态；查询/遗忘走指令通道（13.3 接入）。
+ * 角色卡随快照即时刷新（AC2），保留筛选/展开/遗忘交互骨架。
  */
-class MemoryViewModel(container: AppModelContainer, roleId: String) : ViewModel() {
+class MemoryViewModel(private val container: AppModelContainer, roleId: String) : ViewModel() {
 
     private val _uiState = MutableStateFlow(
-        MemoryUiState(
-            role = container.snapshotStore.roles.find { it.id == roleId },
-            memories = container.snapshotStore.memoriesOf(roleId),
-        )
+        MemoryUiState(role = container.snapshotStore.roles.find { it.id == roleId })
     )
     val uiState: StateFlow<MemoryUiState> = _uiState.asStateFlow()
+
+    init {
+        // AC2：快照全量替换即时刷新角色卡（记忆列表本身不受影响，AC5 恒空）
+        viewModelScope.launch {
+            container.snapshotStore.state.collect { state ->
+                when {
+                    state.loaded -> _uiState.update {
+                        it.copy(role = container.snapshotStore.roles.find { r -> r.id == roleId })
+                    }
+                    // unpair/密钥失效自愈（store.clear 不导航）：角色卡一并清空（评审 P2）
+                    else -> _uiState.update { it.copy(role = null) }
+                }
+            }
+        }
+    }
 
     /** 类别筛选（镜像桌面 setSelectedCategory；切换时重置展开/确认态，镜像桌面 useEffect）。 */
     fun setCategory(category: MemoryCategory?) {

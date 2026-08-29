@@ -66,16 +66,38 @@ class RealConnectionClient internal constructor(
      */
     private val ioDispatcher: CoroutineContext = Dispatchers.IO,
     private val wsOpener: suspend (String, OkHttpClient, Long) -> WsSession = ::openWsSession,
+    /**
+     * 快照帧消费者工厂（13.2 T3 注入缝）：每会话一个实例（残缺分帧序列不跨
+     * 会话）；生产装配由 AppModelContainer 注入 SnapshotFrameHandler。
+     */
+    private val frameConsumerFactory: () -> FrameConsumer = { FrameConsumer.NOOP },
+    /** 降级态快照信息提供者（13.2 T7）：Offline 状态的缓存存在性/数据截止时间。 */
+    private val offlineInfo: () -> OfflineSnapshotInfo = { OfflineSnapshotInfo(false, null) },
+    /**
+     * 降级信息流源（13.2 评审 P7）：offlineInfo 为 pull 式闭包——缓存异步加载
+     * 完成后需此流重发才驱动 combine 重算 Offline 值，冷启动不再误报「无缓存」。
+     * 生产装配传 snapshotStore.state；默认恒 Unit（行为同旧版，测试免注入）。
+     */
+    private val offlineInfoTick: StateFlow<*> = MutableStateFlow(Unit),
 ) : ConnectionClient, PairingConnector {
 
     /** 生产装配：从 Android Context 组装全部依赖（AppModelContainer 唯一换装点，UX-M2）。 */
-    constructor(context: Context, scope: CoroutineScope) : this(
+    constructor(
+        context: Context,
+        scope: CoroutineScope,
+        frameConsumerFactory: () -> FrameConsumer = { FrameConsumer.NOOP },
+        offlineInfo: () -> OfflineSnapshotInfo = { OfflineSnapshotInfo(false, null) },
+        offlineInfoTick: StateFlow<*> = MutableStateFlow(Unit),
+    ) : this(
         scope = scope,
         store = PairingStateStore(
             context.getSharedPreferences(PairingStateStore.PREFS_NAME, Context.MODE_PRIVATE),
         ),
         secrets = PairingSecrets(context),
         nsd = NsdDiscovery(context),
+        frameConsumerFactory = frameConsumerFactory,
+        offlineInfo = offlineInfo,
+        offlineInfoTick = offlineInfoTick,
     )
 
     private val relay: RelayClient = relayClient ?: RelayClient(wsClient)
@@ -85,17 +107,19 @@ class RealConnectionClient internal constructor(
 
     /** 裁决 7：Debug 档位覆盖状态输出（解除配对/进程重启复位自动）。 */
     override val state: StateFlow<ConnectionState> =
-        combine(liveState, debugMode) { live, debug ->
+        // offlineInfoTick 入 combine（评审 P7）：缓存加载完成 → tick 重发 →
+        // fillOffline/offlineState 重算，Offline 值不再滞留「无缓存」
+        combine(liveState, debugMode, offlineInfoTick) { live, debug, _ ->
             debug?.let { mode ->
                 when (mode) {
                     DebugConnectionMode.DIRECT -> ConnectionState.Direct
                     DebugConnectionMode.RELAY -> ConnectionState.Relay
                     DebugConnectionMode.OFFLINE ->
                         ConnectionState.Offline(snapshotAvailable = false, dataAsOf = null)
-                    DebugConnectionMode.DEGRADED ->
-                        ConnectionState.Offline(snapshotAvailable = true, dataAsOf = null)
+                    // 降级档呈现真实缓存态（有缓存才有数据截止时间，T7）
+                    DebugConnectionMode.DEGRADED -> offlineState()
                 }
-            } ?: live
+            } ?: fillOffline(live)
         }.stateIn(scope, SharingStarted.Eagerly, liveState.value)
 
     private val _paired = MutableStateFlow(store.paired)
@@ -256,7 +280,7 @@ class RealConnectionClient internal constructor(
         }
         CompanionLog.warn("Connection", "等待桌面确认换绑超时")
         _pairingProgress.value = PairingProgress.Failed("等待桌面端确认超时，请重新扫码")
-        liveState.value = ConnectionState.Offline(snapshotAvailable = false, dataAsOf = null)
+        liveState.value = offlineState()
     }
 
     /**
@@ -282,7 +306,7 @@ class RealConnectionClient internal constructor(
             else -> "配对未完成，请在桌面端重新生成二维码后重试"
         }
         _pairingProgress.value = PairingProgress.Failed(message)
-        liveState.value = ConnectionState.Offline(snapshotAvailable = false, dataAsOf = null)
+        liveState.value = offlineState()
         nsd.stopDiscovery()
     }
 
@@ -294,7 +318,7 @@ class RealConnectionClient internal constructor(
         if (machine != null) {
             machine.goOffline()
         } else {
-            liveState.value = ConnectionState.Offline(snapshotAvailable = false, dataAsOf = null)
+            liveState.value = offlineState()
         }
         CompanionLog.warn("Connection", "本机配对密钥已失效，已清除配对态，请重新扫码配对")
     }
@@ -314,8 +338,9 @@ class RealConnectionClient internal constructor(
             }
         }
         // P1：状态机输出接线——machine.state 收集进 liveState，UI 订阅的三态
-        // 才真正随承载变化（此前 machine 为编排局部实例，输出被整体丢弃）
-        launch { machine.state.collect { liveState.value = it } }
+        // 才真正随承载变化（此前 machine 为编排局部实例，输出被整体丢弃）；
+        // T7：Offline 值经 fillOffline 填充真实缓存存在性/数据截止时间
+        launch { machine.state.collect { liveState.value = fillOffline(it) } }
         // P17：relayAddr 不再启动时快照固化——runRelayLoop 每次尝试现读
         val relayLoop = if (store.relayAddr != null) {
             launch { runRelayLoop(machine, relaySignal) }
@@ -497,6 +522,8 @@ class RealConnectionClient internal constructor(
 
     /** 会话循环：30s 无入站即发 PING 保活；协议错误/通道关闭即退出（上层进退避）。 */
     private suspend fun startSessionLoop(session: WsSession) {
+        // T3：每会话一个帧消费者——承载切换/重连时会话循环重建，残缺分帧序列不跨会话
+        val frameConsumer = frameConsumerFactory()
         try {
             while (currentCoroutineContext().isActive) {
                 val bytes = withTimeoutOrNull(PING_INTERVAL_MS) { session.incoming.receive() }
@@ -515,7 +542,14 @@ class RealConnectionClient internal constructor(
                     is Frame.Ping -> Unit
                     is Frame.Hello -> Unit
                     is Frame.Notice -> Unit
-                    else -> Unit // SNAPSHOT/COMMAND 等帧 13.x 消费，12.4 忽略
+                    // 13.2 T3：快照帧交注入的消费者（载荷级错误由消费者内部吞掉，
+                    // 不杀会话——下一个全量序列自愈）
+                    // 评审 P6：解析移出主线程——本循环跑在 scope（Main.immediate）上，
+                    // 10MB 快照的 base64 解码/拼接/JSON 解析在主线程会掉帧乃至 ANR
+                    is Frame.Snapshot -> withContext(ioDispatcher) { frameConsumer.onFrame(frame) }
+                    is Frame.StateDelta -> withContext(ioDispatcher) { frameConsumer.onFrame(frame) }
+                    // COMMAND/COMMAND_RESULT/STREAM_TOKEN 为 13.3 指令通道消费方
+                    else -> Unit
                 }
             }
         } catch (e: CancellationException) {
@@ -530,11 +564,24 @@ class RealConnectionClient internal constructor(
 
     private fun initialState(): ConnectionState =
         if (store.paired) {
-            // 启动即未连上——如实 Offline（AC5：不误报在线）
-            ConnectionState.Offline(snapshotAvailable = false, dataAsOf = null)
+            // 启动即未连上——如实 Offline（AC5：不误报在线），缓存存在性经 T7 填充
+            offlineState()
         } else {
             ConnectionState.Direct
         }
+
+    /** Offline 态填充真实缓存存在性/数据截止时间（T7：原硬编码 (false, null)）。 */
+    private fun offlineState(): ConnectionState {
+        val info = offlineInfo()
+        return ConnectionState.Offline(
+            snapshotAvailable = info.snapshotAvailable,
+            dataAsOf = info.dataAsOf,
+        )
+    }
+
+    /** 非 Offline 态原样透传；Offline 态填真实缓存值。 */
+    private fun fillOffline(state: ConnectionState): ConnectionState =
+        if (state is ConnectionState.Offline) offlineState() else state
 
     private companion object {
         const val NSD_WAIT_MS = 12_000L

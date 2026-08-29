@@ -34,7 +34,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.egosync.companion.sync.BriefingActionPoint
-import com.egosync.companion.sync.SnapshotStore
+import com.egosync.companion.sync.MorningBriefing
+import com.egosync.companion.ui.previewBriefing
 import com.egosync.companion.ui.theme.BrandGreen
 import com.egosync.companion.ui.theme.EgoSyncTheme
 
@@ -44,11 +45,12 @@ import com.egosync.companion.ui.theme.EgoSyncTheme
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BriefingScreen(
+    briefing: MorningBriefing,
+    dataCutoffLabel: String? = null,
     onBack: () -> Unit,
     onRespondActionPoint: (pointId: String, confirmed: Boolean) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
 ) {
-    val briefing = SnapshotStore.briefing
     // 行动点决策的本地状态（mock）：confirmed/null→待处理
     val decided = remember { mutableStateMapOf<String, Boolean>() }
 
@@ -79,61 +81,100 @@ fun BriefingScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(start = 4.dp),
             )
-            Spacer(Modifier.height(10.dp))
-
-            // 问候段（管家语气）
-            Surface(
-                color = MaterialTheme.colorScheme.surface,
-                shape = RoundedCornerShape(10.dp),
-            ) {
-                Row(Modifier.padding(14.dp)) {
-                    Icon(LucideIcons.Home, contentDescription = "管家", modifier = Modifier.size(24.dp))
-                    Spacer(Modifier.size(12.dp))
+            // 截断提示：桌面因域被截断而未含完整数据时明示（§5 诚实降级）
+            if (dataCutoffLabel != null) {
+                Spacer(Modifier.height(4.dp))
+                Row(
+                    Modifier.padding(start = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        LucideIcons.AlertTriangle,
+                        contentDescription = null,
+                        modifier = Modifier.size(12.dp),
+                        tint = MaterialTheme.colorScheme.error,
+                    )
+                    Spacer(Modifier.size(4.dp))
                     Text(
-                        briefing.greeting,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurface,
+                        "数据截至 $dataCutoffLabel（桌面端部分域被截断）",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
                     )
                 }
             }
+            Spacer(Modifier.height(10.dp))
 
-            Spacer(Modifier.height(16.dp))
-
-            // 分节内容
-            briefing.sections.forEach { section ->
-                Text(
-                    section.title,
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.padding(start = 4.dp, bottom = 6.dp),
-                )
+            if (briefing.date.isEmpty()) {
+                // 快照未加载/今日无简报：诚实占位（NFR-M3），不以空问候卡冒充「桌面已出简报」（评审 P8）
                 Surface(
                     color = MaterialTheme.colorScheme.surface,
                     shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(
-                        section.body,
+                        "晨间简报尚未生成。连接桌面后，今天的简报会自动出现在这里。",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(14.dp),
                     )
                 }
-                Spacer(Modifier.height(16.dp))
-            }
-
-            // 行动点卡片（可直接确认/拒绝，无需切到角色）
-            Text(
-                "今天可以顺手定下的事",
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.padding(start = 4.dp, bottom = 6.dp),
-            )
-            briefing.actionPoints.forEach { point ->
-                val state = if (decided.containsKey(point.id)) decided[point.id] else null
-                ActionPointCard(point.copy(confirmed = state)) { confirmed ->
-                    decided[point.id] = confirmed
-                    onRespondActionPoint(point.id, confirmed)
+            } else {
+                // 问候段（管家语气）
+                Surface(
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = RoundedCornerShape(10.dp),
+                ) {
+                    Row(Modifier.padding(14.dp)) {
+                        Icon(LucideIcons.Home, contentDescription = "管家", modifier = Modifier.size(24.dp))
+                        Spacer(Modifier.size(12.dp))
+                        Text(
+                            briefing.greeting,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
                 }
-                Spacer(Modifier.height(10.dp))
+
+                Spacer(Modifier.height(16.dp))
+
+                // 分节内容
+                briefing.sections.forEach { section ->
+                    Text(
+                        section.title,
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(start = 4.dp, bottom = 6.dp),
+                    )
+                    Surface(
+                        color = MaterialTheme.colorScheme.surface,
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            section.body,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(14.dp),
+                        )
+                    }
+                    Spacer(Modifier.height(16.dp))
+                }
+
+                // 行动点卡片（可直接确认/拒绝，无需切到角色）；恒空时不渲染分区头（评审 P8）
+                if (briefing.actionPoints.isNotEmpty()) {
+                    Text(
+                        "今天可以顺手定下的事",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(start = 4.dp, bottom = 6.dp),
+                    )
+                    briefing.actionPoints.forEach { point ->
+                        val state = if (decided.containsKey(point.id)) decided[point.id] else null
+                        ActionPointCard(point.copy(confirmed = state)) { confirmed ->
+                            decided[point.id] = confirmed
+                            onRespondActionPoint(point.id, confirmed)
+                        }
+                        Spacer(Modifier.height(10.dp))
+                    }
+                }
             }
             Spacer(Modifier.height(24.dp))
         }
@@ -185,6 +226,6 @@ private fun ActionPointCard(point: BriefingActionPoint, onRespond: (Boolean) -> 
 @Composable
 private fun BriefingScreenPreview() {
     EgoSyncTheme {
-        BriefingScreen(onBack = {})
+        BriefingScreen(briefing = previewBriefing, onBack = {})
     }
 }

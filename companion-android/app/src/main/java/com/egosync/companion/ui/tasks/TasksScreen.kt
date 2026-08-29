@@ -64,7 +64,8 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.egosync.companion.sync.CreateTaskInput
 import com.egosync.companion.sync.RoleCard
-import com.egosync.companion.sync.SnapshotStore
+import com.egosync.companion.ui.previewRoles
+import com.egosync.companion.ui.previewTasks
 import com.egosync.companion.sync.TASK_OWNER_BUTLER_KEY
 import com.egosync.companion.sync.TaskItem
 import com.egosync.companion.sync.TaskOwner
@@ -902,7 +903,7 @@ private fun TasksScreenPreview() {
     EgoSyncTheme {
         TasksScreen(
             uiState = TasksUiState.sample(),
-            roles = SnapshotStore.roles,
+            roles = previewRoles,
             engineAvailable = true,
             onToggleTask = {},
             onQuadrantFilterSelected = {},
@@ -920,24 +921,24 @@ private fun TaskRowPreview() {
     EgoSyncTheme {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             TaskRow(
-                task = SnapshotStore.tasks.first(),
+                task = previewTasks.first(),
                 enabled = true,
                 onToggle = {},
             )
             TaskRow(
-                task = SnapshotStore.tasks.first().copy(done = true),
+                task = previewTasks.first().copy(done = true),
                 enabled = true,
                 onToggle = {},
             )
             TaskRow(
-                task = SnapshotStore.tasks.first(),
+                task = previewTasks.first(),
                 enabled = true,
                 isClassifying = true,
                 onToggle = {},
             )
             // FR-24：at_risk 任务卡（左边框 + 被挤压徽章）
             TaskRow(
-                task = SnapshotStore.tasks.first { it.protectionStatus == TaskProtectionStatus.AT_RISK },
+                task = previewTasks.first { it.protectionStatus == TaskProtectionStatus.AT_RISK },
                 enabled = true,
                 onToggle = {},
             )

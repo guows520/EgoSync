@@ -4,13 +4,11 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.egosync.companion.AppModelContainer
 import com.egosync.companion.sync.BigRockPlanItem
-import com.egosync.companion.sync.SnapshotStore
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** 周复盘阶段（FR-17，镜像桌面 WeeklyReviewModal phase: 'review' | 'plan'）。 */
@@ -26,7 +24,7 @@ data class RolePlanState(val roleId: String, val items: List<String>)
 data class WeeklyReviewUiState(
     val phase: ReviewPhase = ReviewPhase.REVIEW,
     /** 每角色规划项；初始化每角色 1 个空行（镜像桌面 planStates init items: ['']）。 */
-    val planStates: List<RolePlanState> = SnapshotStore.roles.map { RolePlanState(it.id, listOf("")) },
+    val planStates: List<RolePlanState> = emptyList(),
     /** 建议映射；null=未加载完成（镜像桌面 suggestions: RoleBigRockSuggestions[] | null）。 */
     val suggestions: Map<String, List<String>>? = null,
     val isLoadingSuggestions: Boolean = false,
@@ -85,31 +83,52 @@ data class WeeklyReviewUiState(
 }
 
 /**
- * 周复盘 VM（FR-17）：mock 跑建议加载与保存状态机，纯内存态，进程重启还原。
- * 接真实连接层后，加载/保存动作将走 SNAPSHOT/COMMAND 帧；UI 层零改动。
+ * 周复盘 VM（FR-17）：规划输入为本地内存态；建议/保存动作待指令通道（13.3）。
+ * 复盘成绩单数据（review）由 Route 经快照取数直传 Screen。
  */
 class WeeklyReviewViewModel(private val container: AppModelContainer) : ViewModel() {
 
-    private val _uiState = MutableStateFlow(WeeklyReviewUiState())
+    private val _uiState = MutableStateFlow(
+        WeeklyReviewUiState(
+            planStates = container.snapshotStore.roles.map { RolePlanState(it.id, listOf("")) },
+        )
+    )
     val uiState: StateFlow<WeeklyReviewUiState> = _uiState.asStateFlow()
 
-    /** 在途建议加载协程：重进 plan 阶段前取消，防陈旧协程提前写状态打破新一轮占位时序（同 ChatViewModel.streamJob 模式）。 */
-    private var loadJob: Job? = null
+    init {
+        // AC2 + 评审 P12：planStates 随快照角色重建——VM 可能构造于快照到达前（roles 空 →
+        // planStates 空），或 STATE_DELTA 新增角色；缺失角色的 updateItem/addItem/removeItem
+        // 全为 no-op，用户键入会被静默拒绝。已有角色的输入按 roleId 保留。
+        viewModelScope.launch {
+            container.snapshotStore.state.collect { state ->
+                if (state.loaded) {
+                    _uiState.update { st ->
+                        val existing = st.planStates.associateBy { it.roleId }
+                        st.copy(
+                            planStates = container.snapshotStore.roles.map { role ->
+                                existing[role.id] ?: RolePlanState(role.id, listOf(""))
+                            }
+                        )
+                    }
+                } else {
+                    // unpair/密钥失效自愈（store.clear 不导航）：规划态一并清空（评审 P2）
+                    _uiState.update { it.copy(planStates = emptyList()) }
+                }
+            }
+        }
+    }
 
     /**
-     * 进 plan 阶段并加载建议（镜像桌面 phase==='plan' useEffect 每次 loadSuggestions）：
-     * 每次「规划下周大石头」入口均先显「正在思考建议...」占位，再延时出建议。
+     * 进 plan 阶段（镜像桌面 phase==='plan'）：建议属生成性内容，快照口径无
+     * （§5 裁决）——置空态「待接指令通道」，可先手动填写；不再模拟 LLM 加载延时。
      */
     fun enterPlanPhase() {
-        loadJob?.cancel()
         _uiState.update {
-            it.copy(phase = ReviewPhase.PLAN, isLoadingSuggestions = true, suggestions = null)
-        }
-        loadJob = viewModelScope.launch {
-            delay(LOAD_DELAY_MILLIS)
-            _uiState.update {
-                it.copy(isLoadingSuggestions = false, suggestions = container.snapshotStore.bigRockSuggestions)
-            }
+            it.copy(
+                phase = ReviewPhase.PLAN,
+                isLoadingSuggestions = false,
+                suggestions = emptyMap(),
+            )
         }
     }
 
@@ -140,8 +159,6 @@ class WeeklyReviewViewModel(private val container: AppModelContainer) : ViewMode
     }
 
     private companion object {
-        /** mock 建议加载耗时（毫秒）：镜像桌面 LLM「正在思考建议...」过渡。 */
-        const val LOAD_DELAY_MILLIS = 1_500L
         /** mock 保存耗时（毫秒）：镜像桌面 isSaving 期间「保存中...」过渡。 */
         const val SAVE_DELAY_MILLIS = 1_000L
     }

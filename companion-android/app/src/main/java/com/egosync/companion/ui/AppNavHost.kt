@@ -115,7 +115,7 @@ fun AppNavHost(container: AppModelContainer) {
         composable(Routes.TASKS) { MainShellRoute(navController, container, Routes.TASKS) }
         composable(Routes.DASHBOARD) { MainShellRoute(navController, container, Routes.DASHBOARD) }
         composable(Routes.SETTINGS) { MainShellRoute(navController, container, Routes.SETTINGS) }
-        composable(Routes.BRIEFING) { BriefingRoute(navController) }
+        composable(Routes.BRIEFING) { BriefingRoute(navController, container) }
         composable(Routes.REVIEW) { WeeklyReviewRoute(navController, container) }
         composable(Routes.NOTIFICATIONS) { NotificationCenterRoute(navController, container) }
         // FR-8/9 记忆屏：按角色进入（仪表盘角色卡「查看记忆」入口）
@@ -268,9 +268,14 @@ private fun ChatRoute(container: AppModelContainer) {
     )
     val uiState by vm.uiState.collectAsState()
     val connectionState by container.connection.state.collectAsState()
+    val chatSnapshotState = container.snapshotStore.state.collectAsState()
     ChatScreen(
         uiState = uiState,
         engineAvailable = connectionState.engineAvailable,
+        dataCutoffLabel = truncatedCutoffLabel(
+            chatSnapshotState.value.metadata,
+            domain = "conversations",
+        ),
         onSendMessage = vm::sendMessage,
         onActionCardRespond = vm::respondActionCard,
         onRoleSelected = vm::selectRole,
@@ -287,13 +292,16 @@ private fun ChatRoute(container: AppModelContainer) {
 @Composable
 private fun TasksRoute(container: AppModelContainer) {
     val vm: TasksViewModel = viewModel(
-        factory = viewModelFactory { initializer { TasksViewModel(container) } }
+        factory = viewModelFactory { initializer { TasksViewModel(container.snapshotStore) } }
     )
     val uiState by vm.uiState.collectAsState()
     val connectionState by container.connection.state.collectAsState()
+    // 快照态订阅派生 roles（评审 P10）：roles-only 的 STATE_DELTA（角色改名/新增角色）
+    // 也触发重组，归属筛选 chips 不滞后；组合期直读 store.roles 无此保证
+    val snapshotState = container.snapshotStore.state.collectAsState()
     TasksScreen(
         uiState = uiState,
-        roles = container.snapshotStore.roles,
+        roles = if (snapshotState.value.loaded) container.snapshotStore.roles else emptyList(),
         engineAvailable = connectionState.engineAvailable,
         onToggleTask = vm::toggleTask,
         onQuadrantFilterSelected = vm::selectQuadrantFilter,
@@ -351,8 +359,14 @@ private fun SettingsRoute(navController: NavHostController, container: AppModelC
 }
 
 @Composable
-private fun BriefingRoute(navController: NavHostController) {
-    BriefingScreen(onBack = { navController.popBackStack() })
+private fun BriefingRoute(navController: NavHostController, container: AppModelContainer) {
+    // 快照取数（T5 收敛：Route 层经容器实例，不再直读全局单例）
+    val snapshotState = container.snapshotStore.state.collectAsState()
+    BriefingScreen(
+        briefing = container.snapshotStore.briefing,
+        dataCutoffLabel = truncatedCutoffLabel(snapshotState.value.metadata, domain = "briefings"),
+        onBack = { navController.popBackStack() },
+    )
 }
 
 @Composable
@@ -361,8 +375,12 @@ private fun WeeklyReviewRoute(navController: NavHostController, container: AppMo
         factory = viewModelFactory { initializer { WeeklyReviewViewModel(container) } },
     )
     val uiState by vm.uiState.collectAsState()
+    val snapshotState = container.snapshotStore.state.collectAsState()
     WeeklyReviewScreen(
         uiState = uiState,
+        review = container.snapshotStore.weeklyReview,
+        roles = container.snapshotStore.roles,
+        dataCutoffLabel = truncatedCutoffLabel(snapshotState.value.metadata, domain = "weeklyReviews"),
         onBack = { navController.popBackStack() },
         onEnterPlan = vm::enterPlanPhase,
         onBackToReview = vm::enterReviewPhase,
@@ -373,6 +391,20 @@ private fun WeeklyReviewRoute(navController: NavHostController, container: AppMo
         // 确认成功 → pop 返回（等价桌面 savePlan 成功后 onClose 关 Modal）
         onConfirmPlan = { vm.confirmPlan { navController.popBackStack() } },
     )
+}
+
+/** 截断元数据 → 明示标签；未截断（或指定域未被截断）返回 null（T7：不惊扰正常态）。 */
+private fun truncatedCutoffLabel(
+    metadata: com.egosync.companion.sync.SnapshotMetadata?,
+    domain: String? = null,
+): String? {
+    if (metadata == null || !metadata.truncated) return null
+    if (domain != null && domain !in metadata.truncatedDomains) return null
+    // AC4 防御（评审 P16）：截断但缺 dataCutoffAt 时也不得静默吞掉截断事实，
+    // 以缺失数据冒充完整（桌面契约上不应发生，防御性兜底）
+    return metadata.dataCutoffAt
+        ?.let { com.egosync.companion.sync.SnapshotMapper.formatDataCutoff(it) }
+        ?: "部分历史数据因快照过大被截断"
 }
 
 @Composable

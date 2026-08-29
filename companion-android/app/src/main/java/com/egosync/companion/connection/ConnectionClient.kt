@@ -36,6 +36,16 @@ enum class DebugConnectionMode(val label: String) {
 }
 
 /**
+ * 降级态快照信息（Story 13.2 T7）：快照缓存存在性 + 数据截止时间。
+ * 由快照存储提供（`SnapshotStore.offlineInfo()`），连接层经注入缝读取——
+ * Offline 状态不再硬编码 (false, null)。
+ */
+data class OfflineSnapshotInfo(
+    val snapshotAvailable: Boolean,
+    val dataAsOf: String?,
+)
+
+/**
  * 连接客户端抽象——未来接入真实连接层的替换点。
  *
  * 真实实现职责（见 architecture.md 手机伴侣增量章节）：

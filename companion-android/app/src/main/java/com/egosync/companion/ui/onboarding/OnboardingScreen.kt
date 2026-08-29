@@ -40,7 +40,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.egosync.companion.sync.ChatMessage
 import com.egosync.companion.sync.RoleProposalState
-import com.egosync.companion.sync.SnapshotStore
+import com.egosync.companion.ui.onboarding.onboardingRoleProposal
 import com.egosync.companion.ui.components.RoleConfirmDialog
 import com.egosync.companion.ui.components.RoleProposalCard
 import com.egosync.companion.ui.components.ThinkingDots
@@ -309,7 +309,7 @@ private fun OnboardingScreenPreview() {
         OnboardingScreen(
             uiState = OnboardingUiState(
                 messages = listOf(
-                    ChatMessage("ob-1", true, SnapshotStore.onboardingGreeting),
+                    ChatMessage("ob-1", true, onboardingGreeting),
                     ChatMessage("ob-2", false, "我是 boss，一个产品经理"),
                 ),
                 step = 2,
@@ -330,10 +330,10 @@ private fun OnboardingScreenProposalPreview() {
         OnboardingScreen(
             uiState = OnboardingUiState(
                 messages = listOf(
-                    ChatMessage("ob-1", true, SnapshotStore.onboardingGreeting),
+                    ChatMessage("ob-1", true, onboardingGreeting),
                 ),
                 step = 3,
-                roleProposal = SnapshotStore.roleProposal,
+                roleProposal = onboardingRoleProposal,
             ),
             engineAvailable = true,
             onSendMessage = {},

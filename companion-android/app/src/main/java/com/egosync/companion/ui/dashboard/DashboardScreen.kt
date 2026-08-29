@@ -62,7 +62,7 @@ import com.egosync.companion.sync.ActivityWindow
 import com.egosync.companion.sync.MetricScope
 import com.egosync.companion.sync.MetricType
 import com.egosync.companion.sync.RoleCard
-import com.egosync.companion.sync.SnapshotStore
+import com.egosync.companion.ui.previewRoles
 import com.egosync.companion.ui.theme.EgoSyncTheme
 import com.egosync.companion.ui.theme.BreathDurationMillis
 import com.egosync.companion.ui.theme.ColorTransitionMillis
@@ -77,7 +77,6 @@ import com.egosync.companion.ui.theme.rememberReducedMotion
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
-import java.time.temporal.ChronoUnit
 import java.util.Locale
 
 /**
@@ -332,10 +331,11 @@ internal fun RoleCardItem(role: RoleCard, onOpenMemory: () -> Unit = {}, modifie
 
             // 统计数字行（信息密集 · 控制台模式）
             Row(Modifier.fillMaxWidth()) {
-                StatCell("任务", role.taskCount, Modifier.weight(1f))
-                StatCell("记忆", role.memoryCount, Modifier.weight(1f))
-                StatCell("会话", role.sessionCount, Modifier.weight(1f))
-                StatCell("待办", role.pendingCount, Modifier.weight(1f))
+                StatCell("任务", role.taskCount.toString(), Modifier.weight(1f))
+                // 快照无 per-role 记忆数（NFR-M3 诚实降级）：显示「—」，禁止凑数
+                StatCell("记忆", role.memoryCount?.toString() ?: "—", Modifier.weight(1f))
+                StatCell("会话", role.sessionCount.toString(), Modifier.weight(1f))
+                StatCell("待办", role.pendingCount.toString(), Modifier.weight(1f))
             }
 
             Spacer(Modifier.height(10.dp))
@@ -377,7 +377,7 @@ internal fun RoleCardItem(role: RoleCard, onOpenMemory: () -> Unit = {}, modifie
 }
 
 @Composable
-private fun StatCell(label: String, value: Int, modifier: Modifier = Modifier) {
+private fun StatCell(label: String, value: String, modifier: Modifier = Modifier) {
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
         Text(
             "$value",
@@ -468,7 +468,7 @@ private fun ActivityStatsSection(
     scopeId: String,
     window: ActivityWindow,
     roles: List<RoleCard>,
-    metrics: Map<MetricType, Int>,
+    metrics: Map<MetricType, Int?>,
     onScopeSelected: (String) -> Unit,
     onWindowSelected: (ActivityWindow) -> Unit,
     modifier: Modifier = Modifier,
@@ -612,8 +612,8 @@ private fun TimeFilterChip(
                     onClick = {
                         onSelected(
                             ActivityWindow.Custom(
-                                oldestDaysAgo = start.toDaysAgo(),
-                                newestDaysAgo = draftEnd!!.toDaysAgo(),
+                                oldestDate = start,
+                                newestDate = draftEnd!!,
                             )
                         )
                         showEndPicker = false
@@ -696,7 +696,7 @@ private fun FilterChipSurface(
 @Composable
 private fun MetricCard(
     type: MetricType,
-    metrics: Map<MetricType, Int>,
+    metrics: Map<MetricType, Int?>,
     modifier: Modifier = Modifier,
 ) {
     Surface(
@@ -723,8 +723,9 @@ private fun MetricCard(
                 )
             }
             Spacer(Modifier.height(6.dp))
+            // 快照不可得指标（如 per-role 记忆数）显示「—」，不冒充 0
             Text(
-                "${metrics[type] ?: 0}",
+                metrics[type]?.toString() ?: "—",
                 style = MaterialTheme.typography.titleLarge,
                 textAlign = TextAlign.End,
                 modifier = Modifier.fillMaxWidth(),
@@ -760,10 +761,9 @@ private fun windowLabel(window: ActivityWindow): String = when (window) {
         TIME_PRESETS.firstOrNull { it.second == window }?.first
             ?: "最近${window.maxDaysAgo + 1}天"
     is ActivityWindow.Custom -> {
-        // 与 DatePicker 的 UTC 解码同基准，避免设备时区造成天数漂移
-        val today = LocalDate.now(ZoneOffset.UTC)
-        val start = today.minusDays(window.oldestDaysAgo.toLong())
-        val end = today.minusDays(window.newestDaysAgo.toLong())
+        // T8：窗口携带选择时的绝对日期——相对天数跨午夜后前移会让标签与实际窗口错位
+        val start = window.oldestDate
+        val end = window.newestDate
         if (start.year != end.year) {
             "%04d-%02d-%02d 至 %04d-%02d-%02d".format(
                 Locale.ROOT,
@@ -782,10 +782,6 @@ private fun windowLabel(window: ActivityWindow): String = when (window) {
 /** DatePicker 的 UTC epoch millis → LocalDate（M3 DatePicker 以 UTC 零点存日期）。 */
 private fun epochToLocalDate(millis: Long): LocalDate =
     Instant.ofEpochMilli(millis).atZone(ZoneOffset.UTC).toLocalDate()
-
-/** 以「UTC 今天」为基准换算天数前（与 DatePicker 解码同时区；未来日期按今天处理）。 */
-private fun LocalDate.toDaysAgo(): Int =
-    ChronoUnit.DAYS.between(this, LocalDate.now(ZoneOffset.UTC)).toInt().coerceAtLeast(0)
 
 // ── Preview ────────────────────────────────────────────────────────────
 
@@ -810,6 +806,6 @@ private fun DashboardScreenPreview() {
 @Composable
 private fun RoleCardPreview() {
     EgoSyncTheme {
-        RoleCardItem(role = SnapshotStore.roles.first(), modifier = Modifier.padding(12.dp))
+        RoleCardItem(role = previewRoles.first(), modifier = Modifier.padding(12.dp))
     }
 }

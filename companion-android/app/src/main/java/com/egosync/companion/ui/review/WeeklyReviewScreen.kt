@@ -43,7 +43,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.egosync.companion.sync.RoleCard
-import com.egosync.companion.sync.SnapshotStore
+import com.egosync.companion.ui.previewRoles
+import com.egosync.companion.ui.previewWeeklyReview
 import com.egosync.companion.sync.WeeklyReview
 import com.egosync.companion.ui.theme.BrandBlue
 import com.egosync.companion.ui.theme.BrandGreen
@@ -62,6 +63,9 @@ import com.egosync.companion.ui.theme.energyColor
 @Composable
 fun WeeklyReviewScreen(
     uiState: WeeklyReviewUiState,
+    review: WeeklyReview,
+    roles: List<RoleCard>,
+    dataCutoffLabel: String?,
     onBack: () -> Unit,
     onEnterPlan: () -> Unit,
     onBackToReview: () -> Unit,
@@ -72,8 +76,6 @@ fun WeeklyReviewScreen(
     onConfirmPlan: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val review = SnapshotStore.weeklyReview
-
     Scaffold(
         modifier = modifier,
         containerColor = MaterialTheme.colorScheme.background,
@@ -91,12 +93,14 @@ fun WeeklyReviewScreen(
         if (uiState.phase == ReviewPhase.REVIEW) {
             ReviewPhaseContent(
                 review = review,
+                dataCutoffLabel = dataCutoffLabel,
                 padding = padding,
                 onEnterPlan = onEnterPlan,
             )
         } else {
             PlanPhaseContent(
                 uiState = uiState,
+                roles = roles,
                 padding = padding,
                 onBackToReview = onBackToReview,
                 onUpdateItem = onUpdateItem,
@@ -114,9 +118,27 @@ fun WeeklyReviewScreen(
 @Composable
 private fun ReviewPhaseContent(
     review: WeeklyReview,
+    dataCutoffLabel: String?,
     padding: PaddingValues,
     onEnterPlan: () -> Unit,
 ) {
+    if (review.weekLabel.isEmpty()) {
+        // 快照未加载/本周复盘未生成：诚实占位（NFR-M3），不以空成绩单冒充「已生成」（评审 P8）
+        Column(
+            Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Text(
+                "本周复盘尚未生成。连接桌面完成一周回顾后，成绩单会出现在这里。",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        return
+    }
     Column(
         Modifier
             .fillMaxSize()
@@ -130,6 +152,27 @@ private fun ReviewPhaseContent(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(start = 4.dp),
         )
+        // 截断提示：桌面因域被截断而未含完整数据时明示（§5 诚实降级）
+        if (dataCutoffLabel != null) {
+            Spacer(Modifier.height(4.dp))
+            Row(
+                Modifier.padding(start = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    LucideIcons.AlertTriangle,
+                    contentDescription = null,
+                    modifier = Modifier.size(12.dp),
+                    tint = MaterialTheme.colorScheme.error,
+                )
+                Spacer(Modifier.size(4.dp))
+                Text(
+                    "数据截至 $dataCutoffLabel（桌面端部分域被截断）",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+        }
         Spacer(Modifier.height(10.dp))
 
         // 正向叙事（"看看你的进步"，绝不制造被评判感）
@@ -176,7 +219,8 @@ private fun ReviewPhaseContent(
 
         Spacer(Modifier.height(16.dp))
 
-        // 能量趋势柱状图（Canvas 自绘）
+        // 能量趋势柱状图（Canvas 自绘）；快照无逐日时间序列（§5 裁决①）→ 诚实空态，
+        // 图表本体保留（Preview 样例仍渲染，视觉基准不丢）
         Text(
             "能量趋势（近 7 天）",
             style = MaterialTheme.typography.titleMedium,
@@ -187,11 +231,20 @@ private fun ReviewPhaseContent(
             shape = RoundedCornerShape(10.dp),
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Column(Modifier.padding(14.dp)) {
-                EnergyTrendChart(
-                    values = review.energyTrend,
-                    dayLabels = review.energyTrendDays,
+            if (review.energyTrend.isEmpty()) {
+                Text(
+                    "暂无逐日能量数据（当前快照仅含角色当前能量）",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(14.dp),
                 )
+            } else {
+                Column(Modifier.padding(14.dp)) {
+                    EnergyTrendChart(
+                        values = review.energyTrend,
+                        dayLabels = review.energyTrendDays,
+                    )
+                }
             }
         }
 
@@ -265,6 +318,7 @@ private fun ReviewPhaseContent(
 @Composable
 private fun PlanPhaseContent(
     uiState: WeeklyReviewUiState,
+    roles: List<RoleCard>,
     padding: PaddingValues,
     onBackToReview: () -> Unit,
     onUpdateItem: (roleId: String, index: Int, text: String) -> Unit,
@@ -298,7 +352,7 @@ private fun PlanPhaseContent(
 
         Spacer(Modifier.height(16.dp))
 
-        SnapshotStore.roles.forEach { role ->
+        roles.forEach { role ->
             val planState = uiState.planStates.firstOrNull { it.roleId == role.id }
                 ?: RolePlanState(role.id, listOf(""))
             RolePlanCard(
@@ -365,6 +419,7 @@ private fun RolePlanCard(
 
             // 建议区：加载中 / 建议行 / 手动填写占位（三分支镜像桌面 L194-212）
             if (isLoadingSuggestions) {
+                // 兼容分支：13.2 不再模拟 LLM 思考，恒不进此分支；保留以防后续接入复用
                 SuggestionShell {
                     Text(
                         "正在思考建议...",
@@ -409,7 +464,7 @@ private fun RolePlanCard(
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(
-                        "手动填写本周大石头",
+                        "暂无建议，可手动填写本周大石头",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
@@ -581,6 +636,9 @@ private fun WeeklyReviewScreenPreview() {
     EgoSyncTheme {
         WeeklyReviewScreen(
             uiState = WeeklyReviewUiState(),
+            review = previewWeeklyReview,
+            roles = previewRoles,
+            dataCutoffLabel = null,
             onBack = {},
             onEnterPlan = {},
             onBackToReview = {},
@@ -601,8 +659,11 @@ private fun WeeklyReviewPlanScreenPreview() {
             uiState = WeeklyReviewUiState(
                 phase = ReviewPhase.PLAN,
                 isLoadingSuggestions = false,
-                suggestions = SnapshotStore.bigRockSuggestions,
+                suggestions = emptyMap(),
             ),
+            review = previewWeeklyReview,
+            roles = previewRoles,
+            dataCutoffLabel = null,
             onBack = {},
             onEnterPlan = {},
             onBackToReview = {},
@@ -621,8 +682,8 @@ private fun EnergyTrendChartPreview() {
     EgoSyncTheme {
         Surface(color = MaterialTheme.colorScheme.surface) {
             EnergyTrendChart(
-                values = SnapshotStore.weeklyReview.energyTrend,
-                dayLabels = SnapshotStore.weeklyReview.energyTrendDays,
+                values = previewWeeklyReview.energyTrend,
+                dayLabels = previewWeeklyReview.energyTrendDays,
                 modifier = Modifier.padding(16.dp),
             )
         }

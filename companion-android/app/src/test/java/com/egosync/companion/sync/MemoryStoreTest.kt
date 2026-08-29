@@ -6,61 +6,60 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 锁定组 3 记忆/提案 mock 契约：per-role 隔离、task_status 不可见、
- * 来源消息标注与提案白名单合法性（弹窗回显走 normalize 的前提是种子本身合法）。
+ * 13.2 记忆契约锁定（AC5）：记忆内容**永不进入快照**——
+ * memoriesOf 恒为空（无论快照是否加载），记忆页呈现「待接指令通道」占位，
+ * 查询/溯源/遗忘走指令通道（13.3）。若未来有人把记忆内容塞进快照派生，
+ * 本测试立即报错，防止敏感内容静默越过信任边界。
  */
 class MemoryStoreTest {
 
-    @Test
-    fun memoriesOf_returnsOnlyThatRole() {
-        // 记忆屏按单角色进入：跨角色泄漏会把别人的记忆显示到当前角色名下
-        val pm = SnapshotStore.memoriesOf("role-pm")
-        assertTrue(pm.isNotEmpty())
-        assertTrue(pm.all { it.roleId == "role-pm" })
-        assertTrue(SnapshotStore.memoriesOf("role-unknown").isEmpty())
-    }
-
-    @Test
-    fun everyRoleHasVisibleMemories() {
-        // 三角色都可从仪表盘进入记忆屏：任一角色空屏会让入口看起来坏了
-        listOf("role-pm", "role-father", "role-learner").forEach { roleId ->
-            val visible = SnapshotStore.memoriesOf(roleId)
-                .filter { it.category != MemoryCategory.TASK_STATUS }
-            assertTrue("role $roleId 应有可见记忆", visible.isNotEmpty())
-        }
-    }
-
-    @Test
-    fun taskStatusMemories_existToLockExclusionContract() {
-        // 桌面 visibleMemories 契约：任务状态记忆不进记忆面板（属任务域）
-        // mock 需保留一条 task_status 种子，否则该过滤契约失去防回归锚点
-        assertTrue(SnapshotStore.memories.any { it.category == MemoryCategory.TASK_STATUS })
-    }
-
-    @Test
-    fun memorySources_flagExactlyOneSourceMessage() {
-        // 来源高亮契约（桌面 isSource 着色）：每段来源对话恰好一条被标为记忆出处
-        SnapshotStore.memorySources.forEach { (memoryId, messages) ->
-            assertTrue("$memoryId 来源非空", messages.isNotEmpty())
-            assertEquals("$memoryId 应恰好一条 isSource", 1, messages.count { it.isSource })
-        }
-    }
-
-    @Test
-    fun memorySources_rolesAreUserOrAssistant() {
-        // 角色标签映射（用户/助手）不落 raw 值：mock 必须只用两种合法发言角色
-        SnapshotStore.memorySources.values.flatten().forEach { message ->
-            assertTrue(
-                "发言角色应为 user/assistant：${message.role}",
-                message.role == "user" || message.role == "assistant",
+    private fun storeWithSnapshot(): SnapshotStore {
+        val store = SnapshotStore()
+        // 最小合法快照（角色/会话俱全）——即便快照富数据，记忆仍必须为空
+        store.applySnapshot(
+            DesktopSnapshot(
+                schemaVersion = 1,
+                generatedAt = "2026-08-25T08:00:00Z",
+                dataCutoffAt = null,
+                truncated = false,
+                truncatedDomains = emptyList(),
+                roles = listOf(
+                    SnapshotRole("role-pm", "产品经理", "target", "#4F46E5", "", "", 82, "moderate"),
+                ),
+                tasks = emptyList(),
+                dashboard = SnapshotDashboard(
+                    statuses = emptyList(),
+                    metrics = SnapshotMetrics(0, 0, 0, 0, "2026-08-25T08:00:00Z"),
+                ),
+                conversations = emptyList(),
+                briefings = emptyList(),
+                weeklyReviews = emptyList(),
+                notifications = emptyList(),
             )
-        }
+        )
+        return store
+    }
+
+    @Test
+    fun memoriesOf_alwaysEmpty_evenWithRichSnapshot() {
+        // AC5：快照含角色/任务/会话等富数据，但记忆内容不得随之下发
+        val store = storeWithSnapshot()
+        assertTrue(store.memoriesOf("role-pm").isEmpty())
+        assertTrue(store.state.value.loaded) // 前置：快照确已加载，排除「空因为没数据」
+    }
+
+    @Test
+    fun memoriesOf_emptyOnColdStart() {
+        // 冷启动（无快照无缓存）同样为空——不得回退到任何 mock 种子
+        val store = SnapshotStore()
+        assertTrue(store.memoriesOf("role-pm").isEmpty())
+        assertTrue(store.memoriesOf("role-unknown").isEmpty())
     }
 
     @Test
     fun roleProposal_seedIsWhitelisted() {
-        // 提案回显走 normalize 白名单回退：种子必须合法，否则弹窗回显默认值而非提案值
-        val proposal = SnapshotStore.roleProposal
+        // 提案回显走 normalize 白名单回退：演示种子必须合法，否则弹窗回显默认值而非提案值
+        val proposal = com.egosync.companion.ui.chat.roleProposal
         assertEquals(proposal.icon, RoleIcons.normalizeIconId(proposal.icon))
         assertEquals(proposal.color, RoleIcons.normalizeColorHex(proposal.color))
         assertTrue(proposal.name.isNotBlank())

@@ -25,14 +25,14 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 data class ChatUiState(
-    val messages: List<ChatMessage> = SnapshotStore.initialChat,
+    val messages: List<ChatMessage> = emptyList(),
     /** 管家思考中（用户消息后、回复开始前）。 */
     val thinking: Boolean = false,
     val actionCards: List<ActionCardSuggestion> = emptyList(),
     /** FR-20：当前对话角色视图；null=管家 */
     val activeRoleId: String? = null,
     /** FR-20：切换器角色列表（镜像桌面 Sidebar 角色栏） */
-    val roles: List<RoleCard> = SnapshotStore.roles,
+    val roles: List<RoleCard> = emptyList(),
     /** FR-2：对话流内嵌拆分提案卡；null=无提案 */
     val decomposition: TaskDecompositionProposal? = null,
     /** FR-5：角色涌现提案卡（含处理态）；null=未浮现。属管家对话流（角色视图不承载） */
@@ -50,11 +50,12 @@ data class ChatUiState(
 ) {
     companion object {
         fun sample() = ChatUiState(
-            messages = SnapshotStore.initialChat + ChatMessage(
+            messages = previewInitialChat + ChatMessage(
                 id = "m-u1",
                 fromButler = false,
                 text = "今天下午都有什么安排？",
             ),
+            roles = com.egosync.companion.ui.previewRoles,
             actionCards = listOf(
                 ActionCardSuggestion(
                     id = "ac-1",
@@ -67,15 +68,13 @@ data class ChatUiState(
     }
 }
 
-/** 一小时毫秒数（种子会话时间偏移用）。 */
-private const val HOUR_MS = 3_600_000L
-
 /**
  * 管家对话 mock 状态机：发送 → 思考中 → 工具执行状态行 → 流式打字机回复（镜像 llm:stream 语义）。
  * 组 1 chat：FR-1 两段委派、FR-2 拆分提案、FR-20 角色切换、FR-29 溯源、FR-30 低置信、FR-33 工具可视+停止。
- * 初始消息与回复轮换取自快照存储（只读）；接入真实连接层后：发送改为 COMMAND 帧，回复改为 STREAM_TOKEN 帧驱动。
+ * 会话列表与历史消息取自快照 conversations 域（STATE_DELTA 全量替换即时刷新，AC2）；
+ * 回复轮换/提案等演示数据见 [ChatDemoData]（生成性内容，指令通道 13.3 接入）。
  */
-class ChatViewModel(private val store: SnapshotStore = SnapshotStore) : ViewModel() {
+class ChatViewModel(private val store: SnapshotStore) : ViewModel() {
 
     private var replyIndex = 0
     private var nextId = 100
@@ -87,7 +86,7 @@ class ChatViewModel(private val store: SnapshotStore = SnapshotStore) : ViewMode
     /** 委派第一段（交接声明）消息 id：第二段开始前被停止则回滚，防悬空孤气泡 */
     private var pendingHandoffMsgId: String? = null
 
-    /** 按角色视图保存多会话列表（镜像桌面每角色独立 conversation 列表）；null 键=管家 */
+    /** 按角色视图保存多会话列表（快照 conversations 域 + 本地新建/回复暂存）；null 键=管家 */
     private val history: MutableMap<String?, MutableList<ChatConversation>> = mutableMapOf()
 
     /** 各视图（null=管家）离开时的活跃会话 id：切回视图恢复原会话，不重置为最新。 */
@@ -101,45 +100,108 @@ class ChatViewModel(private val store: SnapshotStore = SnapshotStore) : ViewMode
     val uiState: StateFlow<ChatUiState>
 
     init {
-        // 种子会话（时间用相对当前时刻偏移，避免硬编码绝对时间）：
-        // 管家 2 条——当前「今日概览」(initialChat) + 一条历史种子会话；各角色 1 条（roleChatSeeds + 标题）
-        val now = System.currentTimeMillis()
-        history[null] = mutableListOf(
-            ChatConversation(
-                id = UUID.randomUUID().toString(),
-                title = store.butlerCurrentConversationTitle,
-                updatedAt = now - 2 * HOUR_MS,
-                messages = store.initialChat,
-            ),
-            ChatConversation(
-                id = UUID.randomUUID().toString(),
-                title = store.butlerHistoryConversationTitle,
-                updatedAt = now - 26 * HOUR_MS,
-                messages = store.butlerHistoryChat,
-            ),
-        )
-        store.roles.forEach { role ->
-            history[role.id] = mutableListOf(
-                ChatConversation(
-                    id = UUID.randomUUID().toString(),
-                    title = store.roleConversationTitles[role.id].orEmpty(),
-                    updatedAt = now - HOUR_MS,
-                    messages = store.roleChatSeeds[role.id] ?: emptyList(),
-                )
-            )
-        }
-        // 初始激活管家的最新会话（即「今日概览」）
-        val butlerConversations = conversationsOf(null)
-        val current = butlerConversations.first()
+        // 种子会话：快照 conversations 域（未收到快照时为空 → 兜底新建空会话防消息无处持久）
+        seedFromStore()
+        var current = conversationsOf(null).firstOrNull()
+            ?: createConversationIn(null)
         activeConversationIdByRole[null] = current.id
         _uiState = MutableStateFlow(
             ChatUiState(
+                roles = store.roles,
                 messages = current.messages,
-                conversations = butlerConversations,
+                conversations = conversationsOf(null),
                 currentConversationId = current.id,
             )
         )
         uiState = _uiState
+        // AC2：STATE_DELTA 即时刷新——快照全量替换后重建会话列表与消息流
+        //（本地暂存〔新建会话/本地回复〕被覆盖为已知过渡态，指令通道 13.3 收口）。
+        // 跳过构造时已加载的同对象首发：否则首帧会误触重建，抹掉 selectRole 等本地交互暂存
+        viewModelScope.launch {
+            var lastSnapshot = store.state.value.snapshot
+            store.state.collect { state ->
+                when {
+                    state.loaded && state.snapshot !== lastSnapshot -> {
+                        lastSnapshot = state.snapshot
+                        onSnapshotReplaced()
+                    }
+                    // unpair/密钥失效自愈（store.clear 不导航）：会话与角色一并清空，
+                    // 不残留已解配桌面的陈旧数据（评审 P2）；重建兜底空会话防消息无处持久
+                    !state.loaded -> {
+                        lastSnapshot = null
+                        stopStreaming()
+                        history.clear()
+                        activeConversationIdByRole.clear()
+                        val fresh = createConversationIn(null)
+                        activeConversationIdByRole[null] = fresh.id
+                        _uiState.update {
+                            it.copy(
+                                roles = emptyList(),
+                                activeRoleId = null,
+                                messages = emptyList(),
+                                conversations = conversationsOf(null),
+                                currentConversationId = fresh.id,
+                                thinking = false,
+                                responding = false,
+                                streamingToolTitle = null,
+                                actionCards = emptyList(),
+                                decomposition = null,
+                                roleProposal = null,
+                                traceByMessageId = emptyMap(),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /** 用快照 conversations 域重建各视图会话列表。 */
+    private fun seedFromStore() {
+        history.clear()
+        history[null] = store.conversationsOf(null).toMutableList()
+        store.roles.forEach { role ->
+            history[role.id] = store.conversationsOf(role.id).toMutableList()
+        }
+    }
+
+    /** 快照全量替换后重建：保持当前选中会话（消失则回退最新），空视图兜底空会话。 */
+    private fun onSnapshotReplaced() {
+        // 快照替换与流式互斥（评审 P3）：打字机/思考进行中到达 STATE_DELTA，先停流再重建——
+        // 否则打字机会在重建后的消息流上空转续写，回复静默丢失且 responding 滞留
+        stopStreaming()
+        val viewRoleId = _uiState.value.activeRoleId
+        seedFromStore()
+        // 当前查看角色被桌面删除：回退管家视图（切换器已无该角色入口，不留幽灵空视图，评审 P5）
+        val roleId = if (viewRoleId != null && store.roles.none { it.id == viewRoleId }) null else viewRoleId
+        if (roleId != viewRoleId) {
+            // 被删角色的会话暂存与活跃会话记忆一并清掉（数据源已不含该角色）
+            activeConversationIdByRole.remove(viewRoleId)
+        }
+        if (history[null].isNullOrEmpty()) createConversationIn(null)
+        if (roleId != null && history[roleId].isNullOrEmpty()) createConversationIn(roleId)
+        val conversations = conversationsOf(roleId)
+        val currentId = _uiState.value.currentConversationId
+        val current = conversations.firstOrNull { it.id == currentId } ?: conversations.first()
+        // 回落换会话或视角回退：卡片态随会话清空（与 selectConversation 同一不变量，评审 P4）
+        val switched = current.id != currentId || roleId != viewRoleId
+        activeConversationIdByRole[roleId] = current.id
+        _uiState.update {
+            it.copy(
+                roles = store.roles,
+                activeRoleId = roleId,
+                messages = current.messages,
+                conversations = conversations,
+                currentConversationId = current.id,
+                thinking = false,
+                responding = false,
+                streamingToolTitle = null,
+                actionCards = if (switched) emptyList() else it.actionCards,
+                decomposition = if (switched) null else it.decomposition,
+                roleProposal = if (switched) null else it.roleProposal,
+                traceByMessageId = if (switched) emptyMap() else it.traceByMessageId,
+            )
+        }
     }
 
     // ── FR-20 角色切换 ─────────────────────────────────────────────────
@@ -301,10 +363,13 @@ class ChatViewModel(private val store: SnapshotStore = SnapshotStore) : ViewMode
 
         appendMessage(ChatMessage(nextId++.toString(), false, trimmed))
 
-        // FR-1：管家视图命中委派关键词 → 两段委派路由
+        // FR-1：管家视图命中委派关键词 → 两段委派路由。
+        // 关键词随快照角色名派生（角色名 → id）：mock 时代写死 role-pm 等演示键，
+        // 真实快照角色 id 为 UUID，写死路由会落空（评审 P6）
         val delegationRoleId = if (_uiState.value.activeRoleId == null) {
-            store.delegationKeywords.entries
-                .firstOrNull { trimmed.contains(it.key) }?.value
+            store.roles
+                .filter { it.name.isNotBlank() }
+                .firstOrNull { trimmed.contains(it.name) }?.id
         } else null
 
         streamJob = viewModelScope.launch {
@@ -327,14 +392,15 @@ class ChatViewModel(private val store: SnapshotStore = SnapshotStore) : ViewMode
         // 第一段：管家委派声明（即时落定，不走打字机）；记录 id 供中途停止时回滚
         val handoffId = nextId++.toString()
         pendingHandoffMsgId = handoffId
-        appendMessage(ChatMessage(handoffId, true, store.delegationFirstSegment(roleName)))
+        appendMessage(ChatMessage(handoffId, true, delegationFirstSegment(roleName)))
         delay(500)
         currentCoroutineContext().ensureActive()
         pendingHandoffMsgId = null
 
-        // 第二段：目标角色反馈（流式打字机）
-        val full = store.delegationReplies[roleId]
-            ?: store.butlerReplies[replyIndex++ % store.butlerReplies.size]
+        // 第二段：目标角色反馈（流式打字机）。演示表按演示角色 id 命中保留；
+        // 真实快照 UUID 角色未命中时用角色名模板生成同语义反馈（指令通道 13.3 收口）
+        val full = delegationReplies[roleId]
+            ?: "来自${roleName}的反馈：收到，这事我接下了。我先梳理一下当前进展，稍后给你一个初步安排。"
         streamTypewriter(full, senderRoleId = roleId)
         _uiState.update { it.copy(responding = false) }
     }
@@ -347,16 +413,22 @@ class ChatViewModel(private val store: SnapshotStore = SnapshotStore) : ViewMode
         _uiState.update { it.copy(thinking = false) }
 
         // FR-33：工具执行过程可视（工具名+运行中状态轮换）
-        for (stage in store.toolExecutionStages) {
+        for (stage in toolExecutionStages) {
             _uiState.update { it.copy(streamingToolTitle = stage) }
             delay(350)
         }
         _uiState.update { it.copy(streamingToolTitle = null) }
 
-        val replies = store.butlerReplies
+        val replies = butlerReplies
+        if (replies.isEmpty()) {
+            // T8 崩溃守卫：演示回复表为空时 `replyIndex % replies.size` 会除零崩溃——
+            // 落定本轮不触发卡片，不产生空气泡（演示回复为编译期常量，守卫仅作防呆）
+            _uiState.update { it.copy(responding = false) }
+            return
+        }
         // FR-30：管家视图第 4 轮回复走低置信（mock confidence<0.7）
         val lowConfidence = viewKey == null && replyIndex % replies.size == 3
-        val full = if (lowConfidence) store.lowConfidenceReply
+        val full = if (lowConfidence) lowConfidenceReply
         else replies[replyIndex % replies.size]
         replyIndex++
 
@@ -371,10 +443,10 @@ class ChatViewModel(private val store: SnapshotStore = SnapshotStore) : ViewMode
         // FR-2/FR-29：第 2 轮回复后浮现拆分提案卡，并把执行溯源挂到本条助手消息（仅管家对话流）
         if (round == 2 && viewKey == null) {
             if (_uiState.value.decomposition == null) {
-                _uiState.update { it.copy(decomposition = store.decompositionProposal) }
+                _uiState.update { it.copy(decomposition = decompositionProposal) }
             }
             _uiState.update {
-                it.copy(traceByMessageId = it.traceByMessageId + (msgId to store.executionTrace))
+                it.copy(traceByMessageId = it.traceByMessageId + (msgId to executionTrace))
             }
         }
 
@@ -394,7 +466,7 @@ class ChatViewModel(private val store: SnapshotStore = SnapshotStore) : ViewMode
 
         // FR-5：第 2 轮回复后浮现角色涌现提案卡（仅管家对话流，一次性守卫）
         if (round == 2 && viewKey == null && _uiState.value.roleProposal == null) {
-            _uiState.update { it.copy(roleProposal = store.roleProposal) }
+            _uiState.update { it.copy(roleProposal = com.egosync.companion.ui.chat.roleProposal) }
         }
     }
 

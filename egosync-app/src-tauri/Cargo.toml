@@ -37,6 +37,8 @@ tokio-util = "0.7"
 rfd = "0.15"
 indexmap = { version = "1", features = ["std"] }
 companion-proto = { version = "0.1.0", path = "../../crates/companion-proto" }
+# Story 13.1: 快照分帧 envelope 的 chunk 编码（已在依赖树中，此处置为直接依赖）
+base64 = "0.22"
 tokio-tungstenite = "0.29.0"
 mdns-sd = "0.21.0"
 

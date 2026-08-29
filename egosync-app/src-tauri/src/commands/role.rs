@@ -10,6 +10,16 @@ use crate::services::agent_config::AgentConfigService;
 
 const MIN_ACTIVE_ROLE_ERROR: &str = "至少保留一个角色";
 
+/// Story 13.1：命令层补发写事件（快照引擎订阅触发 STATE_DELTA；payload
+/// 沿用域对象供前端自由消费——引擎只看事件名不看 payload）。
+fn emit_role_event(app_handle: &tauri::AppHandle, event: &str, payload: &impl serde::Serialize) {
+    use tauri::Emitter;
+
+    if let Err(e) = app_handle.emit(event, payload) {
+        tracing::warn!(event = event, error = %e, "role 写事件发射失败");
+    }
+}
+
 /// Best-effort sync to opencode.json — warn on failure, never block CRUD.
 fn sync_warn(result: Result<(), AppError>, action: &str) {
     if let Err(e) = result {
@@ -35,6 +45,7 @@ async fn registry_for_sync(pool: &DbPool) -> Vec<crate::models::skill::SkillRegi
 #[tauri::command]
 pub async fn role_create(
     input: CreateRoleInput,
+    app_handle: tauri::AppHandle,
     pool: State<'_, DbPool>,
     agent_config: State<'_, AgentConfigService>,
 ) -> Result<Role, AppError> {
@@ -62,6 +73,7 @@ pub async fn role_create(
         crate::services::mcp_server::sync_role_agent_with_mcp(&pool, &agent_config, &role, &registry).await,
         "create",
     );
+    emit_role_event(&app_handle, "role:created", &role);
     Ok(role)
 }
 
@@ -79,6 +91,7 @@ pub async fn role_list_archived(pool: State<'_, DbPool>) -> Result<Vec<Role>, Ap
 pub async fn role_update(
     id: String,
     input: UpdateRoleInput,
+    app_handle: tauri::AppHandle,
     pool: State<'_, DbPool>,
     agent_config: State<'_, AgentConfigService>,
 ) -> Result<Role, AppError> {
@@ -92,6 +105,7 @@ pub async fn role_update(
         crate::services::mcp_server::sync_role_agent_with_mcp(&pool, &agent_config, &role, &registry).await,
         "update",
     );
+    emit_role_event(&app_handle, "role:updated", &role);
     Ok(role)
 }
 
@@ -99,6 +113,7 @@ pub async fn role_update(
 pub async fn role_update_skills(
     id: String,
     input: UpdateRoleSkillsInput,
+    app_handle: tauri::AppHandle,
     pool: State<'_, DbPool>,
     agent_config: State<'_, AgentConfigService>,
 ) -> Result<Role, AppError> {
@@ -108,6 +123,7 @@ pub async fn role_update_skills(
         crate::services::mcp_server::sync_role_agent_with_mcp(&pool, &agent_config, &role, &registry).await,
         "update_skills",
     );
+    emit_role_event(&app_handle, "role:updated", &role);
     Ok(role)
 }
 
@@ -115,6 +131,7 @@ pub async fn role_update_skills(
 pub async fn role_update_proactivity(
     id: String,
     input: UpdateRoleProactivityInput,
+    app_handle: tauri::AppHandle,
     pool: State<'_, DbPool>,
     agent_config: State<'_, AgentConfigService>,
 ) -> Result<Role, AppError> {
@@ -124,24 +141,28 @@ pub async fn role_update_proactivity(
         crate::services::mcp_server::sync_role_agent_with_mcp(&pool, &agent_config, &role, &registry).await,
         "update_proactivity",
     );
+    emit_role_event(&app_handle, "role:updated", &role);
     Ok(role)
 }
 
 #[tauri::command]
 pub async fn role_archive(
     id: String,
+    app_handle: tauri::AppHandle,
     pool: State<'_, DbPool>,
     agent_config: State<'_, AgentConfigService>,
 ) -> Result<Role, AppError> {
     ensure_can_remove_active_role(&pool).await?;
     let role = roles::archive_role(&pool, &id).await?;
     sync_warn(agent_config.sync_role_archived(&role.id), "archive");
+    emit_role_event(&app_handle, "role:archived", &role);
     Ok(role)
 }
 
 #[tauri::command]
 pub async fn role_restore(
     id: String,
+    app_handle: tauri::AppHandle,
     pool: State<'_, DbPool>,
     agent_config: State<'_, AgentConfigService>,
 ) -> Result<Role, AppError> {
@@ -151,12 +172,14 @@ pub async fn role_restore(
         crate::services::mcp_server::sync_role_agent_with_mcp(&pool, &agent_config, &role, &registry).await,
         "restore",
     );
+    emit_role_event(&app_handle, "role:restored", &role);
     Ok(role)
 }
 
 #[tauri::command]
 pub async fn role_delete(
     id: String,
+    app_handle: tauri::AppHandle,
     pool: State<'_, DbPool>,
     conv_pool: State<'_, ConversationsPool>,
     agent_config: State<'_, AgentConfigService>,
@@ -168,6 +191,7 @@ pub async fn role_delete(
 
     roles::delete_role(&pool, &conv_pool, &id).await?;
     sync_warn(agent_config.sync_role_deleted(&id), "delete");
+    emit_role_event(&app_handle, "role:deleted", &role);
     Ok(())
 }
 

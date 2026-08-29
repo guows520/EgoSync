@@ -40,6 +40,15 @@ pub struct MemoryExtractionState(pub Arc<Mutex<HashMap<String, CancellationToken
 
 const MEMORY_EXTRACTION_IDLE_SECONDS: u64 = 300;
 
+/// Story 13.1：命令层补发写事件（快照引擎订阅触发 STATE_DELTA；payload
+/// 沿用域对象/裸 id 供前端自由消费——引擎只看事件名不看 payload）。
+/// 失败 warn 不阻断（评审 B7：与 role/task 的 emit warn 模式对齐）。
+fn emit_chat_event(app_handle: &tauri::AppHandle, event: &str, payload: &impl serde::Serialize) {
+    if let Err(e) = app_handle.emit(event, payload) {
+        tracing::warn!(event = event, error = %e, "chat 写事件发射失败");
+    }
+}
+
 fn sync_role_config_warn(result: Result<(), AppError>, action: &str) {
     if let Err(e) = result {
         tracing::warn!("opencode sync ({}) failed: {}", action, e);
@@ -329,6 +338,11 @@ pub async fn chat_send_message(
         conversations::insert_message(&conv_pool, &conv_id, "user", display_content, true).await?
     };
 
+    // Story 13.1（评审决策①）：用户消息落库后补发 message:saved（快照引擎
+    // 触发 STATE_DELTA）。assistant 消息完成由既有 llm:stream（done=true）
+    // 覆盖，无需重复 emit。
+    emit_chat_event(&app_handle, "message:saved", &user_msg);
+
     let assistant_msg =
         conversations::insert_message(&conv_pool, &conv_id, "assistant", "", false).await?;
 
@@ -597,7 +611,11 @@ pub async fn chat_delete_conversation(
         cancel_memory_extraction_token(&memory_state, &conversation_id).await;
     }
 
-    conversations::delete_conversation(&conv_pool, &conversation_id).await
+    conversations::delete_conversation(&conv_pool, &conversation_id).await?;
+    // Story 13.1（评审决策①）：会话删除须触发 STATE_DELTA，否则手机会话域
+    // 保留已删会话。payload 裸 id（对象已删，无域对象可发）。
+    emit_chat_event(&app_handle, "conversation:deleted", &conversation_id);
+    Ok(())
 }
 
 #[tauri::command]
@@ -613,7 +631,10 @@ pub async fn chat_new_conversation(
             Ok(messages) => messages,
             Err(err) => {
                 tracing::warn!(conversation_id = old_id, error = %err, "conversation handoff skipped");
-                return conversations::create_conversation(&conv_pool, role_id.as_deref()).await;
+                // Story 13.1（评审决策①）：创建路径同样补发 conversation:created
+                let conv = conversations::create_conversation(&conv_pool, role_id.as_deref()).await?;
+                emit_chat_event(&app_handle, "conversation:created", &conv);
+                return Ok(conv);
             }
         };
         let should_extract_old_conversation = has_enough_complete_user_messages(&messages);
@@ -654,7 +675,9 @@ pub async fn chat_new_conversation(
         }
     }
 
-    conversations::create_conversation(&conv_pool, role_id.as_deref()).await
+    let conv = conversations::create_conversation(&conv_pool, role_id.as_deref()).await?;
+    emit_chat_event(&app_handle, "conversation:created", &conv);
+    Ok(conv)
 }
 
 #[cfg(test)]

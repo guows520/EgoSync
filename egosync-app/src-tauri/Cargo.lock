@@ -1196,6 +1196,7 @@ version = "0.1.4"
 dependencies = [
  "async-trait",
  "axum",
+ "base64 0.22.1",
  "chrono",
  "companion-proto",
  "dirs 5.0.1",

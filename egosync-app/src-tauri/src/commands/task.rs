@@ -10,6 +10,16 @@ use crate::services::task_classifier;
 /// 前端据此用最新任务替换卡片并清除「分类中」标记。
 pub const TASK_CLASSIFIED_EVENT: &str = "task:classified";
 
+/// Story 13.1：命令层补发写事件（快照引擎订阅触发 STATE_DELTA；payload
+/// 沿用域对象供前端自由消费——引擎只看事件名不看 payload）。
+fn emit_task_event(app_handle: &tauri::AppHandle, event: &str, payload: &impl serde::Serialize) {
+    use tauri::Emitter;
+
+    if let Err(e) = app_handle.emit(event, payload) {
+        tracing::warn!(event = event, error = %e, "task 写事件发射失败");
+    }
+}
+
 #[tauri::command]
 pub async fn task_create(
     input: CreateTaskInput,
@@ -47,6 +57,7 @@ pub async fn task_create(
             }
         });
     }
+    emit_task_event(&app_handle, "task:created", &task);
     Ok(task)
 }
 
@@ -79,6 +90,7 @@ pub async fn task_list_all(
 pub async fn task_update(
     id: String,
     input: UpdateTaskInput,
+    app_handle: tauri::AppHandle,
     pool: State<'_, DbPool>,
 ) -> Result<Task, AppError> {
     if let Some(title) = input.title.as_deref() {
@@ -88,29 +100,45 @@ pub async fn task_update(
         validate_quadrant(quadrant)?;
     }
     // db 层已根据 input.quadrant.is_some() 设置 manual_override。
-    tasks::update_task(&pool, &id, &input).await
+    let task = tasks::update_task(&pool, &id, &input).await?;
+    emit_task_event(&app_handle, "task:updated", &task);
+    Ok(task)
 }
 
 #[tauri::command]
-pub async fn task_delete(id: String, pool: State<'_, DbPool>) -> Result<(), AppError> {
-    tasks::soft_delete_task(&pool, &id).await
+pub async fn task_delete(
+    id: String,
+    app_handle: tauri::AppHandle,
+    pool: State<'_, DbPool>,
+) -> Result<(), AppError> {
+    tasks::soft_delete_task(&pool, &id).await?;
+    emit_task_event(&app_handle, "task:deleted", &id);
+    Ok(())
 }
 
 #[tauri::command]
 pub async fn task_reorder(
     task_ids: Vec<String>,
+    app_handle: tauri::AppHandle,
     pool: State<'_, DbPool>,
 ) -> Result<(), AppError> {
-    tasks::reorder_tasks(&pool, &task_ids).await
+    tasks::reorder_tasks(&pool, &task_ids).await?;
+    emit_task_event(&app_handle, "task:reordered", &task_ids);
+    Ok(())
 }
 
 #[tauri::command]
 pub async fn task_toggle_complete(
     task_id: String,
     is_completed: bool,
+    app_handle: tauri::AppHandle,
     pool: State<'_, DbPool>,
 ) -> Result<Task, AppError> {
-    tasks::set_task_completion(&pool, &task_id, is_completed).await
+    let task = tasks::set_task_completion(&pool, &task_id, is_completed).await?;
+    // 评审 B9：toggle 双向（完成/取消完成）——事件名统一为 task:updated，
+    // 取消完成时发 task:completed 会误导消费方对状态的语义判断。
+    emit_task_event(&app_handle, "task:updated", &task);
+    Ok(task)
 }
 
 /// Story 3.5：前端启动 / 打开任务面板时主动触发一次 Q2 保护检查。

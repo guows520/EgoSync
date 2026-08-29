@@ -8,6 +8,7 @@ pub mod briefing_generator;
 pub mod butler_config;
 pub mod companion_connection;
 pub mod companion_pairing;
+pub mod companion_snapshot;
 pub mod dashboard_service;
 pub mod delegate_bridge;
 pub mod energy_calculator;

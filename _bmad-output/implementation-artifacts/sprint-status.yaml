@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-21
-last_updated: 2026-08-29T08:35:00+08:00
+last_updated: 2026-08-29T11:30:00+08:00
 project: "探索 (EgoSync)"
 project_key: NOKEY
 tracking_system: file-system
@@ -193,7 +193,7 @@ development_status:
   # Epic 13: 手机实时视图与远程操作 (Live View & Remote Commands)
   # ============================================================
   epic-13: in-progress
-  13-1-desktop-snapshot-engine-and-state-push: review
+  13-1-desktop-snapshot-engine-and-state-push: done
   13-2-mobile-realtime-snapshot-view: backlog
   13-3-command-channel-and-streaming-chat: backlog
   epic-13-retrospective: optional

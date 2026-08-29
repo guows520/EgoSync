@@ -12,6 +12,7 @@ pub mod q2_reminder;
 pub mod role;
 pub mod settings;
 pub mod skill;
+pub mod snapshot;
 pub mod suggestion;
 pub mod task;
 pub mod task_decomposition;

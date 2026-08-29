@@ -269,3 +269,9 @@ All items resolved in the same session:
 ## Deferred from: code review of 12-4-android-scan-pairing-and-tri-state-connection (2026-08-28)
 
 - **中继槽位抢占 DoS 与桌面重连放大**（companion-android/.../connection/RelayClient.kt + egosync-app/src-tauri/src/services/companion_connection.rs::relay_connect_and_serve/run_relay_client）：中继鉴权零知识，任何持有 16-hex relayId 的一方可注册为 phone 并把真手机挤出单槽位；桌面被拒后 `return Ok(())` + 无限退避重连，放大为持久握手-拒绝-重连 churn，可致永久中继拒服。根治需改 relay-server（phone 槽换绑/速率限制/连接数上限），与本清单 12.3 评审的「全局连接数上限/速率限制」项合并；V1 本地优先单设备、relayId 仅经面对面扫码流转，暂受风险。
+
+## Deferred from: code review of 13-1-desktop-snapshot-engine-and-state-push (2026-08-29)
+
+- **role:deleted/task:deleted payload 形状不一致**（egosync-app/src-tauri/src/commands/role.rs:194 发全对象；commands/task.rs:115 发裸 id）：快照引擎忽略 payload 故无功能影响；13.2 手机端开始消费这些事件时统一，届时需兼顾桌面前端既有监听方。
+- **dataCutoffAt 混合 RFC3339 与 YYYY-MM-DD 字符串比较**（egosync-app/src-tauri/src/services/companion_snapshot.rs min_assign）：同日边界精度 <24h，属信息性字段；13.2 移动端展示语义确定时一并收口。
+- **notify 通道满丢信号 / OnConnect 与 Write 处理顺序**（egosync-app/src-tauri/src/services/companion_snapshot.rs）：256 容量溢出在截断 O(n²) 修复后几乎不可达；STATE_DELTA 可能先于建连 SNAPSHOT 到达，由 13.2 手机端 FrameCodec 状态机语义收口（两帧载荷均为全量快照，功能无损）。

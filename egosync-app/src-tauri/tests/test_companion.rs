@@ -3,6 +3,8 @@
 //! 覆盖：QR payload 字段、WS Noise XX 握手成功/失败路径、paired_devices CRUD
 //! 与免配对重连、移除后拒绝、换绑 pending→confirm 替换、pending 超时、
 //! 事件 payload 形状、data_export 配对设备字段与旧档兼容。
+//! Story 13.1：快照口径/记忆排除、debounce 合并、10MB 截断、建连全量
+//! SNAPSHOT、写信号 STATE_DELTA、断线重连补最新快照、分帧 roundtrip。
 //!
 //! 所有 socket 测试在本机 loopback 起真实 WS listener；事件发射以纯函数
 //! 断言（不依赖 AppHandle）。
@@ -30,6 +32,19 @@ use egosync_lib::services::companion_connection::{
 use egosync_lib::services::companion_pairing;
 use egosync_lib::services::data_export::{
     gather_export_data, import_json_data, ExportFormat, export_all,
+};
+// Story 13.1 快照测试
+use egosync_lib::db::conversations as conversations_db;
+use egosync_lib::db::notifications as notifications_db;
+use egosync_lib::db::roles as roles_db;
+use egosync_lib::db::tasks as tasks_db;
+use egosync_lib::models::notification::CreateNotificationInput;
+use egosync_lib::models::role::CreateRoleInput;
+use egosync_lib::models::snapshot::DesktopSnapshot;
+use egosync_lib::models::task::CreateTaskInput;
+use egosync_lib::services::companion_snapshot::{
+    build_snapshot, frame_snapshot, reassemble, ChunkEnvelope, CompanionSnapshotEngine,
+    SnapshotFrameKind, WriteSignal,
 };
 
 async fn test_pool() -> (DbPool, ConversationsPool, tempfile::TempDir) {
@@ -856,4 +871,737 @@ async fn relay_path_pairs_and_pings() {
     let status = get_status(&pool, &state).await.unwrap();
     let info = status.connected.expect("应处于 Connected");
     assert_eq!(info.origin, "relay", "中继会话 origin 必须如实标记");
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Story 13.1：快照引擎
+// ═══════════════════════════════════════════════════════════════════
+
+/// 带快照引擎的监听装配：注入短 debounce 窗口 + 建连请求通道 + spawn run()。
+async fn setup_listener_with_engine(
+    debounce: Duration,
+) -> (
+    DbPool,
+    ConversationsPool,
+    Arc<CompanionState>,
+    Arc<CompanionSnapshotEngine>,
+    u16,
+    tempfile::TempDir,
+) {
+    let (pool, conv_pool, dir) = test_pool().await;
+    let (priv_key, pub_key) = generate_static_keypair().unwrap();
+    let state = Arc::new(CompanionState::with_static_keypair_for_testing(
+        None,
+        priv_key,
+        pub_key,
+    ));
+    let engine = Arc::new(CompanionSnapshotEngine::with_debounce(
+        pool.clone(),
+        conv_pool.clone(),
+        state.clone(),
+        debounce,
+    ));
+    state
+        .set_snapshot_request_tx(engine.snapshot_request_tx())
+        .await;
+    let engine_for_run = engine.clone();
+    tokio::spawn(async move {
+        engine_for_run.run().await;
+    });
+    let port = start_companion_listener(pool.clone(), state.clone())
+        .await
+        .expect("start listener");
+    (pool, conv_pool, state, engine, port, dir)
+}
+
+/// 种子数据：一个角色（含机密 personality_prompt）+ 任务 + 会话/消息 +
+/// 本季度与跨季度简报/复盘 + 未读/已读通知 + 一条记忆。
+/// 返回角色 id（供通知外键使用）。
+async fn seed_snapshot_domain_data(pool: &DbPool, conv_pool: &ConversationsPool) -> String {
+    let role = roles_db::create_role(
+        pool,
+        &CreateRoleInput {
+            name: "快照测试角色".to_string(),
+            icon: None,
+            color: None,
+            goal: Some("验证快照口径".to_string()),
+        },
+    )
+    .await
+    .expect("create role");
+    // 桌面内部数据：不得出现在快照中（负向断言目标）
+    sqlx::query("UPDATE roles SET personality_prompt = 'SECRET-PERSONALITY-PROMPT' WHERE id = ?1")
+        .bind(&role.id)
+        .execute(pool)
+        .await
+        .expect("set personality_prompt");
+
+    tasks_db::create_task(
+        pool,
+        &CreateTaskInput {
+            owner_type: None,
+            role_id: Some(role.id.clone()),
+            title: "快照口径验证任务".to_string(),
+            deadline: None,
+            quadrant: Some("Q2".to_string()),
+            is_big_rock: None,
+        },
+    )
+    .await
+    .expect("create task");
+
+    let conv = conversations_db::create_conversation(conv_pool, Some(&role.id))
+        .await
+        .expect("create conversation");
+    conversations_db::insert_message(conv_pool, &conv.id, "user", "早上好，今天做什么？", true)
+        .await
+        .expect("insert user message");
+    conversations_db::insert_message(conv_pool, &conv.id, "assistant", "先专注大石头任务。", true)
+        .await
+        .expect("insert assistant message");
+
+    // 简报：本季度 + 远古（本季度过滤的负向目标）
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let month_start = chrono::Local::now().format("%Y-%m-01").to_string();
+    sqlx::query(
+        "INSERT INTO briefings (id, content, date) VALUES ('b-current', '本季度晨间简报内容', ?1)",
+    )
+    .bind(&today)
+    .execute(pool)
+    .await
+    .expect("insert current briefing");
+    sqlx::query(
+        "INSERT INTO briefings (id, content, date) VALUES ('b-old', '远古旧简报-不应上机', '2020-01-10')",
+    )
+    .execute(pool)
+    .await
+    .expect("insert old briefing");
+
+    // 周复盘：本周（月首周必在本季度内）+ 远古
+    sqlx::query(
+        "INSERT INTO weekly_reviews (id, week_start, week_end, summary) \
+         VALUES ('wr-current', ?1, '2026-01-07', '本季度周复盘内容')",
+    )
+    .bind(&month_start)
+    .execute(pool)
+    .await
+    .expect("insert current review");
+    sqlx::query(
+        "INSERT INTO weekly_reviews (id, week_start, week_end, summary) \
+         VALUES ('wr-old', '2020-01-06', '2020-01-12', '远古旧复盘-不应上机')",
+    )
+    .execute(pool)
+    .await
+    .expect("insert old review");
+
+    // 通知：未读 + 已读（快照只含未读）
+    let unread = notifications_db::create_notification(
+        pool,
+        &CreateNotificationInput {
+            role_id: role.id.clone(),
+            level: "tap".to_string(),
+            content: "未读通知-应上机".to_string(),
+        },
+    )
+    .await
+    .expect("create unread notification");
+    let read = notifications_db::create_notification(
+        pool,
+        &CreateNotificationInput {
+            role_id: role.id.clone(),
+            level: "whisper".to_string(),
+            content: "已读通知-不应上机".to_string(),
+        },
+    )
+    .await
+    .expect("create read notification");
+    notifications_db::mark_read(pool, &read.id)
+        .await
+        .expect("mark read");
+    assert_eq!(
+        notifications_db::count_unread(pool).await.unwrap(),
+        1,
+        "种子校验：恰一条未读"
+    );
+    let _ = unread;
+
+    // 记忆：内容不得上机（memoryCount 仅数字出现）
+    sqlx::query(
+        "INSERT INTO memories (id, role_id, category, content, source_conversation_id) \
+         VALUES ('m-secret', ?1, 'fact', '绝密记忆内容XYZ-不上机', 'conv-fake')",
+    )
+    .bind(&role.id)
+    .execute(pool)
+    .await
+    .expect("insert memory");
+
+    role.id
+}
+
+/// 手机侧收帧并重组出目标类型的快照（跳过其他帧类型），超时即 panic。
+async fn phone_receive_snapshot(
+    ws: &mut WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
+    t: &mut TransportSession,
+    want_snapshot: bool,
+    timeout_ms: u64,
+) -> DesktopSnapshot {
+    let mut frames: Vec<Frame> = Vec::new();
+    let mut total: Option<u32> = None;
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        assert!(!remaining.is_zero(), "超时未收齐全部分帧");
+        let msg = tokio::time::timeout(remaining, ws.next())
+            .await
+            .expect("读帧超时")
+            .expect("连接已关闭")
+            .expect("WS 读取失败");
+        let bytes = msg.into_data();
+        let frame = decode_frame(&bytes, t).expect("帧解码失败");
+        let is_wanted = match &frame {
+            Frame::Snapshot(_) => want_snapshot,
+            Frame::StateDelta(_) => !want_snapshot,
+            _ => false,
+        };
+        if !is_wanted {
+            continue;
+        }
+        let data = match &frame {
+            Frame::Snapshot(p) => &p.data,
+            Frame::StateDelta(p) => &p.data,
+            _ => unreachable!(),
+        };
+        let envelope: ChunkEnvelope = serde_json::from_str(data).expect("envelope 解析");
+        match total {
+            None => total = Some(envelope.total),
+            Some(tot) => assert_eq!(tot, envelope.total, "分帧 total 漂移"),
+        }
+        frames.push(frame);
+        if frames.len() == total.unwrap() as usize {
+            return reassemble(&frames).expect("重组快照失败");
+        }
+    }
+}
+
+/// 进程内完成 XX 握手，返回（发起方, 响应方）传输会话（单帧编码上限断言用）。
+fn session_pair() -> (TransportSession, TransportSession) {
+    let (i_priv, _) = generate_static_keypair().unwrap();
+    let (r_priv, _) = generate_static_keypair().unwrap();
+    let mut initiator = HandshakeSession::initiator(&i_priv).unwrap();
+    let mut responder = HandshakeSession::responder(&r_priv).unwrap();
+    let m1 = initiator.write_message(&[]).unwrap();
+    responder.read_message(&m1).unwrap();
+    let m2 = responder.write_message(&[]).unwrap();
+    initiator.read_message(&m2).unwrap();
+    let m3 = initiator.write_message(&[]).unwrap();
+    responder.read_message(&m3).unwrap();
+    (
+        initiator.into_transport().unwrap(),
+        responder.into_transport().unwrap(),
+    )
+}
+
+/// 手机完成配对握手（HELLO + nonce），等待进入 Connected 状态。
+async fn phone_pair_and_connect(
+    port: u16,
+    phone_priv: &[u8],
+    nonce: &str,
+    pool: &DbPool,
+    state: &Arc<CompanionState>,
+) -> (WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>, TransportSession) {
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}"))
+        .await
+        .expect("connect");
+    let mut t = phone_handshake(&mut ws, phone_priv).await;
+    send_frame(
+        &mut ws,
+        &mut t,
+        &Frame::Hello(HelloPayload {
+            protocol_version: PROTOCOL_VERSION,
+        }),
+    )
+    .await;
+    send_pairing_nonce(&mut ws, &mut t, nonce).await;
+    wait_for(
+        || async { get_status(pool, state).await.unwrap().connected.is_some() },
+        15000,
+        "等待进入 Connected 状态",
+    )
+    .await;
+    (ws, t)
+}
+
+#[tokio::test]
+async fn snapshot_scope_completeness_and_memory_exclusion() {
+    // WHY: 桌面是唯一事实源，手机只该拿到口径内数据——七域齐全是「打开
+    // 即见一致状态」的前提；记忆内容/人格提示若泄上机，等于把桌面内部
+    // 数据边界打穿（NFR-M4/硬边界 #4），且用户无从察觉。
+    let (pool, conv_pool, _dir) = test_pool().await;
+    let _role_id = seed_snapshot_domain_data(&pool, &conv_pool).await;
+
+    let snapshot = build_snapshot(&pool, &conv_pool).await.expect("build snapshot");
+
+    // 七域齐全
+    assert_eq!(snapshot.roles.len(), 1, "角色域");
+    assert_eq!(snapshot.tasks.len(), 1, "任务域");
+    assert_eq!(snapshot.dashboard.statuses.len(), 1, "仪表盘角色卡态");
+    assert_eq!(snapshot.conversations.len(), 1, "会话域");
+    assert_eq!(snapshot.conversations[0].messages.len(), 2, "会话消息");
+    assert_eq!(snapshot.briefings.len(), 1, "简报域（仅本季度）");
+    assert_eq!(snapshot.briefings[0].id, "b-current");
+    assert_eq!(snapshot.weekly_reviews.len(), 1, "周复盘域（仅本季度）");
+    assert_eq!(snapshot.weekly_reviews[0].id, "wr-current");
+    assert_eq!(snapshot.notifications.len(), 1, "通知域（仅未读）");
+    assert_eq!(snapshot.notifications[0].content, "未读通知-应上机");
+
+    // 未截断元数据
+    assert!(!snapshot.truncated);
+    assert!(snapshot.data_cutoff_at.is_none());
+    assert!(snapshot.truncated_domains.is_empty());
+    assert_eq!(snapshot.schema_version, 1);
+
+    // 负向断言：记忆内容 / 人格提示 / 跨季度数据 / 已读通知 不在快照中
+    let json = serde_json::to_string(&snapshot).unwrap();
+    assert!(!json.contains("绝密记忆内容XYZ"), "记忆内容不得上机");
+    assert!(!json.contains("SECRET-PERSONALITY-PROMPT"), "人格提示不得上机");
+    assert!(!json.contains("远古旧简报"), "跨季度简报不得上机");
+    assert!(!json.contains("远古旧复盘"), "跨季度复盘不得上机");
+    assert!(!json.contains("已读通知-不应上机"), "已读通知不得上机");
+    // memoryCount 仅作为仪表盘指标数字出现
+    assert_eq!(snapshot.dashboard.metrics.memory_count, 1);
+    assert!(json.contains("\"memoryCount\":1"));
+}
+
+#[tokio::test]
+async fn debounce_coalesces_rapid_writes() {
+    // WHY: 高频写（连续对话落库）若逐条触发 10MB 级重建，桌面主库会被
+    // 聚合查询反复拖慢（sprint 风险 #1）——N 次快速写必须合并为 1 次重建。
+    let (pool, conv_pool, _dir) = test_pool().await;
+    let _role_id = seed_snapshot_domain_data(&pool, &conv_pool).await;
+    let (priv_key, pub_key) = generate_static_keypair().unwrap();
+    let state = Arc::new(CompanionState::with_static_keypair_for_testing(
+        None,
+        priv_key,
+        pub_key,
+    ));
+    let engine = CompanionSnapshotEngine::with_debounce(
+        pool.clone(),
+        conv_pool.clone(),
+        state,
+        Duration::from_millis(80),
+    );
+    let engine = Arc::new(engine);
+    let engine_for_run = engine.clone();
+    tokio::spawn(async move {
+        engine_for_run.run().await;
+    });
+
+    let notify = engine.notify_signal();
+    for _ in 0..5 {
+        notify
+            .try_send(WriteSignal {
+                event: "task:created",
+            })
+            .expect("try_send 写信号");
+    }
+
+    wait_for(
+        || async { engine.rebuild_count() >= 1 },
+        5000,
+        "等待 debounce 窗口结束并完成首次重建",
+    )
+    .await;
+    // 窗口结束后再等一个完整 debounce 周期，确认没有第二次重建
+    sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        engine.rebuild_count(),
+        1,
+        "5 次快速写信号必须合并为恰 1 次重建"
+    );
+}
+
+#[tokio::test]
+async fn snapshot_respects_10mb_cap_and_truncates_oldest() {
+    // WHY: 截断是诚实性机制而非静默丢数据——超限必须置 truncated 元数据并
+    // 保留核心域（角色/任务/指标），让手机 UI 能明示「数据截至何时」；
+    // 静默截断 = 用户看到残缺状态却以为看到了全部。
+    let (pool, conv_pool, _dir) = test_pool().await;
+    let role = roles_db::create_role(
+        &pool,
+        &CreateRoleInput {
+            name: "大快照角色".to_string(),
+            icon: None,
+            color: None,
+            goal: None,
+        },
+    )
+    .await
+    .expect("create role");
+    tasks_db::create_task(
+        &pool,
+        &CreateTaskInput {
+            owner_type: None,
+            role_id: Some(role.id.clone()),
+            title: "核心域任务-不可截断".to_string(),
+            deadline: None,
+            quadrant: Some("Q1".to_string()),
+            is_big_rock: None,
+        },
+    )
+    .await
+    .expect("create task");
+
+    // 3 个会话 × 70 条 × 60KB ≈ 12.6MB（> 10MB 上限）；丢最旧会话后
+    // ≈ 8.4MB（< 上限）——恰触发一次整段丢弃。
+    let big_content = "x".repeat(60_000);
+    let mut conv_ids = Vec::new();
+    for label in ["old", "mid", "new"] {
+        let conv = conversations_db::create_conversation(&conv_pool, Some(&role.id))
+            .await
+            .expect("create conversation");
+        for _ in 0..70 {
+            conversations_db::insert_message(&conv_pool, &conv.id, "user", &big_content, true)
+                .await
+                .expect("insert big message");
+        }
+        // 显式时间戳：会话按 updated_at DESC 排序、消息时间确定性可断言
+        let updated_at = format!("2026-08-{:02}T00:00:00Z", match label {
+            "old" => 1,
+            "mid" => 10,
+            _ => 20,
+        });
+        let message_at = updated_at.clone();
+        sqlx::query("UPDATE conversations SET updated_at = ?1 WHERE id = ?2")
+            .bind(&updated_at)
+            .bind(&conv.id)
+            .execute(&*conv_pool)
+            .await
+            .expect("set conversation updated_at");
+        sqlx::query("UPDATE messages SET created_at = ?1 WHERE conversation_id = ?2")
+            .bind(&message_at)
+            .bind(&conv.id)
+            .execute(&*conv_pool)
+            .await
+            .expect("set message created_at");
+        conv_ids.push(conv.id);
+    }
+
+    let snapshot = build_snapshot(&pool, &conv_pool).await.expect("build snapshot");
+
+    assert!(snapshot.truncated, "超限快照必须标记 truncated");
+    let cutoff = snapshot.data_cutoff_at.clone().expect("截断必须写 dataCutoffAt");
+    assert_eq!(cutoff, "2026-08-10T00:00:00Z", "cutoff = 保留数据的最旧时间戳");
+    assert_eq!(snapshot.truncated_domains, vec!["conversations".to_string()]);
+    assert_eq!(snapshot.conversations.len(), 2, "恰丢弃最旧一个会话");
+    assert!(
+        !snapshot.conversations.iter().any(|c| c.id == conv_ids[0]),
+        "最旧会话必须被整段丢弃"
+    );
+    // 核心域不缺失（AC4）
+    assert_eq!(snapshot.roles.len(), 1);
+    assert_eq!(snapshot.tasks.len(), 1);
+    assert_eq!(snapshot.dashboard.statuses.len(), 1);
+    // 截断后体积达标
+    let len = serde_json::to_vec(&snapshot).unwrap().len();
+    assert!(len <= 10 * 1024 * 1024, "截断后必须 ≤ 10MB，实际 {len}");
+}
+
+#[tokio::test]
+async fn snapshot_stage_b_halves_messages_and_keeps_newest() {
+    // WHY: 单会话超限时阶段 B（消息减半）必须保留最新一半——保旧丢新会让
+    // 手机看到早已结束的话题却看不到最新进展；且阶段 A 的「保留最新 1 个
+    // 会话」守卫不得把唯一会话整段清空（评审 P4/P7：截断方向必须有测试，
+    // 原实现 drain 方向反了也无测试可报错）。
+    let (pool, conv_pool, _dir) = test_pool().await;
+    let role = roles_db::create_role(
+        &pool,
+        &CreateRoleInput {
+            name: "单会话超限角色".to_string(),
+            icon: None,
+            color: None,
+            goal: None,
+        },
+    )
+    .await
+    .expect("create role");
+    let conv = conversations_db::create_conversation(&conv_pool, Some(&role.id))
+        .await
+        .expect("create conversation");
+
+    // 200 条 × 60KB = 12MB（> 10MB）——单会话触发阶段 B；减半后 6MB 达标。
+    // 200 恰为 MESSAGES_PER_CONVERSATION 上限，全部进入快照。
+    let big_content = "x".repeat(60_000);
+    for _ in 0..200 {
+        conversations_db::insert_message(&conv_pool, &conv.id, "user", &big_content, true)
+            .await
+            .expect("insert big message");
+    }
+    // 逐条递增时间戳（rowid 顺序 = 插入顺序 = 时间顺序），方向断言可确定性
+    let rows: Vec<(i64,)> = sqlx::query_as(
+        "SELECT rowid FROM messages WHERE conversation_id = ?1 ORDER BY rowid",
+    )
+    .bind(&conv.id)
+    .fetch_all(&*conv_pool)
+    .await
+    .expect("select rowids");
+    let ts_of = |i: usize| format!("2026-08-01T{:02}:{:02}:00Z", i / 60, i % 60);
+    for (i, (rowid,)) in rows.iter().enumerate() {
+        sqlx::query("UPDATE messages SET created_at = ?1 WHERE rowid = ?2")
+            .bind(ts_of(i))
+            .bind(rowid)
+            .execute(&*conv_pool)
+            .await
+            .expect("set message created_at");
+    }
+
+    let snapshot = build_snapshot(&pool, &conv_pool).await.expect("build snapshot");
+
+    assert_eq!(snapshot.conversations.len(), 1, "唯一会话不得被整段丢弃");
+    let messages = &snapshot.conversations[0].messages;
+    assert_eq!(messages.len(), 100, "200 条减半后恰保留 100 条");
+    assert_eq!(
+        messages.first().map(|m| m.created_at.as_str()),
+        Some(ts_of(100).as_str()),
+        "最旧保留消息必须是原第 101 条（保留最新一半）"
+    );
+    assert_eq!(
+        messages.last().map(|m| m.created_at.as_str()),
+        Some(ts_of(199).as_str()),
+        "最新消息必须保留"
+    );
+    assert!(snapshot.truncated, "减半截断必须标记 truncated");
+    assert_eq!(snapshot.truncated_domains, vec!["conversations".to_string()]);
+    assert_eq!(
+        snapshot.data_cutoff_at.as_deref(),
+        Some(ts_of(100).as_str()),
+        "cutoff = 保留数据的最旧时间戳"
+    );
+    let len = serde_json::to_vec(&snapshot).unwrap().len();
+    assert!(len <= 10 * 1024 * 1024, "减半后必须 ≤ 10MB，实际 {len}");
+}
+
+#[tokio::test]
+async fn snapshot_oversize_core_domain_is_flagged_not_silent() {
+    // WHY: 可截域耗尽仍超限（核心域自身 >10MB）时静默照发 = 谎报数据完整
+    // ——手机会把残缺快照当全量渲染。必须 truncated=true 如实标记（评审
+    // P4 诚实性：显式失败优于静默违约），快照本身照发（完整核心域优于失明）。
+    let (pool, conv_pool, _dir) = test_pool().await;
+    let _role = roles_db::create_role(
+        &pool,
+        &CreateRoleInput {
+            name: "超限角色".to_string(),
+            icon: None,
+            color: None,
+            goal: Some("g".repeat(11 * 1024 * 1024)),
+        },
+    )
+    .await
+    .expect("create role");
+
+    let snapshot = build_snapshot(&pool, &conv_pool).await.expect("build snapshot");
+
+    assert!(snapshot.truncated, "可截域耗尽仍超限必须标记 truncated");
+    assert!(
+        snapshot.truncated_domains.is_empty(),
+        "无域被裁——超限来自不可截的核心域"
+    );
+    assert_eq!(snapshot.roles.len(), 1, "核心域照发不裁");
+    let len = serde_json::to_vec(&snapshot).unwrap().len();
+    assert!(
+        len > 10 * 1024 * 1024,
+        "核心域超限时快照如实超限（诚实标记优先于静默截断），实际 {len}"
+    );
+}
+
+#[tokio::test]
+async fn connected_phone_receives_full_snapshot_on_connect() {
+    // WHY: 「打开手机即见桌面一致状态」——建连（含首配）后桌面必须主动下发
+    // 全量 SNAPSHOT，手机无需轮询；这条链路断一处，手机端就是永远的白屏。
+    let (pool, conv_pool, state, _engine, port, _dir) =
+        setup_listener_with_engine(Duration::from_millis(80)).await;
+    seed_snapshot_domain_data(&pool, &conv_pool).await;
+    state.open_pairing_window("nonce-snap".to_string()).await;
+
+    let (phone_priv, _) = generate_static_keypair().unwrap();
+    let (mut ws, mut t) =
+        phone_pair_and_connect(port, &phone_priv, "nonce-snap", &pool, &state).await;
+
+    // 真 WS 路径：手机收齐全部分帧并重组出合法快照
+    let snapshot = phone_receive_snapshot(&mut ws, &mut t, true, 15000).await;
+    assert_eq!(snapshot.roles.len(), 1, "快照须含角色域");
+    assert_eq!(snapshot.tasks.len(), 1, "快照须含任务域");
+    assert_eq!(snapshot.conversations.len(), 1, "快照须含会话域");
+    assert_eq!(snapshot.schema_version, 1);
+    assert!(!snapshot.truncated);
+}
+
+#[tokio::test]
+async fn write_signal_pushes_state_delta() {
+    // WHY: 「变化即时刷新、无需下拉」——会话在线期间写操作必须触发
+    // STATE_DELTA 主动推送；若只有建连快照，手机就成了静态截图。
+    let (pool, conv_pool, state, engine, port, _dir) =
+        setup_listener_with_engine(Duration::from_millis(80)).await;
+    seed_snapshot_domain_data(&pool, &conv_pool).await;
+    state.open_pairing_window("nonce-delta".to_string()).await;
+
+    let (phone_priv, _) = generate_static_keypair().unwrap();
+    let (mut ws, mut t) =
+        phone_pair_and_connect(port, &phone_priv, "nonce-delta", &pool, &state).await;
+
+    // 先消费建连全量快照（本轮目标之前的流量）
+    let initial = phone_receive_snapshot(&mut ws, &mut t, true, 15000).await;
+    assert!(
+        !initial.tasks.iter().any(|task| task.title == "增量新任务"),
+        "初始快照不应包含尚未创建的任务"
+    );
+
+    // 在线期间发生写操作 → 写信号 → debounce → STATE_DELTA
+    tasks_db::create_task(
+        &pool,
+        &CreateTaskInput {
+            owner_type: Some(egosync_lib::models::task::TaskOwnerType::Butler),
+            role_id: None,
+            title: "增量新任务".to_string(),
+            deadline: None,
+            quadrant: Some("Q2".to_string()),
+            is_big_rock: None,
+        },
+    )
+    .await
+    .expect("create delta task");
+    engine
+        .notify_signal()
+        .try_send(WriteSignal {
+            event: "task:created",
+        })
+        .expect("try_send 写信号");
+
+    let delta = phone_receive_snapshot(&mut ws, &mut t, false, 15000).await;
+    assert!(
+        delta.tasks.iter().any(|task| task.title == "增量新任务"),
+        "STATE_DELTA 载荷必须反映最新变更（全量替换式）"
+    );
+}
+
+#[tokio::test]
+async fn reconnect_receives_latest_snapshot_after_gap() {
+    // WHY: 「断线补最新快照、不做历史回放」——断线期间的变更要在重连后
+    // 以一次全量 SNAPSHOT 补齐；若做增量回放或漏变更，手机状态将永久
+    // 落后于桌面且无法自愈。
+    let (pool, conv_pool, state, _engine, port, _dir) =
+        setup_listener_with_engine(Duration::from_millis(80)).await;
+    seed_snapshot_domain_data(&pool, &conv_pool).await;
+    state.open_pairing_window("nonce-reconnect-snap".to_string()).await;
+
+    let (phone_priv, _) = generate_static_keypair().unwrap();
+    {
+        let (mut ws, mut t) =
+            phone_pair_and_connect(port, &phone_priv, "nonce-reconnect-snap", &pool, &state)
+                .await;
+        let first = phone_receive_snapshot(&mut ws, &mut t, true, 15000).await;
+        assert!(
+            !first.tasks.iter().any(|task| task.title == "断线期间新任务"),
+            "首次快照不应包含断线期间才创建的任务"
+        );
+        drop(ws);
+    }
+    wait_for(
+        || async { get_status(&pool, &state).await.unwrap().listening },
+        15000,
+        "等待断开后回 Listening",
+    )
+    .await;
+
+    // 断线期间变更数据
+    tasks_db::create_task(
+        &pool,
+        &CreateTaskInput {
+            owner_type: Some(egosync_lib::models::task::TaskOwnerType::Butler),
+            role_id: None,
+            title: "断线期间新任务".to_string(),
+            deadline: None,
+            quadrant: Some("Q3".to_string()),
+            is_big_rock: None,
+        },
+    )
+    .await
+    .expect("create gap task");
+
+    // 重连（同公钥已配对，免 nonce）→ OnConnect 全量 SNAPSHOT 补齐
+    let (mut ws2, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}"))
+        .await
+        .expect("reconnect");
+    let mut t2 = phone_handshake(&mut ws2, &phone_priv).await;
+    send_frame(
+        &mut ws2,
+        &mut t2,
+        &Frame::Hello(HelloPayload {
+            protocol_version: PROTOCOL_VERSION,
+        }),
+    )
+    .await;
+
+    let latest = phone_receive_snapshot(&mut ws2, &mut t2, true, 15000).await;
+    assert!(
+        latest.tasks.iter().any(|task| task.title == "断线期间新任务"),
+        "重连后的全量快照必须包含断线期间的变更"
+    );
+    // 单一全量（非增量序列）：载荷是完整七域快照
+    assert_eq!(latest.roles.len(), 1);
+    assert_eq!(latest.conversations.len(), 1);
+    assert_eq!(latest.briefings.len(), 1);
+    assert!(!latest.truncated);
+}
+
+#[tokio::test]
+async fn chunking_roundtrip_and_size_bound() {
+    // WHY: 分帧对协议层必须透明——10MB 级快照分帧后经真实 Noise 编解码
+    // 往返无损、单帧不触 65519 上限；任何一帧超限都会被 crate 既有的
+    // oversized_frame_encode_is_rejected 拒绝，手机端收到的就是断流。
+    let (pool, conv_pool, _dir) = test_pool().await;
+    let role = roles_db::create_role(
+        &pool,
+        &CreateRoleInput {
+            name: "分帧测试角色".to_string(),
+            icon: None,
+            color: None,
+            goal: None,
+        },
+    )
+    .await
+    .expect("create role");
+    let conv = conversations_db::create_conversation(&conv_pool, Some(&role.id))
+        .await
+        .expect("create conversation");
+    let content = "y".repeat(600);
+    for _ in 0..200 {
+        conversations_db::insert_message(&conv_pool, &conv.id, "user", &content, true)
+            .await
+            .expect("insert message");
+    }
+
+    let snapshot = build_snapshot(&pool, &conv_pool).await.expect("build snapshot");
+    let frames = frame_snapshot(&snapshot, SnapshotFrameKind::Snapshot).expect("frame");
+    assert!(frames.len() >= 2, "200×600B 消息必须分成多帧");
+
+    // 单帧经真实 Noise 会话编码不触限（roundtrip 无损）
+    let (mut initiator, mut responder) = session_pair();
+    for frame in &frames {
+        let wire = encode_frame(frame, &mut initiator).expect("单帧编码不得触限");
+        assert!(
+            wire.len() <= 65535 + 4,
+            "线材长度超限: {}",
+            wire.len()
+        );
+        let back = decode_frame(&wire, &mut responder).expect("decode roundtrip");
+        assert_eq!(back, *frame, "单帧往返无损");
+    }
+
+    // 重组 roundtrip 无损（经序列化值对比，避免为测试加 PartialEq 派生）
+    let reassembled = reassemble(&frames).expect("重组");
+    assert_eq!(
+        serde_json::to_value(&reassembled).unwrap(),
+        serde_json::to_value(&snapshot).unwrap(),
+        "分帧重组必须无损还原快照"
+    );
 }

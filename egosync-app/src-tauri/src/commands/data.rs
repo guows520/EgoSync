@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::db::pool::{ConversationsPool, DbPool};
 use crate::error::AppError;
@@ -103,8 +103,15 @@ pub async fn pick_import_file() -> Result<Option<String>, AppError> {
 #[tauri::command]
 pub async fn data_import(
     file_path: String,
+    app_handle: AppHandle,
     pool: State<'_, DbPool>,
     conv_pool: State<'_, ConversationsPool>,
 ) -> Result<ImportResult, AppError> {
-    import_all(&pool, &conv_pool, Path::new(&file_path)).await
+    let result = import_all(&pool, &conv_pool, Path::new(&file_path)).await?;
+    // Story 13.1（评审决策①）：整库导入替换全量数据，必须触发快照重建
+    // （STATE_DELTA 载荷本就是全量替换，事件只作触发信号）。
+    if let Err(e) = app_handle.emit("data:imported", &result) {
+        tracing::warn!(event = "data:imported", error = %e, "data 写事件发射失败");
+    }
+    Ok(result)
 }

@@ -305,6 +305,28 @@ pub fn run() {
                 Ok(companion_state) => {
                     let companion_state = Arc::new(companion_state);
                     app.manage(companion_state.clone());
+                    // ── Story 13.1: 快照引擎（debounce 重建 + 建连全量补发）──
+                    let snapshot_engine = Arc::new(
+                        services::companion_snapshot::CompanionSnapshotEngine::new(
+                            pool.clone(),
+                            conv_pool.clone(),
+                            companion_state.clone(),
+                        ),
+                    );
+                    tauri::async_runtime::block_on(async {
+                        companion_state
+                            .set_snapshot_request_tx(snapshot_engine.snapshot_request_tx())
+                            .await;
+                    });
+                    app.manage(snapshot_engine.clone());
+                    let engine_for_run = snapshot_engine.clone();
+                    tauri::async_runtime::spawn(async move {
+                        engine_for_run.run().await;
+                    });
+                    services::companion_snapshot::register_write_signal_listeners(
+                        app.handle().clone(),
+                        snapshot_engine.notify_signal(),
+                    );
                     let pool_c = pool.clone();
                     tauri::async_runtime::spawn(async move {
                         if let Err(e) =

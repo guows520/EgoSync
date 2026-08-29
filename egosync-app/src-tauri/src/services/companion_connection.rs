@@ -30,6 +30,7 @@ use crate::services::companion_pairing::{
     PAIRING_WINDOW_TIMEOUT_SECS,
 };
 use crate::models::companion::{PairedDevice, PendingPairing};
+use crate::services::companion_snapshot::SnapshotRequest;
 
 /// NSD/mDNS 服务类型（三端一致）。
 const NSD_SERVICE_TYPE: &str = "_egosync._tcp.local.";
@@ -42,6 +43,12 @@ const SESSION_IDLE_TIMEOUT_SECS: u64 = 120;
 
 /// 握手后等待 app 层 Notice（deviceInfo / pairingAuth）的收集窗口（秒）。
 const APP_NOTICE_WINDOW_SECS: u64 = 3;
+
+/// 出站帧通道容量（Story 13.1）：10MB 快照按 48_000 分片 ≈ 219 帧，512
+/// 仅容纳约 2.3 份完整序列——慢链路排空期间的连续写排队可溢出。溢出不
+/// 做逐帧静默丢弃（AC3：在线期间不得中途丢帧），由 `enqueue_outbound`
+/// 整序列中止 + 强制断连，走重连 OnConnect 全量补齐。
+const OUTBOUND_CHANNEL_CAPACITY: usize = 512;
 
 /// 连接状态机（`Arc<RwLock<...>>` managed state）。
 #[derive(Clone, Debug)]
@@ -58,10 +65,12 @@ pub enum CompanionConnectionState {
     Failed,
 }
 
-/// 当前活跃会话句柄：remove / confirm / 新连接可经 terminate 信号终止会话。
+/// 当前活跃会话句柄：remove / confirm / 新连接可经 terminate 信号终止会话；
+/// `outbound` 为出站帧通道（Story 13.1）——会话任务消费对应 receiver。
 pub struct ActiveSession {
     pub device_id: String,
     terminate: tokio::sync::watch::Sender<bool>,
+    outbound: tokio::sync::mpsc::Sender<Frame>,
 }
 
 impl ActiveSession {
@@ -89,6 +98,11 @@ pub struct CompanionState {
     active_session: tokio::sync::Mutex<Option<ActiveSession>>,
     /// P16：中继注册客户端的启动幂等位（唯一实例由本位保证，不靠调用纪律）。
     relay_client_started: std::sync::atomic::AtomicBool,
+    /// Story 13.1：快照引擎建连请求通道（watch：幂等合并，评审 P8——
+    /// 引擎忙于重建时多次建连只排一次补发，无容量上限即无「第 9 次请求
+    /// 被丢」的白屏窗口）；lib.rs setup 注入，`app_handle: None` 的测试
+    /// 路径经 `set_snapshot_request_tx` 注入。
+    snapshot_request_tx: tokio::sync::Mutex<Option<tokio::sync::watch::Sender<SnapshotRequest>>>,
 }
 
 impl CompanionState {
@@ -125,6 +139,55 @@ impl CompanionState {
             listen_port: std::sync::atomic::AtomicU16::new(0),
             active_session: tokio::sync::Mutex::new(None),
             relay_client_started: std::sync::atomic::AtomicBool::new(false),
+            snapshot_request_tx: tokio::sync::Mutex::new(None),
+        }
+    }
+
+    /// 注入快照引擎建连请求通道（lib.rs setup / 测试装配调用）。
+    pub async fn set_snapshot_request_tx(
+        &self,
+        tx: tokio::sync::watch::Sender<SnapshotRequest>,
+    ) {
+        *self.snapshot_request_tx.lock().await = Some(tx);
+    }
+
+    /// 出站帧整序列入队（Story 13.1）：持锁一次性入队本序列全部分帧——
+    /// 与新连接的会话槽替换互斥，残缺分帧序列不跨会话泄漏（评审 P3）。
+    /// 逐帧 try_send 非阻塞；通道满即中止本序列并强制断连（评审 P1：
+    /// 中途静默丢帧会让手机重组永久挂起、违反 AC3「在线期间不得中途
+    /// 丢帧」——断连走重连 OnConnect 全量补齐，丢弃的是整个残缺序列
+    /// 而非单帧）。会话不在线整序列直接丢弃（OnConnect 补齐兜底）。
+    pub async fn enqueue_outbound(&self, frames: Vec<Frame>) {
+        let guard = self.active_session.lock().await;
+        if let Some(session) = guard.as_ref() {
+            for frame in frames {
+                match session.outbound.try_send(frame) {
+                    Ok(()) => {}
+                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                        // 仅记错误类别，不含帧内容（NFR-M7 帧明文零输出纪律）
+                        tracing::warn!(
+                            "companion 出站通道已满（慢链路背压），强制断连走重连全量补齐"
+                        );
+                        session.terminate();
+                        break;
+                    }
+                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                        // 会话任务已退出、槽位待替换——剩余帧随会话消亡
+                        tracing::debug!("companion 出站通道已关闭，剩余帧随会话丢弃");
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    /// 建连后请求全量快照：直连通道而非 Tauri 事件——`app_handle: None`
+    /// 的脱 UI 测试路径同样可用（Task 4 裁决）。watch send 永不因容量
+    /// 失败（幂等合并）；Err 仅在引擎已消亡（应用退出期），无人消费属预期。
+    async fn request_snapshot_on_connect(&self) {
+        let guard = self.snapshot_request_tx.lock().await;
+        if let Some(tx) = guard.as_ref() {
+            let _ = tx.send(SnapshotRequest::OnConnect);
         }
     }
 
@@ -710,6 +773,8 @@ async fn enter_session(
     peer_label: String,
 ) -> Result<(), AppError> {
     let (term_tx, mut term_rx) = tokio::sync::watch::channel(false);
+    let (outbound_tx, mut outbound_rx) =
+        tokio::sync::mpsc::channel::<Frame>(OUTBOUND_CHANNEL_CAPACITY);
     {
         let mut guard = state.active_session.lock().await;
         if let Some(old) = guard.take() {
@@ -718,6 +783,7 @@ async fn enter_session(
         *guard = Some(ActiveSession {
             device_id: device_id.clone(),
             terminate: term_tx.clone(),
+            outbound: outbound_tx,
         });
     }
     state.set_connected(&device_id, &device_name, origin, &peer_label);
@@ -725,10 +791,41 @@ async fn enter_session(
         EVENT_CONNECTED,
         connected_event_payload(&device_id, &device_name),
     );
+    // Story 13.1：建连即全量快照——直连通道请求（不走 Tauri 事件，脱 UI 测试可用）
+    state.request_snapshot_on_connect().await;
 
     loop {
         let frame = tokio::select! {
             _ = term_rx.changed() => break, // 被 remove / confirm / 新连接终止
+            outbound = outbound_rx.recv() => {
+                // 出站帧分支：编码失败/发送失败按断连路径退出（绕过状态机复位=错误）
+                match outbound {
+                    Some(frame) => {
+                        match encode_frame(&frame, transport) {
+                            Ok(bytes) => {
+                                // 发送期间仍可被终止/管理操作中断（评审 P2：TCP
+                                // 背压下单个 send 可长时间阻塞，await 期间不得
+                                // 让 terminate 与 idle 超时失联）
+                                tokio::select! {
+                                    _ = term_rx.changed() => break,
+                                    sent = send_frame(io, &bytes) => {
+                                        if let Err(e) = sent {
+                                            tracing::debug!(error = %e, "companion 出站帧发送失败，断开连接");
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = %e, "companion 出站帧编码失败，断开连接");
+                                break;
+                            }
+                        }
+                        continue; // 出站帧已处理，不进入入站 match
+                    }
+                    None => break, // 会话槽已被新连接取代（sender drop）
+                }
+            }
             res = tokio::time::timeout(
                 std::time::Duration::from_secs(SESSION_IDLE_TIMEOUT_SECS),
                 recv_frame(io, transport),

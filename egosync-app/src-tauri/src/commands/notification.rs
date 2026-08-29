@@ -70,10 +70,17 @@ pub async fn notification_list(
 /// 标记通知为已读。
 #[tauri::command]
 pub async fn notification_mark_read(
+    app_handle: AppHandle,
     pool: State<'_, DbPool>,
     id: String,
 ) -> Result<Notification, AppError> {
-    db::notifications::mark_read(&pool, &id).await
+    // app_handle 由 Tauri 自动注入（前端 invoke 不变）——Story 13.1
+    // 评审决策①：已读须触发 STATE_DELTA，否则手机未读角标永远滞后。
+    let notification = db::notifications::mark_read(&pool, &id).await?;
+    if let Err(e) = app_handle.emit("notification:read", &notification) {
+        tracing::warn!(event = "notification:read", error = %e, "notification 写事件发射失败");
+    }
+    Ok(notification)
 }
 
 /// 统计未读通知数量。

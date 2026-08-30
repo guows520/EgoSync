@@ -20,7 +20,7 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 use companion_proto::crypto::{generate_static_keypair, HandshakeSession, TransportSession};
 use companion_proto::frames::{
-    decode_frame, encode_frame, Frame, HelloPayload, NoticePayload,
+    decode_frame, encode_frame, CommandPayload, Frame, HelloPayload, NoticePayload,
 };
 use companion_proto::PROTOCOL_VERSION;
 
@@ -46,6 +46,12 @@ use egosync_lib::services::companion_snapshot::{
     build_snapshot, frame_snapshot, reassemble, ChunkEnvelope, CompanionSnapshotEngine,
     SnapshotFrameKind, WriteSignal,
 };
+// Story 13.3 指令通道测试
+use egosync_lib::error::AppError;
+use egosync_lib::services::companion_dispatch::{
+    mirror_stream_payload, CommandExecutor, CompanionDispatcher,
+};
+use egosync_lib::models::companion_command::COMMAND_DATA_MAX_BYTES;
 
 async fn test_pool() -> (DbPool, ConversationsPool, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("create temp dir");
@@ -1604,4 +1610,741 @@ async fn chunking_roundtrip_and_size_bound() {
         serde_json::to_value(&snapshot).unwrap(),
         "分帧重组必须无损还原快照"
     );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Story 13.3：指令通道与流式对话
+// ═══════════════════════════════════════════════════════════════════
+
+/// 可记录调用的 fake 执行器（chat/task/suggestion 路由的注入缝）。
+/// 响应经闭包按次构造（AppError 不可 Clone）。
+struct FakeExecutor {
+    calls: std::sync::Mutex<Vec<(String, serde_json::Value)>>,
+    respond: Box<dyn Fn() -> Result<serde_json::Value, AppError> + Send + Sync>,
+}
+
+impl FakeExecutor {
+    fn with_result(result: serde_json::Value) -> Self {
+        Self {
+            calls: std::sync::Mutex::new(Vec::new()),
+            respond: Box::new(move || Ok(result.clone())),
+        }
+    }
+
+    fn with_not_found(msg: &str) -> Self {
+        let msg = msg.to_string();
+        Self {
+            calls: std::sync::Mutex::new(Vec::new()),
+            respond: Box::new(move || Err(AppError::NotFound(msg.clone()))),
+        }
+    }
+
+    /// 闸门版：respond 阻塞在 mpsc::Receiver::recv()——释放前持闸，供并发
+    /// 排队/过载闸门测试构造「首条在途」窗口（Mutex 包裹：Receiver 非 Sync）。
+    fn with_gated_result(
+        result: serde_json::Value,
+        release: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+    ) -> Self {
+        Self {
+            calls: std::sync::Mutex::new(Vec::new()),
+            respond: Box::new(move || {
+                release
+                    .lock()
+                    .unwrap()
+                    .recv()
+                    .expect("闸门释放信号未到达");
+                Ok(result.clone())
+            }),
+        }
+    }
+
+    /// 已记录的执行调用次数（幂等测试断言去重是否真正生效）。
+    fn call_count(&self) -> usize {
+        self.calls.lock().unwrap().len()
+    }
+
+    /// 协变为注入缝所需的 trait 对象（保留具体 Arc 供 call_count 断言）。
+    fn as_executor(self: &std::sync::Arc<Self>) -> std::sync::Arc<dyn CommandExecutor> {
+        self.clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl CommandExecutor for FakeExecutor {
+    async fn execute(
+        &self,
+        action: &str,
+        params: &serde_json::Value,
+    ) -> Result<serde_json::Value, AppError> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push((action.to_string(), params.clone()));
+        (self.respond)()
+    }
+}
+
+/// 构造 COMMAND 帧（envelope JSON 塞 data，与手机端 CommandModels 同构）。
+fn command_frame(command_id: &str, action: &str, params_json: &str) -> Frame {
+    let envelope = format!(
+        r#"{{"schemaVersion":1,"commandId":"{command_id}","action":"{action}","params":{params_json}}}"#
+    );
+    Frame::Command(CommandPayload { data: envelope })
+}
+
+/// 等待 ack JSON 并断言（commandId 关联 + ok 形状）。
+async fn parse_ack(ack_json: &str) -> serde_json::Value {
+    serde_json::from_str(ack_json).expect("ack JSON 解析失败")
+}
+
+/// 手机侧等待 COMMAND_RESULT 并解析 ack JSON（跳过快照等其他帧），超时 panic。
+async fn phone_receive_ack(
+    ws: &mut WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
+    t: &mut TransportSession,
+    timeout_ms: u64,
+) -> serde_json::Value {
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        assert!(!remaining.is_zero(), "超时未收到 COMMAND_RESULT");
+        let msg = tokio::time::timeout(remaining, ws.next())
+            .await
+            .expect("读帧超时")
+            .expect("连接已关闭")
+            .expect("WS 读取失败");
+        let frame = decode_frame(&msg.into_data(), t).expect("帧解码失败");
+        if let Frame::CommandResult(p) = &frame {
+            return serde_json::from_str(&p.data).expect("ack JSON 解析失败");
+        }
+    }
+}
+
+/// 手机侧按序收集 STREAM_TOKEN 直到 done=true（跳过其他帧），超时 panic。
+async fn phone_receive_stream_until_done(
+    ws: &mut WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
+    t: &mut TransportSession,
+    timeout_ms: u64,
+) -> Vec<serde_json::Value> {
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+    let mut tokens = Vec::new();
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        assert!(!remaining.is_zero(), "超时未收齐流式 token（done 收口）");
+        let msg = tokio::time::timeout(remaining, ws.next())
+            .await
+            .expect("读帧超时")
+            .expect("连接已关闭")
+            .expect("WS 读取失败");
+        let frame = decode_frame(&msg.into_data(), t).expect("帧解码失败");
+        if let Frame::StreamToken(p) = &frame {
+            let payload: serde_json::Value =
+                serde_json::from_str(&p.data).expect("STREAM_TOKEN payload 解析失败");
+            let done = payload.get("done").and_then(|d| d.as_bool()).unwrap_or(false);
+            tokens.push(payload);
+            if done {
+                return tokens;
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn command_dispatch_routes_via_executor_and_memory_pool() {
+    // WHY: dispatch 是手机指令唯一入口——chat/task/suggestion 必须经执行缝
+    // 路由（生产=命令层 pub fn 直调），memory 必须纯 pool 真跑；任何旁路
+    // 都意味着手机操作绕过桌面命令层的守卫/事件/幂等语义。
+    let (pool, conv_pool, _dir) = test_pool().await;
+    let _role_id = seed_snapshot_domain_data(&pool, &conv_pool).await;
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    let executor = FakeExecutor::with_result(serde_json::json!({
+        "conversationId": "c-1",
+        "userMessageId": "u-1",
+        "assistantMessageId": "a-1",
+    }));
+    let dispatcher = CompanionDispatcher::new(
+        pool.clone(),
+        conv_pool.clone(),
+        tx,
+        std::sync::Arc::new(executor),
+    );
+
+    // chat.send → 执行缝
+    let ack = parse_ack(
+        &dispatcher
+            .execute(
+                r#"{"schemaVersion":1,"commandId":"cmd-1","action":"chat.send","params":{"content":"你好"}}"#,
+            )
+            .await,
+    )
+    .await;
+    assert_eq!(ack["commandId"], "cmd-1");
+    assert_eq!(ack["ok"], true);
+    assert_eq!(ack["result"]["conversationId"], "c-1");
+
+    // memory.list → 纯 pool 真跑（不经执行缝）
+    let ack = parse_ack(
+        &dispatcher
+            .execute(
+                r#"{"schemaVersion":1,"commandId":"cmd-2","action":"memory.list","params":{}}"#,
+            )
+            .await,
+    )
+    .await;
+    assert_eq!(ack["ok"], true, "memory.list 应真跑成功: {ack}");
+    let memories = ack["result"]["memories"].as_array().expect("memories 数组");
+    assert_eq!(memories.len(), 1, "种子记忆必须现查现显");
+    assert_eq!(memories[0]["content"], "绝密记忆内容XYZ-不上机");
+}
+
+#[tokio::test]
+async fn command_dispatch_idempotent_serial_replay_returns_first_result() {
+    // WHY: 幂等去重是 14.1 速记队列的机制底座——确认丢失后的串行重放若
+    // 重复执行，用户会在桌面看到重复入库的管家消息/任务。仅断言两次 ack
+    // 相同无法证明去重存在（fake 每次返回同一 JSON），必须断言执行器
+    // 只被调用一次。
+    let (pool, conv_pool, _dir) = test_pool().await;
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    let executor = std::sync::Arc::new(FakeExecutor::with_result(serde_json::json!({"ok": true})));
+    let dispatcher = CompanionDispatcher::new(pool, conv_pool, tx, executor.as_executor());
+
+    let envelope = r#"{"schemaVersion":1,"commandId":"cmd-dup","action":"chat.send","params":{"content":"重放"}}"#;
+    let first = dispatcher.execute(envelope).await;
+    let second = dispatcher.execute(envelope).await;
+    assert_eq!(first, second, "串行重放必须返回首次结果");
+    assert_eq!(
+        executor.call_count(),
+        1,
+        "串行重放不得重复执行（去重必须真正拦截第二次路由）"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn command_dispatch_concurrent_same_id_queues_and_shares_first_result() {
+    // WHY: 手机超时重发与首次慢执行并发时，同 commandId 各自执行会重复
+    // 建任务/消息（幂等若只覆盖串行重放就挡不住这个窗口）——裁决 B：
+    // 同号第二条排队等待首次完成并共享同一 ack。
+    let (pool, conv_pool, _dir) = test_pool().await;
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let executor = std::sync::Arc::new(FakeExecutor::with_gated_result(
+        serde_json::json!({"ok": 1}),
+        std::sync::Mutex::new(release_rx),
+    ));
+    let dispatcher = std::sync::Arc::new(CompanionDispatcher::new(
+        pool,
+        conv_pool,
+        tx,
+        executor.as_executor(),
+    ));
+    let envelope =
+        r#"{"schemaVersion":1,"commandId":"cmd-conc","action":"chat.send","params":{"content":"并发"}}"#
+            .to_string();
+
+    // 首条 spawn 后持闸阻塞（占住同号串行门与 1 个并发闸位）
+    let d1 = std::sync::Arc::clone(&dispatcher);
+    let env1 = envelope.clone();
+    let first = tokio::spawn(async move { d1.execute(&env1).await });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while executor.call_count() < 1 {
+        assert!(std::time::Instant::now() < deadline, "首条指令未进入执行");
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    // 并发同号第二条：排队等首条完成（不得先执行，也不得过载报错）
+    let d2 = std::sync::Arc::clone(&dispatcher);
+    let env2 = envelope.clone();
+    let second = tokio::spawn(async move { d2.execute(&env2).await });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await; // 让第二条确实排队在门上
+    release_tx.send(()).expect("释放闸门");
+
+    let first = first.await.expect("首条任务 panic");
+    let second = second.await.expect("第二条任务 panic");
+    assert_eq!(first, second, "排队者必须共享首次结果");
+    assert_eq!(
+        executor.call_count(),
+        1,
+        "同 commandId 并发不得重复执行（排队+双检缓存生效）"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn command_dispatch_overload_rejected_beyond_concurrency_limit() {
+    // WHY: 每帧无条件 spawn 直通 DB——配对设备帧洪泛可无界耗尽资源。
+    // 裁决 A：并发闸门超限立即回过载错误 ack（不断连、不排队、不执行）。
+    let (pool, conv_pool, _dir) = test_pool().await;
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let executor = std::sync::Arc::new(FakeExecutor::with_gated_result(
+        serde_json::json!({"ok": 1}),
+        std::sync::Mutex::new(release_rx),
+    ));
+    let dispatcher = std::sync::Arc::new(CompanionDispatcher::with_command_limit(
+        pool,
+        conv_pool,
+        tx,
+        executor.as_executor(),
+        1,
+    ));
+
+    // 首条（cmd-a）持闸占用唯一闸位
+    let d1 = std::sync::Arc::clone(&dispatcher);
+    let first = tokio::spawn(async move {
+        d1.execute(r#"{"schemaVersion":1,"commandId":"cmd-a","action":"chat.send","params":{"content":"占位"}}"#)
+            .await
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while executor.call_count() < 1 {
+        assert!(std::time::Instant::now() < deadline, "首条指令未进入执行");
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    // 异号第二条：缓存/串行门都不适用，闸门满 → 立即过载错误
+    let second = dispatcher
+        .execute(r#"{"schemaVersion":1,"commandId":"cmd-b","action":"chat.send","params":{"content":"超限"}}"#)
+        .await;
+    let ack = parse_ack(&second).await;
+    assert_eq!(ack["commandId"], "cmd-b");
+    assert_eq!(ack["ok"], false);
+    assert!(
+        ack["error"]["ConnectionError"].is_string(),
+        "过载必须是 ConnectionError 分类: {ack}"
+    );
+    assert_eq!(executor.call_count(), 1, "过载指令不得进入执行");
+
+    release_tx.send(()).expect("释放闸门");
+    let first = parse_ack(&first.await.expect("首条任务 panic")).await;
+    assert_eq!(first["ok"], true, "持闸指令正常完成不受闸门影响");
+}
+
+#[tokio::test]
+async fn command_dispatch_oversized_result_replaced_with_error_ack() {
+    // WHY: 超限 ack 塞进出站通道后会被编码层拒绝——表现为整条连接断开；
+    // 必须在 dispatch 出口降级为显式错误 ack（诚实失败而非断流）。
+    let (pool, conv_pool, _dir) = test_pool().await;
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    let big = serde_json::json!({ "blob": "x".repeat(70000) });
+    let executor = std::sync::Arc::new(FakeExecutor::with_result(big));
+    let dispatcher = CompanionDispatcher::new(pool, conv_pool, tx, executor.as_executor());
+
+    let ack_json = dispatcher
+        .execute(r#"{"schemaVersion":1,"commandId":"cmd-big","action":"suggestion.list","params":{"conversationId":"c"}}"#)
+        .await;
+    assert!(
+        ack_json.len() <= COMMAND_DATA_MAX_BYTES,
+        "ack 必须在单帧上限内: {}",
+        ack_json.len()
+    );
+    let ack = parse_ack(&ack_json).await;
+    assert_eq!(ack["commandId"], "cmd-big");
+    assert_eq!(ack["ok"], false);
+    assert!(
+        ack["error"]["ValidationError"].is_string(),
+        "超限结果必须降级为 ValidationError: {ack}"
+    );
+}
+
+#[tokio::test]
+async fn command_dispatch_chat_send_blank_content_rejected() {
+    // WHY: 命令层无空内容守卫，手机指令路径绕过前端 UI 校验——空消息
+    // 会落库并触发一轮空 LLM 流（浪费 token 与流式状态机）。dispatch
+    // 层在路由前拦下，执行器不得被触达。
+    let (pool, conv_pool, _dir) = test_pool().await;
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    let executor = std::sync::Arc::new(FakeExecutor::with_result(serde_json::json!({"ok": 1})));
+    let dispatcher = CompanionDispatcher::new(pool, conv_pool, tx, executor.as_executor());
+
+    let ack = parse_ack(
+        &dispatcher
+            .execute(r#"{"schemaVersion":1,"commandId":"cmd-blank","action":"chat.send","params":{"content":"   "}}"#)
+            .await,
+    )
+    .await;
+    assert_eq!(ack["ok"], false);
+    assert_eq!(
+        ack["error"],
+        serde_json::json!({"ValidationError": "消息内容不能为空"}),
+        "空白内容必须显式拒绝: {ack}"
+    );
+    assert_eq!(executor.call_count(), 0, "空白内容不得触达执行器");
+}
+
+#[tokio::test]
+async fn command_dispatch_cache_evicts_oldest_beyond_capacity() {
+    // WHY: 幂等缓存无界增长 = 内存泄漏（长跑桌面）；容量上限 + 淘汰最旧
+    // 保证有界。淘汰后重放重新执行——缓存是优化不是状态，语义不变。
+    let (pool, conv_pool, _dir) = test_pool().await;
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    let executor = std::sync::Arc::new(FakeExecutor::with_result(serde_json::json!({"n": 0})));
+    let dispatcher = CompanionDispatcher::new(pool, conv_pool, tx, executor.as_executor());
+
+    // 1001 条不同指令——第 1 条（cmd-0）被淘汰出 1000 容量缓存
+    for i in 0..1001 {
+        let envelope = format!(
+            r#"{{"schemaVersion":1,"commandId":"cmd-{i}","action":"chat.stop","params":{{"conversationId":"c"}}}}"#
+        );
+        dispatcher.execute(&envelope).await;
+    }
+    // 被淘汰的 cmd-0 重放：重新执行（结果正确即可，不 panic 不悬挂）
+    let envelope = r#"{"schemaVersion":1,"commandId":"cmd-0","action":"chat.stop","params":{"conversationId":"c"}}"#;
+    let ack = parse_ack(&dispatcher.execute(envelope).await).await;
+    assert_eq!(ack["commandId"], "cmd-0");
+    assert_eq!(ack["ok"], true);
+    // 淘汰语义证明：重放确实重新触达执行器（1001 次 + 重放 1 次）
+    assert_eq!(
+        executor.call_count(),
+        1002,
+        "被淘汰的缓存项重放必须重新执行（缓存是优化不是状态）"
+    );
+}
+
+#[tokio::test]
+async fn command_dispatch_unknown_action_and_parse_errors_return_typed_ack() {
+    // WHY: 未知 action/缺 commandId/超限都必须显式报错——静默忽略会让
+    // 手机端 pending 永远等不到回执（悬挂），违反 AC2。
+    let (pool, conv_pool, _dir) = test_pool().await;
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    let executor = FakeExecutor::with_result(serde_json::json!({}));
+    let dispatcher = CompanionDispatcher::new(pool, conv_pool, tx, std::sync::Arc::new(executor));
+
+    // 未知 action → ValidationError「不支持的指令类型」单键 map
+    let ack = parse_ack(
+        &dispatcher
+            .execute(r#"{"schemaVersion":1,"commandId":"cmd-x","action":"task.delete","params":{}}"#)
+            .await,
+    )
+    .await;
+    assert_eq!(ack["ok"], false);
+    assert_eq!(
+        ack["error"],
+        serde_json::json!({"ValidationError": "不支持的指令类型"}),
+        "未知 action 的错误分类形状: {ack}"
+    );
+
+    // 缺 commandId → 显式错误（空 commandId 回流）
+    let ack = parse_ack(
+        &dispatcher
+            .execute(r#"{"schemaVersion":1,"action":"chat.send","params":{}}"#)
+            .await,
+    )
+    .await;
+    assert_eq!(ack["ok"], false);
+    assert!(
+        ack["error"]["ValidationError"].is_string(),
+        "缺 commandId 必须显式报错: {ack}"
+    );
+
+    // 坏 JSON → 显式错误
+    let ack = parse_ack(&dispatcher.execute("not json").await).await;
+    assert_eq!(ack["ok"], false);
+
+    // payload 超限 → 显式错误
+    let oversized = format!(
+        r#"{{"schemaVersion":1,"commandId":"c","action":"chat.send","params":{{"content":"{}"}}}}"#,
+        "x".repeat(70000)
+    );
+    let ack = parse_ack(&dispatcher.execute(&oversized).await).await;
+    assert_eq!(ack["ok"], false);
+    assert!(
+        ack["error"]["ValidationError"].is_string(),
+        "超限必须显式报错: {ack}"
+    );
+
+    // 执行器错误 → AppError 分类原样回流
+    let (pool2, conv_pool2, _dir2) = test_pool().await;
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    let dispatcher = CompanionDispatcher::new(
+        pool2,
+        conv_pool2,
+        tx,
+        std::sync::Arc::new(FakeExecutor::with_not_found("任务不存在")),
+    );
+    let ack = parse_ack(
+        &dispatcher
+            .execute(r#"{"schemaVersion":1,"commandId":"cmd-e","action":"task.toggle","params":{"taskId":"t","isCompleted":true}}"#)
+            .await,
+    )
+    .await;
+    assert_eq!(
+        ack["error"],
+        serde_json::json!({"NotFound": "任务不存在"}),
+        "执行器错误必须按 AppError 单键 map 回流: {ack}"
+    );
+}
+
+#[tokio::test]
+async fn command_dispatch_suggestion_confirm_supplements_write_signal() {
+    // WHY: 既有缺口——confirm 建任务但不 emit 事件，手机 STATE_DELTA 永远
+    // 不含确认产生的任务（「确认后任务消失」）。dispatch 补发写信号收口。
+    let (pool, conv_pool, _dir) = test_pool().await;
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    let executor = FakeExecutor::with_result(serde_json::json!({"id": "s1", "status": "confirmed"}));
+    let dispatcher = CompanionDispatcher::new(pool, conv_pool, tx, std::sync::Arc::new(executor));
+
+    dispatcher
+        .execute(r#"{"schemaVersion":1,"commandId":"cmd-s","action":"suggestion.confirm","params":{"suggestionId":"s1"}}"#)
+        .await;
+
+    let signal = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+        .await
+        .expect("确认建议后必须补发写信号")
+        .expect("写信号通道未关闭");
+    assert_eq!(signal.event, "task:created", "确认建任务的信号语义");
+
+    // 拒绝同样补发（信号事件名区分语义）
+    dispatcher
+        .execute(r#"{"schemaVersion":1,"commandId":"cmd-s2","action":"suggestion.reject","params":{"suggestionId":"s1","reason":"bad_timing"}}"#)
+        .await;
+    let signal = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+        .await
+        .expect("拒绝建议后必须补发写信号")
+        .expect("写信号通道未关闭");
+    assert_eq!(signal.event, "suggestion:rejected");
+
+    // 执行失败不补发（错误已按 ack 回流，快照无需重建）
+    let (pool2, conv_pool2, _dir2) = test_pool().await;
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    let dispatcher = CompanionDispatcher::new(
+        pool2,
+        conv_pool2,
+        tx,
+        std::sync::Arc::new(FakeExecutor::with_not_found("无")),
+    );
+    dispatcher
+        .execute(r#"{"schemaVersion":1,"commandId":"cmd-s3","action":"suggestion.confirm","params":{"suggestionId":"missing"}}"#)
+        .await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), rx.recv())
+            .await
+            .is_err(),
+        "执行失败不得补发写信号"
+    );
+}
+
+#[test]
+fn mirror_stream_payload_passes_through_and_guards() {
+    // WHY: STREAM_TOKEN data 必须是 llm:stream payload 原样 JSON——手机端
+    // 流式状态机按同名字段解析，任何重排/重组都造成双端状态机漂移。
+    let token = r#"{"conversationId":"c1","token":"你","done":false,"thinking":false}"#;
+    let frame = mirror_stream_payload(token).expect("合法 payload 必须镜像");
+    match frame {
+        Frame::StreamToken(p) => assert_eq!(p.data, token, "data 必须原样透传"),
+        other => panic!("镜像必须是 StreamToken 帧: {other:?}"),
+    }
+
+    // done 帧（流结束信号）同样原样镜像
+    let done = r#"{"conversationId":"c1","token":"","done":true,"thinking":false,"phase":"done"}"#;
+    assert!(
+        mirror_stream_payload(done).is_some(),
+        "done 帧必须镜像（流收口信号）"
+    );
+
+    // 非 JSON / 超限 → None（fail-safe：宁跳过不断流）
+    assert!(mirror_stream_payload("not json").is_none(), "非法 JSON 跳过");
+    let oversize = format!(
+        r#"{{"conversationId":"c","token":"{}","done":false}}"#,
+        "x".repeat(70000)
+    );
+    assert!(mirror_stream_payload(&oversize).is_none(), "超限 payload 跳过");
+}
+
+#[tokio::test]
+async fn phone_command_memory_list_roundtrip_over_real_socket() {
+    // WHY: 真链路验证指令闭环——手机 COMMAND 经 Noise 会话到达 dispatch，
+    // 结果以 COMMAND_RESULT 回流；这条链路断一处，手机记忆页就是永远
+    // 的空态（AC5）。
+    let (pool, conv_pool, state, engine, port, _dir) =
+        setup_listener_with_engine(Duration::from_millis(80)).await;
+    seed_snapshot_domain_data(&pool, &conv_pool).await;
+    state.open_pairing_window("nonce-cmd".to_string()).await;
+    // dispatcher 装配：真 pool（memory 真跑）+ fake 执行器（本轮不触达）
+    state
+        .set_dispatcher(Arc::new(CompanionDispatcher::new(
+            pool.clone(),
+            conv_pool.clone(),
+            engine.notify_signal(),
+            std::sync::Arc::new(FakeExecutor::with_result(serde_json::json!({}))),
+        )))
+        .await;
+
+    let (phone_priv, _) = generate_static_keypair().unwrap();
+    let (mut ws, mut t) =
+        phone_pair_and_connect(port, &phone_priv, "nonce-cmd", &pool, &state).await;
+
+    send_frame(&mut ws, &mut t, &command_frame("cmd-mem", "memory.list", "{}")).await;
+
+    let ack = phone_receive_ack(&mut ws, &mut t, 15000).await;
+    assert_eq!(ack["commandId"], "cmd-mem", "ack 必须按 commandId 关联");
+    assert_eq!(ack["ok"], true, "memory.list 真跑必须成功: {ack}");
+    let memories = ack["result"]["memories"].as_array().expect("memories 数组");
+    assert_eq!(memories.len(), 1);
+    assert_eq!(memories[0]["content"], "绝密记忆内容XYZ-不上机");
+}
+
+#[tokio::test]
+async fn phone_chat_send_ack_then_stream_tokens_in_order() {
+    // WHY: 流式收口链路——chat.send 的 COMMAND_RESULT 即时确认（id 对齐），
+    // STREAM_TOKEN 按序回流、done 帧收口；顺序错乱会让手机逐字渲染
+    // 变成乱序拼接（AC3）。
+    let (pool, conv_pool, state, engine, port, _dir) =
+        setup_listener_with_engine(Duration::from_millis(80)).await;
+    seed_snapshot_domain_data(&pool, &conv_pool).await;
+    state.open_pairing_window("nonce-chat".to_string()).await;
+    let canned = serde_json::json!({
+        "conversationId": "conv-13",
+        "userMessageId": "msg-u",
+        "assistantMessageId": "msg-a",
+    });
+    state
+        .set_dispatcher(Arc::new(CompanionDispatcher::new(
+            pool.clone(),
+            conv_pool.clone(),
+            engine.notify_signal(),
+            std::sync::Arc::new(FakeExecutor::with_result(canned.clone())),
+        )))
+        .await;
+
+    let (phone_priv, _) = generate_static_keypair().unwrap();
+    let (mut ws, mut t) =
+        phone_pair_and_connect(port, &phone_priv, "nonce-chat", &pool, &state).await;
+
+    // 手机发送 chat.send → ack 即时确认（含会话/消息 id 对齐）
+    send_frame(
+        &mut ws,
+        &mut t,
+        &command_frame("cmd-chat", "chat.send", r#"{"content":"早上好"}"#),
+    )
+    .await;
+    let ack = phone_receive_ack(&mut ws, &mut t, 15000).await;
+    assert_eq!(ack["commandId"], "cmd-chat");
+    assert_eq!(ack["ok"], true);
+    assert_eq!(ack["result"], canned, "ack 必须携带三 id 对齐字段");
+
+    // 直调 mirror 模拟桌面 llm:stream token 流（生产由 register_stream_mirror
+    // 监听驱动；此处注入纯函数产物验证出站顺序与 done 收口）
+    let payloads = [
+        r#"{"conversationId":"conv-13","token":"早","done":false,"thinking":false}"#,
+        r#"{"conversationId":"conv-13","token":"上好","done":false,"thinking":false}"#,
+        r#"{"conversationId":"conv-13","token":"呀","done":false,"thinking":false,"phase":"done"}"#,
+        r#"{"conversationId":"conv-13","token":"","done":true,"thinking":false,"phase":"done"}"#,
+    ];
+    for payload in payloads {
+        let frame = mirror_stream_payload(payload).expect("镜像");
+        assert!(
+            state.try_enqueue_single(frame).await,
+            "会话在线期间单帧入队必须成功"
+        );
+    }
+
+    let tokens = phone_receive_stream_until_done(&mut ws, &mut t, 15000).await;
+    assert_eq!(tokens.len(), 4, "全部 token + done 按序到达");
+    assert_eq!(tokens[0]["token"], "早");
+    assert_eq!(tokens[1]["token"], "上好");
+    assert_eq!(tokens[2]["token"], "呀");
+    assert_eq!(tokens[3]["done"], true, "最后一个必须是 done 收口帧");
+}
+
+#[tokio::test]
+async fn try_enqueue_single_drops_when_full_without_disconnect() {
+    // WHY: 出站双语义——流式 token 满则丢弃不断连（快照兜底收敛）；若误用
+    // 整序列语义（满则断连），慢链路下手机每次对话都会被踢下线重连。
+    let (pool, conv_pool, state, engine, port, _dir) =
+        setup_listener_with_engine(Duration::from_millis(80)).await;
+    seed_snapshot_domain_data(&pool, &conv_pool).await;
+    state.open_pairing_window("nonce-full".to_string()).await;
+    state
+        .set_dispatcher(Arc::new(CompanionDispatcher::new(
+            pool.clone(),
+            conv_pool.clone(),
+            engine.notify_signal(),
+            std::sync::Arc::new(FakeExecutor::with_result(serde_json::json!({}))),
+        )))
+        .await;
+
+    let (phone_priv, _) = generate_static_keypair().unwrap();
+    let (mut ws, mut t) =
+        phone_pair_and_connect(port, &phone_priv, "nonce-full", &pool, &state).await;
+
+    // 手机不读 → TCP 窗口饱和 → 会话出站通道（512 容量）填满。
+    // 700 × 60KB ≈ 42MB >> TCP 缓冲（数 MB）——必然溢出。
+    let big_token = "x".repeat(60_000);
+    let mut dropped = 0usize;
+    let mut enqueued = 0usize;
+    for i in 0..700 {
+        let payload = format!(
+            r#"{{"conversationId":"c","token":"{big_token}","done":false,"seq":{i}}}"#
+        );
+        let frame = mirror_stream_payload(&payload).expect("60KB payload 在单帧上限内");
+        if state.try_enqueue_single(frame).await {
+            enqueued += 1;
+        } else {
+            dropped += 1;
+        }
+    }
+    assert!(dropped > 0, "通道填满后必须丢弃（入队 {enqueued}/丢弃 {dropped}）");
+
+    // 手机开始读取（排空通道）与 done 标记入队重试并发进行——标记位于
+    // 队尾，其到达即证明此前的入队帧已按序全部送达。
+    let reader = tokio::spawn(async move {
+        let mut received = 0usize;
+        loop {
+            let msg = tokio::time::timeout(Duration::from_secs(60), ws.next())
+                .await
+                .expect("读帧超时")
+                .expect("连接已关闭")
+                .expect("WS 读取失败");
+            let frame = decode_frame(&msg.into_data(), &mut t).expect("帧解码失败");
+            if let Frame::StreamToken(p) = &frame {
+                let payload: serde_json::Value =
+                    serde_json::from_str(&p.data).expect("payload 解析失败");
+                if payload.get("done").and_then(|d| d.as_bool()).unwrap_or(false) {
+                    break;
+                }
+                received += 1;
+            }
+        }
+        (ws, t, received)
+    });
+
+    let marker_deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        let marker = mirror_stream_payload(r#"{"conversationId":"c","token":"","done":true}"#)
+            .expect("标记镜像");
+        if state.try_enqueue_single(marker).await {
+            break;
+        }
+        assert!(
+            marker_deadline.saturating_duration_since(tokio::time::Instant::now())
+                > Duration::ZERO,
+            "超时未能入队 done 标记"
+        );
+        sleep(Duration::from_millis(50)).await;
+    }
+
+    let (mut ws, mut t, received) = reader.await.expect("读取任务完成");
+    assert_eq!(
+        received, enqueued,
+        "入队的帧必须全部按序送达（丢弃的恰为未入队者）"
+    );
+
+    // 连接必须仍然存活：排空后 PING/PONG 往返
+    send_frame(
+        &mut ws,
+        &mut t,
+        &Frame::Ping(companion_proto::frames::PingPayload {}),
+    )
+    .await;
+    let pong_deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let remaining = pong_deadline.saturating_duration_since(tokio::time::Instant::now());
+        assert!(!remaining.is_zero(), "超时未收到 PONG——满丢弃不得断连");
+        let msg = tokio::time::timeout(remaining, ws.next())
+            .await
+            .expect("读帧超时")
+            .expect("连接已关闭")
+            .expect("WS 读取失败");
+        let frame = decode_frame(&msg.into_data(), &mut t).expect("帧解码失败");
+        if matches!(frame, Frame::Ping(_)) {
+            break; // PONG 到达——连接存活
+        }
+    }
 }

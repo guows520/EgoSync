@@ -2,6 +2,10 @@ package com.egosync.companion.connection
 
 import android.content.Context
 import android.os.Build
+import com.egosync.companion.command.CommandChannel
+import com.egosync.companion.command.CommandException
+import com.egosync.companion.command.CommandSender
+import com.egosync.companion.command.StreamCoordinator
 import com.egosync.companion.pairing.QrPayload
 import java.io.IOException
 import java.util.concurrent.TimeUnit
@@ -79,7 +83,14 @@ class RealConnectionClient internal constructor(
      * 生产装配传 snapshotStore.state；默认恒 Unit（行为同旧版，测试免注入）。
      */
     private val offlineInfoTick: StateFlow<*> = MutableStateFlow(Unit),
-) : ConnectionClient, PairingConnector {
+    /**
+     * 指令通道（13.3 T5）：出站指令经会话 pump 协程发送，入站
+     * COMMAND_RESULT 完成对应 pending；null=指令通道不可用（fake 态）。
+     */
+    private val commandChannel: CommandChannel? = null,
+    /** 流式聚合器（13.3 T5）：STREAM_TOKEN 分发至此。 */
+    private val streamCoordinator: StreamCoordinator? = null,
+) : ConnectionClient, PairingConnector, CommandSender {
 
     /** 生产装配：从 Android Context 组装全部依赖（AppModelContainer 唯一换装点，UX-M2）。 */
     constructor(
@@ -88,6 +99,8 @@ class RealConnectionClient internal constructor(
         frameConsumerFactory: () -> FrameConsumer = { FrameConsumer.NOOP },
         offlineInfo: () -> OfflineSnapshotInfo = { OfflineSnapshotInfo(false, null) },
         offlineInfoTick: StateFlow<*> = MutableStateFlow(Unit),
+        commandChannel: CommandChannel? = null,
+        streamCoordinator: StreamCoordinator? = null,
     ) : this(
         scope = scope,
         store = PairingStateStore(
@@ -98,6 +111,8 @@ class RealConnectionClient internal constructor(
         frameConsumerFactory = frameConsumerFactory,
         offlineInfo = offlineInfo,
         offlineInfoTick = offlineInfoTick,
+        commandChannel = commandChannel,
+        streamCoordinator = streamCoordinator,
     )
 
     private val relay: RelayClient = relayClient ?: RelayClient(wsClient)
@@ -154,6 +169,9 @@ class RealConnectionClient internal constructor(
         sessionJob = null
         nsd.stopDiscovery()
         debugMode.value = null
+        // 13.3：解除配对后指令通道与流式态一并失效（pending 全失败、暂存快照丢弃）
+        commandChannel?.shutdown()
+        streamCoordinator?.reset()
         _paired.value = false
         _pairingProgress.value = PairingProgress.Idle
         liveState.value = ConnectionState.Direct
@@ -163,6 +181,15 @@ class RealConnectionClient internal constructor(
             store.clear()
         }
     }
+
+    // ── CommandSender（13.3 T5）─────────────────────────────────────
+
+    override val sessionActive: Boolean
+        get() = commandChannel?.sessionActive == true
+
+    override suspend fun execute(action: String, paramsJson: String): org.json.JSONObject =
+        commandChannel?.execute(action, paramsJson)
+            ?: throw CommandException("ConnectionError", "桌面引擎不可达")
 
     // ── PairingConnector ──────────────────────────────────────────────
 
@@ -521,9 +548,19 @@ class RealConnectionClient internal constructor(
     }
 
     /** 会话循环：30s 无入站即发 PING 保活；协议错误/通道关闭即退出（上层进退避）。 */
-    private suspend fun startSessionLoop(session: WsSession) {
+    private suspend fun startSessionLoop(session: WsSession) = kotlinx.coroutines.coroutineScope {
         // T3：每会话一个帧消费者——承载切换/重连时会话循环重建，残缺分帧序列不跨会话
         val frameConsumer = frameConsumerFactory()
+        // 13.3 T5：指令出站 pump（每会话绑定一次；pending 表跨会话存活）
+        val commandBinding = commandChannel?.bind()
+        val pump = commandBinding?.let { binding ->
+            launch {
+                for (frame in binding.outbound) {
+                    // 发送失败即 pump 退出——在途指令由 unbind 失败或看门狗兜底
+                    if (!session.send(FrameCodec.encode(frame, session.transport))) break
+                }
+            }
+        }
         try {
             while (currentCoroutineContext().isActive) {
                 val bytes = withTimeoutOrNull(PING_INTERVAL_MS) { session.incoming.receive() }
@@ -548,8 +585,15 @@ class RealConnectionClient internal constructor(
                     // 10MB 快照的 base64 解码/拼接/JSON 解析在主线程会掉帧乃至 ANR
                     is Frame.Snapshot -> withContext(ioDispatcher) { frameConsumer.onFrame(frame) }
                     is Frame.StateDelta -> withContext(ioDispatcher) { frameConsumer.onFrame(frame) }
-                    // COMMAND/COMMAND_RESULT/STREAM_TOKEN 为 13.3 指令通道消费方
-                    else -> Unit
+                    // 13.3 T5：指令帧分发（pending 表跨会话存活，故消费者不随会话重建）
+                    is Frame.CommandResult -> withContext(ioDispatcher) {
+                        commandChannel?.onCommandResult(frame.data)
+                    }
+                    is Frame.StreamToken -> withContext(ioDispatcher) {
+                        streamCoordinator?.onStreamToken(frame.data)
+                    }
+                    // 手机不接收 COMMAND 帧（桌面→手机不发起指令）；防御性忽略
+                    is Frame.Command -> Unit
                 }
             }
         } catch (e: CancellationException) {
@@ -558,6 +602,12 @@ class RealConnectionClient internal constructor(
         } catch (_: Exception) {
             // 通道关闭/收发失败：会话终止
         } finally {
+            pump?.cancel()
+            commandBinding?.let { commandChannel?.unbind(it) }
+            // 会话终止清流式门（评审 C10）：闪断重连时活跃流残留会让重连后的
+            // 所有快照（含首帧全量）无限暂存，UI 冻结在断连前陈旧数据上——
+            // reset 同时 flush 暂存快照，流式状态由 VM 侧收口为「连接中断」
+            streamCoordinator?.reset()
             session.close()
         }
     }

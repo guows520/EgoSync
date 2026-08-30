@@ -264,7 +264,16 @@ private fun MainShellRoute(
 @Composable
 private fun ChatRoute(container: AppModelContainer) {
     val vm: ChatViewModel = viewModel(
-        factory = viewModelFactory { initializer { ChatViewModel(container.snapshotStore) } }
+        factory = viewModelFactory {
+            initializer {
+                ChatViewModel(
+                    store = container.snapshotStore,
+                    commands = container.commandSender,
+                    stream = container.streamCoordinator,
+                    onError = container::showEvent,
+                )
+            }
+        }
     )
     val uiState by vm.uiState.collectAsState()
     val connectionState by container.connection.state.collectAsState()
@@ -292,7 +301,15 @@ private fun ChatRoute(container: AppModelContainer) {
 @Composable
 private fun TasksRoute(container: AppModelContainer) {
     val vm: TasksViewModel = viewModel(
-        factory = viewModelFactory { initializer { TasksViewModel(container.snapshotStore) } }
+        factory = viewModelFactory {
+            initializer {
+                TasksViewModel(
+                    store = container.snapshotStore,
+                    commands = container.commandSender,
+                    onError = container::showEvent,
+                )
+            }
+        }
     )
     val uiState by vm.uiState.collectAsState()
     val connectionState by container.connection.state.collectAsState()
@@ -424,7 +441,16 @@ private fun NotificationCenterRoute(navController: NavHostController, container:
 private fun MemoryRoute(navController: NavHostController, container: AppModelContainer, roleId: String) {
     val vm: MemoryViewModel = viewModel(
         key = "memory-$roleId",
-        factory = viewModelFactory { initializer { MemoryViewModel(container, roleId) } },
+        factory = viewModelFactory {
+            initializer {
+                MemoryViewModel(
+                    store = container.snapshotStore,
+                    roleId = roleId,
+                    commands = container.commandSender,
+                    onError = container::showEvent,
+                )
+            }
+        },
     )
     val uiState by vm.uiState.collectAsState()
     MemoryScreen(
@@ -435,5 +461,7 @@ private fun MemoryRoute(navController: NavHostController, container: AppModelCon
         onOpenForgetConfirm = vm::openForgetConfirm,
         onCancelForget = vm::cancelForget,
         onConfirmForget = vm::confirmForget,
+        onRetry = vm::reload,
+        onRetrySources = vm::retrySources,
     )
 }

@@ -1,5 +1,22 @@
 # Deferred Work
 
+## Deferred from: code review of story-13.3 Chunk B (2026-08-31)
+
+- **actionType 子串分类脆弱**：`StreamCoordinator.kt` `toTraceBlock` 用 `toolName.contains("read"/"edit"/...)` 顺序匹配归类工具——`update_and_read` 之类名字会被首个命中子串随机归类。属展示层图标分类，需对照桌面前端（ChatStream 消费方式）的映射表统一后修正，避免双端分类漂移。
+- **超时重试不复用 commandId 的重复执行窗口**：手机重试生成新 commandId，桌面幂等缓存无法去重——task.create 类非幂等指令在「慢执行+用户重试」组合下重复执行。接口 doc 已诚实声明，复用 commandId 的重放机制属 14.1 速记队列；已通过 ack 超时 15s→60s 缓解（伪超时概率大幅下降）。
+
+## Deferred from: code review of story-13.3 Chunk C (2026-08-31)
+
+- **conversation.delete 失败不回滚本地**：删除指令失败时本地已移除、桌面仍存——下次 STATE_DELTA 会话「复活」，与用户操作矛盾但最终一致（桌面是事实源）；onError snackbar 已即时反馈。回滚需保存被删会话快照，复杂度收益比低，暂缓。
+- **toggle 超时回滚 vs 已收敛快照竞态**：task.toggle 60s ack 超时无条件回滚本地翻转，但桌面可能已执行成功且写信号快照（约 2s）已收敛 done=true——回滚后 UI 与桌面短暂不一致且无后续收敛信号。与 Chunk B「commandId 非复用」deferred 同源（超时+重试组合窗口），14.1 速记队列统一收口。
+
+
+## Deferred from: code review of story-13.3 Chunk A (2026-08-31)
+
+- **解析失败 ack 恒用空 commandId（超限 envelope 手机 pending 无法关单）**：`models/companion_command.rs` parse 失败（含长度前置检查）即回 `commandId:""` 的 ack——超限 envelope 手机侧确携带 commandId，但回执无法匹配。仅恶意/异常客户端可达（手机编码层 `MAX_PLAINTEXT_LEN=65519` 发送前自拒），桌面已有显式错误回执满足 AC2 字面。建议作为协议边界登记（性质同 §9.3 幂等边界）。
+- **route 执行无超时包装**：`companion_dispatch.rs` execute 内命令（DB 锁/opencode 派发）理论上可挂起，手机 120s 看门狗覆盖用户体验，reqwest 有自身超时。桌面侧 `tokio::time::timeout` 为纵深防御，当前价值有限。
+
+
 ## Deferred from: companion-android 任务屏补齐三路评审 (2026-05-27)
 
 - **VM 编排层测试缺口（createTask/4s delay 无测试）**：`TasksViewModel.createTask` 的 id 序列、roleName 回查（未知角色回退「未知角色」）、4s delay→applyClassified 固定归 Q2 均只有静态核对。需以 TestDispatcher 注入 delay（或抽 orchestrateCreateTask 纯化）补 VM 级测试，锁定「智能判断 4s 后必归组、指定象限永不被改」两条路径。仓库有 PairingViewModelTest 先例可循。

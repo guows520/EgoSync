@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -40,6 +41,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.egosync.companion.sync.MemoryCategory
 import com.egosync.companion.sync.MemoryItem
+import com.egosync.companion.sync.MemorySourceMessage
 import com.egosync.companion.sync.formatMemoryTime
 import com.egosync.companion.ui.icons.LucideIcons
 import com.egosync.companion.ui.theme.EgoSyncTheme
@@ -59,6 +61,8 @@ fun MemoryScreen(
     onOpenForgetConfirm: (memoryId: String) -> Unit,
     onCancelForget: (memoryId: String) -> Unit,
     onConfirmForget: (memoryId: String) -> Unit,
+    onRetry: () -> Unit = {},
+    onRetrySources: (memoryId: String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     // 色温随角色域（桌面 --role-accent 同语义）
@@ -102,11 +106,26 @@ fun MemoryScreen(
 
             Spacer(Modifier.height(12.dp))
 
-            if (visible.isEmpty()) {
-                // AC5 契约空态：记忆内容永不进入快照——显示占位而非伪数据，
-                // 记忆查询/溯源走指令通道（13.3 接入）
-                Text(
-                    "记忆通道尚未接通：内容不随快照下发，查询与溯源将在指令通道就绪后开放",
+            // 13.3 指令通道：列表现查现显（memory.list）——加载/错误/空三态
+            // 复用原 AC5 占位槽（不再宣称「通道尚未接通」）
+            when {
+                uiState.loading -> Text(
+                    "正在加载记忆…",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                uiState.error != null -> Column {
+                    Text(
+                        "记忆加载失败：${uiState.error}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(onClick = onRetry) { Text("重试") }
+                }
+                visible.isEmpty() -> Text(
+                    // AC5 契约空态：记忆内容永不进入快照（防快照膨胀），此处即真实空
+                    "这个角色还没有记忆",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -118,10 +137,13 @@ fun MemoryScreen(
                     accent = roleAccent,
                     expanded = uiState.expandedMemoryId == memory.id,
                     confirming = uiState.confirmingMemoryId == memory.id,
+                    sources = uiState.sourcesByMemoryId[memory.id],
+                    sourcesLoading = memory.id in uiState.loadingSourceIds,
                     onToggleSource = { onToggleSource(memory.id) },
                     onOpenForgetConfirm = { onOpenForgetConfirm(memory.id) },
                     onCancelForget = { onCancelForget(memory.id) },
                     onConfirmForget = { onConfirmForget(memory.id) },
+                    onRetrySources = { onRetrySources(memory.id) },
                 )
                 Spacer(Modifier.height(12.dp))
             }
@@ -157,6 +179,8 @@ private fun MemoryFilterChip(label: String, selected: Boolean, accent: Color, on
 /**
  * 记忆卡（镜像桌面 memory card 结构）：
  * 类别头 + 遗忘钮 → 内容 → 遗忘确认面板 → 来源触发行 → 展开来源列表。
+ * 13.3 偏差：来源列表经 `sources` 参数注入（story 原文「组件零改动复用」不准确——
+ * 13.2 并未预留来源槽位，此处补齐并记录为已批准偏差）。
  */
 @Composable
 private fun MemoryCard(
@@ -164,10 +188,13 @@ private fun MemoryCard(
     accent: Color,
     expanded: Boolean,
     confirming: Boolean,
+    sources: List<MemorySourceMessage>?,
+    sourcesLoading: Boolean,
     onToggleSource: () -> Unit,
     onOpenForgetConfirm: () -> Unit,
     onCancelForget: () -> Unit,
     onConfirmForget: () -> Unit,
+    onRetrySources: () -> Unit = {},
 ) {
     Surface(
         color = MaterialTheme.colorScheme.surface,
@@ -211,15 +238,41 @@ private fun MemoryCard(
             // FR-8 来源触发行
             SourceTriggerRow(memory = memory, expanded = expanded, onClick = onToggleSource)
 
-            // FR-8 展开来源列表：来源对话不随快照下发（AC5 同源裁决），
-            // 展开先明示占位（AC6 视觉基准的交互骨架保留）
+            // FR-8 展开来源列表：memory.sources 现查（懒加载，展开时触发）
             if (expanded) {
                 Spacer(Modifier.size(10.dp))
-                Text(
-                    "来源对话待接指令通道后可查",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                when {
+                    sourcesLoading -> Text(
+                        "正在加载来源对话…",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    sources == null -> Row(verticalAlignment = Alignment.CenterVertically) {
+                        // 失败即显式重试入口（评审 C18）：文案称「请重试」却无可点元素
+                        // 是断裂交互；失败不缓存，重查即重发
+                        Text(
+                            "来源对话加载失败，请重试",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        Spacer(Modifier.size(8.dp))
+                        Text(
+                            "重试",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.clickable { onRetrySources() },
+                        )
+                    }
+                    sources.isEmpty() -> Text(
+                        "暂无来源对话",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    else -> sources.forEach { message ->
+                        SourceMessageRow(message = message, accent = accent)
+                        Spacer(Modifier.size(6.dp))
+                    }
+                }
             }
         }
     }
@@ -291,6 +344,46 @@ private fun ForgetConfirmPanel(onConfirm: () -> Unit, onCancel: () -> Unit) {
 
 // ── FR-8 来源溯源 ──────────────────────────────────────────────────────
 
+/** 来源消息行（镜像桌面来源列表条目：发言方 + 内容 + 时间；来源条目 accent 左缘标记）。 */
+@Composable
+private fun SourceMessageRow(message: MemorySourceMessage, accent: Color) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+        shape = RoundedCornerShape(6.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Surface(
+                    color = if (message.isSource) accent.copy(alpha = 0.15f)
+                    else MaterialTheme.colorScheme.surfaceVariant,
+                    shape = RoundedCornerShape(4.dp),
+                ) {
+                    Text(
+                        if (message.role == "assistant") "角色" else "我",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (message.isSource) accent
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                    )
+                }
+                Spacer(Modifier.size(6.dp))
+                Text(
+                    formatMemoryTime(message.createdAt),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.size(4.dp))
+            Text(
+                message.content,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+    }
+}
+
 /** 来源触发行（镜像桌面：Clock + 来源对话 + 查看原文/收起 + 时间小字）。 */
 @Composable
 private fun SourceTriggerRow(memory: MemoryItem, expanded: Boolean, onClick: () -> Unit) {
@@ -347,6 +440,8 @@ private fun MemoryScreenPreview() {
             onOpenForgetConfirm = {},
             onCancelForget = {},
             onConfirmForget = {},
+            onRetry = {},
+            onRetrySources = {},
         )
     }
 }

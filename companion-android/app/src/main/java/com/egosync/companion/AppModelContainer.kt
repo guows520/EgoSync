@@ -1,6 +1,9 @@
 package com.egosync.companion
 
 import android.content.Context
+import com.egosync.companion.command.CommandChannel
+import com.egosync.companion.command.CommandSender
+import com.egosync.companion.command.StreamCoordinator
 import com.egosync.companion.connection.ConnectionClient
 import com.egosync.companion.connection.PairingConnector
 import com.egosync.companion.connection.RealConnectionClient
@@ -45,24 +48,38 @@ class AppModelContainer private constructor(context: Context) {
         scope = scope,
     )
 
+    /** 13.3 T5：流式聚合器（兼快照延后门——活跃流期间暂存，结束补应用）。 */
+    val streamCoordinator = StreamCoordinator { snapshot, rawJson ->
+        snapshotStore.applySnapshot(snapshot, rawJson)
+    }
+
+    /** 13.3 T5：指令通道（pending 表跨会话存活；RealConnectionClient 会话 pump 绑定）。 */
+    val commandChannel = CommandChannel()
+
     private val realConnection = RealConnectionClient(
         context = context,
         scope = scope,
-        // SNAPSHOT/STATE_DELTA 帧 → 分片重组 → 解析 → 快照全量替换（AC1/AC2）；
+        // SNAPSHOT/STATE_DELTA 帧 → 分片重组 → 解析 → 流式门 → 快照全量替换（AC1/AC2）；
         // 新会话建立即解封快照通道（unpair 封存后重新配对，评审 P4）
         frameConsumerFactory = {
             snapshotStore.resume()
             SnapshotFrameHandler { snapshot, rawJson ->
-                snapshotStore.applySnapshot(snapshot, rawJson)
+                // 13.3：活跃流期间暂存（只留最新），流结束/失败立即补应用（Dev Notes §4 裁决）
+                streamCoordinator.deliverSnapshot(snapshot, rawJson)
             }
         },
         // 降级态信息来自快照缓存可用性（FR-40，DebugConnectionMode.DEGRADED 同源）；
         // tick 传快照态流：缓存异步加载完成后驱动 Offline 重算（评审 P7）
         offlineInfo = { snapshotStore.offlineInfo() },
         offlineInfoTick = snapshotStore.state,
+        commandChannel = commandChannel,
+        streamCoordinator = streamCoordinator,
     )
     val connection: ConnectionClient = realConnection
     val pairingConnector: PairingConnector = realConnection
+
+    /** 13.3 T5：指令发送入口（二态：真实客户端实现 / Preview fake 态 null → UI 显式失败提示）。 */
+    val commandSender: CommandSender? = realConnection
 
     val quickNotes = QuickNoteQueue()
     val notifications = InAppNotificationAdapter(
@@ -79,9 +96,13 @@ class AppModelContainer private constructor(context: Context) {
     )
     val themeMode: StateFlow<ThemeMode> = _themeMode.asStateFlow()
 
-    /** 一次性事件消息（Snackbar），UI 消费后调 [consumeEvent]。 */
-    private val _eventMessage = MutableStateFlow<String?>(null)
-    val eventMessage: StateFlow<String?> = _eventMessage.asStateFlow()
+    /** 一次性事件流（Snackbar）：SharedFlow 不做值去重——连续相同的错误
+     *  各发一次（StateFlow 同值重发会被合并吞掉，评审 C21）。 */
+    private val _events = kotlinx.coroutines.flow.MutableSharedFlow<String>(
+        extraBufferCapacity = 16,
+        onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST,
+    )
+    val events: kotlinx.coroutines.flow.SharedFlow<String> = _events
 
     init {
         // FR-43：恢复连接后速记自动提交管家（mock：直接清队并提示）
@@ -91,7 +112,7 @@ class AppModelContainer private constructor(context: Context) {
                     val pending = quickNotes.pendingCount()
                     if (pending > 0) {
                         quickNotes.flush()
-                        _eventMessage.value = "连接已恢复，$pending 条速记已提交管家处理"
+                        _events.tryEmit("连接已恢复，$pending 条速记已提交管家处理")
                     }
                 }
             }
@@ -124,7 +145,12 @@ class AppModelContainer private constructor(context: Context) {
     }
 
     fun consumeEvent() {
-        _eventMessage.value = null
+        // 保留空实现（旧 StateFlow 语义遗留）：SharedFlow 事件无需手动消费
+    }
+
+    /** 一次性事件（Snackbar）——VM 层错误反馈经此直达全局提示（13.3）。 */
+    fun showEvent(message: String) {
+        _events.tryEmit(message)
     }
 
     companion object {

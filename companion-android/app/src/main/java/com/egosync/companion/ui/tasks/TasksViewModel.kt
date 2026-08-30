@@ -2,6 +2,9 @@ package com.egosync.companion.ui.tasks
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.egosync.companion.command.CommandEnvelope
+import com.egosync.companion.command.CommandException
+import com.egosync.companion.command.CommandSender
 import com.egosync.companion.sync.CreateTaskInput
 import com.egosync.companion.sync.DesktopSnapshot
 import com.egosync.companion.sync.SnapshotStore
@@ -16,6 +19,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 
 data class TasksUiState(
     val tasks: List<TaskItem> = emptyList(),
@@ -30,8 +34,8 @@ data class TasksUiState(
 ) {
     fun grouped(): Map<Quadrant, List<TaskItem>> {
         val visible = tasks.filter { task ->
-            // 分类中任务不参与象限过滤：智能判断占位象限（Q3）≠ 最终归类（Q2），
-            // 若参与过滤，选中目标象限的用户在 4 秒分类窗口内完全看不到刚建的任务，
+            // 分类中任务不参与象限过滤：智能判断占位象限（Q2）≠ 最终归类，
+            // 若参与过滤，选中目标象限的用户在分类窗口内完全看不到刚建的任务，
             // 违背「立即上屏并挂徽章」契约（大石头/归属是用户刚选定的真实属性，仍参与过滤）
             (quadrantFilter == null || task.quadrant == quadrantFilter || task.id in classifyingIds) &&
                 (!showBigRocksOnly || task.bigRock) &&
@@ -78,33 +82,32 @@ data class TasksUiState(
 }
 
 /**
- * 四象限任务 mock 状态：勾选完成 = 指令交桌面引擎执行（FR-41），
- * 原型仅本地翻转；真实层将改为 COMMAND 帧发送。
+ * 四象限任务状态机（Story 13.3 换装：mock 本地翻转 → 指令通道）。
+ * 勾选/新建经 `COMMAND(task.toggle/task.create)` 由桌面引擎真实执行：
+ * 勾选 = 乐观翻转 + 失败回滚；新建 = 乐观追加（分类中过渡态）+ ack 换真 id，
+ * 象限归类经 task:classified → STATE_DELTA 收敛（移除 4s 固定 Q2 mock）。
  */
-class TasksViewModel(private val store: SnapshotStore) : ViewModel() {
+class TasksViewModel(
+    private val store: SnapshotStore,
+    private val commands: CommandSender?,
+    private val onError: (String) -> Unit = {},
+) : ViewModel() {
 
-    private val _uiState = MutableStateFlow(
-        TasksUiState(tasks = store.tasks + seedTask)
-    )
+    private val _uiState = MutableStateFlow(TasksUiState(tasks = store.tasks))
     val uiState: StateFlow<TasksUiState> = _uiState.asStateFlow()
 
     /** 快照同一性守卫（评审 P1）：仅快照对象变更（首次加载/STATE_DELTA 全量替换）才重建
-     *  任务列表——无守卫时任何 state 重发都会把已分类的 seedTask 回滚为 Q3 占位、
-     *  nextTaskId 回退（applyClassified 按 id 替换会改错/找不到卡片，正是其注释
-     *  自述要防的故障模式）。 */
+     *  任务列表——无守卫时任何 state 重发都会回滚已归类的卡片。 */
     private var lastSnapshot: DesktopSnapshot? = store.state.value.snapshot
 
-    /** 新建任务 id 序列起点：从快照任务（含 seed）最大 t-N 推导——新增种子免手工同步，
-     *  否则静默 id 冲突会让 applyClassified 按 id 替换时改错卡片（原 companion 静态变量换装为实例态）。 */
-    private var nextTaskId = deriveNextTaskId()
+    /** 新建任务临时 id 序列起点（local- 前缀防与桌面 id 冲突；ack 后替换为真 id）。 */
+    private var nextLocalId = 1
 
-    private fun deriveNextTaskId(): Int =
-        (store.tasks + seedTask)
-            .maxOf { it.id.removePrefix("t-").toIntOrNull() ?: 0 } + 1
+    /** 在途乐观勾选（toggle ack 未回）：id → 翻转目标态；快照重建时保持本地翻转。 */
+    private val inFlightToggles = mutableMapOf<String, Boolean>()
 
     init {
-        // AC2：快照全量替换即时刷新任务列表（本地暂存〔勾选/新建〕被覆盖为已知过渡态，
-        // 指令通道 13.3 收口）；classifyingIds 属本地交互态，保留不清
+        // AC2：快照全量替换即时刷新任务列表；classifyingIds 属本地交互态，保留不清
         viewModelScope.launch {
             store.state.collect { state ->
                 when {
@@ -121,43 +124,80 @@ class TasksViewModel(private val store: SnapshotStore) : ViewModel() {
                 }
             }
         }
-        // FR-23 mock：模拟桌面「新建任务未指定象限 → 后台异步分类」过渡态——
-        // seed 一条占位象限（Q3）任务并标记分类中，延时后模拟 task:classified
-        // 事件到达，归类到 Q2 并清除标记。纯内存态，进程重启还原。
+    }
+
+    /** 用快照 tasks 域重建列表；在途乐观勾选保持（快照旧态不回滚翻转）；
+     *  分类中收敛仅靠 15s 超时兜底（评审 D1-A：桌面未指定象限默认落库 Q2，
+     *  「象限脱离 Q3」判据在真实链路 2s 内即误清，不可用）。 */
+    private fun rebuildTasks() {
+        val snapshotTasks = store.tasks
         _uiState.update { state ->
-            state.copy(classifyingIds = setOf(seedTask.id))
+            var tasks = snapshotTasks
+            // 乐观暂存的任务在快照出现前保留（ack 换 id 前 STATE_DELTA 不含它）
+            for (pending in state.tasks) {
+                if (pending.id.startsWith(LOCAL_ID_PREFIX) && tasks.none { it.id == pending.id }) {
+                    tasks = tasks + pending
+                }
+            }
+            // 在途勾选保持乐观态：toggle 写信号快照（约 2s）到达前，无关 STATE_DELTA
+            // 会用桌面旧态覆盖翻转——视觉回滚后再次跳变（评审 C14）
+            tasks = tasks.map { t ->
+                inFlightToggles[t.id]?.let { flipped -> t.copy(done = flipped) } ?: t
+            }
+            // 分类中：任务已从快照消失（桌面删除）时清标记防悬挂；归类收敛
+            // 由 15s 超时兜底（task:classified 无独立事件通道，经 STATE_DELTA 无法区分）
+            val classifying = state.classifyingIds.filter { id ->
+                tasks.any { it.id == id }
+            }.toSet()
+            state.copy(tasks = tasks, classifyingIds = classifying)
+        }
+    }
+
+    fun toggleTask(taskId: String) {
+        val current = _uiState.value.tasks.find { it.id == taskId } ?: return
+        // 连点守卫：同任务在途（ack 未回）期间不受理二次翻转——多次乐观翻转与
+        // 回滚交错会让本地态偏离桌面且无收敛信号（评审 C14）
+        if (inFlightToggles.containsKey(taskId)) return
+        val original = current.done
+        val flipped = !original
+        inFlightToggles[taskId] = flipped
+        // 乐观翻转（既有交互即时反馈）；失败回滚到点击前基线 + 中文提示
+        _uiState.update { state ->
+            state.copy(
+                tasks = state.tasks.map { if (it.id == taskId) it.copy(done = flipped) else it },
+            )
         }
         viewModelScope.launch {
-            delay(CLASSIFY_DELAY_MILLIS)
-            // 事件载荷从当前卡片构造（只改象限）：桌面事件载荷来自后端（已知完成态），
-            // 移动 mock 若用陈旧常量整卡替换，会回滚分类窗口内用户的本地勾选。
-            // 任务已不在列表（mock 防御，正常不可达）：不做任何事，避免过期快照复活
-            _uiState.update { state ->
-                val current = state.tasks.firstOrNull { it.id == seedTask.id } ?: return@update state
-                state.applyClassified(current.copy(quadrant = Quadrant.Q2))
+            val sender = commands
+            if (sender == null) {
+                rollbackToggle(taskId, original)
+                onError("桌面引擎不可达")
+                return@launch
+            }
+            try {
+                sender.execute(
+                    "task.toggle",
+                    CommandEnvelope.buildParams(
+                        listOf("taskId" to taskId, "isCompleted" to flipped),
+                    ),
+                )
+                // 成功：STATE_DELTA 收敛终态（任务勾选事件经写信号推送快照）
+            } catch (e: CommandException) {
+                rollbackToggle(taskId, original)
+                onError("任务操作失败：${e.message}")
+            } finally {
+                inFlightToggles.remove(taskId)
             }
         }
     }
 
-    /** 用快照 tasks 域重建列表：seedTask 若已被 task:classified 归类则保持已分类象限
-     *  不回退为 Q3 占位；nextTaskId 取历史最大，不因重建回退造成 id 复用。 */
-    private fun rebuildTasks() {
-        val classifiedSeed = _uiState.value.tasks.firstOrNull { it.id == seedTask.id }
-        val seed = if (classifiedSeed != null && classifiedSeed.quadrant != seedTask.quadrant) {
-            classifiedSeed
-        } else {
-            seedTask
-        }
-        _uiState.update { it.copy(tasks = store.tasks + seed) }
-        nextTaskId = maxOf(nextTaskId, deriveNextTaskId())
-    }
-
-    fun toggleTask(taskId: String) {
+    /** 回滚到点击前基线（非盲翻——连续点击交错时盲翻会滚到从未存在的状态）。 */
+    private fun rollbackToggle(taskId: String, restoreTo: Boolean) {
         _uiState.update { state ->
             state.copy(
                 tasks = state.tasks.map {
-                    if (it.id == taskId) it.copy(done = !it.done) else it
-                }
+                    if (it.id == taskId) it.copy(done = restoreTo) else it
+                },
             )
         }
     }
@@ -182,37 +222,103 @@ class TasksViewModel(private val store: SnapshotStore) : ViewModel() {
 
     /**
      * 新建任务（FR-23，镜像桌面 TaskModal handleSubmit → useTasks.createTask）：
-     * 指定象限直接归组；未指定（智能判断）复用 classifyingIds 过渡态，延时后模拟
-     * task:classified 事件归类。原型在 mock 层本地追加（同 seedTask 先例）；
-     * 真实层将改为 COMMAND 帧发送桌面引擎。title 由表单层校验非空后传入。
+     * 乐观追加 + `COMMAND(task.create)`；ack 返回桌面 Task（替换临时 id）。
+     * 智能判断（未指定象限）保持 classifyingIds 过渡态，归类经 STATE_DELTA 收敛
+     * （task:classified 写信号触发快照）；分类上限 12s 后超时清标记兜底。
      */
     fun createTask(input: CreateTaskInput) {
-        val id = "t-$nextTaskId"
-        nextTaskId += 1
-        // 归属展示名（桌面 CrossRoleTask.roleName 由后端联表给出；mock 就地查 roles）
+        val tempId = "$LOCAL_ID_PREFIX${nextLocalId++}"
+        // 归属展示名（桌面 CrossRoleTask.roleName 由后端联表给出；乐观期就地查 roles）
         val roleName = if (input.ownerType == TaskOwner.BUTLER) "管家"
         else store.roles.firstOrNull { it.id == input.roleId }?.name ?: "未知角色"
-        val created = TaskItem(
-            id = id,
+        val optimistic = TaskItem(
+            id = tempId,
             title = input.title.trim(),
-            // 智能判断占位象限（同 seedTask 约定），事件到达后归类
-            quadrant = input.quadrant ?: Quadrant.Q3,
+            // 智能判断占位象限：Q2（对齐桌面默认落库值 normalized_quadrant
+            // unwrap_or("Q2")——评审 D1-A：占位 Q3 在首个 STATE_DELTA 即被误判
+            // 「已归类」清掉分类中标记；占位 Q2 时 ack/快照象限一致，无假跳变）
+            quadrant = input.quadrant ?: Quadrant.Q2,
             roleName = roleName,
             ownerType = input.ownerType,
             roleId = input.roleId,
             due = input.due?.trim()?.takeIf { it.isNotEmpty() },
             bigRock = input.bigRock,
         )
-        _uiState.update { it.applyCreated(created, pendingClassify = input.quadrant == null) }
-        if (input.quadrant == null) {
-            viewModelScope.launch {
-                delay(CLASSIFY_DELAY_MILLIS)
-                // 事件载荷从当前卡片构造（只改象限），不回滚分类窗口内的本地勾选——同 init seed 约定；
-                // mock 分类结果固定 Q2（原型简化，真实层由桌面引擎分类后经事件下发）
-                _uiState.update { state ->
-                    val current = state.tasks.firstOrNull { it.id == id } ?: return@update state
-                    state.applyClassified(current.copy(quadrant = Quadrant.Q2))
+        _uiState.update { it.applyCreated(optimistic, pendingClassify = input.quadrant == null) }
+
+        viewModelScope.launch {
+            val sender = commands ?: run {
+                // fake 态：移除乐观卡片 + 显式失败（不伪造桌面任务）
+                _uiState.update { state -> state.copy(tasks = state.tasks.filterNot { it.id == tempId }) }
+                onError("桌面引擎不可达")
+                return@launch
+            }
+            try {
+                val result = sender.execute(
+                    "task.create",
+                    CommandEnvelope.buildParams(
+                        listOf(
+                            "title" to input.title.trim(),
+                            "ownerType" to if (input.ownerType == TaskOwner.BUTLER) "butler" else "role",
+                            "roleId" to input.roleId,
+                            "deadline" to input.due?.trim()?.takeIf { it.isNotEmpty() },
+                            "quadrant" to input.quadrant?.code,
+                            "isBigRock" to input.bigRock.takeIf { it },
+                        ),
+                    ),
+                )
+                replaceWithDesktopTask(tempId, result, pendingClassify = input.quadrant == null)
+            } catch (e: CommandException) {
+                _uiState.update { state -> state.copy(tasks = state.tasks.filterNot { it.id == tempId }) }
+                onError("任务创建失败：${e.message}")
+            }
+        }
+    }
+
+    /** ack Task 替换乐观临时卡片；未指定象限时保分类中态，归类由 15s 超时兜底收口。 */
+    private fun replaceWithDesktopTask(tempId: String, result: JSONObject, pendingClassify: Boolean) {
+        val desktopId = result.optString("id")
+        if (desktopId.isEmpty()) {
+            // ack 缺 id：契约破坏——乐观卡移除 + 显式失败，不留永不收敛的孤儿（评审 C15）
+            _uiState.update { state -> state.copy(tasks = state.tasks.filterNot { it.id == tempId }) }
+            onError("桌面未返回任务 id")
+            return
+        }
+        // 未知象限不造假映射（与 MemoryViewModel 同立场）：保留乐观占位 Q2，
+        // 由后续 STATE_DELTA 收敛——静默映射 Q3 会把契约破坏伪装成正常数据
+        val quadrant = Quadrant.entries.firstOrNull { it.code == result.optString("quadrant") }
+        _uiState.update { state ->
+            // 快照已含同 id 任务（写信号快照先于 ack 到达的竞速）：仅去重乐观卡，
+            // 否则替换后列表出现两张同 id 卡片（LazyColumn key 冲突，评审 C15）
+            if (state.tasks.any { it.id == desktopId }) {
+                state.copy(
+                    tasks = state.tasks.filterNot { it.id == tempId },
+                    classifyingIds = state.classifyingIds - tempId +
+                        if (pendingClassify) setOf(desktopId) else emptySet(),
+                )
+            } else {
+                val replaced = state.tasks.map { t ->
+                    if (t.id == tempId) {
+                        t.copy(
+                            id = desktopId,
+                            quadrant = quadrant ?: t.quadrant,
+                            done = result.optBoolean("isCompleted", false),
+                        )
+                    } else t
                 }
+                state.copy(
+                    tasks = replaced,
+                    // 已指定象限：无需分类；智能判断：保持分类中（象限可能仍在后台变化）
+                    classifyingIds = state.classifyingIds - tempId +
+                        if (pendingClassify) setOf(desktopId) else emptySet(),
+                )
+            }
+        }
+        if (pendingClassify) {
+            viewModelScope.launch {
+                // 桌面 task_classifier 固定 12s 截止——到期分类已终态（含降级 Q2），清标记兜底
+                delay(CLASSIFY_TIMEOUT_MILLIS)
+                _uiState.update { it.copy(classifyingIds = it.classifyingIds - desktopId) }
             }
         }
     }
@@ -222,19 +328,10 @@ class TasksViewModel(private val store: SnapshotStore) : ViewModel() {
         setOf(TASK_OWNER_BUTLER_KEY) + store.roles.map { it.id }
 
     private companion object {
-        /** 模拟后台分类耗时（毫秒）：进屏后约 4 秒收到 task:classified 事件。 */
-        const val CLASSIFY_DELAY_MILLIS = 4_000L
+        /** 本地乐观任务 id 前缀（与桌面 id 空间隔离）。 */
+        const val LOCAL_ID_PREFIX = "local-"
 
-        /** seed 任务：语义为「从对话/速记新建、未指定象限」，占位象限 Q3，事件到达后归类 Q2。 */
-        val seedTask = TaskItem(
-            id = "t-9",
-            title = "整理客户反馈要点",
-            quadrant = Quadrant.Q3,
-            roleName = "产品经理",
-            ownerType = TaskOwner.ROLE,
-            roleId = "role-pm",
-            due = null,
-            bigRock = false,
-        )
+        /** 桌面智能分类固定截止（task_classifier 12s deadline）+ 快照 debounce 余量。 */
+        const val CLASSIFY_TIMEOUT_MILLIS = 15_000L
     }
 }

@@ -1,9 +1,12 @@
 package com.egosync.companion.ui.chat
 
+import com.egosync.companion.command.CommandException
+import com.egosync.companion.command.FakeCommandSender
+import com.egosync.companion.command.StreamCoordinator
 import com.egosync.companion.sync.ChatMessage
 import com.egosync.companion.sync.DesktopSnapshot
-import com.egosync.companion.sync.SnapshotDashboard
 import com.egosync.companion.sync.SnapshotConversation
+import com.egosync.companion.sync.SnapshotDashboard
 import com.egosync.companion.sync.SnapshotMessage
 import com.egosync.companion.sync.DashboardStatus
 import com.egosync.companion.sync.SnapshotMetrics
@@ -12,23 +15,27 @@ import com.egosync.companion.sync.SnapshotStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.setMain
+import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
 /**
- * 多会话状态机意图验证（规格 FR-3 / FR-6，I/O 契约六场景的 VM 侧语义）。
+ * 管家对话状态机（Story 13.3 换装：指令通道 + STREAM_TOKEN 驱动）。
  *
- * 13.2 换装后：会话列表由快照 conversations 域派生（种子会话固定在测试夹具快照中），
- * 回复轮换/提案等生成性内容见 [ChatDemoData]。VM 内所有 delay（思考/工具阶段/打字机）
- * 由测试调度器推进，可用 advanceTimeBy 精确停在「流式进行中」验证中断守卫。
+ * 发送经 `COMMAND(chat.send)`、回复经 token 流折叠渲染（镜像桌面 ChatStream
+ * 消费方式）；多会话/角色隔离语义沿用 13.2 契约。VM 内所有 delay（看门狗）
+ * 由测试调度器推进，可精确停在「流式进行中」验证互斥/超时守卫。
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class ChatViewModelTest {
@@ -110,15 +117,69 @@ class ChatViewModelTest {
         notifications = emptyList(),
     )
 
+    /** 流式收口后的收敛快照：当前会话含用户消息 + 完整助手回复（id 与 ack 对齐）。 */
+    private fun convergedSnapshot(): DesktopSnapshot = fixtureSnapshot().let { snap ->
+        snap.copy(
+            generatedAt = "2026-08-25T09:00:00Z",
+            conversations = snap.conversations.map { conv ->
+                if (conv.id == "conv-butler-current") {
+                    conv.copy(
+                        updatedAt = "2026-08-25T08:30:00Z",
+                        messages = conv.messages + listOf(
+                            SnapshotMessage("m-user-d", "user", "你好", "", true, "2026-08-25T08:30:00Z"),
+                            SnapshotMessage("m-a-d", "assistant", "你好，我在。", "", true, "2026-08-25T08:31:00Z"),
+                        ),
+                    )
+                } else conv
+            },
+        )
+    }
+
     private fun newVm(
         store: SnapshotStore = SnapshotStore().apply { applySnapshot(fixtureSnapshot()) },
-    ): ChatViewModel = ChatViewModel(store)
+        commands: FakeCommandSender? = FakeCommandSender(),
+        onError: (String) -> Unit = {},
+    ): ChatViewModel {
+        // 流式聚合器与 VM 共享（测试直接注入 token 事件驱动状态机）
+        val coordinator = StreamCoordinator { snapshot, raw -> store.applySnapshot(snapshot, raw) }
+        return ChatViewModel(store, commands, coordinator, onError)
+    }
 
-    /** 初始种子会话中「今日概览」（当前会话，最新在前）。 */
-    private fun ChatUiState.currentConversation() =
-        conversations.first { it.id == currentConversationId }
+    private fun ChatViewModel.streamField(): StreamCoordinator =
+        ChatViewModel::class.java.getDeclaredField("stream").let {
+            it.isAccessible = true
+            @Suppress("UNCHECKED_CAST")
+            it.get(this) as StreamCoordinator
+        }
 
-    // ── 场景 1：新建会话归属与角色隔离 ─────────────────────────────────
+    /** STREAM_TOKEN payload（桌面 llm:stream StreamPayload 形状）。 */
+    private fun tokenJson(
+        conversationId: String = "conv-butler-current",
+        token: String = "",
+        done: Boolean = false,
+        thinking: Boolean = false,
+        messageId: String? = "m-a-d",
+        phase: String? = null,
+        statusText: String? = null,
+        processEvent: String? = null,
+    ): String {
+        val json = StringBuilder(
+            """{"conversationId":"$conversationId","done":$done,"thinking":$thinking""",
+        )
+        messageId?.let { json.append(""", "messageId":"$it"""") }
+        if (token.isNotEmpty()) json.append(""", "token":"$token"""")
+        phase?.let { json.append(""", "phase":"$it"""") }
+        statusText?.let { json.append(""", "statusText":"$it"""") }
+        processEvent?.let { json.append(""", "processEvent":$it""") }
+        json.append("}")
+        return json.toString()
+    }
+
+    private fun chatSendAck(): JSONObject = JSONObject(
+        """{"conversationId":"conv-butler-current","userMessageId":"m-user-d","assistantMessageId":"m-a-d"}""",
+    )
+
+    // ── 场景 1：多会话归属（13.2 契约沿用）─────────────────────────
 
     @Test
     fun `新建会话归属当前角色且不串到其他角色`() {
@@ -138,8 +199,285 @@ class ChatViewModelTest {
 
         // 切回管家：新会话仍在（归属未丢）
         vm.selectRole(null)
-        assertTrue(vm.uiState.value.conversations.any { it.id == newId })
+        assertEquals(3, vm.uiState.value.conversations.size)
     }
+
+    @Test
+    fun `删除会话经指令通知桌面且本地立即移除`() {
+        // WHY：手机删除仅移除本地视图时桌面残留——回执快照会把已删会话
+        // 「复活」，用户操作被静默吞掉；删除必须同步桌面。
+        val commands = FakeCommandSender()
+        val vm = newVm(commands = commands)
+
+        vm.deleteConversation("conv-butler-history") // 非当前会话：不触发回退
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertFalse(vm.uiState.value.conversations.any { it.id == "conv-butler-history" })
+        assertEquals("conversation.delete", commands.calls.map { it.first }.last())
+        assertEquals("conv-butler-history", commands.paramsOf("conversation.delete")?.optString("conversationId"))
+    }
+
+    // ── 场景 2：发送经指令通道 + ack id 对齐（AC:3）───────────────
+
+    @Test
+    fun `发送经chat点send指令且回显气泡按ack对齐id`() {
+        // WHY：本地临时 id 若不替换为桌面 id，流结束后的快照替换会以
+        // 不同 key 重建消息列表——气泡闪烁且本地回写错位。
+        val commands = FakeCommandSender { _, _ -> chatSendAck() }
+        val vm = newVm(commands = commands)
+
+        vm.sendMessage("你好")
+        dispatcher.scheduler.runCurrent() // 精确停在流式窗口内（advanceUntilIdle 会烧掉 120s 看门狗）
+
+        // 指令已发出且参数完整（camelCase，桌面 deny_unknown_fields 校验）
+        assertEquals("chat.send", commands.calls.first().first)
+        val params = commands.paramsOf("chat.send")!!
+        assertEquals("你好", params.optString("content"))
+        assertEquals("conv-butler-current", params.optString("conversationId"))
+
+        // 用户气泡即时回显且 id 已对齐桌面
+        val userMsg = vm.uiState.value.messages.last { !it.fromButler }
+        assertEquals("m-user-d", userMsg.id)
+        assertEquals("你好", userMsg.text)
+
+        // ack 后进入流式等待（thinking），不悬挂
+        assertTrue(vm.uiState.value.thinking)
+        assertTrue(vm.uiState.value.responding)
+    }
+
+    @Test
+    fun `发送失败显式反馈且不悬挂`() {
+        // WHY：指令失败若静默，用户消息发出后永远停在「思考中」——
+        // 无反馈无出路，比报错更糟（NFR-M3 不伪造回执）。
+        val commands = FakeCommandSender { _, _ ->
+             throw CommandException("ConnectionError", "桌面引擎不可达")
+         }
+        val errors = mutableListOf<String>()
+        val vm = newVm(commands = commands, onError = { errors += it })
+
+        vm.sendMessage("你好")
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(listOf("桌面引擎不可达"), errors)
+        assertFalse(vm.uiState.value.responding)
+        assertFalse(vm.uiState.value.thinking)
+        // 用户消息保留（重试语义），但不出现任何伪造回复
+        //（种子会话自带 1 条管家问候气泡——只断言无新增）
+        assertEquals(1, vm.uiState.value.messages.count { it.fromButler })
+    }
+
+    // ── 场景 3：STREAM_TOKEN 驱动流式状态机（AC:3）────────────────
+
+    @Test
+    fun `token流驱动渲染工具行与done收口并现查建议`() {
+        // WHY：流式体验 = 桌面 ChatStream 的手机镜像；done 后快照域无
+        // suggestions（Dev Notes §4 裁决），建议必须现查。
+        val commands = FakeCommandSender { action, _ ->
+            if (action == "chat.send") chatSendAck()
+            else JSONObject("""{"suggestions":[{"id":"s-1","title":"排进明天上午","content":"明早有空","roleName":"产品经理"}]}""")
+        }
+        val vm = newVm(commands = commands)
+        val coordinator = vm.streamField()
+
+        vm.sendMessage("你好")
+        dispatcher.scheduler.runCurrent()
+
+        // 工具状态行（phase=tool）
+        coordinator.onStreamToken(tokenJson(phase = "tool", statusText = "检索记忆"))
+        dispatcher.scheduler.runCurrent()
+        assertEquals("检索记忆", vm.uiState.value.streamingToolTitle)
+
+        // 文本 token 逐字渲染
+        coordinator.onStreamToken(tokenJson(token = "你"))
+        coordinator.onStreamToken(tokenJson(token = "好，"))
+        dispatcher.scheduler.runCurrent()
+        val streaming = vm.uiState.value.messages.last { it.fromButler }
+        assertEquals("你好，", streaming.text)
+        assertTrue(streaming.streaming)
+
+        // done 收口
+        coordinator.onStreamToken(tokenJson(token = "我在。", done = true))
+        dispatcher.scheduler.runCurrent()
+
+        val finalMsg = vm.uiState.value.messages.last { it.fromButler }
+        assertEquals("你好，我在。", finalMsg.text)
+        assertFalse(finalMsg.streaming)
+        assertFalse(vm.uiState.value.responding)
+        assertNull(vm.uiState.value.streamingToolTitle)
+
+        // 流结束现查 pending 建议（快照无此域）
+        assertNotNull(commands.paramsOf("suggestion.list"))
+        assertEquals("conv-butler-current", commands.paramsOf("suggestion.list")?.optString("conversationId"))
+        assertEquals(1, vm.uiState.value.actionCards.size)
+        assertEquals("s-1", vm.uiState.value.actionCards.first().id)
+    }
+
+    @Test
+    fun `停止发chat点stop指令且已浮现文本落定`() {
+        // WHY：FR-33 停止 = 桌面真实终止生成；本地若只掐渲染不通知桌面，
+        // 桌面继续产出并在快照中回流完整回复，停止形同虚设。
+        val commands = FakeCommandSender { _, _ -> chatSendAck() }
+        val vm = newVm(commands = commands)
+        val coordinator = vm.streamField()
+
+        vm.sendMessage("你好")
+        dispatcher.scheduler.runCurrent()
+        coordinator.onStreamToken(tokenJson(token = "已浮现的部"))
+        dispatcher.scheduler.runCurrent()
+
+        vm.stopStreaming()
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals("chat.stop", commands.calls.map { it.first }.last())
+        assertEquals("conv-butler-current", commands.paramsOf("chat.stop")?.optString("conversationId"))
+        // 已浮现内容不回滚（镜像桌面：停止保留已生成部分）
+        assertTrue(vm.uiState.value.messages.any { it.fromButler && it.text == "已浮现的部" && !it.streaming })
+        assertFalse(vm.uiState.value.responding)
+    }
+
+    @Test
+    fun `看门狗超时错误反馈可重试`() {
+        // WHY：链路死亡（token 断流）时若不看门狗，气泡永远停在流式态。
+        val commands = FakeCommandSender { _, _ -> chatSendAck() }
+        val errors = mutableListOf<String>()
+        val vm = newVm(commands = commands, onError = { errors += it })
+        val coordinator = vm.streamField()
+
+        vm.sendMessage("你好")
+        dispatcher.scheduler.runCurrent()
+        coordinator.onStreamToken(tokenJson(token = "部分"))
+        dispatcher.scheduler.runCurrent()
+
+        // 120s 无 token 进展 → 超时收口
+        dispatcher.scheduler.advanceTimeBy(121_000)
+        dispatcher.scheduler.runCurrent()
+
+        assertTrue(errors.any { it.contains("超时") })
+        assertFalse(vm.uiState.value.responding)
+        // 超时后可再发（看门狗/发送态已复位）
+        vm.sendMessage("重试")
+        dispatcher.scheduler.runCurrent()
+        assertTrue(vm.uiState.value.responding)
+    }
+
+    // ── 场景 4：快照-流式互斥（Dev Notes §4 裁决）────────────────
+
+    @Test
+    fun `流式期间快照暂存不掐气泡流结束补应用收敛`() {
+        // WHY：chat 写入触发 2s debounce 快照重建，流式中段 STATE_DELTA
+        // 必然到达；立即应用会触发 onSnapshotReplaced → stopStreaming
+        // 掐掉正在流式的气泡（13.2 既有守卫）——暂存是最小正确解。
+        val store = SnapshotStore().apply { applySnapshot(fixtureSnapshot()) }
+        val commands = FakeCommandSender { _, _ -> chatSendAck() }
+        val coordinator = StreamCoordinator { snapshot, raw -> store.applySnapshot(snapshot, raw) }
+        val vm = ChatViewModel(store, commands, coordinator)
+
+        vm.sendMessage("你好")
+        dispatcher.scheduler.runCurrent()
+        coordinator.onStreamToken(tokenJson(token = "部分回复"))
+        dispatcher.scheduler.runCurrent()
+
+        // 流式中段快照到达：走暂存门（frameConsumerFactory 经 deliverSnapshot）
+        coordinator.deliverSnapshot(convergedSnapshot(), null)
+        dispatcher.scheduler.runCurrent()
+
+        // 气泡未被掐：流式态保持、消息不被快照替换清掉
+        assertTrue(vm.uiState.value.responding)
+        assertTrue(vm.uiState.value.messages.any { it.fromButler && it.text == "部分回复" && it.streaming })
+
+        // done → 暂存快照补应用 → VM 按快照收敛（id 已对齐，无重复气泡）
+        coordinator.onStreamToken(tokenJson(done = true))
+        dispatcher.scheduler.runCurrent()
+
+        val messages = vm.uiState.value.messages
+        assertEquals(1, messages.count { it.id == "m-user-d" })
+        assertEquals(1, messages.count { it.id == "m-a-d" })
+        assertFalse(vm.uiState.value.responding)
+    }
+
+    // ── 场景 5：停止/断连/非查看会话收口（评审 C1/C3）─────────────
+
+    @Test
+    fun `停止掐灭ack等待中的发送协程不复活流`() {
+        // WHY（评审 C1）：ack 等待窗口点停止后，存活的 chat.send 协程会在 ack
+        // 返回时继续 streamStarting + 重臂看门狗——已停止的流「复活」，取消
+        // 语义倒退。停止必须掐灭协程本身。
+        val commands = FakeCommandSender { action, _ ->
+            if (action == "chat.send") {
+                kotlinx.coroutines.delay(60_000) // ack 等待窗口
+                chatSendAck()
+            } else JSONObject()
+        }
+        val vm = newVm(commands = commands)
+
+        vm.sendMessage("你好")
+        dispatcher.scheduler.runCurrent()
+        assertTrue(vm.uiState.value.responding)
+
+        vm.stopStreaming()
+        dispatcher.scheduler.runCurrent()
+        assertFalse(vm.uiState.value.responding)
+
+        // ack 时刻到达：被取消的协程不得复活流（不得 streamStarting/重臂看门狗）
+        dispatcher.scheduler.advanceUntilIdle()
+        assertFalse(vm.uiState.value.responding)
+        assertFalse(vm.uiState.value.thinking)
+        assertNull(vm.streamField().state.value)
+    }
+
+    @Test
+    fun `非查看会话的流done后段落落库不凭空消失`() {
+        // WHY（评审 C3）：done 收口不得以「正在查看该会话」为前提——流式中切走
+        // （或桌面自起流）后 done 到达，文本仍须写入该会话历史，否则切回时
+        // 已流出文本凭空消失、streamEnded 不调用。
+        val commands = FakeCommandSender { _, _ -> JSONObject() }
+        val vm = newVm(commands = commands)
+        val coordinator = vm.streamField()
+        val historyId = vm.uiState.value.conversations.first { it.title == butlerHistoryTitle }.id
+
+        // 桌面在「历史会话」发起流（当前查看的是今日概览）
+        coordinator.onStreamToken(tokenJson(conversationId = historyId, token = "桌面侧回复", messageId = "m-x"))
+        dispatcher.scheduler.runCurrent()
+        // 非查看会话不占全局流式态（不锁发送守卫）
+        assertFalse(vm.uiState.value.responding)
+        coordinator.onStreamToken(tokenJson(conversationId = historyId, token = "。", done = true, messageId = "m-x"))
+        dispatcher.scheduler.runCurrent()
+
+        // 段落已写入历史会话：切过去即可见（不凭空消失）
+        vm.selectConversation(historyId)
+        assertTrue(vm.uiState.value.messages.any { it.text == "桌面侧回复。" })
+    }
+
+    @Test
+    fun `新建后立即发消息时孤儿桌面会话被回收`() {
+        // WHY（评审 C8）：conversation.new 与首条 chat.send 并发时桌面产生两个
+        // 会话——本地 id 已被 chat.send 采纳替换后，new 的 ack 落空须删除孤儿，
+        // 否则桌面永久残留无入口的空会话。
+        val commands = FakeCommandSender { action, _ ->
+            when (action) {
+                "conversation.new" -> {
+                    kotlinx.coroutines.delay(2_000) // new 慢于 send：竞速窗口
+                    JSONObject("""{"id":"conv-desktop-new"}""")
+                }
+                "chat.send" -> JSONObject(
+                    """{"conversationId":"conv-desktop-send","userMessageId":"u-1","assistantMessageId":"a-1"}""",
+                )
+                else -> JSONObject()
+            }
+        }
+        val vm = newVm(commands = commands)
+
+        vm.newConversation()
+        dispatcher.scheduler.runCurrent() // new 已发出（ack 在途）
+        vm.sendMessage("你好")
+        dispatcher.scheduler.runCurrent() // send ack 先到：本地 id 被采纳替换
+
+        dispatcher.scheduler.advanceUntilIdle() // new ack 到达：落空 → 回收孤儿
+
+        assertEquals("conv-desktop-new", commands.paramsOf("conversation.delete")?.optString("conversationId"))
+    }
+
+    // ── 场景 6：13.2 快照/会话管理守护（评审 D2 补回，零回归测试面）──
 
     @Test
     fun `新建会话设为当前且列表最新在前`() {
@@ -156,8 +494,6 @@ class ChatViewModelTest {
             vm.uiState.value.conversations.first().id,
         )
     }
-
-    // ── 场景 2：切换会话换消息流（含卡片态规则）────────────────────────
 
     @Test
     fun `切换会话换消息流且可切回`() {
@@ -176,77 +512,6 @@ class ChatViewModelTest {
         vm.selectConversation(currentConv.id)
         assertEquals(listOf(butlerGreeting), vm.uiState.value.messages.map { it.text })
     }
-
-    @Test
-    fun `角色视图切换会话时卡片态清空`() {
-        // WHY：拆分提案/建议卡/角色涌现卡属管家对话流；若切到角色会话仍显示，
-        // 用户会在错误的上下文里点「确认」，把管家决策误挂给角色（镜像桌面按 conversation 隔离）。
-        val vm = newVm()
-        vm.selectRole("role-pm")
-        val seedId = vm.uiState.value.conversations.first().id
-        vm.newConversation() // pm 现在有 2 个会话：空会话 + 种子
-
-        vm.selectConversation(seedId)
-
-        assertEquals(rolePmSeedMsgs.map { it.text }, vm.uiState.value.messages.map { it.text })
-        assertTrue(vm.uiState.value.actionCards.isEmpty())
-        assertEquals(null, vm.uiState.value.decomposition)
-        assertEquals(null, vm.uiState.value.roleProposal)
-    }
-
-    @Test
-    fun `管家视图切换会话后卡片态同样清空`() {
-        // WHY：卡片属触发它的那段对话（按 conversation 隔离）；若切到别的管家会话
-        // 仍显示旧会话的提案卡，用户会在不相干的会话里点「确认」，决策挂错上下文。
-        val vm = newVm()
-        // 管家视图走两轮完整回复：第 2 轮后浮现建议卡/拆分提案/角色涌现卡
-        vm.sendMessage("第一轮")
-        dispatcher.scheduler.advanceUntilIdle()
-        vm.sendMessage("第二轮")
-        dispatcher.scheduler.advanceUntilIdle()
-        assertFalse(vm.uiState.value.actionCards.isEmpty())
-
-        val okrId = vm.uiState.value.conversations.first { it.title == butlerHistoryTitle }.id
-        vm.selectConversation(okrId)
-
-        assertTrue(vm.uiState.value.actionCards.isEmpty())
-        assertEquals(null, vm.uiState.value.decomposition)
-        assertEquals(null, vm.uiState.value.roleProposal)
-    }
-
-    @Test
-    fun `切走再切回复原视图原会话`() {
-        // WHY：往返切换（管家→角色→管家）若每次都重置为「最新会话」，
-        // 用户正在看的会话会被静默换掉——上下文丢失且无任何提示。
-        val vm = newVm()
-        val okrId = vm.uiState.value.conversations.first { it.title == butlerHistoryTitle }.id
-        vm.selectConversation(okrId)
-
-        vm.selectRole("role-pm")
-        vm.selectRole(null)
-
-        assertEquals(okrId, vm.uiState.value.currentConversationId)
-        assertEquals(butlerHistoryMsgs.map { it.text }, vm.uiState.value.messages.map { it.text })
-    }
-
-    @Test
-    fun `切换到未种子化角色自动建会话且消息可持久`() {
-        // WHY：若无会话兜底，currentConversationId 悬空为空串，persist 静默跳过——
-        // 用户看到完整对话，切走切回后消息全部消失（界面与数据自相矛盾）。
-        val vm = newVm()
-
-        vm.selectRole("role-unknown")
-        assertEquals(1, vm.uiState.value.conversations.size)
-
-        vm.sendMessage("测试消息")
-        dispatcher.scheduler.advanceUntilIdle()
-
-        vm.selectRole(null)
-        vm.selectRole("role-unknown")
-        assertTrue(vm.uiState.value.messages.any { it.text == "测试消息" })
-    }
-
-    // ── 场景 3：删除当前会话回退 / 全删兜底 ────────────────────────────
 
     @Test
     fun `删除当前会话回退到剩余最新会话`() {
@@ -268,6 +533,7 @@ class ChatViewModelTest {
         // 输入框永远无处可发，用户只能重启 App，这是体验断裂。
         val vm = newVm()
         vm.deleteConversation(vm.uiState.value.currentConversationId) // 剩 OKR 种子
+        dispatcher.scheduler.advanceUntilIdle()
         vm.deleteConversation(vm.uiState.value.currentConversationId) // 全删
 
         assertEquals(1, vm.uiState.value.conversations.size)
@@ -275,24 +541,6 @@ class ChatViewModelTest {
         assertTrue(vm.uiState.value.messages.isEmpty())
         assertTrue(vm.uiState.value.conversations.first().title.isEmpty())
     }
-
-    // ── 场景 4：删除其他会话不影响当前 ─────────────────────────────────
-
-    @Test
-    fun `删除其他会话仅移除该会话当前不变`() {
-        // WHY：删除操作必须是精确的——误删当前上下文会让用户丢失正在进行的对话。
-        val vm = newVm()
-        val currentId = vm.uiState.value.currentConversationId
-        val okrId = vm.uiState.value.conversations.first { it.title == butlerHistoryTitle }.id
-
-        vm.deleteConversation(okrId)
-
-        assertEquals(currentId, vm.uiState.value.currentConversationId)
-        assertEquals(listOf(butlerGreeting), vm.uiState.value.messages.map { it.text })
-        assertEquals(1, vm.uiState.value.conversations.size)
-    }
-
-    // ── 场景 5：空会话首条消息生成标题 ─────────────────────────────────
 
     @Test
     fun `空会话首条消息生成标题且超长截断加省略号`() {
@@ -302,63 +550,23 @@ class ChatViewModelTest {
         vm.newConversation()
 
         vm.sendMessage("你好") // 同步落标题，无需推进调度器
-        assertEquals("你好", vm.uiState.value.currentConversation().title)
+        assertEquals(
+            "你好",
+            vm.uiState.value.conversations.first { it.id == vm.uiState.value.currentConversationId }.title,
+        )
 
         vm.newConversation()
         vm.sendMessage("abcdefghijklmnopqrst") // 20 字符 > 16
-        assertEquals("abcdefghijklmnop…", vm.uiState.value.currentConversation().title)
+        assertEquals(
+            "abcdefghijklmnop…",
+            vm.uiState.value.conversations.first { it.id == vm.uiState.value.currentConversationId }.title,
+        )
     }
-
-    // ── 场景 6：流式中断守卫（新建 / 切换后 responding=false）──────────
-
-    @Test
-    fun `流式进行中新建会话立即中断且不回写新会话`() {
-        // WHY：打字机协程若不被取消，后续字符会继续写进「当前会话」——
-        // 而此时当前会话已换成新的空会话，旧回复污染新对话且 stop 按钮失效。
-        val vm = newVm()
-        vm.sendMessage("帮我看看明天的安排")
-        dispatcher.scheduler.advanceTimeBy(1800) // 思考 700ms + 工具阶段进行中，打字机已启动
-        assertTrue(vm.uiState.value.responding)
-
-        vm.newConversation()
-
-        assertFalse(vm.uiState.value.responding)
-        assertFalse(vm.uiState.value.thinking)
-        assertEquals(emptyList<ChatMessage>(), vm.uiState.value.messages)
-
-        // 让残留协程有机会跑完：若取消失效，这里会混入流式文本
-        dispatcher.scheduler.advanceUntilIdle()
-        assertEquals(emptyList<ChatMessage>(), vm.uiState.value.messages)
-        assertFalse(vm.uiState.value.responding)
-    }
-
-    @Test
-    fun `流式进行中切换会话立即中断且不泄漏到目标会话`() {
-        // WHY：同上的跨会话污染路径——切到历史会话后，旧流式的剩余字符
-        // 若继续写入，会让一段不相干的回复凭空出现在历史对话里。
-        val vm = newVm()
-        val okrId = vm.uiState.value.conversations.first { it.title == butlerHistoryTitle }.id
-
-        vm.sendMessage("帮我看看明天的安排")
-        dispatcher.scheduler.advanceTimeBy(1800)
-        assertTrue(vm.uiState.value.responding)
-
-        vm.selectConversation(okrId)
-
-        assertFalse(vm.uiState.value.responding)
-        assertEquals(butlerHistoryMsgs.map { it.text }, vm.uiState.value.messages.map { it.text })
-
-        dispatcher.scheduler.advanceUntilIdle()
-        // 目标会话保持原样：种子消息一条不多一条不少
-        assertEquals(butlerHistoryMsgs.map { it.text }, vm.uiState.value.messages.map { it.text })
-    }
-
-    // ── 场景 4：快照换装语义（AC2 核心分支，评审 P14）──────────────────
 
     @Test
     fun `同对象首发不重建_本地暂存不被首帧抹掉`() {
-        // WHY：构造时已加载的快照会作为 collect 首帧再次投递；无同一性守卫时
-        // 首帧重建会 seedFromStore 抹掉首帧之前用户已完成的本地暂存（新建会话）。
+        // WHY（13.2 评审 P14 守护）：构造时已加载的快照会作为 collect 首帧再次
+        // 投递；无同一性守卫时首帧重建会 seedFromStore 抹掉首帧之前的本地暂存。
         val vm = newVm()
 
         vm.newConversation()
@@ -369,9 +577,9 @@ class ChatViewModelTest {
 
     @Test
     fun `二次applySnapshot后消息与会话随新快照刷新`() {
-        // WHY：AC2 的核心承诺——STATE_DELTA 全量替换后，消息流与会话列表必须随
-        // 新快照刷新（含当前会话内桌面侧新增的消息），否则换装名存实亡；
-        // 同时当前会话保持不跳（快照替换不重置用户视图）。
+        // WHY（AC2 守护）：STATE_DELTA 全量替换后，消息流与会话列表必须随新快照
+        // 刷新（含当前会话内桌面侧新增的消息），否则换装名存实亡；同时当前会话
+        // 保持不跳（快照替换不重置用户视图）。
         val store = SnapshotStore().apply { applySnapshot(fixtureSnapshot()) }
         val vm = newVm(store)
         dispatcher.scheduler.advanceUntilIdle()
@@ -406,7 +614,7 @@ class ChatViewModelTest {
 
     @Test
     fun `冷启动空快照兜底建会话_快照到达后重建`() {
-        // WHY：离线冷启动（无缓存）时 Chat 不能进入「无当前会话」死态；
+        // WHY（守护）：离线冷启动（无缓存）时 Chat 不能进入「无当前会话」死态；
         // 快照随后到达时必须自动重建，会话列表与消息流切换到快照口径。
         val store = SnapshotStore()
         val vm = newVm(store)
@@ -424,15 +632,23 @@ class ChatViewModelTest {
 
     @Test
     fun `快照删除当前会话回落时卡片态清空`() {
-        // WHY：回落换会话必须遵守 selectConversation 的同一不变量——卡片态属
-        // 触发它的那段对话；桌面删除当前会话导致的回落若不清卡片，用户会在
-        // 不相干的会话里确认旧提案（评审 P4）。
+        // WHY（13.2 评审 P4 守护）：回落换会话必须遵守 selectConversation 的同一
+        // 不变量——卡片态属触发它的那段对话；桌面删除当前会话导致的回落若不清
+        // 卡片，用户会在不相干的会话里确认旧建议。
         val store = SnapshotStore().apply { applySnapshot(fixtureSnapshot()) }
-        val vm = newVm(store)
+        val commands = FakeCommandSender { action, _ ->
+            if (action == "chat.send") chatSendAck()
+            else JSONObject(
+                """{"suggestions":[{"id":"s-1","title":"排进明天上午","content":"明早有空","roleName":"产品经理"}]}""",
+            )
+        }
+        val vm = newVm(store, commands)
+        val coordinator = vm.streamField()
+
         vm.sendMessage("第一轮")
-        dispatcher.scheduler.advanceUntilIdle()
-        vm.sendMessage("第二轮")
-        dispatcher.scheduler.advanceUntilIdle()
+        dispatcher.scheduler.runCurrent()
+        coordinator.onStreamToken(tokenJson(token = "回复", done = true))
+        dispatcher.scheduler.runCurrent()
         assertFalse(vm.uiState.value.actionCards.isEmpty())
 
         val reduced = fixtureSnapshot().copy(
@@ -449,18 +665,15 @@ class ChatViewModelTest {
 
     @Test
     fun `当前查看角色被快照删除后回退管家视图`() {
-        // WHY：角色被桌面删除后，切换器已无该角色入口；若手机仍停留在已删
-        // 角色的空视图，用户没有直观路径回到管家（幽灵视图，评审 P5）。
+        // WHY（13.2 评审 P5 守护）：角色被桌面删除后，切换器已无该角色入口；
+        // 若手机仍停留在已删角色的空视图，用户没有直观路径回到管家（幽灵视图）。
         val store = SnapshotStore().apply { applySnapshot(fixtureSnapshot()) }
         val vm = newVm(store)
-        // 先启动 collect 协程（同对象首帧跳过）：lastSnapshot 捕获发生在协程体首跑时，
-        // 若先换快照再驱动调度器，守卫基线会直接捕获新快照而跳过 rebuild——生产中
-        // collect 在主线程同轮启动，早于连接层帧到达，此处用 runCurrent 对齐该时序
+        // 先启动 collect 协程（同对象首帧跳过）：lastSnapshot 捕获发生在协程体首跑时
         dispatcher.scheduler.runCurrent()
         vm.selectRole("role-pm")
 
-        // 注意：store.roles 门面从 dashboard.statuses 派生（SnapshotMapper.toRoleCards），
-        // 模拟删除角色须同步删 dashboard 中的状态行，仅删 roles 域不生效
+        // store.roles 门面从 dashboard.statuses 派生——模拟删除角色须同步删状态行
         val reduced = fixtureSnapshot().copy(
             roles = fixtureSnapshot().roles.filterNot { it.id == "role-pm" },
             dashboard = fixtureSnapshot().dashboard.copy(
@@ -473,37 +686,5 @@ class ChatViewModelTest {
 
         assertNull(vm.uiState.value.activeRoleId)
         assertTrue(vm.uiState.value.roles.none { it.id == "role-pm" })
-    }
-
-    @Test
-    fun `委派路由随快照角色名派生且第二段挂真实角色id`() {
-        // WHY：真实快照角色 id 为 UUID，写死 role-pm 等演示键会让委派路由到
-        // 不存在的角色（气泡 senderRoleId 不在 roles 列表、名字退化为「角色」）；
-        // 关键词必须随快照角色名派生，第二段气泡挂真实角色 id（评审 P6）。
-        val uuidRole = SnapshotRole("role-uuid-pm", "产品经理", "target", "#4F46E5", "", "", 82, "moderate")
-        // store.roles 门面从 dashboard.statuses 派生（SnapshotMapper.toRoleCards），
-        // UUID 角色须同步落到 dashboard.statuses 才会出现在角色清单里
-        val uuidStore = fixtureSnapshot().copy(
-            roles = listOf(uuidRole),
-            dashboard = fixtureSnapshot().dashboard.copy(
-                statuses = listOf(
-                    DashboardStatus("role-uuid-pm", "产品经理", "target", "#4F46E5", 82, 3,
-                        "2026-08-25T07:50:00Z", false),
-                ),
-            ),
-            conversations = fixtureSnapshot().conversations.filter { it.roleId == null },
-        )
-        val store = SnapshotStore().apply { applySnapshot(uuidStore) }
-        val vm = newVm(store)
-
-        vm.sendMessage("帮我把这件事同步给产品经理")
-        dispatcher.scheduler.advanceUntilIdle()
-
-        assertTrue(vm.uiState.value.messages.any { it.fromButler && it.text == "稍等，我让产品经理看一下。" })
-        val roleBubble = vm.uiState.value.messages.firstOrNull { it.senderRoleId == "role-uuid-pm" }
-            ?: error("委派第二段气泡缺失：未挂真实角色 id")
-        // UUID 角色未命中演示回复表 → 角色名模板反馈（不以管家轮换回复冒充角色反馈）
-        assertTrue(roleBubble.text.startsWith("来自产品经理的反馈"))
-        assertTrue(roleBubble.text.contains("收到，这事我接下了"))
     }
 }

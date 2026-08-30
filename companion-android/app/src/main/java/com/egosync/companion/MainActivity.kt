@@ -37,12 +37,11 @@ private fun EgoSyncRoot(container: AppModelContainer) {
     val themeMode by container.themeMode.collectAsState()
     EgoSyncTheme(themeMode = themeMode) {
         val snackbarHostState = remember { SnackbarHostState() }
-        val eventMessage by container.eventMessage.collectAsState()
 
-        LaunchedEffect(eventMessage) {
-            eventMessage?.let {
-                snackbarHostState.showSnackbar(it)
-                container.consumeEvent()
+        // 事件流逐条消费（SharedFlow 不去重——连续相同错误各显示一次）
+        LaunchedEffect(Unit) {
+            container.events.collect { message ->
+                snackbarHostState.showSnackbar(message)
             }
         }
 

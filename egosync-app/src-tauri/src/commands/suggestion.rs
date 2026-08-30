@@ -29,7 +29,10 @@ pub async fn suggestion_reject(
 }
 
 /// 确认建议并创建对应任务。先建任务再 confirm + 回填，避免「已确认但无任务」的静默丢失。
-async fn confirm_and_create_task(pool: &DbPool, id: &str) -> Result<Suggestion, AppError> {
+///
+/// Story 13.3 受控例外 A：pub 化（纯可见性变更，零行为改动）——
+/// companion dispatch 复用唯一入口，避免重写确认编排造成漂移。
+pub async fn confirm_and_create_task(pool: &DbPool, id: &str) -> Result<Suggestion, AppError> {
     // 先校验建议处于 pending 状态，避免对已处理建议创建任务
     let suggestion = suggestions::get_suggestion(pool, id).await?;
     if suggestion.status != "pending" {
@@ -58,7 +61,9 @@ async fn confirm_and_create_task(pool: &DbPool, id: &str) -> Result<Suggestion, 
 }
 
 /// 校验拒绝原因后写入拒绝状态。
-async fn reject_with_reason(pool: &DbPool, id: &str, reason: &str) -> Result<Suggestion, AppError> {
+///
+/// Story 13.3 受控例外 A：pub 化（纯可见性变更，零行为改动）。
+pub async fn reject_with_reason(pool: &DbPool, id: &str, reason: &str) -> Result<Suggestion, AppError> {
     validate_reject_reason(reason)?;
     suggestions::reject_suggestion(pool, id, reason.trim()).await
 }

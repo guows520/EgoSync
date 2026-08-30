@@ -103,6 +103,9 @@ pub struct CompanionState {
     /// 被丢」的白屏窗口）；lib.rs setup 注入，`app_handle: None` 的测试
     /// 路径经 `set_snapshot_request_tx` 注入。
     snapshot_request_tx: tokio::sync::Mutex<Option<tokio::sync::watch::Sender<SnapshotRequest>>>,
+    /// Story 13.3：指令 dispatcher（手机指令唯一入口）；lib.rs 引擎构造后
+    /// 装配注入（镜像 `set_snapshot_request_tx` 先例）。
+    dispatcher: tokio::sync::Mutex<Option<Arc<crate::services::companion_dispatch::CompanionDispatcher>>>,
 }
 
 impl CompanionState {
@@ -140,6 +143,7 @@ impl CompanionState {
             active_session: tokio::sync::Mutex::new(None),
             relay_client_started: std::sync::atomic::AtomicBool::new(false),
             snapshot_request_tx: tokio::sync::Mutex::new(None),
+            dispatcher: tokio::sync::Mutex::new(None),
         }
     }
 
@@ -149,6 +153,37 @@ impl CompanionState {
         tx: tokio::sync::watch::Sender<SnapshotRequest>,
     ) {
         *self.snapshot_request_tx.lock().await = Some(tx);
+    }
+
+    /// 注入指令 dispatcher（lib.rs setup / 测试装配调用）。
+    pub async fn set_dispatcher(
+        &self,
+        dispatcher: Arc<crate::services::companion_dispatch::CompanionDispatcher>,
+    ) {
+        *self.dispatcher.lock().await = Some(dispatcher);
+    }
+
+    /// 出站单帧入队（Story 13.3）：try_send 非阻塞，通道满丢弃 + warn
+    /// 不断连（与 `enqueue_outbound` 的整序列语义分野——流式 token 丢一帧
+    /// 由快照在 done 后兜底收敛，断连反而破坏体验）。返回是否入队成功。
+    pub async fn try_enqueue_single(&self, frame: Frame) -> bool {
+        let guard = self.active_session.lock().await;
+        if let Some(session) = guard.as_ref() {
+            match session.outbound.try_send(frame) {
+                Ok(()) => true,
+                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                    // 仅记帧类别，不含内容（NFR-M7 帧明文零输出纪律）
+                    tracing::warn!("companion 出站通道已满，丢弃单帧（快照兜底收敛）");
+                    false
+                }
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                    tracing::debug!("companion 出站通道已关闭，单帧随会话丢弃");
+                    false
+                }
+            }
+        } else {
+            false // 会话不在线：丢弃（OnConnect 快照补齐兜底）
+        }
     }
 
     /// 出站帧整序列入队（Story 13.1）：持锁一次性入队本序列全部分帧——
@@ -756,8 +791,8 @@ async fn run_authorized_session(
     }
 }
 
-/// 帧循环：在 transport 会话内处理 HELLO / PING / Notice(deviceInfo)，
-/// 其余帧类型收到即忽略并 warn（13.x 才消费）。
+/// 帧循环：在 transport 会话内处理 HELLO / PING / Notice(deviceInfo) /
+/// COMMAND（Story 13.3 经 dispatcher 路由），其余帧类型收到即忽略并 warn。
 ///
 /// 会话生命周期：注册到 `active_session` 单槽——新连接进入时旧会话被终止
 /// （僵尸连接不得污染状态机）；remove / confirm 经 terminate 信号终止会话；
@@ -866,6 +901,47 @@ async fn enter_session(
                 if let Some(name) = device_name_from_frame(&frame) {
                     tracing::info!(new_name = %name, "收到对端设备名更新");
                     // 名字更新属 app 层契约，不在此写入（避免无窗口无 confirm 的隐性写入）
+                }
+            }
+            Frame::Command(cmd) => {
+                // Story 13.3：手机指令 → dispatcher 解析路由执行（唯一入口）。
+                // 必须 spawn——`agent_bridge::send_message` 类长操作 inline
+                // await 会饿死 PING 应答与出站排空（120s 空闲超时依赖帧活动）。
+                let dispatcher = state.dispatcher.lock().await.clone();
+                match dispatcher {
+                    Some(dispatcher) => {
+                        let state_c = state.clone();
+                        let data = cmd.data.clone();
+                        tokio::spawn(async move {
+                            let ack = dispatcher.execute(&data).await;
+                            let frame = crate::services::companion_dispatch::command_result_frame(ack);
+                            // 单槽会话语义：在途结果发往当前槽（可能是新连接）
+                            // ——手机幂等 commandId 兜底去重。
+                            if !state_c.try_enqueue_single(frame).await {
+                                tracing::debug!("companion 指令结果随会话消亡（手机重试/幂等兜底）");
+                            }
+                        });
+                    }
+                    None => {
+                        // 装配期窗口/降级：显式错误回执，不悬挂
+                        let command_id =
+                            crate::models::companion_command::CommandEnvelope::parse(&cmd.data)
+                                .ok()
+                                .map(|e| e.command_id)
+                                .unwrap_or_default();
+                        let ack = crate::models::companion_command::CommandAck::failure(
+                            &command_id,
+                            AppError::ConnectionError("指令服务未就绪".to_string()),
+                        );
+                        let frame = crate::services::companion_dispatch::command_result_frame(
+                            ack.to_json(),
+                        );
+                        // 回执丢失留痕（评审整改：显式失败不静默）——手机侧
+                        // 由看门狗超时兜底，无迹可查会放大排查成本。
+                        if !state.try_enqueue_single(frame).await {
+                            tracing::debug!("companion 未就绪回执随会话消亡（手机看门狗兜底）");
+                        }
+                    }
                 }
             }
             other => {

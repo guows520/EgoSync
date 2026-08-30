@@ -3,6 +3,7 @@ pub mod big_rock_protection_reminder;
 pub mod briefing;
 pub mod chat;
 pub mod companion;
+pub mod companion_command;
 pub mod dashboard;
 pub mod memory;
 pub mod mcp;

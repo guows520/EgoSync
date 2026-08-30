@@ -327,6 +327,25 @@ pub fn run() {
                         app.handle().clone(),
                         snapshot_engine.notify_signal(),
                     );
+                    // ── Story 13.3：指令 dispatcher + llm:stream 镜像监听 ──
+                    // dispatch 需要 engine 写信号（suggestion 确认/拒绝补发）；
+                    // 镜像监听复用 try_enqueue_single 单帧出站。装配在监听启动前，
+                    // 确保 COMMAND 帧到达时 dispatcher 已就位。
+                    let dispatcher = Arc::new(
+                        services::companion_dispatch::CompanionDispatcher::production(
+                            pool.clone(),
+                            conv_pool.clone(),
+                            app.handle().clone(),
+                            snapshot_engine.notify_signal(),
+                        ),
+                    );
+                    tauri::async_runtime::block_on(async {
+                        companion_state.set_dispatcher(dispatcher).await;
+                    });
+                    services::companion_dispatch::register_stream_mirror(
+                        app.handle().clone(),
+                        companion_state.clone(),
+                    );
                     let pool_c = pool.clone();
                     tauri::async_runtime::spawn(async move {
                         if let Err(e) =

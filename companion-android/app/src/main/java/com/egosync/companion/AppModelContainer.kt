@@ -105,10 +105,12 @@ class AppModelContainer private constructor(context: Context) {
     val events: kotlinx.coroutines.flow.SharedFlow<String> = _events
 
     init {
-        // FR-43：恢复连接后速记自动提交管家（mock：直接清队并提示）
+        // FR-43：恢复连接后速记自动提交管家（mock：直接清队并提示）。
+        // paired 守门：遮罩出口/自愈解除配对后的 Direct 并非真实恢复，
+        // 不得触发 flush（FR-43 无丢失——真实恢复必然已配对）
         scope.launch {
             connection.state.collect { state ->
-                if (state.engineAvailable) {
+                if (state.engineAvailable && connection.paired.value) {
                     val pending = quickNotes.pendingCount()
                     if (pending > 0) {
                         quickNotes.flush()

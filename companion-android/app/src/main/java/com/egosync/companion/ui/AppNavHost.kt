@@ -130,11 +130,26 @@ fun AppNavHost(container: AppModelContainer) {
         }
         }
 
-        // 降级态遮罩全局覆盖（含二级页）：离线时任何页面都明示数据截止与引擎禁用
-        if (connectionState is com.egosync.companion.connection.ConnectionState.Offline) {
+        // 降级态遮罩全局覆盖（含二级页）：离线时任何页面都明示数据截止与引擎禁用。
+        // paired 守门：配对流内首次尝试失败也呈 Offline，但那是 PairingScreen 自有
+        // 错误态的职责——降级遮罩（含解除配对出口）只属于已配对设备
+        val paired by container.connection.paired.collectAsState()
+        if (connectionState is com.egosync.companion.connection.ConnectionState.Offline && paired) {
             DegradedOverlayHost(
                 state = connectionState,
                 quickNotes = container.quickNotes,
+                // 受控出口：镜像 SettingsRoute.onUnpair——清配对态并清空返回栈直落配对流。
+                // Offline 复核：对话框开着时自动重连翻 Direct 的迟到确认不得拆健康会话
+                onRePair = {
+                    if (container.connection.state.value
+                        is com.egosync.companion.connection.ConnectionState.Offline
+                    ) {
+                        container.unpair()
+                        navController.navigate(Routes.PAIRING) {
+                            popUpTo(0) { inclusive = true }
+                        }
+                    }
+                },
             )
         }
     }

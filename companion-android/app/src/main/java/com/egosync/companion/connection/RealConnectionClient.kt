@@ -149,6 +149,10 @@ class RealConnectionClient internal constructor(
     private var wipeJob: Job? = null
 
     init {
+        // 损坏配对态自愈必须先于任何协程启动同步完成：AppNavHost 的
+        // startDestination 在首组合 remember{} 定格，晚了 paired 仍为 true，
+        // 冷启动直落主界面＋离线遮罩（编排首轮即静默 return，永久死锁）
+        healCorruptPairingIfAny()
         if (store.paired) {
             sessionJob = scope.launch { orchestrate() }
         }
@@ -180,6 +184,32 @@ class RealConnectionClient internal constructor(
             secrets.wipe()
             store.clear()
         }
+    }
+
+    /**
+     * 冷启动自愈（覆盖安装遗留态）：paired=true 但 relayId/desktopPubkeyHex
+     * 缺失或为空时，编排首轮即静默 return（runDirectLoop 取不到 relayId），叠加
+     * 离线遮罩无应用内出口即永久死锁——清配对回未配对，冷启动直接落配对扫码流
+     * （FR-40 重装重扫即恢复）。配对元数据同步清除；密钥文件异步擦除（镜像
+     * [unpair] 的 wipeJob 模式，目标场景通常无密钥文件，wipe 为无害空操作）；
+     * 快照缓存与通知清理属容器层 unpair（遮罩出口路径）职责，客户端层不可达
+     * （目标场景从未建立会话，无缓存可清——评审裁定记录于规格变更日志）。
+     * 速记队列属容器层，不在此清除（FR-43 无丢失）；NFR-M7：日志不含任何
+     * 密钥材料。仅在 [init] 同步段调用（此时编排尚未启动，无需取消会话）。
+     */
+    private fun healCorruptPairingIfAny() {
+        if (!(store.paired && (store.relayId.isNullOrBlank() || store.desktopPubkeyHex.isNullOrBlank()))) return
+        CompanionLog.warn("Connection", "检测到损坏的配对态（配对元数据不完整），已自动清除，请重新扫码配对")
+        nsd.stopDiscovery()
+        debugMode.value = null
+        commandChannel?.shutdown()
+        streamCoordinator?.reset()
+        _paired.value = false
+        _pairingProgress.value = PairingProgress.Idle
+        // 未配对态沿用 initialState() 既有语义（Direct，遮罩自然不显示）
+        liveState.value = ConnectionState.Direct
+        store.clear()
+        wipeJob = scope.launch(Dispatchers.IO) { secrets.wipe() }
     }
 
     // ── CommandSender（13.3 T5）─────────────────────────────────────

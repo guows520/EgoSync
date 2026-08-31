@@ -18,6 +18,8 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okio.ByteString
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -30,6 +32,8 @@ import org.junit.Test
  * - 「双承载皆断必须 Offline」：直连丢失 + 中继连不上（从未建立）不得永久滞留 Direct；
  * - 「unpair 擦除必须先于重配对密钥生成」：迟到的异步 wipe 不得毁掉新配对（AC6）；
  * - 「信任锚不等即断开」：中间人公钥必须被拒且会话关闭（负向安全测试）。
+ * - 「损坏配对态冷启动必须自愈」：覆盖安装遗留 paired=true 缺 relayId →
+ *   编排静默退出＋遮罩无出口即永久死锁（FR-40 重装重扫即恢复）。
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class RealConnectionClientOrchestrationTest {
@@ -92,7 +96,10 @@ class RealConnectionClientOrchestrationTest {
         override val resolved = MutableSharedFlow<NsdEndpoint>(replay = 1, extraBufferCapacity = 1)
         override val failed = MutableSharedFlow<Unit>(replay = 0, extraBufferCapacity = 1)
         var resolveEnabled = true
+        var discoverCount = 0
+            private set
         override fun discover(expectedInstanceName: String) {
+            discoverCount++
             if (resolveEnabled) resolved.tryEmit(NsdEndpoint("127.0.0.1", 47_000))
         }
         override fun stopDiscovery() = Unit
@@ -280,5 +287,105 @@ class RealConnectionClientOrchestrationTest {
             "信任锚拒绝发生在握手完成后（m1/m3 已发出）",
             rogueWs.sent.size >= 2,
         )
+    }
+
+    @Test
+    fun `损坏配对态冷启动必须自愈且零网络尝试`() = runTest {
+        // WHY（H6 死锁回归）：覆盖安装遗留 paired=true 但 relayId 缺失——编排
+        // 首轮即静默 return（零重试零网络活动），叠加离线遮罩无应用内出口，
+        // 用户永久锁死「离线 · 暂无缓存」（FR-40 击穿）。自愈必须发生在 init
+        // 同步段：AppNavHost.startDestination 在首组合 remember{} 定格，晚了
+        // paired 仍为 true，冷启动仍直落主界面＋遮罩。
+        val store = PairingStateStore(FakeSharedPreferences(initialPaired = true))
+        var wsOpens = 0
+        val nsd = FakeNsd()
+        val client = RealConnectionClient(
+            scope = backgroundScope,
+            store = store,
+            secrets = FakeSecrets(),
+            nsd = nsd,
+            ioDispatcher = EmptyCoroutineContext,
+            wsOpener = { _, _, _ ->
+                wsOpens++
+                throw AssertionError("自愈生效后不得发起任何 WS 连接尝试")
+            },
+        )
+
+        // 时序护栏：不 advanceTimeBy 直接断言——自愈若被挪进编排协程（异步），
+        // 此处 paired 仍为 true，测试必须红（防护 startDestination 首组合定格）
+        assertFalse("自愈必须在 init 同步段完成（协程启动前）", client.paired.value)
+
+        advanceTimeBy(2_000)
+        assertFalse("损坏配对态必须自愈回未配对（冷启动直落配对扫码流）", client.paired.value)
+        // 持久层断言：仅清内存标志不够——store.clear() 被删时跨重启损坏态复活
+        assertFalse("自愈必须落盘清除（跨重启不得复活损坏态）", store.paired)
+        assertNull("损坏元数据必须一并清除（relayId）", store.relayId)
+        assertNull("损坏元数据必须一并清除（desktopPubkeyHex）", store.desktopPubkeyHex)
+        assertEquals("不得发起任何 WS 连接尝试", 0, wsOpens)
+        assertEquals("不得发起任何 NSD 发现", 0, nsd.discoverCount)
+        assertEquals(
+            "未配对态沿用 Direct 既有语义（遮罩不显示、不闪现离线）",
+            ConnectionState.Direct,
+            client.state.value,
+        )
+    }
+
+    @Test
+    fun `健康配对态冷启动行为不变`() = runTest {
+        // WHY：自愈判定不得误伤健康配对——relayId 与桌面公钥齐全时编排必须
+        // 照常启动（退避重连是已配对设备的正常离线表现，唯一出路仍是自动恢复），
+        // 若自愈把健康态也清掉，每次冷启动都强制重扫即配对功能回归性损坏。
+        val deskPriv = ByteArray(32) { (it + 1).toByte() }
+        val deskPubHex = Hex.encode(NoiseChannel.deriveStaticPublicKeyForTest(deskPriv))
+        val store = PairingStateStore(FakeSharedPreferences())
+        store.save(deskPubHex, "1122334455667788", null)
+        val nsd = FakeNsd()
+        val client = RealConnectionClient(
+            scope = backgroundScope,
+            store = store,
+            secrets = FakeSecrets(),
+            nsd = nsd,
+            ioDispatcher = EmptyCoroutineContext,
+            wsOpener = { _, _, _ ->
+                openPumpedSession(backgroundScope, deskPriv, readIntroFrames = true)
+            },
+        )
+
+        advanceTimeBy(2_000)
+        assertTrue("健康配对态必须保持已配对", client.paired.value)
+        assertTrue("编排必须照常启动（NSD 发现发生、直连建立翻 Direct）", nsd.discoverCount > 0)
+        assertEquals("直连建立后 UI 状态必须为 Direct", ConnectionState.Direct, client.state.value)
+    }
+
+    @Test
+    fun `单缺 relayId 或单缺公钥同样自愈`() = runTest {
+        // WHY：自愈判定是 OR——若回归成 AND，单字段损坏（如残留空串 relay_id）
+        // 仍落入零重试死锁。两分支各自构造最小损坏态锁定 OR 语义（含空串边界，
+        // isNullOrBlank：旧版残留的空值元数据不得绕过自愈）。
+        val deskPubHex = Hex.encode(NoiseChannel.deriveStaticPublicKeyForTest(ByteArray(32) { 3 }))
+        // 分支一：仅缺 relayId（公钥齐全）
+        val storeA = PairingStateStore(
+            FakeSharedPreferences(initialPaired = true).apply {
+                edit().putString("desktop_pubkey_hex", deskPubHex).commit()
+            },
+        )
+        // 分支二：仅缺 desktopPubkeyHex（relayId 为空串）
+        val storeB = PairingStateStore(
+            FakeSharedPreferences(initialPaired = true).apply {
+                edit().putString("relay_id", "").commit()
+            },
+        )
+        for (store in listOf(storeA, storeB)) {
+            val client = RealConnectionClient(
+                scope = backgroundScope,
+                store = store,
+                secrets = FakeSecrets(),
+                nsd = FakeNsd(),
+                ioDispatcher = EmptyCoroutineContext,
+                wsOpener = { _, _, _ -> throw AssertionError("自愈生效后不得发起任何 WS 连接尝试") },
+            )
+            assertFalse("单字段损坏必须触发自愈（OR 分支）", client.paired.value)
+            assertFalse("自愈必须落盘清除", store.paired)
+        }
     }
 }

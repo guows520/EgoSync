@@ -14,17 +14,20 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -43,7 +46,9 @@ import kotlinx.coroutines.flow.collectLatest
 /**
  * 降级态遮罩（FR-43）：
  * 灰色半透明蒙层（拦截交互 = 引擎功能禁用）+ 数据截止时间标注 +
- * 引擎功能禁用说明 + 底部速记输入条（唯一可用入口）。
+ * 引擎功能禁用说明 + 底部速记输入条（唯一持续开放入口）+ 低强调
+ * 「解除配对并重新扫码」受控出口（不可自愈失配的应用内唯一出路，
+ * 破坏性动作需 AlertDialog 二次确认）。
  *
  * 只读缓存在蒙层下仍然可见（诚实标注，不以陈旧数据冒充实时的）。
  */
@@ -51,15 +56,35 @@ import kotlinx.coroutines.flow.collectLatest
 fun DegradedOverlayHost(
     state: ConnectionState,
     quickNotes: QuickNoteQueue,
+    onRePair: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     if (state !is ConnectionState.Offline) return
 
     var noteText by remember { mutableStateOf("") }
     var pendingCount by remember { mutableStateOf(quickNotes.pendingCount()) }
+    var showRePairDialog by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         quickNotes.items.collectLatest { pendingCount = it.count { n -> !n.submitted } }
+    }
+
+    if (showRePairDialog) {
+        AlertDialog(
+            onDismissRequest = { showRePairDialog = false },
+            title = { Text("解除配对？") },
+            text = {
+                Text("解除后将清除本机缓存与配对信息，需重新扫码才能再次连接桌面端。")
+            },
+            confirmButton = {
+                TextButton(onClick = { showRePairDialog = false; onRePair() }) {
+                    Text("解除配对", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRePairDialog = false }) { Text("取消") }
+            },
+        )
     }
 
     Box(
@@ -109,6 +134,12 @@ fun DegradedOverlayHost(
                 color = Color(0xFF9CA3AF),
                 textAlign = TextAlign.Center,
             )
+            // 受控出口（低强调、两态均可见）：自动重连无法自救的失配（如桌面
+            // 重装换信任锚）下唯一应用内出路——二次确认后解除配对重扫（FR-40）
+            Spacer(Modifier.height(16.dp))
+            TextButton(onClick = { showRePairDialog = true }) {
+                Text("连接不上？解除配对并重新扫码", color = Color(0xFF9CA3AF))
+            }
         }
 
         // 底部速记输入条（降级态唯一开放入口，FR-43）
@@ -176,6 +207,7 @@ private fun DegradedOverlayPreview() {
             DegradedOverlayHost(
                 state = ConnectionState.Offline(snapshotAvailable = true, dataAsOf = "今天 08:15"),
                 quickNotes = QuickNoteQueue(),
+                onRePair = {},
             )
         }
     }

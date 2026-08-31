@@ -292,3 +292,9 @@ All items resolved in the same session:
 - **role:deleted/task:deleted payload 形状不一致**（egosync-app/src-tauri/src/commands/role.rs:194 发全对象；commands/task.rs:115 发裸 id）：快照引擎忽略 payload 故无功能影响；13.2 手机端开始消费这些事件时统一，届时需兼顾桌面前端既有监听方。
 - **dataCutoffAt 混合 RFC3339 与 YYYY-MM-DD 字符串比较**（egosync-app/src-tauri/src/services/companion_snapshot.rs min_assign）：同日边界精度 <24h，属信息性字段；13.2 移动端展示语义确定时一并收口。
 - **notify 通道满丢信号 / OnConnect 与 Write 处理顺序**（egosync-app/src-tauri/src/services/companion_snapshot.rs）：256 容量溢出在截断 O(n²) 修复后几乎不可达；STATE_DELTA 可能先于建连 SNAPSHOT 到达，由 13.2 手机端 FrameCodec 状态机语义收口（两帧载荷均为全量快照，功能无损）。
+
+## Deferred from: quick-dev 三路评审 of spec-companion-offline-deadlock-recovery (2026-08-30)
+
+- **自愈后无用户可见提示**：heal 清配对后直接落配对扫码流，应用内无一次性「配对信息损坏已重置」说明（仅 logcat warn），用户可能困惑为何要求重扫。修法：经容器 events（Snackbar）或 PairingScreen WELCOME 态注入一次性提示。位置：`companion-android/app/src/main/java/com/egosync/companion/connection/RealConnectionClient.kt:200`。
+- **容器层 flush 守门与导航接线无自动化测试**：`AppModelContainer` 恢复收集器（paired 守门）与 `AppNavHost` 遮罩门控/出口接线均为 Context/组合层依赖，项目无对应 JVM/Compose 测试基建（androidTest 仅 PairingSmokeTest），FR-43 无丢失守门当前仅代码+注释保障。修法：提取收集器为可注入协作对象或引入 Compose UI 测试。位置：`companion-android/app/src/main/java/com/egosync/companion/AppModelContainer.kt:113`、`ui/AppNavHost.kt:136`。
+- **自愈后旧快照/通知残留理论场景**：heal 在客户端层无法清容器层快照缓存与通知（遮罩出口路径的 unpair 已有此清理）；目标场景（mock 时代遗留、从未建会话）无缓存文件，实践中不可达。若未来出现「真实配对后元数据损坏」形态，应由容器观察 paired 跳变补清理。位置：`companion-android/app/src/main/java/com/egosync/companion/connection/RealConnectionClient.kt:200`。

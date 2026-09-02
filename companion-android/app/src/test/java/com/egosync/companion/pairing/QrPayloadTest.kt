@@ -71,3 +71,37 @@ class QrPayloadTest {
         ))
     }
 }
+
+/**
+ * QR 回调闸门契约（Camera1 扫码路径）：相机持续出帧（~30fps）下，同一
+ * 二维码不得高频重复触发 onQrScanned——重复回调会在解析成功到离开扫码页
+ * 的窗口内反复击发配对入口；闸门用冷却而非永久锁存，保证残码被拒后可重扫。
+ */
+class QrCallbackGateTest {
+
+    @Test
+    fun `冷却窗口内只放行一次成功解码`() {
+        // WHY：ML Kit 解析成功到扫码页离开组合之间存在数百毫秒窗口，期间
+        // 后续帧会继续命中同一码——闸门必须把窗口内的重复解码全部挡下。
+        var now = 1_000L
+        val gate = QrCallbackGate { now }
+
+        assertTrue("首次解码必须立即放行", gate.tryAccept())
+        now += 100L
+        assertFalse("冷却窗口内的重复解码不得再回调", gate.tryAccept())
+        now += 100L
+        assertFalse(gate.tryAccept())
+    }
+
+    @Test
+    fun `冷却过期后放行以保证残码可重扫`() {
+        // WHY：无效 payload 被 ViewModel 拒绝后停留在扫码页，用户在桌面重新
+        // 生成二维码后再扫——闸门不得永久锁死（宁冷却不锁存）。
+        var now = 0L
+        val gate = QrCallbackGate { now }
+        assertTrue(gate.tryAccept())
+
+        now = QrCallbackGate.RESCAN_COOLDOWN_MS
+        assertTrue("冷却过期后必须重新放行", gate.tryAccept())
+    }
+}

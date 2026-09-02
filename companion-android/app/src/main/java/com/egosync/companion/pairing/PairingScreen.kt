@@ -166,14 +166,14 @@ private fun ScanStep(onScanCompleted: (String) -> Unit, onBack: () -> Unit, pair
             .border(1.5.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp)),
         contentAlignment = Alignment.Center,
     ) {
-        // 四角取景标记
-        CornerMarks()
         CameraPermissionGate {
             QrScannerView(
                 modifier = Modifier.fillMaxSize(),
                 onQrScanned = onScanCompleted,
             )
         }
+        // 四角取景标记与底部提示绘制在相机之上（SurfaceView z-order）
+        CornerMarks()
         Text(
             "将二维码对准取景框",
             style = MaterialTheme.typography.labelSmall,

@@ -18,8 +18,7 @@ orgJson = "20240303"
 # ── Story 12.4 白名单增项（裁决 2/5，理由见故事文档）────────────────
 # ML Kit Barcode bundled 变体：不依赖 GMS（本地优先哲学）；完全自定义 overlay 满足 UX-M1 视觉零回归
 mlkitBarcode = "17.3.0"
-# CameraX：Preview 自定义取景框 + ImageAnalysis 喂 ML Kit
-camerax = "1.6.2"
+# Camera1 API（android.hardware.Camera）+ ML Kit：卓易通 HarmonyOS 容器兼容性修复
 # OkHttp：WS 客户端（裁决 5；架构 Important Gap #2 明示候选）
 okhttp = "5.5.0"
 # ── Story 12.4 Task 8：androidTest 仪器测试 runner（AC7）──

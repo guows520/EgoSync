@@ -1192,7 +1192,7 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "egosync"
-version = "0.1.4"
+version = "0.1.6-alpha.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -3644,7 +3644,7 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
 name = "relay-server"
-version = "0.1.0"
+version = "0.1.6-alpha.1"
 dependencies = [
  "axum",
  "companion-proto",

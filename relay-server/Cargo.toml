@@ -1,6 +1,6 @@
 [package]
 name = "relay-server"
-version = "0.1.0"
+version = "0.1.6-alpha.1"
 edition = "2021"
 description = "EgoSync 手机伴侣无状态加密中继：零知识纯转发 + 内存注册表"
 

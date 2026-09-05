@@ -43,14 +43,23 @@ async fn main() {
         shutdown_state.registry.shutdown_all();
     });
 
-    // 兜底：个别客户端若对 Close 无响应，serve 不得无限等待
-    match tokio::time::timeout(Duration::from_secs(SHUTDOWN_DEADLINE_SECS), serve).await {
-        Ok(result) => result.expect("server error"),
-        Err(_) => tracing::warn!(
+    // 兜底：个别客户端若对 Close 无响应，serve 不得无限等待——
+    // 从收到退出信号起最多 8s 强制退出（Docker stop 默认 10s，留 2s 余量）。
+    // 注意：兜底窗口以退出信号为起点，而非进程启动——serve 本身须无限期运行。
+    tokio::select! {
+        result = serve => result.expect("server error"),
+        _ = shutdown_deadline() => tracing::warn!(
             deadline_secs = SHUTDOWN_DEADLINE_SECS,
             "优雅退出超时，强制退出（仍有连接未关闭）"
         ),
     }
+}
+
+/// 兜底计时：等退出信号（与 with_graceful_shutdown 回调共享同一信号广播，
+/// tokio Signal 多实例各自独立唤醒），再等 SHUTDOWN_DEADLINE_SECS 秒。
+async fn shutdown_deadline() {
+    shutdown_signal().await;
+    tokio::time::sleep(Duration::from_secs(SHUTDOWN_DEADLINE_SECS)).await;
 }
 
 /// SIGTERM / SIGINT → 优雅退出（Docker stop 场景）。

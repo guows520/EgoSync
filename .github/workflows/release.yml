@@ -87,8 +87,10 @@ jobs:
         shell: bash
         run: |
           TAG_VERSION="${GITHUB_REF_NAME#v}"
-          if ! echo "$TAG_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "ERROR: Tag version '$TAG_VERSION' is not valid semver (MAJOR.MINOR.PATCH)"
+          # semver 含 prerelease 后缀（如 0.1.6-alpha.1）：标识 alpha/beta/rc
+          # 预发布构建，与纯 MAJOR.MINOR.PATCH 一样允许触发发布
+          if ! echo "$TAG_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]([0-9A-Za-z.-]*[0-9A-Za-z])?)?$'; then
+            echo "ERROR: Tag version '$TAG_VERSION' is not valid semver (MAJOR.MINOR.PATCH[-PRERELEASE])"
             exit 1
           fi
           TAURI_VERSION=$(jq -r '.version' egosync-app/src-tauri/tauri.conf.json)

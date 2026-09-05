@@ -12,8 +12,8 @@ android {
         applicationId = "com.egosync.companion"
         minSdk = 26
         targetSdk = 37
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.1.6-alpha.1"
         // Story 12.4 Task 8：androidTest 冒烟需 androidx instrumented runner
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

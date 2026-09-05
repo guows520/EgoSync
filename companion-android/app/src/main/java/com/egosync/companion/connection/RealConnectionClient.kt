@@ -242,83 +242,106 @@ class RealConnectionClient internal constructor(
         }
     }
 
-    // ── 首次配对（直连路径，AC）──────────────────────────────────────
+    // ── 首次配对（直连优先，中继回退，Story 12.5 AC1）────────────────
 
     private suspend fun runPairing(payload: QrPayload) {
         var phase = "discovery"
+        var viaRelay = false
         try {
             _pairingProgress.value = PairingProgress.DiscoveringDevice
-            nsd.discover("EgoSync-${payload.relayId.take(8)}")
-            val endpoint = nsd.awaitResolved(NSD_WAIT_MS)
-
-            phase = "connect"
-            _pairingProgress.value = PairingProgress.ExchangingKeys
-            // 握手+信任锚+帧序一体建立；信任锚拒绝在此处即关会话（防半开泄漏）
-            val session = connectDirect(
-                endpoint,
-                expectedDesktopPubHex = payload.desktopStaticPubkey,
-                needsPairingAuth = true,
-                pairingNonce = payload.pairingNonce,
-            )
+            val session = try {
+                nsd.discover("EgoSync-${payload.relayId.take(8)}")
+                val endpoint = nsd.awaitResolved(NSD_WAIT_MS)
+                phase = "connect"
+                _pairingProgress.value = PairingProgress.ExchangingKeys
+                // 握手+信任锚+帧序一体建立；信任锚拒绝在此处即关会话（防半开泄漏）
+                connectDirect(
+                    endpoint,
+                    expectedDesktopPubHex = payload.desktopStaticPubkey,
+                    needsPairingAuth = true,
+                    pairingNonce = payload.pairingNonce,
+                )
+            } catch (e: Exception) {
+                // NSD 局域网发现失败/超时且 QR 携带 relayAddr → 回退中继完成首配
+                //（顺序回退：NSD 先、12s 预算后转中继，镜像连接期 prefer-direct）。
+                // phase 维持 "discovery"：中继也失败时文案如实合并（发现+中继双失败）。
+                // 真实取消（协程已失活）与非发现类失败原样上抛，不吞不降级。
+                val discoveryFailure = (e is TimeoutCancellationException || e is IOException) &&
+                    currentCoroutineContext().isActive
+                if (payload.relayAddr == null || !discoveryFailure) throw e
+                // NFR-M7：只记 relayId 截断前缀，不打印地址全量/QR 内容
+                CompanionLog.info("Connection", "局域网未发现桌面，回退中继配对（relay=${payload.relayId.take(8)}…）")
+                _pairingProgress.value = PairingProgress.ExchangingKeys
+                viaRelay = true
+                connectViaRelay(payload, needsPairingAuth = true, pairingNonce = payload.pairingNonce)
+                    .also { CompanionLog.info("Connection", "中继配对通道已建立") }
+            }
 
             phase = "verify"
             _pairingProgress.value = PairingProgress.VerifyingIdentity
 
-            // 探测会话是否真正建立：桌面若判定换绑 pending 会关闭连接（手机侧
-            // 无法从握手结果区分），以 PING/回帧探测是唯一可靠信号。
+            // 探测会话是否真正建立：桌面若判定待确认（换绑或中继首配 pending，
+            // 12.5 AC2）会关闭连接（手机侧无法从握手结果区分），以 PING/回帧
+            // 探测是唯一可靠信号。
             if (!probeSessionAlive(session)) {
                 session.close()
-                CompanionLog.info("Connection", "配对请求已提交，等待桌面确认换绑")
+                CompanionLog.info("Connection", "配对请求已提交，等待桌面确认")
                 waitDesktopConfirmAndRetry(payload)
                 return
             }
 
-            finishPairing(payload, session)
+            finishPairing(payload, session, viaRelay)
         } catch (e: SecretsInvalidatedException) {
             // P14：Keystore 失效/密文损坏 → 自愈清配对态，绝不无限重试
             handleSecretsInvalidated(machine = null)
             _pairingProgress.value = PairingProgress.Failed("本机配对密钥已失效，请重新扫码配对")
         } catch (e: CancellationException) {
             if (!currentCoroutineContext().isActive) throw e
-            onPairingFailed(phase, e)
+            onPairingFailed(phase, e, payload.relayAddr != null)
         } catch (e: Exception) {
-            onPairingFailed(phase, e)
+            onPairingFailed(phase, e, payload.relayAddr != null)
         }
     }
 
-    /** 配对完成收尾：落盘信任锚 + 进度 Success + 转入会话循环。 */
-    private suspend fun finishPairing(payload: QrPayload, session: WsSession) {
+    /** 配对完成收尾：落盘信任锚 + 进度 Success + 转入会话循环（承载态如实标记）。 */
+    private suspend fun finishPairing(payload: QrPayload, session: WsSession, viaRelay: Boolean) {
         _paired.value = true
         store.save(payload.desktopStaticPubkey, payload.relayId, payload.relayAddr)
         _pairingProgress.value = PairingProgress.Success
-        liveState.value = ConnectionState.Direct
+        liveState.value = if (viaRelay) ConnectionState.Relay else ConnectionState.Direct
         nsd.stopDiscovery()
-        CompanionLog.info("Connection", "配对成功，直连会话建立")
+        CompanionLog.info("Connection", "配对成功，${if (viaRelay) "中继" else "直连"}会话建立")
         startSessionLoop(session)
     }
 
     /**
-     * 换绑等待（桌面 PENDING_PAIRING_TIMEOUT_SECS=120s 对齐）：周期重连免 nonce
-     * （pending 匹配放行）；桌面确认后同公钥即 AlreadyPaired 直接进入会话；
-     * 超时如实 Failed。重连期间进度维持 WaitDesktopConfirm（UI 呈现等待文案）。
+     * 等待桌面确认（换绑或中继首配 pending，120s 与桌面超时对齐）：周期重连免
+     * nonce（pending 匹配放行）；桌面确认后同公钥即 AlreadyPaired 直接进入会话；
+     * 超时如实 Failed。QR 携带 relayAddr 时重连走中继（Story 12.5 AC3），NSD
+     * 直连重试保留（relayAddr 为空时）。重连期间进度维持 WaitDesktopConfirm。
      */
     private suspend fun waitDesktopConfirmAndRetry(payload: QrPayload) {
         _pairingProgress.value = PairingProgress.WaitDesktopConfirm
         val deadline = System.currentTimeMillis() + WAIT_CONFIRM_TIMEOUT_MS
         while (currentCoroutineContext().isActive && System.currentTimeMillis() < deadline) {
             delay(WAIT_CONFIRM_RETRY_MS)
+            var viaRelay = false
             try {
-                nsd.discover("EgoSync-${payload.relayId.take(8)}")
-                val endpoint = nsd.awaitResolved(NSD_WAIT_MS)
-                // nonce 已消费：pending 匹配（免 nonce）或已确认（AlreadyPaired）均放行
-                val session = connectDirect(
-                    endpoint,
-                    expectedDesktopPubHex = payload.desktopStaticPubkey,
-                    needsPairingAuth = false,
-                    pairingNonce = null,
-                )
+                val session = if (payload.relayAddr != null) {
+                    viaRelay = true
+                    connectViaRelay(payload, needsPairingAuth = false, pairingNonce = null)
+                } else {
+                    nsd.discover("EgoSync-${payload.relayId.take(8)}")
+                    val endpoint = nsd.awaitResolved(NSD_WAIT_MS)
+                    connectDirect(
+                        endpoint,
+                        expectedDesktopPubHex = payload.desktopStaticPubkey,
+                        needsPairingAuth = false,
+                        pairingNonce = null,
+                    )
+                }
                 if (probeSessionAlive(session)) {
-                    finishPairing(payload, session)
+                    finishPairing(payload, session, viaRelay)
                     return
                 }
                 // 仍未确认：桌面再次关闭连接，继续等待
@@ -335,7 +358,7 @@ class RealConnectionClient internal constructor(
                 nsd.stopDiscovery()
             }
         }
-        CompanionLog.warn("Connection", "等待桌面确认换绑超时")
+        CompanionLog.warn("Connection", "等待桌面确认配对超时")
         _pairingProgress.value = PairingProgress.Failed("等待桌面端确认超时，请重新扫码")
         liveState.value = offlineState()
     }
@@ -354,12 +377,17 @@ class RealConnectionClient internal constructor(
         }
     }
 
-    private fun onPairingFailed(phase: String, e: Exception) {
+    private fun onPairingFailed(phase: String, e: Exception, hasRelayAddr: Boolean) {
         val message = when {
             e is IdentityVerificationException -> "桌面身份校验失败，已断开连接"
             phase == "discovery" && (e is TimeoutCancellationException || e is IOException) ->
-                // P13：发现/解析失败现以 IOException 快速上抛，与超时同文案呈现
-                "未发现桌面设备，请确认与桌面端在同一网络"
+                if (hasRelayAddr) {
+                    // NSD 与中继双双失败（回退已触发，Story 12.5 Task 3）：合并如实提示
+                    "未发现桌面设备，且中继连接失败，请检查网络或中继配置"
+                } else {
+                    // P13：发现/解析失败现以 IOException 快速上抛，与超时同文案呈现
+                    "未发现桌面设备，请确认与桌面端在同一网络"
+                }
             else -> "配对未完成，请在桌面端重新生成二维码后重试"
         }
         _pairingProgress.value = PairingProgress.Failed(message)
@@ -460,9 +488,15 @@ class RealConnectionClient internal constructor(
                 val staticPrivate = withContext(ioDispatcher) { secrets.loadOrCreateStaticPrivateKey() }
                 val session = relay.connect(relayAddr, relayId, staticPrivate)
                 try {
-                    e2eHandshake(session, staticPrivate)
-                    verifyTrustAnchor(session, store.desktopPubkeyHex)
-                    sendIntroFrames(session, needsPairingAuth = false, pairingNonce = null)
+                    // Story 12.5：中继握手改用 m1 重发版（对端转发态 churn 空窗内
+                    // 收敛，m2 正常到达时不触发重发、行为不变）；其后与直连同构
+                    e2eHandshakeRelay(session, staticPrivate)
+                    connectOverSession(
+                        session,
+                        store.desktopPubkeyHex,
+                        needsPairingAuth = false,
+                        pairingNonce = null,
+                    )
                     machine.onRelayEstablished()
                     established = true
                     backoff.reset()
@@ -502,7 +536,7 @@ class RealConnectionClient internal constructor(
         if (established) machine.onRelayLost() else machine.onRelayEstablishmentFailed()
     }
 
-    // ── 共享协议序列（直连/中继同构）────────────────────────────────
+    // ── 共享协议序列（直连/中继同构，Story 12.5 抽取）────────────────
 
     private class IdentityVerificationException : Exception()
 
@@ -513,6 +547,20 @@ class RealConnectionClient internal constructor(
         if (actualHex != expected.lowercase()) {
             throw IdentityVerificationException()
         }
+    }
+
+    /**
+     * 承载建立后的共享序列（Story 12.5）：信任锚校验 → app 层帧序——
+     * 直连 [connectDirect] 与中继 [connectViaRelay] 仅承载建立方式不同。
+     */
+    private fun connectOverSession(
+        session: WsSession,
+        expectedDesktopPubHex: String?,
+        needsPairingAuth: Boolean,
+        pairingNonce: String?,
+    ) {
+        verifyTrustAnchor(session, expectedDesktopPubHex)
+        sendIntroFrames(session, needsPairingAuth, pairingNonce)
     }
 
     /**
@@ -532,8 +580,31 @@ class RealConnectionClient internal constructor(
         }
         try {
             e2eHandshake(session, staticPrivate)
-            verifyTrustAnchor(session, expectedDesktopPubHex)
-            sendIntroFrames(session, needsPairingAuth = needsPairingAuth, pairingNonce = pairingNonce)
+            connectOverSession(session, expectedDesktopPubHex, needsPairingAuth, pairingNonce)
+            return session
+        } catch (e: Throwable) {
+            session.close()
+            throw e
+        }
+    }
+
+    /**
+     * 中继承载的配对/重连建立（Story 12.5 AC1/AC3）：register phone 槽 → relay
+     * 鉴权（[RelayClient.connect]）→ 中继版 E2E 握手 → 共享序列。与直连仅
+     * 承载建立方式不同（[connectOverSession]）。任一步失败即关闭会话再上抛。
+     */
+    private suspend fun connectViaRelay(
+        payload: QrPayload,
+        needsPairingAuth: Boolean,
+        pairingNonce: String?,
+    ): WsSession {
+        val relayAddr = payload.relayAddr
+            ?: throw IllegalStateException("中继回退仅应在 QR 携带 relayAddr 时调用")
+        val staticPrivate = withContext(ioDispatcher) { secrets.loadOrCreateStaticPrivateKey() }
+        val session = relay.connect(relayAddr, payload.relayId, staticPrivate)
+        try {
+            e2eHandshakeRelay(session, staticPrivate)
+            connectOverSession(session, payload.desktopStaticPubkey, needsPairingAuth, pairingNonce)
             return session
         } catch (e: Throwable) {
             session.close()
@@ -547,6 +618,38 @@ class RealConnectionClient internal constructor(
         // P12：send=false 即套接字已死——立即失败，不等 10s 步超时才暴露
         if (!session.send(channel.writeHandshakeMessage())) throw IOException("握手消息发送失败")
         val m2 = withTimeout(HANDSHAKE_STEP_MS) { session.incoming.receive() }
+        channel.readHandshakeMessage(m2)
+        if (!session.send(channel.writeHandshakeMessage())) throw IOException("握手消息发送失败")
+        session.channel = channel
+        session.transport = channel.split()
+    }
+
+    /**
+     * 中继版 E2E 握手（Story 12.5）：与 [e2eHandshake] 同构，但 m1 在 m2 等待
+     * 期间周期重发——relay 无离线投递（对端不在即丢弃），桌面中继客户端转发
+     * 态有超时+退避的 churn 空窗；手机超时断开还会触发 relay 对端 close 通知、
+     * 杀死刚重建的桌面槽位，单发 m1 会与桌面重连形成活锁（桌面集成测试 14 次
+     * 重试全 miss 的实测证据）。重发间隔远大于 m2 RTT；withTimeoutOrNull 取消
+     * 竞窗可能吞掉的 m2 以非阻塞捞回兜底，重复投递由桌面 responder 帧位错判
+     * 拒收兜底（整次重试）。直连不重发：TCP 建连即对端在场（AC5 零回归）。
+     */
+    private suspend fun e2eHandshakeRelay(session: WsSession, staticPrivate: ByteArray) {
+        val channel = NoiseChannel.initiator(staticPrivate)
+        val m1 = channel.writeHandshakeMessage()
+        if (!session.send(m1)) throw IOException("握手消息发送失败")
+        val m2: ByteArray = withTimeout(HANDSHAKE_STEP_MS) {
+            var received: ByteArray? = null
+            while (received == null) {
+                val candidate = withTimeoutOrNull(RELAY_M1_RESEND_MS) { session.incoming.receive() }
+                if (candidate != null) {
+                    received = candidate
+                } else {
+                    received = session.incoming.tryReceive().getOrNull()
+                    if (received == null && !session.send(m1)) throw IOException("握手消息发送失败")
+                }
+            }
+            received
+        }
         channel.readHandshakeMessage(m2)
         if (!session.send(channel.writeHandshakeMessage())) throw IOException("握手消息发送失败")
         session.channel = channel
@@ -677,5 +780,8 @@ class RealConnectionClient internal constructor(
         /** 换绑等待总预算（对齐桌面 PENDING_PAIRING_TIMEOUT_SECS=120s）与重连间隔。 */
         const val WAIT_CONFIRM_TIMEOUT_MS = 120_000L
         const val WAIT_CONFIRM_RETRY_MS = 3_000L
+
+        /** 中继 E2E m1 重发间隔（Story 12.5）：覆盖桌面转发态 churn 空窗、远小于 m2 RTT。 */
+        const val RELAY_M1_RESEND_MS = 1_000L
     }
 }

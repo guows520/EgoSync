@@ -44,10 +44,6 @@ junit = { group = "junit", name = "junit", version.ref = "junit" }
 noise-java = { group = "com.github.rweather", name = "noise-java", version.ref = "noiseJava" }
 org-json = { group = "org.json", name = "json", version.ref = "orgJson" }
 mlkit-barcode-scanning = { group = "com.google.mlkit", name = "barcode-scanning", version.ref = "mlkitBarcode" }
-androidx-camera-core = { group = "androidx.camera", name = "camera-core", version.ref = "camerax" }
-androidx-camera-camera2 = { group = "androidx.camera", name = "camera-camera2", version.ref = "camerax" }
-androidx-camera-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "camerax" }
-androidx-camera-view = { group = "androidx.camera", name = "camera-view", version.ref = "camerax" }
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 # Story 12.4 Task 8：androidTest 冒烟仪器依赖
 androidx-test-ext-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxTestExtJunit" }

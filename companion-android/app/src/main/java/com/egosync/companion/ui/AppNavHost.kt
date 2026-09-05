@@ -173,6 +173,7 @@ private fun PairingRoute(navController: NavHostController, container: AppModelCo
     val connectStage by vm.connectStage.collectAsState()
     val waitDesktopConfirm by vm.waitDesktopConfirm.collectAsState()
     val pairingError by vm.pairingError.collectAsState()
+    val qrHasRelay by vm.qrHasRelay.collectAsState()
 
     com.egosync.companion.pairing.PairingScreen(
         step = step,
@@ -191,6 +192,7 @@ private fun PairingRoute(navController: NavHostController, container: AppModelCo
         },
         waitDesktopConfirm = waitDesktopConfirm,
         pairingError = pairingError,
+        qrHasRelay = qrHasRelay,
     )
 }
 

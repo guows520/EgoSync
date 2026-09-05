@@ -54,6 +54,8 @@ fun PairingScreen(
     modifier: Modifier = Modifier,
     waitDesktopConfirm: Boolean = false,
     pairingError: String? = null,
+    /** 扫码 QR 是否携带中继地址（12.5 AC1）：发现阶段行按中继配置如实渲染。 */
+    qrHasRelay: Boolean = false,
 ) {
     Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(
@@ -67,7 +69,7 @@ fun PairingScreen(
             when (step) {
                 PairingStep.WELCOME -> WelcomeStep(onStartScan)
                 PairingStep.SCAN -> ScanStep(onScanCompleted, onBack, pairingError)
-                PairingStep.CONNECTING -> ConnectingStep(connectStage, waitDesktopConfirm)
+                PairingStep.CONNECTING -> ConnectingStep(connectStage, waitDesktopConfirm, qrHasRelay)
                 PairingStep.SUCCESS -> SuccessStep(onEnterApp)
             }
             Spacer(Modifier.height(48.dp))
@@ -255,7 +257,7 @@ private fun BoxScope.CornerMarks() {
 // ── ③ 连接中动画 ───────────────────────────────────────────────────────
 
 @Composable
-private fun ConnectingStep(stage: Int, waitDesktopConfirm: Boolean = false) {
+private fun ConnectingStep(stage: Int, waitDesktopConfirm: Boolean = false, qrHasRelay: Boolean = false) {
     Spacer(Modifier.height(56.dp))
     CircularProgressIndicator(
         color = MaterialTheme.colorScheme.primary,
@@ -268,17 +270,23 @@ private fun ConnectingStep(stage: Int, waitDesktopConfirm: Boolean = false) {
         color = MaterialTheme.colorScheme.onBackground,
     )
     if (waitDesktopConfirm) {
-        // PendingRebind（Story 12.4）：桌面已有配对设备，等待人工确认换绑
+        // 待桌面确认（换绑，或中继首配确认门 12.5 AC2——手机侧无法区分两者，
+        // 文案不得断言「已有配对设备」）：确认后手机将自动继续
         Spacer(Modifier.height(12.dp))
         Text(
-            "桌面端已有配对设备：请在桌面「设置 · 手机伴侣」确认换绑，确认后手机将自动继续…",
+            "请在桌面「设置 · 手机伴侣」确认配对请求，确认后手机将自动继续（120 秒内有效）…",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
         )
     }
     Spacer(Modifier.height(36.dp))
-    ConnectStageRow("发现桌面设备（NSD 局域网发现）", stage >= 0)
+    // 发现阶段行按中继配置如实渲染（12.5 AC1）：QR 含 relayAddr 时
+    // 局域网发现失败会自动回退中继，不再断言「仅 NSD 局域网发现」
+    ConnectStageRow(
+        if (qrHasRelay) "发现桌面设备（局域网优先，中继兜底）" else "发现桌面设备（NSD 局域网发现）",
+        stage >= 0,
+    )
     Spacer(Modifier.height(14.dp))
     ConnectStageRow("交换密钥（Noise XX 握手）", stage >= 1)
     Spacer(Modifier.height(14.dp))

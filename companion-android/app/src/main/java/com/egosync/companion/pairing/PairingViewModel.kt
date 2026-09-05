@@ -33,9 +33,13 @@ class PairingViewModel(
     private val _connectStage = MutableStateFlow(0)
     val connectStage: StateFlow<Int> = _connectStage.asStateFlow()
 
-    /** 换绑待桌面确认时为 true——CONNECTING 步呈现等待文案。 */
+    /** 换绑或中继首配（12.5 AC2）待桌面确认时为 true——CONNECTING 步呈现等待文案。 */
     private val _waitDesktopConfirm = MutableStateFlow(false)
     val waitDesktopConfirm: StateFlow<Boolean> = _waitDesktopConfirm.asStateFlow()
+
+    /** 扫码的 QR 是否携带中继地址（12.5 AC1）——发现阶段行文案按此如实渲染。 */
+    private val _qrHasRelay = MutableStateFlow(false)
+    val qrHasRelay: StateFlow<Boolean> = _qrHasRelay.asStateFlow()
 
     /** 配对失败原因（SCAN 步展示，便于用户定位「为何没配上」）。 */
     private val _pairingError = MutableStateFlow<String?>(null)
@@ -57,11 +61,13 @@ class PairingViewModel(
      */
     fun onQrScanned(qrJson: String) {
         if (_step.value != PairingStep.SCAN) return
-        if (QrPayload.parse(qrJson) == null) {
+        val parsed = QrPayload.parse(qrJson)
+        if (parsed == null) {
             _pairingError.value = "二维码无效，请在桌面端重新生成"
             return
         }
         _pairingError.value = null
+        _qrHasRelay.value = parsed.relayAddr != null
         if (pairing == null) {
             beginConnecting(simulated = true)
         } else {

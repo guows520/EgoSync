@@ -131,14 +131,27 @@ class RealConnectionClientOrchestrationTest {
             throw java.io.IOException("中继不可达（测试注入）")
     }
 
+    /** 中继替身（Story 12.5）：每次 connect 产出注入的会话（回退编排测试缝）。 */
+    private class FakeRelay(private val sessionProvider: () -> WsSession) : RelayClient(OkHttpClient()) {
+        var connectCount = 0
+            private set
+        override suspend fun connect(relayAddr: String, relayId: String, staticPrivate: ByteArray): WsSession {
+            connectCount++
+            return sessionProvider()
+        }
+    }
+
     /**
      * 进程内「桌面/冒名」WS 会话：真 NoiseChannel responder 泵——m1 入 → m2 出 →
-     * m3 入 → split →（可选）HELLO+deviceInfo 帧确认。
+     * m3 入 → split →（可选）读 N 条 intro 帧 →（可选）以 Ping 帧应答 PING
+     * （probeSessionAlive 的存活判据，Story 12.5 配对回退用：answerPing=false
+     * 模拟桌面 pending 关闭连接、探测超时）。
      */
     private fun openPumpedSession(
         pumpScope: CoroutineScope,
         responderPriv: ByteArray,
-        readIntroFrames: Boolean,
+        readIntroFrameCount: Int,
+        answerPing: Boolean = false,
     ): WsSession {
         val ws = FakeWebSocket()
         val session = WsSession(ws)
@@ -149,11 +162,17 @@ class RealConnectionClientOrchestrationTest {
             session.incoming.trySend(responder.writeHandshakeMessage()) // m2
             awaitMinSize(ws.sent, 2)
             responder.readHandshakeMessage(ws.sent[1]) // m3
-            if (readIntroFrames) {
+            if (readIntroFrameCount > 0 || answerPing) {
                 val transport = responder.split()
-                awaitMinSize(ws.sent, 4)
-                FrameCodec.decode(ws.sent[2], transport) // HELLO
-                FrameCodec.decode(ws.sent[3], transport) // NOTICE(deviceInfo)
+                val introEnd = 2 + readIntroFrameCount
+                if (readIntroFrameCount > 0) awaitMinSize(ws.sent, introEnd)
+                for (i in 2 until introEnd) FrameCodec.decode(ws.sent[i], transport)
+                if (answerPing) {
+                    awaitMinSize(ws.sent, introEnd + 1)
+                    val ping = FrameCodec.decode(ws.sent[introEnd], transport)
+                    check(ping is Frame.Ping) { "intro 后首帧应为 PING 探测" }
+                    session.incoming.trySend(FrameCodec.encode(Frame.Ping, transport))
+                }
             }
         }
         return session
@@ -165,6 +184,11 @@ class RealConnectionClientOrchestrationTest {
 
     private fun validQr(pubkeyHex: String) =
         """{"relayAddr":null,"desktopStaticPubkey":"$pubkeyHex",""" +
+            """"relayId":"1122334455667788","pairingNonce":"n-1"}"""
+
+    /** 携带中继地址的 QR（Story 12.5：跨网回退的前提）。 */
+    private fun qrWithRelay(pubkeyHex: String) =
+        """{"relayAddr":"ws://relay.test:7333","desktopStaticPubkey":"$pubkeyHex",""" +
             """"relayId":"1122334455667788","pairingNonce":"n-1"}"""
 
     // ── 用例 ──────────────────────────────────────────────────────────
@@ -185,7 +209,7 @@ class RealConnectionClientOrchestrationTest {
             nsd = FakeNsd(),
             ioDispatcher = EmptyCoroutineContext,
             wsOpener = { _, _, _ ->
-                openPumpedSession(backgroundScope, deskPriv, readIntroFrames = true)
+                openPumpedSession(backgroundScope, deskPriv, readIntroFrameCount = 2)
                     .also { sessions.add(it) }
             },
         )
@@ -274,7 +298,7 @@ class RealConnectionClientOrchestrationTest {
             nsd = FakeNsd(),
             ioDispatcher = EmptyCoroutineContext,
             wsOpener = { _, _, _ ->
-                openPumpedSession(backgroundScope, roguePriv, readIntroFrames = false)
+                openPumpedSession(backgroundScope, roguePriv, readIntroFrameCount = 0)
                     .also { sessions.add(it) }
             },
         )
@@ -347,7 +371,7 @@ class RealConnectionClientOrchestrationTest {
             nsd = nsd,
             ioDispatcher = EmptyCoroutineContext,
             wsOpener = { _, _, _ ->
-                openPumpedSession(backgroundScope, deskPriv, readIntroFrames = true)
+                openPumpedSession(backgroundScope, deskPriv, readIntroFrameCount = 2)
             },
         )
 
@@ -387,5 +411,115 @@ class RealConnectionClientOrchestrationTest {
             assertFalse("单字段损坏必须触发自愈（OR 分支）", client.paired.value)
             assertFalse("自愈必须落盘清除", store.paired)
         }
+    }
+
+    // ── 中继首配回退（Story 12.5 AC1/AC3）──────────────────────────
+
+    @Test
+    fun `NSD 发现超时后必须回退中继完成首配`() = runTest {
+        // WHY（AC1）：出差/异地场景 NSD 永远超时——不回退中继，用户必须先
+        // 回家连入局域网才能绑定（「未发现桌面设备」的现状即此限制，见调查
+        // 档案 companion-public-discovery-investigation）。
+        val deskPriv = ByteArray(32) { (it + 1).toByte() }
+        val deskPubHex = Hex.encode(NoiseChannel.deriveStaticPublicKeyForTest(deskPriv))
+        val store = PairingStateStore(FakeSharedPreferences())
+        val nsd = FakeNsd().apply { resolveEnabled = false } // 跨网：局域网发现必然超时
+        val relay = FakeRelay {
+            // 中继首配帧序：HELLO + deviceInfo + pairingAuth（3 条 intro）
+            openPumpedSession(backgroundScope, deskPriv, readIntroFrameCount = 3, answerPing = true)
+        }
+        val client = RealConnectionClient(
+            scope = backgroundScope,
+            store = store,
+            secrets = FakeSecrets(),
+            nsd = nsd,
+            ioDispatcher = EmptyCoroutineContext,
+            relayClient = relay,
+        )
+
+        client.pairWithQr(qrWithRelay(deskPubHex))
+        // t=12s NSD 超时 → 中继回退 → 握手/信任锚/帧序 → PING 探测 PONG → Success
+        advanceTimeBy(15_000)
+
+        assertEquals("中继回退后配对必须成功", PairingProgress.Success, client.pairingProgress.value)
+        assertTrue("配对态必须落盘", store.paired)
+        assertEquals(
+            "relayAddr 必须随配对落盘（T2：后续中继环据此自然启动）",
+            "ws://relay.test:7333",
+            store.relayAddr,
+        )
+        assertEquals("中继承载必须发生（而非 NSD 直连）", 1, relay.connectCount)
+    }
+
+    @Test
+    fun `NSD 与中继双双失败必须如实合并文案`() = runTest {
+        // WHY（Task 3）：回退后中继也失败时若仍提示「请确认在同一网络」，
+        // 跨网用户会误判为自己网络配置错误——真实原因是中继不可达/配置有误，
+        // 文案必须如实合并两项失败。
+        val deskPubHex = Hex.encode(NoiseChannel.deriveStaticPublicKeyForTest(ByteArray(32) { 5 }))
+        val store = PairingStateStore(FakeSharedPreferences())
+        val nsd = FakeNsd().apply { resolveEnabled = false }
+        val client = RealConnectionClient(
+            scope = backgroundScope,
+            store = store,
+            secrets = FakeSecrets(),
+            nsd = nsd,
+            ioDispatcher = EmptyCoroutineContext,
+            relayClient = FakeUnreachableRelay(),
+        )
+
+        client.pairWithQr(qrWithRelay(deskPubHex))
+        advanceTimeBy(15_000)
+
+        val progress = client.pairingProgress.value
+        assertTrue("双失败必须进入 Failed", progress is PairingProgress.Failed)
+        assertEquals(
+            "双失败文案必须如实合并（发现 + 中继）",
+            "未发现桌面设备，且中继连接失败，请检查网络或中继配置",
+            (progress as PairingProgress.Failed).message,
+        )
+        assertTrue("失败后状态如实 Offline（不误报在线）", client.state.value is ConnectionState.Offline)
+        assertFalse("失败不得落配对态", store.paired)
+    }
+
+    @Test
+    fun `pending 等待期重连必须走中继并在确认后成功`() = runTest {
+        // WHY（AC2/AC3）：中继首配入 pending 确认门后手机只能等桌面确认——
+        // 重连若仍走 NSD（原行为），跨网场景永远等不到确认后的 AlreadyPaired，
+        // 120s 超时如实 Failed，确认门在异地场景反而变成永久死锁。
+        val deskPriv = ByteArray(32) { (it + 7).toByte() }
+        val deskPubHex = Hex.encode(NoiseChannel.deriveStaticPublicKeyForTest(deskPriv))
+        val store = PairingStateStore(FakeSharedPreferences())
+        val nsd = FakeNsd().apply { resolveEnabled = false }
+        val progressLog = Collections.synchronizedList(mutableListOf<PairingProgress>())
+        // 首连：桌面入 pending、关闭连接（answerPing=false → 探测 4s 超时）；
+        // 重连（needsPairingAuth=false，2 条 intro）：确认后 AlreadyPaired 应答 PING
+        val sessionProviders = mutableListOf<() -> WsSession>()
+        sessionProviders += { openPumpedSession(backgroundScope, deskPriv, readIntroFrameCount = 3, answerPing = false) }
+        sessionProviders += { openPumpedSession(backgroundScope, deskPriv, readIntroFrameCount = 2, answerPing = true) }
+        var providerIndex = 0
+        val relay = FakeRelay { sessionProviders[providerIndex++].invoke() }
+        val client = RealConnectionClient(
+            scope = backgroundScope,
+            store = store,
+            secrets = FakeSecrets(),
+            nsd = nsd,
+            ioDispatcher = EmptyCoroutineContext,
+            relayClient = relay,
+        )
+        backgroundScope.launch { client.pairingProgress.collect { progressLog.add(it) } }
+
+        client.pairWithQr(qrWithRelay(deskPubHex))
+        // 12s NSD 超时 → 中继首连 → pending 探测 4s 失败 → WaitDesktopConfirm
+        // → 3s 后中继重连 → PONG → Success
+        advanceTimeBy(25_000)
+
+        assertEquals("确认后重连必须配对成功", PairingProgress.Success, client.pairingProgress.value)
+        assertTrue("确认后配对态必须落盘", store.paired)
+        assertEquals("重连必须经中继（首连 + 确认后重连）", 2, relay.connectCount)
+        assertTrue(
+            "等待期必须呈现 WaitDesktopConfirm（UI 等待文案的事实源）",
+            progressLog.any { it == PairingProgress.WaitDesktopConfirm },
+        )
     }
 }

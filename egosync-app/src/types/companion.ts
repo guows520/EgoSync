@@ -9,7 +9,7 @@ export interface PairedDevice {
 }
 
 export interface QrPayload {
-  /** V1 中继未部署（Story 12.3），恒为 null */
+  /** 桌面配置的中继服务器地址；null = 未配置（手机局域网发现失败即失败） */
   relayAddr: string | null;
   desktopStaticPubkey: string;
   relayId: string;

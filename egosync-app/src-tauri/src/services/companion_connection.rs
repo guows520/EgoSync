@@ -761,8 +761,9 @@ async fn run_authorized_session(
         *state.pending.lock().await = None;
     }
 
-    // ── 配对决策 ──
-    let decision = decide_pairing(&pool, &state.pending, &pubkey_hex, &device_name).await?;
+    // ── 配对决策（origin 直传：中继首配入 pending 确认门，直连即绑）──
+    let decision =
+        decide_pairing(&pool, &state.pending, &pubkey_hex, &device_name, origin).await?;
     match decision {
         PairingDecision::AlreadyPaired { device_id, device_name } => {
             enter_session(pool, state, io, &mut transport, device_id, device_name, origin, peer_label)
@@ -785,7 +786,8 @@ async fn run_authorized_session(
             .await
         }
         PairingDecision::PendingRebind { .. } => {
-            // 换绑待确认：关闭连接，等待 pairing_confirm（手机重连即恢复）
+            // 待确认（换绑或中继首配）：关闭连接，等待 pairing_confirm
+            //（手机重连即恢复；中继首配确认后重连走 AlreadyPaired）
             Ok(())
         }
     }

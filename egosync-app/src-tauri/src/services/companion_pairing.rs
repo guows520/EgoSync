@@ -1,7 +1,8 @@
 //! 手机伴侣配对服务（Story 12.2）。
 //!
 //! 职责：静态密钥管理（keyring + 内存缓存）、QR payload 生成、
-//! Noise XX responder 握手编排、配对决策（首配 / 免配对重连 / 换绑 pending）。
+//! Noise XX responder 握手编排、配对决策（直连首配即绑 / 免配对重连 /
+//! 中继首配与换绑的 pending 确认门，Story 12.5）。
 //!
 //! 架构边界：本模块只读写 `db::paired_devices` 与自身状态，不触任何其他
 //! service；全部核心函数为无 `AppHandle` 的纯函数（事件 payload 以返回值
@@ -279,13 +280,23 @@ fn now_unix_secs() -> i64 {
     chrono::Utc::now().timestamp()
 }
 
-/// 配对决策：同公钥 → 免配对；无任何记录（首配）→ 直接写入；
-/// 已有记录且公钥不同（换绑）→ pending 单槽等待确认。
+/// 配对决策：同公钥 → 免配对；无任何记录（首配）→ 直连即绑 / 中继入
+/// pending 确认门（Story 12.5 AC2）；已有记录且公钥不同（换绑）→ pending
+/// 单槽等待确认。
+///
+/// `origin` 为连接来源（"direct" / "relay"，对齐 `run_authorized_session`
+/// 既有 origin 形态）：中继首配不走「扫码即绑定」——QR 泄露（拍照/转发）
+/// 后攻击者可在窗口内从任意网络完成首配并自动绑定，连接即获快照数据
+/// （FR-41 全量推送）；确认门（pending + `pairing_confirm`）把信任决策
+/// 交回桌面用户。直连首配以物理临近为隐式认证因子，维持即绑（FR-40）。
+/// 判定必须挂在首配分支本身（陷阱 T1）：手机 pending 等待期的重试会再次
+/// 进入首配分支，漏拦即自动落库。
 pub async fn decide_pairing(
     pool: &DbPool,
     pending_slot: &Mutex<Option<PendingPairing>>,
     remote_pubkey_hex: &str,
     device_name: &str,
+    origin: &'static str,
 ) -> Result<PairingDecision, AppError> {
     // 已配对公钥：免配对直接进入会话（AC4 前置）
     if let Some(existing) = paired_devices_db::get_by_pubkey(pool, remote_pubkey_hex).await? {
@@ -298,19 +309,25 @@ pub async fn decide_pairing(
 
     let now = crate::db::settings::chrono_now_pub();
     if paired_devices_db::get_all(pool).await?.is_empty() {
-        // 首配：扫码即绑定（FR-40 无桌面确认环节）
-        let device = PairedDevice {
-            id: uuid::Uuid::new_v4().to_string(),
-            device_name: device_name.to_string(),
-            device_pubkey: remote_pubkey_hex.to_string(),
-            paired_at: now.clone(),
-            last_seen_at: now,
-        };
-        paired_devices_db::upsert_single_device(pool, &device).await?;
-        return Ok(PairingDecision::FirstPairing { device });
+        // 首配：origin=direct 扫码即绑定（FR-40 无桌面确认环节，物理临近
+        // 为隐式认证因子）；origin=relay 落入下方 pending 确认门（AC2）
+        if origin == "direct" {
+            let device = PairedDevice {
+                id: uuid::Uuid::new_v4().to_string(),
+                device_name: device_name.to_string(),
+                device_pubkey: remote_pubkey_hex.to_string(),
+                paired_at: now.clone(),
+                last_seen_at: now,
+            };
+            paired_devices_db::upsert_single_device(pool, &device).await?;
+            return Ok(PairingDecision::FirstPairing { device });
+        }
     }
 
-    // 换绑：pending 单槽（覆盖旧 pending），等待 pairing_confirm。
+    // 确认门：pending 单槽（覆盖旧 pending），等待 pairing_confirm。
+    // 触达路径：中继首配（库空 + origin=relay，AC2）与换绑（已有记录且
+    // 公钥不同）——两者同走 pending+confirm，`confirm_pending` 以
+    // `upsert_single_device` 落库，首配/换绑无特例。
     // P9：同公钥重连保留原 created_at——120s 作废语义不得被重连无限续期
     //（新扫码走 nonce 校验路径，校验成功时清槽重建 pending，见 connection 层）。
     let pending = {
@@ -332,7 +349,8 @@ pub async fn decide_pairing(
     };
     tracing::info!(
         device_name = %pending.device_name,
-        "新设备请求替换配对，进入待确认状态"
+        origin,
+        "新配对请求进入待确认状态（中继首配或换绑）"
     );
     Ok(PairingDecision::PendingRebind { pending })
 }
@@ -687,11 +705,12 @@ mod tests {
 
     #[tokio::test]
     async fn first_pairing_writes_device_directly() {
-        // WHY: 首配"扫码即绑定"（FR-40）——若首配也要确认，配对流程
-        // 与 PRD 的免输入承诺冲突。
+        // WHY: 直连首配"扫码即绑定"（FR-40，物理临近为隐式认证因子）——
+        // 若直连首配也要确认，配对流程与 PRD 的免输入承诺冲突；本测试
+        // 同时是 AC2 的守护：origin=direct 的即绑语义不得被确认门波及。
         let pool = test_pool().await;
         let slot = Mutex::new(None);
-        let decision = decide_pairing(&pool, &slot, "pub-first", "首台手机")
+        let decision = decide_pairing(&pool, &slot, "pub-first", "首台手机", "direct")
             .await
             .expect("first pairing");
         match decision {
@@ -716,10 +735,10 @@ mod tests {
         // 前端会弹出第二次配对提示，信任持久化在用户眼里就是坏的。
         let pool = test_pool().await;
         let slot = Mutex::new(None);
-        decide_pairing(&pool, &slot, "pub-a", "手机A")
+        decide_pairing(&pool, &slot, "pub-a", "手机A", "direct")
             .await
             .expect("first pairing");
-        let decision = decide_pairing(&pool, &slot, "pub-a", "手机A")
+        let decision = decide_pairing(&pool, &slot, "pub-a", "手机A", "direct")
             .await
             .expect("reconnect");
         match decision {
@@ -739,11 +758,11 @@ mod tests {
         // QR 的人都能偷走配对位；pending+confirm 是最小可见同意闸门。
         let pool = test_pool().await;
         let slot = Mutex::new(None);
-        decide_pairing(&pool, &slot, "pub-a", "手机A")
+        decide_pairing(&pool, &slot, "pub-a", "手机A", "direct")
             .await
             .expect("first pairing");
 
-        match decide_pairing(&pool, &slot, "pub-b", "手机B")
+        match decide_pairing(&pool, &slot, "pub-b", "手机B", "direct")
             .await
             .expect("rebind request")
         {
@@ -791,12 +810,12 @@ mod tests {
         // 手机持续重连即可把"曾经的扫码"无限延长到任意未来时刻。
         let pool = test_pool().await;
         let slot = Mutex::new(None);
-        decide_pairing(&pool, &slot, "pub-a", "手机A")
+        decide_pairing(&pool, &slot, "pub-a", "手机A", "direct")
             .await
             .expect("first pairing");
         // 注入既有 pending（旧 created_at），模拟手机在 pending 期间重连
         *slot.lock().await = Some(pending_with_age("pub-b", 60));
-        match decide_pairing(&pool, &slot, "pub-b", "手机B")
+        match decide_pairing(&pool, &slot, "pub-b", "手机B", "direct")
             .await
             .expect("pending reconnect")
         {
@@ -806,6 +825,79 @@ mod tests {
                 assert!(age >= 55, "同公钥重连不得刷新 created_at，实际年龄 {age}s");
             }
             other => panic!("同公钥重连必须是 PendingRebind，实际: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn relay_first_pairing_goes_pending_without_landing() {
+        // WHY（AC2 安全裁决核心）：中继首配若沿用「扫码即绑定」，QR 泄露
+        // （拍照/转发）后攻击者可在窗口内从任意网络完成绑定——连接即获
+        // 快照数据（FR-41 全量推送）；pending 确认门把信任决策交回桌面用户。
+        let pool = test_pool().await;
+        let slot = Mutex::new(None);
+        match decide_pairing(&pool, &slot, "pub-relay", "中继手机", "relay")
+            .await
+            .expect("relay first pairing")
+        {
+            PairingDecision::PendingRebind { pending } => {
+                assert_eq!(pending.device_pubkey, "pub-relay");
+                assert_eq!(pending.device_name, "中继手机");
+            }
+            other => panic!("中继首配必须入 pending，实际: {other:?}"),
+        }
+        assert!(
+            paired_devices_db::get_all(&pool).await.unwrap().is_empty(),
+            "中继首配未确认前不得落库"
+        );
+    }
+
+    #[tokio::test]
+    async fn relay_pending_wait_retry_does_not_auto_bind() {
+        // WHY（陷阱 T1）：手机在 pending 等待期的重连会再次进入首配分支
+        //（库仍为空）——若确认门只拦首次连接，重试即自动落库，确认门
+        // 形同虚设；判定必须挂在首配分支本身按 origin 分流。
+        let pool = test_pool().await;
+        let slot = Mutex::new(None);
+        decide_pairing(&pool, &slot, "pub-relay", "中继手机", "relay")
+            .await
+            .expect("relay first pairing");
+        // pending 等待期重试（同公钥、库仍空、仍经中继）
+        match decide_pairing(&pool, &slot, "pub-relay", "中继手机", "relay")
+            .await
+            .expect("pending retry")
+        {
+            PairingDecision::PendingRebind { .. } => {}
+            other => panic!("重试仍必须是 PendingRebind，实际: {other:?}"),
+        }
+        assert!(
+            paired_devices_db::get_all(&pool).await.unwrap().is_empty(),
+            "pending 等待期重试不得自动落库（T1）"
+        );
+    }
+
+    #[tokio::test]
+    async fn relay_first_pairing_confirm_then_reconnect_already_paired() {
+        // WHY（AC2 用户路径）：确认后手机重连必须免配对直入会话——
+        // 若 confirm 后仍卡 pending，用户点完确认手机永远「等待桌面确认」。
+        // confirm_pending 复用 upsert_single_device，首配/换绑无特例。
+        let pool = test_pool().await;
+        let slot = Mutex::new(None);
+        decide_pairing(&pool, &slot, "pub-relay", "中继手机", "relay")
+            .await
+            .expect("relay first pairing");
+
+        let confirmed = confirm_pending(&pool, &slot).await.expect("confirm");
+        assert_eq!(confirmed.device_pubkey, "pub-relay");
+        let all = paired_devices_db::get_all(&pool).await.unwrap();
+        assert_eq!(all.len(), 1, "确认后中继首配落库");
+        assert!(slot.lock().await.is_none(), "确认后 pending 槽清空");
+
+        match decide_pairing(&pool, &slot, "pub-relay", "中继手机", "relay")
+            .await
+            .expect("reconnect after confirm")
+        {
+            PairingDecision::AlreadyPaired { .. } => {}
+            other => panic!("确认后重连必须是 AlreadyPaired，实际: {other:?}"),
         }
     }
 

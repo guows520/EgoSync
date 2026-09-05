@@ -20,8 +20,9 @@ pub struct PairedDevice {
 
 /// 配对二维码 payload（前端负责渲染二维码图，后端只产出数据）。
 ///
-/// `relay_addr` 在 V1（中继未部署，Story 12.3 之前）恒为 `None`，
-/// 前端如实展示「中继未部署」。
+/// `relay_addr` 为桌面配置的中继服务器地址（`companion_relay_addr`，
+/// 未配置/空白为 `None`）：手机据此在局域网发现失败时回退中继完成
+/// 首配（Story 12.5，需桌面确认）与会话连接。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QrPayload {

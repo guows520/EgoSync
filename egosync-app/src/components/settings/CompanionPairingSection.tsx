@@ -40,6 +40,8 @@ export function CompanionPairingSection() {
   const [removingDevice, setRemovingDevice] = useState<PairedDevice | null>(null);
   const [isRemoving, setIsRemoving] = useState(false);
   const [confirmedName, setConfirmedName] = useState<string | null>(null);
+  // 确认的 pending 是首配还是换绑——完成提示文案据此渲染（12.5：中继首配也走 pending）
+  const [confirmedFirstPair, setConfirmedFirstPair] = useState(false);
   const [relayAddr, setRelayAddr] = useState<string | null>(null);
   const [relayAddrInput, setRelayAddrInput] = useState('');
   const [isSavingRelay, setIsSavingRelay] = useState(false);
@@ -142,6 +144,8 @@ export function CompanionPairingSection() {
     setError('');
     setConfirmedName(null);
     try {
+      // pending 时无已配对设备 = 中继首配（12.5 AC2）；有 = 换绑
+      setConfirmedFirstPair(devices.length === 0);
       const device = await companionService.confirmPairing();
       setConfirmedName(device.deviceName);
       await refresh();
@@ -187,7 +191,7 @@ export function CompanionPairingSection() {
     <div className="space-y-6">
       <div className="bg-indigo-50 dark:bg-indigo-900/30 border border-indigo-100 dark:border-indigo-700 rounded-xl p-4 text-[13px] text-indigo-800 leading-relaxed flex items-start gap-2">
         <Smartphone size={16} className="mt-0.5 shrink-0" />
-        <span>生成配对二维码后，用手机扫码即可绑定。配对一次后，手机在同一局域网内可自动发现并免扫码重连。{relayAddr ? '已配置中继服务器：不在同一局域网时，手机可经中继加密转发连接。' : '未配置中继服务器时仅支持局域网直连，可在下方配置中继地址。'}</span>
+        <span>生成配对二维码后，用手机扫码即可绑定。配对一次后，手机在同一局域网内可自动发现并免扫码重连。{relayAddr ? '已配置中继服务器：手机不在同一局域网时，也可经中继扫码配对（需在此确认后生效）并加密转发连接。' : '未配置中继服务器时仅支持局域网直连（含首次配对），可在下方配置中继地址。'}</span>
       </div>
 
       {/* 中继服务器地址（Story 12.4）：留空清除，保存后 ≤5s 生效 */}
@@ -244,10 +248,21 @@ export function CompanionPairingSection() {
         <div className="rounded-xl border border-amber-200 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/30 p-4">
           <div className="flex items-center justify-between gap-4">
             <div className="min-w-0">
-              <p className="text-[14px] font-medium text-amber-900 dark:text-amber-200">新设备请求替换配对</p>
-              <p className="mt-1 text-[13px] text-amber-800 dark:text-amber-300">
-                「{status.pendingPairing.deviceName}」请求成为新的配对手机（确认后旧设备将被解绑，120 秒内有效）。
-              </p>
+              {devices.length === 0 ? (
+                <>
+                  <p className="text-[14px] font-medium text-amber-900 dark:text-amber-200">新设备请求配对</p>
+                  <p className="mt-1 text-[13px] text-amber-800 dark:text-amber-300">
+                    「{status.pendingPairing.deviceName}」经中继请求与这台电脑配对（确认后生效，120 秒内有效）。
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="text-[14px] font-medium text-amber-900 dark:text-amber-200">新设备请求替换配对</p>
+                  <p className="mt-1 text-[13px] text-amber-800 dark:text-amber-300">
+                    「{status.pendingPairing.deviceName}」请求成为新的配对手机（确认后旧设备将被解绑，120 秒内有效）。
+                  </p>
+                </>
+              )}
             </div>
             <button
               onClick={handleConfirmPairing}
@@ -255,7 +270,7 @@ export function CompanionPairingSection() {
               className="shrink-0 px-4 py-2 rounded-lg bg-amber-600 text-white text-[13px] font-medium hover:bg-amber-700 transition-colors disabled:opacity-50 flex items-center gap-1.5"
             >
               {isConfirming ? <Loader2 size={14} className="animate-loading-spin" /> : <Check size={14} />}
-              确认换绑
+              {devices.length === 0 ? '确认配对' : '确认换绑'}
             </button>
           </div>
         </div>
@@ -263,7 +278,7 @@ export function CompanionPairingSection() {
 
       {confirmedName && (
         <div className="rounded-lg border border-green-100 bg-green-50 px-3 py-2 text-[13px] text-green-700 flex items-center gap-2">
-          <Check size={14} /> 已完成换绑：{confirmedName}
+          <Check size={14} /> {confirmedFirstPair ? '已完成配对：' : '已完成换绑：'}{confirmedName}
         </div>
       )}
 
@@ -289,9 +304,9 @@ export function CompanionPairingSection() {
                 </p>
               )}
               {qrPayload.relayAddr ? (
-                <p className="text-slate-400 dark:text-slate-500">本二维码含中继地址（{qrPayload.relayAddr}）。首次配对需与电脑处于同一局域网（扫码配对仅支持直连）；配对成功后离开局域网可经中继加密转发连接。</p>
+                <p className="text-slate-400 dark:text-slate-500">本二维码含中继地址（{qrPayload.relayAddr}）：手机不在同一局域网时也可扫码，经中继完成配对（需在本页确认后生效）；局域网内则扫码即绑定。</p>
               ) : (
-                <p className="text-slate-400 dark:text-slate-500">中继未配置——手机需与电脑处于同一局域网。</p>
+                <p className="text-slate-400 dark:text-slate-500">中继未配置——首次配对与日常连接均需手机与电脑处于同一局域网。</p>
               )}
               {status?.port ? (
                 <p className="text-slate-400 dark:text-slate-500">连接端口（动态分配）：{status.port}</p>

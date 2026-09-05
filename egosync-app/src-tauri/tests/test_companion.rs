@@ -767,12 +767,72 @@ async fn relay_phone_auth(
     let _ = responder.into_transport();
 }
 
+/// 模拟手机经中继完成 E2E 握手（含重试预算：桌面槽位就绪前发送的 E2E m1
+/// 会被 relay 丢弃——无离线投递；预算 14×~2.3s 覆盖桌面中继客户端首个
+/// 慢轮询周期 ≤5s + 并行测试负载）。
+async fn relay_e2e_connect(
+    relay_addr: &str,
+    relay_id: &str,
+    phone_priv: &[u8],
+) -> Option<(
+    WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
+    TransportSession,
+)> {
+    for attempt in 0..14 {
+        let (mut ws, _) = tokio_tungstenite::connect_async(format!("{}/relay", relay_addr))
+            .await
+            .expect("phone relay connect");
+        let register = format!(
+            r#"{{"type":"register","relayId":"{}","role":"phone"}}"#,
+            relay_id
+        );
+        ws.send(Message::text(register)).await.expect("register");
+        relay_phone_auth(&mut ws, phone_priv).await;
+
+        let mut initiator = HandshakeSession::initiator(phone_priv).expect("initiator");
+        let m1 = initiator.write_message(&[]).expect("m1");
+        ws.send(Message::binary(m1.clone())).await.expect("send e2e m1");
+        // m2 等待期间周期重发 m1：relay 无离线投递（forward.rs「对端不在即
+        // 丢弃」），桌面中继客户端转发态存在超时+退避的 churn 空窗；手机
+        // 超时断开还会触发 relay 对端 close 通知、杀死刚重建的桌面槽位——
+        // 单发 m1 会与桌面重连形成活锁。重发间隔 500ms 远大于 m2 RTT，
+        // 重复投递由桌面 responder 以帧位错判拒收兜底（整轮重试）。
+        let m2 = tokio::time::timeout(Duration::from_secs(2), async {
+            let mut m2: Option<Vec<u8>> = None;
+            while m2.is_none() {
+                match tokio::time::timeout(Duration::from_millis(500), ws.next()).await {
+                    Ok(Some(Ok(Message::Binary(data)))) => m2 = Some(data.to_vec()),
+                    Ok(Some(Ok(Message::Ping(_) | Message::Pong(_)))) => {}
+                    Ok(_) => break, // 连接关闭/错误：本轮作废，外层整体重试
+                    Err(_) => {
+                        ws.send(Message::binary(m1.clone())).await.expect("resend m1");
+                    }
+                }
+            }
+            m2
+        })
+        .await;
+        let Some(data) = m2.unwrap_or(None) else {
+            tracing::debug!(attempt, "中继对端未就绪，重试");
+            sleep(Duration::from_millis(300)).await;
+            continue;
+        };
+        initiator.read_message(&data).expect("read m2");
+        let m3 = initiator.write_message(&[]).expect("m3");
+        ws.send(Message::binary(m3)).await.expect("send m3");
+        return Some((ws, initiator.into_transport().expect("transport")));
+    }
+    None
+}
+
 #[tokio::test]
 async fn relay_path_pairs_and_pings() {
-    // WHY: 离开局域网（无 NSD）时中继是唯一承载——这条链路断一处，
-    // "出门在外手机伴侣永久离线"且用户无从定位。全链路贯通：
-    // desktop register→鉴权→转发态 → 手机 register→鉴权→E2E 握手
-    // →首配落库→PING/PONG→状态 origin=relay（与直连同源决策）。
+    // WHY: 中继首配的确认门（Story 12.5 AC2）——origin=relay 的首配若沿用
+    // 「扫码即绑定」，QR 泄露（拍照/转发）后攻击者可在窗口内从任意网络完成
+    // 绑定，连接即获快照数据（FR-41 全量推送）。全链路贯通：desktop
+    // register→鉴权→转发态 → 手机 register→鉴权→E2E 握手→首配入 pending
+    //（不落库）→ pairing_confirm → 重连 AlreadyPaired → PING/PONG →
+    // 状态 origin=relay（与直连同源决策）。
     let relay_port = spawn_relay().await;
     let relay_addr = format!("ws://127.0.0.1:{relay_port}");
     let (pool, state, _port, _desktop_priv, desktop_pub, _dir) = setup_listener().await;
@@ -789,53 +849,17 @@ async fn relay_path_pairs_and_pings() {
 
     // 桌面中继客户端：setup_listener → start_companion_listener 已 spawn
     // run_relay_client（唯一实例；多实例会因 relay 单槽替换语义互踢抖动）。
-    // 配置写入后首个慢轮询周期（≤5s）内连接中继。
-    // 手机侧重试预算（10×2.3s）覆盖该窗口。
 
-    // QR 透出真实中继地址（AC4 前提：手机扫码才知道去哪注册）
+    // QR 透出真实中继地址（AC1 前提：手机扫码才知道去哪注册）
     let payload =
         companion_pairing::generate_qr_payload(&desktop_pub, Some(relay_addr.clone()));
     assert_eq!(payload.relay_addr.as_deref(), Some(relay_addr.as_str()));
 
-    // 模拟手机：连中继 → register → 中继鉴权 → E2E initiator 握手（经转发）。
-    // 桌面槽位就绪前发送的 E2E m1 会被 relay 丢弃（无离线投递），故整体重试。
+    // 第一段：中继 E2E 握手 + HELLO → deviceInfo → pairingAuth（nonce 单次提交）
     let (phone_priv, _) = generate_static_keypair().unwrap();
-    let mut t = None;
-    // 预算 14×~2.3s：覆盖桌面中继客户端首个慢轮询周期（≤5s）+ 并行测试负载
-    for attempt in 0..14 {
-        let (mut ws, _) =
-            tokio_tungstenite::connect_async(format!("{}/relay", relay_addr))
-                .await
-                .expect("phone relay connect");
-        let register = format!(
-            r#"{{"type":"register","relayId":"{}","role":"phone"}}"#,
-            payload.relay_id
-        );
-        ws.send(Message::text(register)).await.expect("register");
-        relay_phone_auth(&mut ws, &phone_priv).await;
-
-        let mut initiator = HandshakeSession::initiator(&phone_priv).expect("initiator");
-        let m1 = initiator.write_message(&[]).expect("m1");
-        ws.send(Message::binary(m1)).await.expect("send e2e m1");
-        let m2 = tokio::time::timeout(Duration::from_secs(2), next_binary(&mut ws)).await;
-        match m2 {
-            Ok(data) => {
-                initiator.read_message(&data).expect("read m2");
-                let m3 = initiator.write_message(&[]).expect("m3");
-                ws.send(Message::binary(m3)).await.expect("send m3");
-                t = Some((ws, initiator.into_transport().expect("transport")));
-                break;
-            }
-            _ => {
-                // 桌面槽位尚未就绪：断开重来（≤10 次 × ~2s）
-                tracing::debug!(attempt, "中继对端未就绪，重试");
-                sleep(Duration::from_millis(300)).await;
-            }
-        }
-    }
-    let (mut ws, mut t) = t.expect("E2E 握手应在重试预算内完成");
-
-    // app 层：HELLO → deviceInfo → pairingAuth（与直连同款序列）
+    let (mut ws, mut t) = relay_e2e_connect(&relay_addr, &payload.relay_id, &phone_priv)
+        .await
+        .expect("E2E 握手应在重试预算内完成");
     send_frame(
         &mut ws,
         &mut t,
@@ -854,16 +878,62 @@ async fn relay_path_pairs_and_pings() {
     .await;
     send_pairing_nonce(&mut ws, &mut t, "nonce-relay").await;
 
-    // 首配直接落库（confirm 仅用于换绑，与直连同源决策）
+    // 确认门：中继首配入 pending、未确认前不落库（AC2）
     wait_for(
-        || async { paired_devices_db::get_all(&pool).await.unwrap().len() == 1 },
+        || async {
+            get_status(&pool, &state)
+                .await
+                .unwrap()
+                .pending_pairing
+                .is_some()
+        },
         15000,
-        "等待中继路径配对设备落库",
+        "中继首配进入 pending",
     )
     .await;
+    assert!(
+        paired_devices_db::get_all(&pool).await.unwrap().is_empty(),
+        "中继首配未确认前不得自动落库"
+    );
+    // pending 期间连接被桌面关闭（不进会话）
+    let _ = tokio::time::timeout(Duration::from_secs(3), ws.next()).await;
+    drop(ws);
+
+    // 桌面确认 → 落库（confirm_pending 复用 upsert_single_device，无首配特例）
+    let confirmed = companion_pairing::confirm_pending(&pool, &state.pending)
+        .await
+        .expect("confirm");
+    assert_eq!(confirmed.device_name, "中继测试机");
     let devices = paired_devices_db::get_all(&pool).await.unwrap();
     assert_eq!(devices.len(), 1);
     assert_eq!(devices[0].device_name, "中继测试机");
+
+    // 第二段：手机重连（同公钥，免 nonce——已确认即 AlreadyPaired 直入会话）
+    let (mut ws, mut t) = relay_e2e_connect(&relay_addr, &payload.relay_id, &phone_priv)
+        .await
+        .expect("确认后重连的 E2E 握手应在重试预算内完成");
+    send_frame(
+        &mut ws,
+        &mut t,
+        &Frame::Hello(HelloPayload {
+            protocol_version: PROTOCOL_VERSION,
+        }),
+    )
+    .await;
+    send_frame(
+        &mut ws,
+        &mut t,
+        &Frame::Notice(NoticePayload {
+            data: r#"{"type":"deviceInfo","deviceName":"中继测试机"}"#.to_string(),
+        }),
+    )
+    .await;
+    wait_for(
+        || async { get_status(&pool, &state).await.unwrap().connected.is_some() },
+        15000,
+        "确认后重连进入 Connected",
+    )
+    .await;
 
     // PING/PONG 往返（转发态全双工，与直连同协议）
     send_frame(&mut ws, &mut t, &Frame::Ping(companion_proto::frames::PingPayload {})).await;
@@ -877,6 +947,7 @@ async fn relay_path_pairs_and_pings() {
     let status = get_status(&pool, &state).await.unwrap();
     let info = status.connected.expect("应处于 Connected");
     assert_eq!(info.origin, "relay", "中继会话 origin 必须如实标记");
+    drop(ws);
 }
 
 // ═══════════════════════════════════════════════════════════════════

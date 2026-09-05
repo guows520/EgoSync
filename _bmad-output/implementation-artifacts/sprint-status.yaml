@@ -1,5 +1,5 @@
 # generated: 2026-05-21
-# last_updated: 2026-08-27T21:10:00+08:00
+# last_updated: 2026-09-04T22:45:00+08:00
 # project: 探索 (EgoSync)
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-21
-last_updated: 2026-08-30T10:00:00+08:00
+last_updated: 2026-09-04T22:45:00+08:00
 project: "探索 (EgoSync)"
 project_key: NOKEY
 tracking_system: file-system
@@ -187,6 +187,7 @@ development_status:
   12-2-desktop-pairing-and-connection-service: done
   12-3-relay-server-stateless-relay-and-docker: done
   12-4-android-scan-pairing-and-tri-state-connection: done
+  12-5-relay-first-pairing-and-remote-confirm: review
   epic-12-retrospective: optional
 
   # ============================================================

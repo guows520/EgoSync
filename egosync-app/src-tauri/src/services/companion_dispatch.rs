@@ -696,7 +696,10 @@ pub fn register_stream_mirror(app_handle: tauri::AppHandle, state: Arc<Companion
 
     let (mirror_tx, mut mirror_rx) = mpsc::channel::<Frame>(MIRROR_CHANNEL_CAPACITY);
     // 单消费者保序：消费顺序 = 事件到达顺序（mpsc FIFO），入站顺序恒定。
-    tokio::spawn(async move {
+    // 本函数由 lib.rs setup 同步调用，无 Tokio reactor 上下文——必须用
+    // tauri::async_runtime::spawn（内部走 Tauri 全局运行时）；裸 tokio::spawn
+    // 在此会 panic "there is no reactor running"（v0.1.6-alpha.1 启动即退出的根因）。
+    tauri::async_runtime::spawn(async move {
         while let Some(frame) = mirror_rx.recv().await {
             state.try_enqueue_single(frame).await;
         }

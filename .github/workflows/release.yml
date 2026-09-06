@@ -243,6 +243,32 @@ jobs:
       #    tauri-action 在这些 env vars 不存在时自动跳过签名（构建未签名包）
       #    已知问题（tauri-action#234）：空字符串 env var 仍会触发签名流程导致失败
       #    配置证书后：在 env: 中添加对应 secrets（APPLE_CERTIFICATE 等）
+      # ── 发布前冒烟：真实启动一次产物，拦截「CI 全绿但装上打不开」 ──
+      # WHY: v0.1.6-alpha.1 曾带 setup 阶段 panic 发版——单测全绿（#[tokio::test]
+      # 自带运行时），E2E 已禁用，唯一可靠的拦截是拉起产物验证进程存活。
+      # panic（exit code 101）或提前退出即失败并附 stderr；tauri-action 复用
+      # 同一 target 缓存，额外开销约 1-2 分钟。
+      - name: Smoke test - launch app (Windows)
+        if: matrix.platform.os == 'windows-latest'
+        shell: pwsh
+        working-directory: egosync-app
+        run: |
+          npm run tauri build -- --no-bundle
+          $exe = "src-tauri/target/release/egosync.exe"
+          if (-not (Test-Path $exe)) { Write-Host "ERROR: $exe not found"; exit 1 }
+          $err = "$env:TEMP\egosync_smoke_stderr.txt"
+          $p = Start-Process -FilePath $exe -RedirectStandardError $err -PassThru
+          $deadline = (Get-Date).AddSeconds(15)
+          while ((Get-Date) -lt $deadline -and -not $p.HasExited) { Start-Sleep -Milliseconds 500 }
+          if ($p.HasExited) {
+            Write-Host "=== APP EXITED EARLY (exit code $($p.ExitCode)) - startup crash ==="
+            Write-Host "=== stderr ==="
+            Get-Content $err -ErrorAction SilentlyContinue
+            exit 1
+          }
+          Stop-Process -Id $p.Id -Force
+          Write-Host "Smoke test passed: app survived 15s"
+
       - name: Set build args
         id: build_args
         shell: bash

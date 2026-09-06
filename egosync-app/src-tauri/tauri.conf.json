@@ -44,6 +44,7 @@
     ],
     "windows": {
       "wix": {
+        "version": "0.1.6.1",
         "language": "zh-CN"
       },
       "nsis": {

@@ -351,7 +351,11 @@ jobs:
           name: companion-apk
 
       - name: Attach APK to release
-        run: gh release upload "${{ github.ref_name }}" EgoSync-Companion-*-debug.apk --clobber
+        # --repo 必须显式：本 job 无 checkout，gh 无 git 上下文推断仓库
+        # （与下方 verify-release 的 --repo 用法对齐；缺省会秒败 exit 1）
+        run: |
+          ls -la EgoSync-Companion-*.apk
+          gh release upload "${{ github.ref_name }}" EgoSync-Companion-*-debug.apk --clobber --repo "${{ github.repository }}"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

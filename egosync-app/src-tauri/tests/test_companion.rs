@@ -109,6 +109,25 @@ async fn send_pairing_nonce(
     .await;
 }
 
+/// T-S5（SPEC qr-semantics §3.1）：断言拒绝点先发结构化 Notice 再关连接——
+/// 旧手机忽略 Notice 回退现状，新手机据此呈现「旧 QR/过期」而非误等桌面确认。
+async fn expect_pairing_rejected(
+    ws: &mut WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    t: &mut TransportSession,
+    expected_reason: &str,
+) {
+    let bytes = next_binary(ws).await;
+    let frame = decode_frame(&bytes, t).expect("拒绝帧解码");
+    match frame {
+        Frame::Notice(n) => {
+            let v: serde_json::Value = serde_json::from_str(&n.data).expect("拒绝 Notice JSON");
+            assert_eq!(v["type"], "pairingRejected", "Notice 类型必须为 pairingRejected");
+            assert_eq!(v["reason"], expected_reason, "拒绝原因必须精确（手机文案按此分类）");
+        }
+        other => panic!("期望 pairingRejected Notice，实际收到 {:?}", other),
+    }
+}
+
 async fn setup_listener() -> (DbPool, Arc<CompanionState>, u16, Vec<u8>, Vec<u8>, tempfile::TempDir) {
     let (pool, _conv, dir) = test_pool().await;
     let (priv_key, pub_key) = generate_static_keypair().unwrap();
@@ -350,6 +369,8 @@ async fn removed_device_pubkey_is_rejected() {
         .expect("connect after remove");
     let mut t = phone_handshake(&mut ws, &phone_priv).await;
     send_frame(&mut ws, &mut t, &Frame::Hello(HelloPayload { protocol_version: PROTOCOL_VERSION })).await;
+    // T-S5：拒绝前必须先发结构化 Notice（移除后重连 = 无窗口准入拒绝）
+    expect_pairing_rejected(&mut ws, &mut t, "pairingWindowClosed").await;
     // 对端拒绝后关闭连接
     let _ = tokio::time::timeout(Duration::from_secs(3), ws.next()).await;
     sleep(Duration::from_millis(300)).await;
@@ -581,6 +602,8 @@ async fn missing_or_wrong_nonce_is_rejected() {
         send_frame(&mut ws, &mut t, &Frame::Notice(NoticePayload {
             data: r#"{"type":"deviceInfo","deviceName":"无 nonce"}"#.to_string(),
         })).await;
+        // T-S5：窗口开 + 未提交 nonce → nonceConsumed（结构化拒绝先行）
+        expect_pairing_rejected(&mut ws, &mut t, "nonceConsumed").await;
         let _ = tokio::time::timeout(Duration::from_secs(3), ws.next()).await;
         sleep(Duration::from_millis(300)).await;
         assert_eq!(paired_devices_db::get_all(&pool).await.unwrap().len(), 0, "无 nonce 不得落库");
@@ -594,6 +617,8 @@ async fn missing_or_wrong_nonce_is_rejected() {
         let mut t = phone_handshake(&mut ws, &phone_priv).await;
         send_frame(&mut ws, &mut t, &Frame::Hello(HelloPayload { protocol_version: PROTOCOL_VERSION })).await;
         send_pairing_nonce(&mut ws, &mut t, "wrong").await;
+        // T-S5：窗口开 + nonce 不匹配 → nonceConsumed
+        expect_pairing_rejected(&mut ws, &mut t, "nonceConsumed").await;
         let _ = tokio::time::timeout(Duration::from_secs(3), ws.next()).await;
         sleep(Duration::from_millis(300)).await;
         assert_eq!(paired_devices_db::get_all(&pool).await.unwrap().len(), 0, "错误 nonce 不得落库");

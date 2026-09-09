@@ -7,6 +7,9 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 
@@ -19,15 +22,20 @@ import org.json.JSONObject
  * - 会话不可用/超时/桌面错误统一抛 [CommandException]。
  */
 interface CommandSender {
-    /** 会话是否在线（出站通道已绑定）。 */
-    val sessionActive: Boolean
+    /**
+     * 会话/就绪面（T-S2，SPEC state-and-recovery-model §4.2）：出站通道是否
+     * 已绑定，可观察。写操作判据（commandReady）的唯一事实源——不得以连接
+     * 展示态（Direct/Relay）推断可发送（滞回/竞窗内展示在线但 binding 已空）。
+     */
+    val sessionActive: StateFlow<Boolean>
 
     /**
      * 发送指令并等待 COMMAND_RESULT；成功返回 result JSON，失败抛 [CommandException]。
      * 幂等语义由桌面按 commandId 保证——同一语义指令重发（新 commandId）会重复执行，
-     * 重放需复用 commandId（14.1 速记队列的底座，本 story 不消费）。
+     * 重放需复用 commandId（T-S10 待发箱重发即传 [commandId]，桌面 dispatcher
+     * 幂等缓存命中返回首次结果，网络重传/竞窗重发零重复执行）。
      */
-    suspend fun execute(action: String, paramsJson: String = "{}"): JSONObject
+    suspend fun execute(action: String, paramsJson: String = "{}", commandId: String? = null): JSONObject
 }
 
 /** ack 看门狗默认预算（毫秒）。评审裁决 A：60s——chat.send 走 DB 写 +
@@ -59,8 +67,13 @@ class CommandChannel(
 
     private val pending = ConcurrentHashMap<String, CompletableDeferred<CommandAck>>()
 
-    val sessionActive: Boolean
-        get() = binding != null
+    /**
+     * 会话/就绪面（T-S2，SPEC state-and-recovery-model §4.2）：bind/unbind/
+     * shutdown 同步发布——UI 写控件与 flush 守门消费此流（commandReady），
+     * 不再以状态机 Direct/Relay 展示推断可发送。
+     */
+    private val _sessionActive = MutableStateFlow(false)
+    val sessionActive: StateFlow<Boolean> = _sessionActive.asStateFlow()
 
     /**
      * 会话建立时绑定出站通道，返回该会话的 pump 源（会话循环内消费并
@@ -75,16 +88,20 @@ class CommandChannel(
             com.egosync.companion.connection.CompanionLog.warn(TAG, "新会话绑定，旧出站通道关闭")
         }
         binding = b
+        _sessionActive.value = true
         return b
     }
 
     /**
      * 会话结束时解绑：仅当仍是当前绑定时清空并失败全部 pending（新会话
      * 已接管则保留——桌面把在途结果发往当前槽，ack 可达）。
+     * 时序不变量（T-S2）：sessionActive=false 先行并失败全部 pending，
+     * 之后状态机才处理丢失/滞回——UI 不得观察到「在线展示 + 不可发送仍可点」。
      */
     internal fun unbind(b: Binding) {
         if (binding === b) {
             binding = null
+            _sessionActive.value = false
             b.outbound.close()
             failAllPending("连接已断开，指令未送达桌面")
         }
@@ -94,17 +111,18 @@ class CommandChannel(
     fun shutdown() {
         binding?.outbound?.close()
         binding = null
+        _sessionActive.value = false
         failAllPending("连接已断开，指令未送达桌面")
     }
 
-    suspend fun execute(action: String, paramsJson: String): org.json.JSONObject {
+    suspend fun execute(action: String, paramsJson: String, commandId: String? = null): org.json.JSONObject {
         val b = binding
             ?: throw CommandException("ConnectionError", "桌面引擎不可达")
-        val commandId = UUID.randomUUID().toString()
+        val id = commandId ?: UUID.randomUUID().toString()
         val deferred = CompletableDeferred<CommandAck>()
-        pending[commandId] = deferred
+        pending[id] = deferred
         try {
-            val envelope = CommandEnvelope.encode(commandId, action, paramsJson)
+            val envelope = CommandEnvelope.encode(id, action, paramsJson)
             // TOCTOU 整改：注册 pending 之后复查绑定——unbind 若发生在注册
             // 之前，此处立即失败（failAllPending 清不到未注册的条目）；若发生
             // 在注册之后则已被 failAllPending 命中，此处复查同样兜住。
@@ -121,7 +139,7 @@ class CommandChannel(
             } ?: throw CommandException("ConnectionError", "指令超时未收到回执（$action）")
             return ack.resultOrThrow()
         } finally {
-            pending.remove(commandId)
+            pending.remove(id)
         }
     }
 

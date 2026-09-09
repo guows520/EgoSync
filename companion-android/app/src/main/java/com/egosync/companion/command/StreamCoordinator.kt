@@ -163,7 +163,7 @@ class StreamCoordinator(
 
     private fun foldNew(event: StreamEvent, conversationId: String): DesktopStream {
         val trace = event.processEvent?.let { listOf(it.toTraceBlock()) } ?: emptyList()
-        val isText = !event.thinking && event.phase == null
+        val isText = isAnswerText(event)
         return DesktopStream(
             conversationId = conversationId,
             segments = listOf(
@@ -195,7 +195,7 @@ class StreamCoordinator(
             segments = segments + StreamSegment(event.messageId, "", sealed = false)
         }
         // 文本累加到活跃段
-        if (!event.thinking && event.phase == null && event.token.isNotEmpty()) {
+        if (isAnswerText(event) && event.token.isNotEmpty()) {
             val idx = segments.indexOfLast { !it.sealed }
             if (idx >= 0) {
                 segments = segments.toMutableList().also {
@@ -205,7 +205,9 @@ class StreamCoordinator(
         }
         var thinking = cur.thinking
         if (event.thinking) thinking = true
-        if (event.phase == "tool" || event.phase == "process" || (!event.thinking && event.token.isNotEmpty())) {
+        // 思考态关闭与正文累加共用同一判定（isAnswerText）——两处判据漂移是
+        // 「空光标后整段回填」的历史根因形态，不允许再次分叉
+        if (event.phase == "tool" || event.phase == "process" || (isAnswerText(event) && event.token.isNotEmpty())) {
             thinking = false
         }
         val toolTitle = if (event.phase == "tool") (event.statusText ?: event.toolName) else cur.toolTitle
@@ -218,6 +220,18 @@ class StreamCoordinator(
             done = done,
         )
     }
+
+    /**
+     * 桌面正文 token 判定（跨端契约，SPEC-companion-connection-chat-ux / streaming-protocol.md）：
+     * `thinking=false && phase ∈ {null, "answering"}`。
+     * - "answering"：生产总线 delta 路径（桌面 agent_engine.rs emit_stream_token 硬编码）；
+     * - null：历史 SSE Text/Error 收口路径（桌面 SseEvent 映射，serde skip 后无 phase 字段）。
+     * 值域锚点：桌面 models/chat.rs `stream_phase_domain_is_locked` 测试 + 本仓
+     * `app/src/test/resources/streaming/` 黄金契约 fixture。tool/process/thinking/done
+     * 及未知 phase 值永不为正文（未知值保守忽略，不改变 thinking 态）。
+     */
+    private fun isAnswerText(event: StreamEvent): Boolean =
+        !event.thinking && (event.phase == null || event.phase == "answering")
 
     private fun toolTitleOf(event: StreamEvent): String? =
         if (event.phase == "tool") (event.statusText ?: event.toolName) else null

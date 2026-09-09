@@ -56,6 +56,8 @@ fun PairingScreen(
     pairingError: String? = null,
     /** 扫码 QR 是否携带中继地址（12.5 AC1）：发现阶段行按中继配置如实渲染。 */
     qrHasRelay: Boolean = false,
+    /** T-S4：配对健康面失效原因（冷启动 CredentialMissing / 运行中恢复后回到配对流）。 */
+    recoveryHint: String? = null,
 ) {
     Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(
@@ -66,6 +68,10 @@ fun PairingScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Spacer(Modifier.height(64.dp))
+            if (recoveryHint != null) {
+                RecoveryHintBar(recoveryHint)
+                Spacer(Modifier.height(12.dp))
+            }
             when (step) {
                 PairingStep.WELCOME -> WelcomeStep(onStartScan)
                 PairingStep.SCAN -> ScanStep(onScanCompleted, onBack, pairingError)
@@ -78,6 +84,17 @@ fun PairingScreen(
 }
 
 // ── ① 欢迎说明 ─────────────────────────────────────────────────────────
+
+/** T-S4：配对失效原因条——告知用户为何被带回配对流（密钥缺失/失效、桌面侧变化）。 */
+@Composable
+private fun RecoveryHintBar(hint: String) {
+    Text(
+        hint,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.error,
+        textAlign = TextAlign.Center,
+    )
+}
 
 @Composable
 private fun WelcomeStep(onStartScan: () -> Unit) {
@@ -100,7 +117,7 @@ private fun WelcomeStep(onStartScan: () -> Unit) {
     Spacer(Modifier.height(18.dp))
     FeatureRow(LucideIcons.ShieldCheck, "端到端加密", "局域网直连优先，出网经中继转发且中继无法读取明文")
     Spacer(Modifier.height(18.dp))
-    FeatureRow(LucideIcons.HardDrive, "诚实降级", "桌面离线时只读缓存 + 速记排队，恢复后自动补齐")
+    FeatureRow(LucideIcons.HardDrive, "诚实降级", "桌面离线时只读缓存 + 对话待发排队，恢复后自动补齐")
     Spacer(Modifier.height(56.dp))
     Button(onClick = onStartScan, modifier = Modifier.fillMaxWidth()) {
         Text("开始配对")

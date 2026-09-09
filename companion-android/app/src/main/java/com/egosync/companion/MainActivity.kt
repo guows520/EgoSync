@@ -17,7 +17,10 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import com.egosync.companion.ui.AppNavHost
+import com.egosync.companion.ui.ImeDiagnostics
 import com.egosync.companion.ui.theme.EgoSyncTheme
 
 class MainActivity : ComponentActivity() {
@@ -46,13 +49,30 @@ private fun EgoSyncRoot(container: AppModelContainer) {
         }
 
         Scaffold(
+            // T-S8-A：外层 Scaffold 根 bounds 诊断接线（仅 debug；release 常量折叠零开销）
+            modifier = if (BuildConfig.DEBUG) {
+                Modifier.onGloballyPositioned { ImeDiagnostics.rootBounds = it.boundsInRoot() }
+            } else {
+                Modifier
+            },
             snackbarHost = { SnackbarHost(snackbarHostState) },
             containerColor = MaterialTheme.colorScheme.background,
         ) { padding ->
+            if (BuildConfig.DEBUG) {
+                ImeDiagnostics.outerBottomPadding = padding.calculateBottomPadding()
+            }
             Box(
                 Modifier
                     .fillMaxSize()
                     .padding(padding)
+                    .then(
+                        if (BuildConfig.DEBUG) {
+                            // T-S8-A：外层 content Box bounds（外层 padding 消费后的可用区）
+                            Modifier.onGloballyPositioned { ImeDiagnostics.outerContentBounds = it.boundsInRoot() }
+                        } else {
+                            Modifier
+                        },
+                    )
             ) {
                 AppNavHost(container = container)
             }

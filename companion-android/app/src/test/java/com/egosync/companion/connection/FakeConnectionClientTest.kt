@@ -8,8 +8,8 @@ import org.junit.Test
 
 /**
  * FakeConnectionClient 意图验证：
- * 四档 debug 预设必须准确映射到连接三态 + 降级信息，
- * 驱动全局降级遮罩与操作禁用态的实时切换是状态模拟入口的契约。
+ * 六档 debug 预设必须准确映射到承载态 + 降级信息 + commandReady，
+ * 驱动顶部状态条与操作禁用态的实时切换是状态模拟入口的契约（T-S3）。
  */
 class FakeConnectionClientTest {
 
@@ -18,8 +18,8 @@ class FakeConnectionClientTest {
         val client = FakeConnectionClient()
         client.setDebugMode(DebugConnectionMode.DIRECT)
 
-        assertEquals(ConnectionState.Direct, client.state.value)
-        assertTrue(client.state.value.engineAvailable)
+        assertEquals(TransportStatus.Direct, client.state.value)
+        assertTrue(client.commandReady.value)
     }
 
     @Test
@@ -27,21 +27,36 @@ class FakeConnectionClientTest {
         val client = FakeConnectionClient()
         client.setDebugMode(DebugConnectionMode.RELAY)
 
-        assertEquals(ConnectionState.Relay, client.state.value)
-        assertTrue(client.state.value.engineAvailable)
+        assertEquals(TransportStatus.Relay, client.state.value)
+        assertTrue(client.commandReady.value)
     }
 
     @Test
-    fun `offline 预设映射为无缓存离线`() {
+    fun `connecting 与 reconnecting 预设映射为宽限态`() {
+        // WHY（T-S3）：宽限两档驱动「紧凑状态条 + 写操作禁用」组合——
+        // 展示非在线且 commandReady=false，与真实编排的宽限语义一致。
+        val client = FakeConnectionClient()
+
+        client.setDebugMode(DebugConnectionMode.CONNECTING)
+        assertEquals(TransportStatus.Connecting, client.state.value)
+        assertFalse(client.commandReady.value)
+
+        client.setDebugMode(DebugConnectionMode.RECONNECTING)
+        assertEquals(TransportStatus.Reconnecting, client.state.value)
+        assertFalse(client.commandReady.value)
+    }
+
+    @Test
+    fun `offline 预设映射为无缓存降级`() {
         val client = FakeConnectionClient()
         client.setDebugMode(DebugConnectionMode.OFFLINE)
 
         val state = client.state.value
-        assertTrue(state is ConnectionState.Offline)
-        state as ConnectionState.Offline
+        assertTrue(state is TransportStatus.Degraded)
+        state as TransportStatus.Degraded
         assertFalse(state.snapshotAvailable)
         assertNull(state.dataAsOf)
-        assertFalse(state.engineAvailable)
+        assertFalse(client.commandReady.value)
     }
 
     @Test
@@ -50,11 +65,11 @@ class FakeConnectionClientTest {
         client.setDebugMode(DebugConnectionMode.DEGRADED)
 
         val state = client.state.value
-        assertTrue(state is ConnectionState.Offline)
-        state as ConnectionState.Offline
+        assertTrue(state is TransportStatus.Degraded)
+        state as TransportStatus.Degraded
         assertTrue(state.snapshotAvailable)
         assertEquals("今天 08:15", state.dataAsOf)
-        assertFalse(state.engineAvailable)
+        assertFalse(client.commandReady.value)
     }
 
     @Test
@@ -66,5 +81,25 @@ class FakeConnectionClientTest {
 
         client.unpair()
         assertFalse(client.paired.value)
+    }
+
+    @Test
+    fun `commandReady随debug档位与配对往返同步`() {
+        // WHY（T-S2）：commandReady 是写操作唯一判据——fake 的档位/配对语义
+        // 必须同步翻转就绪面，否则 Debug 预览与 VM 测试注入的禁用态失真。
+        val client = FakeConnectionClient()
+        assertTrue(client.commandReady.value)
+
+        client.setDebugMode(DebugConnectionMode.DIRECT)
+        assertTrue(client.commandReady.value)
+        client.setDebugMode(DebugConnectionMode.RELAY)
+        assertTrue(client.commandReady.value)
+        client.setDebugMode(DebugConnectionMode.OFFLINE)
+        assertFalse(client.commandReady.value)
+        client.setDebugMode(DebugConnectionMode.DEGRADED)
+        assertFalse(client.commandReady.value)
+
+        client.completePairing()
+        assertTrue(client.commandReady.value)
     }
 }

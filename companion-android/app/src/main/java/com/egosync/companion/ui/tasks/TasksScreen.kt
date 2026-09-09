@@ -87,7 +87,7 @@ import com.egosync.companion.ui.theme.rememberReducedMotion
 fun TasksScreen(
     uiState: TasksUiState,
     roles: List<RoleCard>,
-    engineAvailable: Boolean,
+    commandReady: Boolean,
     onToggleTask: (taskId: String) -> Unit,
     onQuadrantFilterSelected: (Quadrant?) -> Unit,
     onToggleBigRocksOnly: () -> Unit,
@@ -111,7 +111,7 @@ fun TasksScreen(
                 .fillMaxWidth()
                 .padding(start = 16.dp, end = 16.dp, top = 12.dp)
                 .clickable(
-                    enabled = engineAvailable,
+                    enabled = commandReady,
                     role = Role.Button,
                     onClickLabel = "新增任务",
                 ) { showCreateSheet = true },
@@ -120,14 +120,14 @@ fun TasksScreen(
                 LucideIcons.Plus,
                 contentDescription = null,
                 modifier = Modifier.size(16.dp),
-                tint = if (engineAvailable) MaterialTheme.colorScheme.primary
+                tint = if (commandReady) MaterialTheme.colorScheme.primary
                 else MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.size(4.dp))
             Text(
                 "新增任务",
                 style = MaterialTheme.typography.labelLarge,
-                color = if (engineAvailable) MaterialTheme.colorScheme.primary
+                color = if (commandReady) MaterialTheme.colorScheme.primary
                 else MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
@@ -155,7 +155,7 @@ fun TasksScreen(
             ),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            if (!engineAvailable) {
+            if (!commandReady) {
                 item(key = "offline-hint") {
                     Text(
                         "桌面引擎离线：任务操作需桌面引擎在线，暂不可交互。",
@@ -188,7 +188,7 @@ fun TasksScreen(
                     items(tasks.size, key = { tasks[it].id }) { index ->
                         TaskRow(
                             task = tasks[index],
-                            enabled = engineAvailable,
+                            enabled = commandReady,
                             isClassifying = uiState.classifyingIds.contains(tasks[index].id),
                             onToggle = { onToggleTask(tasks[index].id) },
                         )
@@ -203,7 +203,7 @@ fun TasksScreen(
             roles = roles,
             // 离线门禁：弹层在独立 Dialog window，全局降级蒙层拦不到——保存按钮与入口同步禁用，
             // 否则「入口离线禁用但表单仍可提交」自相矛盾
-            enabled = engineAvailable,
+            enabled = commandReady,
             onCreate = onCreateTask,
             onDismiss = { showCreateSheet = false },
         )
@@ -904,7 +904,7 @@ private fun TasksScreenPreview() {
         TasksScreen(
             uiState = TasksUiState.sample(),
             roles = previewRoles,
-            engineAvailable = true,
+            commandReady = true,
             onToggleTask = {},
             onQuadrantFilterSelected = {},
             onToggleBigRocksOnly = {},

@@ -1,0 +1,3 @@
+{"conversationId":"conv-gold","token":"先分析一下需求","done":false,"thinking":true,"messageId":"m-1","phase":"thinking","statusText":"思考中..."}
+{"conversationId":"conv-gold","token":"早上","done":false,"thinking":false,"messageId":"m-1","phase":"answering"}
+{"conversationId":"conv-gold","token":"好。","done":false,"thinking":false,"messageId":"m-1","phase":"answering"}

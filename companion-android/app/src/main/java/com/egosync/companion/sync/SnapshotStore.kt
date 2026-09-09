@@ -172,6 +172,8 @@ data class ChatMessage(
     val senderRoleId: String? = null,
     /** 置信度<0.7（FR-30）：视图层气泡尾部内联标注 */
     val lowConfidence: Boolean = false,
+    /** T-S10 离线待发态（!commandReady 入队）：网络恢复后自动发送 */
+    val pending: Boolean = false,
 )
 
 /**
@@ -471,7 +473,7 @@ class SnapshotStore(
         state.value.snapshot?.let { SnapshotMapper.activityMetrics(it, scopeId, window) }
             ?: MetricType.entries.associateWith { null }
 
-    /** 降级态信息（AC3/FR-40）：缓存可用性与数据截止时间，供 ConnectionState.Offline 呈现。 */
+    /** 降级态信息（AC3/FR-40）：缓存可用性与数据截止时间，供 TransportStatus.Degraded 呈现。 */
     fun offlineInfo(): OfflineSnapshotInfo {
         val snapshot = state.value.snapshot
             ?: return OfflineSnapshotInfo(snapshotAvailable = false, dataAsOf = null)

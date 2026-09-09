@@ -7,6 +7,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -15,8 +16,50 @@ import org.junit.Test
  *
  * WHY：pending 表跨会话存活 + 出站 pump 分离是会话断开时「在途指令明确失败」
  * 而非悬挂的前提；超时与未知回执路径决定手机端永不无限等待。
+ * T-S2：sessionActive 升级为可观察 StateFlow——commandReady 是写操作与
+ * flush 守门的唯一判据，bind/unbind/shutdown 的同步发布语义在此锁定。
  */
 class CommandChannelTest {
+
+    // ── T-S2：sessionActive / commandReady 事实源 ─────────────────────
+
+    @Test
+    fun `sessionActive随bind与unbind同步发布`() = runTest {
+        // WHY：布尔 getter 的竞窗读数会让 flush 守门/UI enabled 误判可发送——
+        // bind 即刻 true、unbind 即刻 false（先于 pending 失败与状态机处理）。
+        val channel = CommandChannel(ackTimeoutMs = 60_000)
+        assertFalse(channel.sessionActive.value)
+
+        val binding = channel.bind()
+        assertTrue(channel.sessionActive.value)
+
+        channel.unbind(binding)
+        assertFalse(channel.sessionActive.value)
+    }
+
+    @Test
+    fun `新绑定接管后旧unbind不得拉低sessionActive`() = runTest {
+        // WHY：会话切换（新会话 bind 先于旧 loop 的 unbind 到达）时旧 unbind
+        // 必须是 no-op——否则新会话明明在线却被误报不可发送。
+        val channel = CommandChannel(ackTimeoutMs = 60_000)
+        val oldBinding = channel.bind()
+        val newBinding = channel.bind()
+        assertTrue(channel.sessionActive.value)
+
+        channel.unbind(oldBinding) // 旧绑定已非当前绑定
+        assertTrue("旧 unbind 不得误关新会话的 sessionActive", channel.sessionActive.value)
+
+        channel.unbind(newBinding)
+        assertFalse(channel.sessionActive.value)
+    }
+
+    @Test
+    fun `shutdown同步发布sessionActive为false`() = runTest {
+        val channel = CommandChannel(ackTimeoutMs = 60_000)
+        channel.bind()
+        channel.shutdown()
+        assertFalse(channel.sessionActive.value)
+    }
 
     @Test
     fun `发送出站帧并由回执完成`() = runTest {

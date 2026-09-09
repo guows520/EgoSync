@@ -9,22 +9,34 @@ import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
@@ -36,10 +48,10 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.egosync.companion.AppModelContainer
+import com.egosync.companion.connection.TransportStatus
 import com.egosync.companion.ui.briefing.BriefingScreen
 import com.egosync.companion.ui.chat.ChatScreen
 import com.egosync.companion.ui.chat.ChatViewModel
-import com.egosync.companion.ui.components.DegradedOverlayHost
 import com.egosync.companion.ui.dashboard.DashboardScreen
 import com.egosync.companion.ui.dashboard.DashboardViewModel
 import com.egosync.companion.ui.memory.MemoryScreen
@@ -53,6 +65,8 @@ import com.egosync.companion.ui.settings.SettingsScreen
 import com.egosync.companion.ui.settings.SettingsViewModel
 import com.egosync.companion.ui.tasks.TasksScreen
 import com.egosync.companion.ui.tasks.TasksViewModel
+import com.egosync.companion.ui.theme.BrandAmber
+import com.egosync.companion.ui.theme.BrandError
 import com.egosync.companion.ui.theme.rememberReducedMotion
 
 private data class TabSpec(
@@ -94,9 +108,22 @@ fun AppNavHost(container: AppModelContainer) {
             else -> Routes.DASHBOARD
         }
     }
-    val connectionState by container.connection.state.collectAsState()
+    val transportStatus by container.connection.state.collectAsState()
     // reduced-motion（系统「移除动画」开启）：页面转场瞬时，不做淡入淡出
     val reducedMotion = rememberReducedMotion()
+
+    // T-S4：配对/凭据失效恢复事件 → 回配对流重扫（容器已并行清快照/通知并
+    // Snackbar 原因）。冷启动检测不发事件（健康态经 PairingRoute 提示），此处
+    // 只处理运行中失效——任何非配对页都会被带回。已在配对页则不重复压栈。
+    androidx.compose.runtime.LaunchedEffect(container) {
+        container.connection.pairingRecovery.collect {
+            if (navController.currentDestination?.route != Routes.PAIRING) {
+                navController.navigate(Routes.PAIRING) {
+                    popUpTo(0) { inclusive = true }
+                }
+            }
+        }
+    }
 
     androidx.compose.foundation.layout.Box(Modifier.fillMaxSize()) {
         NavHost(
@@ -130,26 +157,60 @@ fun AppNavHost(container: AppModelContainer) {
         }
         }
 
-        // 降级态遮罩全局覆盖（含二级页）：离线时任何页面都明示数据截止与引擎禁用。
-        // paired 守门：配对流内首次尝试失败也呈 Offline，但那是 PairingScreen 自有
-        // 错误态的职责——降级遮罩（含解除配对出口）只属于已配对设备
+        // T-S3 紧凑非阻断指示（SPEC supersessions.md：FR-43 全屏遮罩阻断形态退役）：
+        // Connecting/Reconnecting 轻量状态条；Degraded 降级横幅（数据截止 + 写操作
+        // 禁用说明）。paired 守门：未配对（配对流内）的承载失败由配对屏自有错误态呈现。
         val paired by container.connection.paired.collectAsState()
-        if (connectionState is com.egosync.companion.connection.ConnectionState.Offline && paired) {
-            DegradedOverlayHost(
-                state = connectionState,
-                quickNotes = container.quickNotes,
-                // 受控出口：镜像 SettingsRoute.onUnpair——清配对态并清空返回栈直落配对流。
-                // Offline 复核：对话框开着时自动重连翻 Direct 的迟到确认不得拆健康会话
-                onRePair = {
-                    if (container.connection.state.value
-                        is com.egosync.companion.connection.ConnectionState.Offline
-                    ) {
-                        container.unpair()
-                        navController.navigate(Routes.PAIRING) {
-                            popUpTo(0) { inclusive = true }
-                        }
-                    }
-                },
+        if (paired) {
+            ConnectionStatusBanner(
+                status = transportStatus,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .fillMaxWidth(),
+            )
+        }
+    }
+}
+
+/**
+ * 紧凑非阻断连接指示（T-S3）：仅 Connecting/Reconnecting/Degraded 显示——
+ * 小状态条贴顶，不拦截任何交互（写操作禁用由各屏 commandReady 判据承担）。
+ */
+@Composable
+private fun ConnectionStatusBanner(status: TransportStatus, modifier: Modifier = Modifier) {
+    if (status is TransportStatus.Direct || status is TransportStatus.Relay) return
+    val text = when (status) {
+        TransportStatus.Connecting -> "正在连接桌面引擎…"
+        TransportStatus.Reconnecting -> "连接已断开，正在重连…"
+        is TransportStatus.Degraded ->
+            if (status.snapshotAvailable) {
+                "离线降级 · 缓存数据截至${status.dataAsOf ?: "未知"}，写操作暂不可用，重连后自动恢复"
+            } else {
+                "离线降级 · 暂无缓存数据，写操作暂不可用，重连后自动恢复"
+            }
+        else -> return
+    }
+    val color = if (status is TransportStatus.Degraded) BrandError else BrandAmber
+    Surface(
+        modifier = modifier,
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+        shadowElevation = 4.dp,
+    ) {
+        Row(
+            Modifier.padding(horizontal = 16.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(color),
+            )
+            Spacer(Modifier.size(8.dp))
+            Text(
+                text,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }
@@ -174,6 +235,20 @@ private fun PairingRoute(navController: NavHostController, container: AppModelCo
     val waitDesktopConfirm by vm.waitDesktopConfirm.collectAsState()
     val pairingError by vm.pairingError.collectAsState()
     val qrHasRelay by vm.qrHasRelay.collectAsState()
+    // T-S4：健康面失效原因 → 配对屏顶部提示（冷启动 CredentialMissing 与
+    // 运行中恢复后落到配对页共用此呈现）
+    val pairingHealth by container.connection.pairingHealth.collectAsState()
+    val recoveryHint = when (pairingHealth) {
+        com.egosync.companion.connection.PairingHealth.Ok -> null
+        com.egosync.companion.connection.PairingHealth.CredentialMissing ->
+            "检测到本机配对密钥缺失，请重新扫码"
+        com.egosync.companion.connection.PairingHealth.CredentialInvalid ->
+            "本机配对密钥已失效，请重新扫码"
+        com.egosync.companion.connection.PairingHealth.PairingRevoked ->
+            "桌面已解除与此手机的配对，请重新扫码"
+        com.egosync.companion.connection.PairingHealth.TrustMismatch ->
+            "桌面身份已变化（可能重装），需重新配对"
+    }
 
     com.egosync.companion.pairing.PairingScreen(
         step = step,
@@ -193,6 +268,7 @@ private fun PairingRoute(navController: NavHostController, container: AppModelCo
         waitDesktopConfirm = waitDesktopConfirm,
         pairingError = pairingError,
         qrHasRelay = qrHasRelay,
+        recoveryHint = recoveryHint,
     )
 }
 
@@ -204,7 +280,8 @@ private fun OnboardingRoute(navController: NavHostController, container: AppMode
         factory = viewModelFactory { initializer { OnboardingViewModel(container) } }
     )
     val uiState by vm.uiState.collectAsState()
-    val connectionState by container.connection.state.collectAsState()
+    // T-S2：写操作判据改绑 commandReady（出站通道绑定），不再读连接展示态
+    val commandReady by container.connection.commandReady.collectAsState()
     // 完成路径统一出口：清引导栈进主界面（镜像桌面 onComplete → butler 视图）
     val enterMain = {
         navController.navigate(Routes.DASHBOARD) {
@@ -214,7 +291,7 @@ private fun OnboardingRoute(navController: NavHostController, container: AppMode
     }
     OnboardingScreen(
         uiState = uiState,
-        engineAvailable = connectionState.engineAvailable,
+        commandReady = commandReady,
         onSendMessage = vm::sendMessage,
         onSkipOnboarding = { vm.skipOnboarding(onComplete = enterMain) },
         onRoleProposalConfirm = { name, icon, color, goal ->
@@ -241,7 +318,15 @@ private fun MainShellRoute(
         bottomBar = {
             val backStackEntry by navController.currentBackStackEntryAsState()
             val currentRoute = backStackEntry?.destination?.route
-            NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
+            NavigationBar(
+                containerColor = MaterialTheme.colorScheme.surface,
+                // T-S8-A：bottomBar bounds 诊断接线（仅 debug）
+                modifier = if (com.egosync.companion.BuildConfig.DEBUG) {
+                    Modifier.onGloballyPositioned { ImeDiagnostics.navigationBarBounds = it.boundsInRoot() }
+                } else {
+                    Modifier
+                },
+            ) {
                 tabs.forEach { tab ->
                     val selected = currentRoute == tab.route
                     NavigationBarItem(
@@ -267,7 +352,22 @@ private fun MainShellRoute(
             }
         },
     ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding)) {
+        if (com.egosync.companion.BuildConfig.DEBUG) {
+            ImeDiagnostics.innerBottomPadding = padding.calculateBottomPadding()
+        }
+        Box(
+            Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .then(
+                    if (com.egosync.companion.BuildConfig.DEBUG) {
+                        // T-S8-A：内层 content Box bounds（bottomBar 高度消费后的可用区）
+                        Modifier.onGloballyPositioned { ImeDiagnostics.innerContentBounds = it.boundsInRoot() }
+                    } else {
+                        Modifier
+                    },
+                )
+        ) {
             when (currentTab) {
                 Routes.CHAT -> ChatRoute(container)
                 Routes.TASKS -> TasksRoute(container)
@@ -288,16 +388,20 @@ private fun ChatRoute(container: AppModelContainer) {
                     commands = container.commandSender,
                     stream = container.streamCoordinator,
                     onError = container::showEvent,
+                    outbox = container.chatOutbox,
+                    commandReady = container.connection.commandReady,
+                    paired = container.connection.paired,
                 )
             }
         }
     )
     val uiState by vm.uiState.collectAsState()
-    val connectionState by container.connection.state.collectAsState()
+    // T-S2/T-S10：写操作判据 commandReady（对话发送已改为常开 + 离线待发箱）
+    val commandReady by container.connection.commandReady.collectAsState()
     val chatSnapshotState = container.snapshotStore.state.collectAsState()
     ChatScreen(
         uiState = uiState,
-        engineAvailable = connectionState.engineAvailable,
+        commandReady = commandReady,
         dataCutoffLabel = truncatedCutoffLabel(
             chatSnapshotState.value.metadata,
             domain = "conversations",
@@ -329,14 +433,15 @@ private fun TasksRoute(container: AppModelContainer) {
         }
     )
     val uiState by vm.uiState.collectAsState()
-    val connectionState by container.connection.state.collectAsState()
+    // T-S2：写操作判据改绑 commandReady（出站通道绑定）
+    val commandReady by container.connection.commandReady.collectAsState()
     // 快照态订阅派生 roles（评审 P10）：roles-only 的 STATE_DELTA（角色改名/新增角色）
     // 也触发重组，归属筛选 chips 不滞后；组合期直读 store.roles 无此保证
     val snapshotState = container.snapshotStore.state.collectAsState()
     TasksScreen(
         uiState = uiState,
         roles = if (snapshotState.value.loaded) container.snapshotStore.roles else emptyList(),
-        engineAvailable = connectionState.engineAvailable,
+        commandReady = commandReady,
         onToggleTask = vm::toggleTask,
         onQuadrantFilterSelected = vm::selectQuadrantFilter,
         onToggleBigRocksOnly = vm::toggleBigRocksOnly,
@@ -444,10 +549,11 @@ private fun truncatedCutoffLabel(
 @Composable
 private fun NotificationCenterRoute(navController: NavHostController, container: AppModelContainer) {
     val notices by container.notifications.notices.collectAsState()
-    val connectionState by container.connection.state.collectAsState()
+    // T-S2：通知响应等写操作判据改绑 commandReady
+    val commandReady by container.connection.commandReady.collectAsState()
     NotificationCenterScreen(
         notices = notices,
-        engineAvailable = connectionState.engineAvailable,
+        commandReady = commandReady,
         onBack = { navController.popBackStack() },
         onMarkAllRead = container.notifications::markAllRead,
         onRespond = container.notifications::respond,
@@ -470,8 +576,11 @@ private fun MemoryRoute(navController: NavHostController, container: AppModelCon
         },
     )
     val uiState by vm.uiState.collectAsState()
+    // T-S2：记忆写操作（选择性遗忘）判据改绑 commandReady
+    val commandReady by container.connection.commandReady.collectAsState()
     MemoryScreen(
         uiState = uiState,
+        commandReady = commandReady,
         onBack = { navController.popBackStack() },
         onCategorySelected = vm::setCategory,
         onToggleSource = vm::toggleSource,

@@ -10,8 +10,10 @@ import com.egosync.companion.sync.ActionCardSuggestion
 import com.egosync.companion.sync.ActionCardState
 import com.egosync.companion.sync.ChatConversation
 import com.egosync.companion.sync.ChatMessage
+import com.egosync.companion.sync.ChatOutbox
 import com.egosync.companion.sync.DecompositionState
 import com.egosync.companion.sync.ExecutionTraceBlock
+import com.egosync.companion.sync.OutboxEntry
 import com.egosync.companion.sync.RoleCard
 import com.egosync.companion.sync.RoleProposal
 import com.egosync.companion.sync.RoleProposalState
@@ -25,6 +27,9 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -87,6 +92,11 @@ class ChatViewModel(
     private val commands: CommandSender?,
     private val stream: StreamCoordinator,
     private val onError: (String) -> Unit = {},
+    /** T-S10 离线待发箱（null = 无队列能力的退化测试态，发送失败照旧显式提示）。 */
+    private val outbox: ChatOutbox? = null,
+    /** 会话就绪面（flush 守门 commandReady && paired，SPEC state-model §4.4/§4.5）。 */
+    private val commandReady: StateFlow<Boolean> = MutableStateFlow(true),
+    private val paired: StateFlow<Boolean> = MutableStateFlow(true),
 ) : ViewModel() {
 
     private var nextId = 100
@@ -116,6 +126,9 @@ class ChatViewModel(
     /** 当前流式发送协程句柄（chat.send + 看门狗）：停止按钮（FR-33 Square）终止之 */
     private var streamJob: Job? = null
 
+    /** 待发箱 flush 轮次句柄：门控重入（恢复→断线→再恢复）时取消旧轮重启。 */
+    private var flushJob: Job? = null
+
     /** 流式看门狗句柄：token 进展即重置。 */
     private var watchdogJob: Job? = null
 
@@ -138,6 +151,9 @@ class ChatViewModel(
         )
         uiState = _uiState
         stream.onViewedConversation(current.id)
+        // T-S10：进程重建后还原待发态气泡（含本地占位会话——条目 conversationId=null
+        // 时新建本地会话承载；快照异步加载完成后再补齐对齐会话的气泡）
+        restoreOutboxBubbles()
         // 13.3 T6：流式状态机由 STREAM_TOKEN 驱动（替代 mock 打字机）
         viewModelScope.launch {
             stream.state.collect { s -> onStreamState(s) }
@@ -160,6 +176,7 @@ class ChatViewModel(
                         stopStreaming()
                         history.clear()
                         activeConversationIdByRole.clear()
+                        localConversationIds.clear()
                         val fresh = createConversationIn(null)
                         activeConversationIdByRole[null] = fresh.id
                         _uiState.update {
@@ -178,9 +195,23 @@ class ChatViewModel(
                                 traceByMessageId = emptyMap(),
                             )
                         }
+                        restoreOutboxBubbles()
                     }
                 }
             }
+        }
+        // T-S10 待发箱 flush（SPEC state-model §4.4/§4.5）：守门 commandReady && paired
+        //（不读连接展示态）；恢复触发逐条串行重发——一次一条、等本轮流式 done 后再发下一条。
+        // 不加 distinctUntilChanged：竞窗内 false→true 快速翻转会被 combine 聚合吞掉
+        // 中间态（单一 true 发射与上次同值）——门重开却不再触发 drain 的漏发风险更大。
+        viewModelScope.launch {
+            combine(commandReady, paired) { ready, p -> ready && p }
+                .collect { gate ->
+                    if (gate) {
+                        flushJob?.cancel()
+                        flushJob = viewModelScope.launch { drainOutbox() }
+                    }
+                }
         }
     }
 
@@ -231,6 +262,9 @@ class ChatViewModel(
             )
         }
         stream.onViewedConversation(current.id)
+        // T-S10：快照替换后补齐待发气泡（进程重建先于快照加载时，对齐会话此刻才可见；
+        //  按 localMessageId 幂等去重，已还原的不重复）
+        restoreOutboxBubbles()
     }
 
     // ── FR-20 角色切换 ─────────────────────────────────────────────────
@@ -444,7 +478,22 @@ class ChatViewModel(
         }
 
         val userMsgId = "u-${nextId++}"
-        appendMessage(ChatMessage(userMsgId, false, trimmed))
+        // T-S10（用户裁决：队列化）：!commandReady 发送不禁用也不报错——入待发箱，
+        // 气泡呈待发态，网络恢复后自动发送（无「桌面引擎不可达」路径触发）
+        val offlineQueue = !commandReady.value && outbox != null
+        appendMessage(ChatMessage(userMsgId, false, trimmed, pending = offlineQueue))
+        if (offlineQueue) {
+            outbox.enqueue(
+                OutboxEntry(
+                    commandId = UUID.randomUUID().toString(),
+                    roleId = roleId,
+                    conversationId = currentId.takeIf { it !in localConversationIds },
+                    content = trimmed,
+                    localMessageId = userMsgId,
+                ),
+            )
+            return
+        }
         _uiState.update { it.copy(thinking = true, responding = true) }
 
         streamJob = viewModelScope.launch {
@@ -476,12 +525,167 @@ class ChatViewModel(
         }
     }
 
+    // ── T-S10 离线待发箱：串行 flush 管线（SPEC state-model §4.4）──────────
+
+    /**
+     * 逐条串行重发：一次一条、等本轮流式 done（thinking/responding 落回）后再发
+     * 下一条（对齐桌面 busy 串行语义）；连接类失败留队并挂等恢复门重开（不退出、
+     * 也不紧环重试——对同一条目无退避空转），业务错误删条目走既有 failSend 提示。
+     */
+    private suspend fun drainOutbox() {
+        while (currentCoroutineContext().isActive) {
+            val entry = outbox?.entries?.value?.firstOrNull() ?: return
+            if (!(commandReady.value && paired.value)) {
+                // 门关：挂起直读上游等重开（断连/重连跨调度拍，等待方已消费 false）
+                gateFlow().first { it }
+            }
+            // 并发守卫：等当前流式收口（用户在看的流 / 上一条待发的流）后再发
+            if (_uiState.value.thinking || _uiState.value.responding) {
+                _uiState.filter { !it.thinking && !it.responding }.first()
+            }
+            if (!resendEntry(entry)) awaitGateReopen()
+        }
+    }
+
+    /** 连接类失败后等真实恢复：门仍开（超时/TOCTOU 类失败）先等关门再等重开。 */
+    private suspend fun awaitGateReopen() {
+        if (commandReady.value && paired.value) {
+            gateFlow().first { !it }
+        }
+        gateFlow().first { it }
+    }
+
+    private fun gateFlow() = combine(commandReady, paired) { ready, p -> ready && p }
+
+    /**
+     * 重发一条待发条目（复用其 commandId——桌面幂等缓存键）。
+     * @return false = 连接类失败（条目留队，停止本轮 drain）。
+     */
+    private suspend fun resendEntry(entry: OutboxEntry): Boolean {
+        val sender = commands ?: return false
+        _uiState.update { it.copy(thinking = true, responding = true) }
+        return try {
+            val result = sender.execute(
+                "chat.send",
+                CommandEnvelope.buildParams(
+                    listOf(
+                        "conversationId" to entry.conversationId,
+                        "roleId" to entry.roleId,
+                        "content" to entry.content,
+                    ),
+                ),
+                commandId = entry.commandId,
+            )
+            // 气泡实际所在会话（含进程重建还原出的本地占位会话）——按位置采纳，
+            // 比条目快照的 conversationId 更可靠（重建/切换后位置即事实）
+            val localConvId = findConversationIdOfMessage(entry.localMessageId)
+                ?: entry.conversationId.orEmpty()
+            val convId = result.optString("conversationId").ifEmpty { localConvId }
+            val userId = result.optString("userMessageId").ifEmpty { entry.localMessageId }
+            adoptChatIds(localConvId, convId, entry.localMessageId, userId, entry.roleId)
+            // 成功删条目（SPEC §4.4 结果处理）——漏删会让 drain 对同一条目无限重发
+            outbox?.remove(entry.commandId)
+            markBubbleNotPending(entry.localMessageId)
+            stream.streamStarting(convId)
+            resetWatchdog(convId)
+            true
+        } catch (e: CommandException) {
+            if (e.variant == "ConnectionError") {
+                // 连接类失败：条目留队，恢复后自动再试——不弹错（降级态已由状态条呈现）
+                endStreamVisuals()
+                false
+            } else {
+                // 桌面业务错误：删条目（不无限重试坏消息），按既有 failSend 路径提示
+                outbox?.remove(entry.commandId)
+                markBubbleNotPending(entry.localMessageId)
+                failSend(e.message ?: "发送失败")
+                true
+            }
+        }
+    }
+
+    /** 消息 id → 所属会话 id（跨视图检索——管家视图键为 null）。 */
+    private fun findConversationIdOfMessage(messageId: String): String? {
+        history.entries.forEach { (_, list) ->
+            list.forEach { conv ->
+                if (conv.messages.any { it.id == messageId }) return conv.id
+            }
+        }
+        return null
+    }
+
+    /** 待发气泡转常态（ack 采纳/业务错误放弃待发后）。 */
+    private fun markBubbleNotPending(localMessageId: String) {
+        history.entries.forEach { (_, list) ->
+            val index = list.indexOfFirst { c -> c.messages.any { it.id == localMessageId } }
+            if (index >= 0) {
+                list[index] = list[index].copy(
+                    messages = list[index].messages.map { m ->
+                        if (m.id == localMessageId) m.copy(pending = false) else m
+                    },
+                )
+            }
+        }
+        _uiState.update { state ->
+            state.copy(messages = state.messages.map { m ->
+                if (m.id == localMessageId) m.copy(pending = false) else m
+            })
+        }
+    }
+
+    /**
+     * 进程重建后还原待发态气泡（T-S10 落盘恢复的内存半场）：
+     * - conversationId=null（本地占位）→ 新建本地会话承载（注册占位集，flush ack 采纳替换）；
+     * - conversationId 有值 → 找对应会话（任意视图）追加气泡；快照未加载/会话未到
+     *   时暂不落位，等 onSnapshotReplaced 再补（按 localMessageId 幂等去重）。
+     */
+    private fun restoreOutboxBubbles() {
+        val entries = outbox?.entries?.value ?: return
+        if (entries.isEmpty()) return
+        for (entry in entries) {
+            val roleId = entry.roleId?.takeIf { r -> store.roles.any { it.id == r } }
+            if (entry.conversationId == null) {
+                val conv = createConversationIn(roleId)
+                localConversationIds.add(conv.id)
+                val bubble = ChatMessage(entry.localMessageId, false, entry.content, pending = true)
+                history[roleId]?.let { list ->
+                    val index = list.indexOfFirst { it.id == conv.id }
+                    if (index >= 0) list[index] = list[index].copy(messages = listOf(bubble))
+                }
+            } else {
+                history.entries.forEach { (_, list) ->
+                    val index = list.indexOfFirst { it.id == entry.conversationId }
+                    if (index >= 0) {
+                        val conv = list[index]
+                        if (conv.messages.none { it.id == entry.localMessageId }) {
+                            list[index] = conv.copy(messages = conv.messages + ChatMessage(entry.localMessageId, false, entry.content, pending = true))
+                        }
+                        return@forEach
+                    }
+                }
+            }
+        }
+        // 刷新当前视图（还原可能发生在非当前视图——切过去时从 history 取）
+        _uiState.update { state ->
+            val current = history[state.activeRoleId]?.find { it.id == state.currentConversationId }
+            state.copy(
+                messages = current?.messages ?: state.messages,
+                conversations = conversationsOf(state.activeRoleId),
+            )
+        }
+    }
+
     private fun failSend(message: String) {
+        endStreamVisuals()
+        onError(message)
+    }
+
+    /** 流式视觉态复位（failSend 与待发箱连接类失败的静默路径共用）。 */
+    private fun endStreamVisuals() {
         sawStream = false
         closedStreamConv = null
         watchdogJob?.cancel()
         _uiState.update { it.copy(thinking = false, responding = false, streamingToolTitle = null) }
-        onError(message)
     }
 
     /** ack 三 id 对齐：本地临时 id 替换为桌面 id（快照替换时 LazyColumn key 稳定无闪烁）。 */
@@ -501,7 +705,8 @@ class ChatViewModel(
             _uiState.update { state ->
                 state.copy(
                     messages = state.messages.map { m ->
-                        if (m.id == localUserId) m.copy(id = desktopUserId) else m
+                        // pending=false：ack 已确认送达（待发箱 flush 采纳路径）
+                        if (m.id == localUserId) m.copy(id = desktopUserId, pending = false) else m
                     },
                 )
             }
@@ -553,7 +758,7 @@ class ChatViewModel(
                 closedStreamConv = s.conversationId
                 sawStream = false
                 streamSeq++
-                val segMsgs = s.segments.mapIndexed { i, seg ->
+                val segMsgs = s.segments.filter { it.text.isNotBlank() }.mapIndexed { i, seg ->
                     ChatMessage(
                         id = seg.messageId ?: "stream-$streamSeq-$i",
                         fromButler = true,
@@ -589,7 +794,9 @@ class ChatViewModel(
         if (!s.done) closedStreamConv = null // 新流开启：清除上一轮回声记忆
         val base = streamBase.orEmpty()
         val roleId = _uiState.value.activeRoleId
-        val segMsgs = s.segments.mapIndexed { i, seg ->
+        // 空光标守卫（SPEC streaming-protocol §3）：无可见文本的段落不产生消息项
+        // （思考期由 ThinkingBubble、工具期由 ToolStatusRow 承载）——禁止纯 ▍ 空气泡
+        val segMsgs = s.segments.filter { it.text.isNotBlank() }.mapIndexed { i, seg ->
             ChatMessage(
                 id = seg.messageId ?: "stream-$streamSeq-$i",
                 fromButler = true,

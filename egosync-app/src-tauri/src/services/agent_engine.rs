@@ -14,7 +14,7 @@ use crate::llm::openai::OpenAiProvider;
 use crate::llm::traits::{
     ChatCompletionMessage, ChatOptions, LlmProvider, StreamEvent, ToolCall, ToolDefinition,
 };
-use crate::models::chat::{RoleProposedPayload, StreamPayload};
+use crate::models::chat::{RoleProposedPayload, StreamPayload, STREAM_PHASE_ANSWERING, STREAM_PHASE_DONE, STREAM_PHASE_PROCESS, STREAM_PHASE_THINKING, STREAM_PHASE_TOOL};
 use crate::commands::chat::OpencodeSessionState;
 use crate::models::role::CreateRoleInput;
 use crate::models::task::{CreateTaskInput, TaskOwnerType};
@@ -118,7 +118,7 @@ fn stream_payload_from_sse(
             done: false,
             thinking: true,
             message_id: message_id.map(str::to_string),
-            phase: Some("thinking".to_string()),
+            phase: Some(STREAM_PHASE_THINKING.to_string()),
             status_text: Some("思考中...".to_string()),
             tool_name: None,
             process_event: None,
@@ -221,7 +221,7 @@ fn emit_stream_token(
             done: false,
             thinking,
             message_id: message_id.map(str::to_string),
-            phase: Some(if thinking { "thinking" } else { "answering" }.to_string()),
+            phase: Some((if thinking { STREAM_PHASE_THINKING } else { STREAM_PHASE_ANSWERING }).to_string()),
             status_text: if thinking {
                 Some("思考中...".to_string())
             } else {
@@ -294,7 +294,7 @@ fn emit_tool_status(
             done: false,
             thinking: false,
             message_id: None,
-            phase: Some("tool".to_string()),
+            phase: Some(STREAM_PHASE_TOOL.to_string()),
             status_text: Some(status_text),
             tool_name: {
                 let display_name = display_tool_name(tool_name);
@@ -816,7 +816,7 @@ fn emit_process_event(
             done: false,
             thinking: false,
             message_id: None,
-            phase: Some("process".to_string()),
+            phase: Some(STREAM_PHASE_PROCESS.to_string()),
             status_text: None,
             tool_name: process_event.tool_name.clone(),
             process_event: Some(process_event),
@@ -950,7 +950,7 @@ fn emit_stream_done(
             done: true,
             thinking: false,
             message_id: message_id.map(str::to_string),
-            phase: Some("done".to_string()),
+            phase: Some(STREAM_PHASE_DONE.to_string()),
             status_text: None,
             tool_name: None,
             process_event: None,

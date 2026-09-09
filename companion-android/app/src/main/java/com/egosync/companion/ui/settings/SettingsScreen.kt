@@ -41,14 +41,15 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import com.egosync.companion.connection.ConnectionState
 import com.egosync.companion.connection.DebugConnectionMode
+import com.egosync.companion.connection.TransportStatus
 import com.egosync.companion.sync.NoticeLevel
 import com.egosync.companion.sync.ProactivityLevel
 import com.egosync.companion.sync.RoleCard
 import com.egosync.companion.sync.SnapshotStore
 import com.egosync.companion.ui.icons.LucideIcons
 import com.egosync.companion.ui.icons.RoleIcons
+import com.egosync.companion.ui.theme.BrandAmber
 import com.egosync.companion.ui.theme.BrandBlue
 import com.egosync.companion.ui.theme.BrandError
 import com.egosync.companion.ui.theme.BrandGreen
@@ -64,7 +65,7 @@ import com.egosync.companion.ui.theme.accent
 @Composable
 fun SettingsScreen(
     uiState: SettingsUiState,
-    connectionState: ConnectionState,
+    connectionState: TransportStatus,
     onSetTheme: (ThemeMode) -> Unit,
     onToggleNoticeLevel: (NoticeLevel) -> Unit,
     onProactivityRoleSelected: (String) -> Unit,
@@ -82,7 +83,10 @@ fun SettingsScreen(
             onDismissRequest = { showUnpairDialog = false },
             title = { Text("解除配对？") },
             text = {
-                Text("解除后手机将与桌面端断开绑定，缓存数据不再更新。重新扫码即可再次配对，桌面端无需重置。")
+                // T-S7（SPEC qr-semantics §5）：明确「旧码不可复用」——解除只清
+                // 本机凭据，桌面公钥记录仍在，重连必须桌面重新生成新二维码；
+                // 旧文案「重新扫码即可再次配对」暗示可扫旧码（实为结构化拒绝）。
+                Text("仅清除此手机的凭据；重新连接需要桌面端生成新二维码，当前二维码不可复用。缓存数据不再更新。")
             },
             confirmButton = {
                 TextButton(onClick = { showUnpairDialog = false; onUnpair() }) {
@@ -229,7 +233,7 @@ fun SettingsScreen(
             Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(10.dp)) {
                 Column(Modifier.padding(16.dp)) {
                     Text(
-                        "手动切换连接状态，驱动降级态遮罩与操作禁用态实时变化。",
+                        "手动切换连接状态，驱动顶部状态条与操作禁用态实时变化。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -417,11 +421,13 @@ private fun DebugModeRow(mode: DebugConnectionMode, selected: Boolean, onClick: 
 }
 
 @Composable
-private fun ConnectionDot(state: ConnectionState) {
+private fun ConnectionDot(state: TransportStatus) {
+    // T-S3 五档承载态：直连绿 / 中继蓝 / 宽限黄（Connecting/Reconnecting）/ 降级红
     val color = when (state) {
-        is ConnectionState.Direct -> BrandGreen
-        is ConnectionState.Relay -> BrandBlue
-        is ConnectionState.Offline -> BrandError
+        is TransportStatus.Direct -> BrandGreen
+        is TransportStatus.Relay -> BrandBlue
+        is TransportStatus.Connecting, is TransportStatus.Reconnecting -> BrandAmber
+        is TransportStatus.Degraded -> BrandError
     }
     Box(
         Modifier
@@ -431,10 +437,12 @@ private fun ConnectionDot(state: ConnectionState) {
     )
 }
 
-private fun connectionStateLabel(state: ConnectionState): String = when (state) {
-    is ConnectionState.Direct -> "局域网直连"
-    is ConnectionState.Relay -> "中继转发"
-    is ConnectionState.Offline -> "离线"
+private fun connectionStateLabel(state: TransportStatus): String = when (state) {
+    is TransportStatus.Direct -> "局域网直连"
+    is TransportStatus.Relay -> "中继转发"
+    is TransportStatus.Connecting -> "连接中"
+    is TransportStatus.Reconnecting -> "重连中"
+    is TransportStatus.Degraded -> "离线降级"
 }
 
 // ── Preview ────────────────────────────────────────────────────────────
@@ -445,7 +453,7 @@ private fun SettingsScreenPreview() {
     EgoSyncTheme {
         SettingsScreen(
             uiState = SettingsUiState.sample(),
-            connectionState = ConnectionState.Direct,
+            connectionState = TransportStatus.Direct,
             onSetTheme = {},
             onToggleNoticeLevel = {},
             onProactivityRoleSelected = {},
@@ -466,7 +474,7 @@ private fun SettingsScreenDebugPreview() {
                 debugUnlocked = true,
                 debugMode = DebugConnectionMode.DEGRADED,
             ),
-            connectionState = ConnectionState.Offline(snapshotAvailable = true, dataAsOf = "今天 08:15"),
+            connectionState = TransportStatus.Degraded(snapshotAvailable = true, dataAsOf = "今天 08:15"),
             onSetTheme = {},
             onToggleNoticeLevel = {},
             onProactivityRoleSelected = {},

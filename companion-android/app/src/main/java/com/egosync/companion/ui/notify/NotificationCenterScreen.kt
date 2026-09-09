@@ -52,7 +52,7 @@ import com.egosync.companion.ui.theme.QuadrantGray
 @Composable
 fun NotificationCenterScreen(
     notices: List<NoticeItem>,
-    engineAvailable: Boolean,
+    commandReady: Boolean,
     onBack: () -> Unit,
     onMarkAllRead: () -> Unit,
     onRespond: (id: String, confirmed: Boolean) -> Unit,
@@ -98,7 +98,7 @@ fun NotificationCenterScreen(
                 items(levelNotices.size, key = { levelNotices[it].id }) { index ->
                     NoticeRow(
                         notice = levelNotices[index],
-                        engineAvailable = engineAvailable,
+                        commandReady = commandReady,
                         onRespond = { confirmed -> onRespond(levelNotices[index].id, confirmed) },
                     )
                     Spacer(Modifier.height(8.dp))
@@ -170,7 +170,7 @@ private fun LevelBadge(level: NoticeLevel) {
 @Composable
 private fun NoticeRow(
     notice: NoticeItem,
-    engineAvailable: Boolean,
+    commandReady: Boolean,
     onRespond: (Boolean) -> Unit,
 ) {
     Surface(
@@ -219,15 +219,15 @@ private fun NoticeRow(
                         Row {
                             Button(
                                 onClick = { onRespond(true) },
-                                enabled = engineAvailable,
+                                enabled = commandReady,
                             ) { Text("确认") }
                             Spacer(Modifier.size(10.dp))
                             OutlinedButton(
                                 onClick = { onRespond(false) },
-                                enabled = engineAvailable,
+                                enabled = commandReady,
                             ) { Text("拒绝") }
                         }
-                        if (!engineAvailable) {
+                        if (!commandReady) {
                             Spacer(Modifier.height(4.dp))
                             Text(
                                 "桌面引擎离线，暂无法处理敲门通知",
@@ -260,7 +260,7 @@ private fun NotificationCenterScreenPreview() {
     EgoSyncTheme {
         NotificationCenterScreen(
             notices = previewNotices,
-            engineAvailable = true,
+            commandReady = true,
             onBack = {},
             onMarkAllRead = {},
             onRespond = { _, _ -> },

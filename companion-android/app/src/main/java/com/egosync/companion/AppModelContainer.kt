@@ -6,11 +6,13 @@ import com.egosync.companion.command.CommandSender
 import com.egosync.companion.command.StreamCoordinator
 import com.egosync.companion.connection.ConnectionClient
 import com.egosync.companion.connection.PairingConnector
+import com.egosync.companion.connection.PairingRecoveryReason
 import com.egosync.companion.connection.RealConnectionClient
 import com.egosync.companion.notify.InAppNotificationAdapter
 import com.egosync.companion.notify.PrefsNoticeReadStateStore
+import com.egosync.companion.sync.ChatOutbox
+import com.egosync.companion.sync.ChatOutboxFile
 import com.egosync.companion.sync.KeystoreSnapshotCipher
-import com.egosync.companion.sync.QuickNoteQueue
 import com.egosync.companion.sync.SnapshotCacheFile
 import com.egosync.companion.sync.SnapshotFrameHandler
 import com.egosync.companion.sync.SnapshotStore
@@ -40,10 +42,12 @@ class AppModelContainer private constructor(context: Context) {
 
     /** 快照数据源（声明先于连接层：frameConsumerFactory 闭包引用之）。
      *  缓存：filesDir 下 Keystore AES-GCM 包裹（离线呈现最后已知快照，AC3）。 */
+    private val snapshotCipher = KeystoreSnapshotCipher(context)
+
     val snapshotStore = SnapshotStore(
         cache = SnapshotCacheFile(
             dir = context.filesDir,
-            cipher = KeystoreSnapshotCipher(context),
+            cipher = snapshotCipher,
         ),
         scope = scope,
     )
@@ -81,7 +85,15 @@ class AppModelContainer private constructor(context: Context) {
     /** 13.3 T5：指令发送入口（二态：真实客户端实现 / Preview fake 态 null → UI 显式失败提示）。 */
     val commandSender: CommandSender? = realConnection
 
-    val quickNotes = QuickNoteQueue()
+    /**
+     * T-S10 对话离线待发箱：!commandReady 发送入队（FIFO + 幂等 commandId），
+     * 队列变更同步落盘（Keystore 加密 + 原子写，进程被杀不丢）；flush 守门
+     * commandReady && paired 由 ChatViewModel 判定（不私建平行判据）。
+     */
+    val chatOutbox = ChatOutbox(
+        persistence = ChatOutboxFile(dir = context.filesDir, cipher = snapshotCipher),
+    )
+
     val notifications = InAppNotificationAdapter(
         store = snapshotStore,
         scope = scope,
@@ -105,24 +117,25 @@ class AppModelContainer private constructor(context: Context) {
     val events: kotlinx.coroutines.flow.SharedFlow<String> = _events
 
     init {
-        // FR-43：恢复连接后速记自动提交管家（mock：直接清队并提示）。
-        // paired 守门：遮罩出口/自愈解除配对后的 Direct 并非真实恢复，
-        // 不得触发 flush（FR-43 无丢失——真实恢复必然已配对）
+        // T-S10：离线待发箱 flush 由 ChatViewModel 驱动（守门 commandReady && paired
+        // 在 VM 内合并判定并串行重发，SPEC state-model §4.4/§4.5）；容器只负责
+        // 构造时从磁盘恢复队列（ChatOutbox init）——旧 mock 收集器随全屏遮罩退役
+        // 删除（离线录入无丢失语义由对话离线待发箱真实承接，SPEC supersessions.md）。
+
+        // T-S4：配对/凭据失效恢复——客户端已完成原子序列前半（会话/指令/流式
+        // 失效、清配对态、擦密钥）；容器补后半：清快照缓存与通知（配对解除后
+        // 数据不再可信，镜像 unpair 清理面）+ 原因提示。待发箱保留（FR-43 无
+        // 丢失，重新配对后续发）。导航回配对流由 AppNavHost 订阅同一事件执行。
         scope.launch {
-            connection.state.collect { state ->
-                if (state.engineAvailable && connection.paired.value) {
-                    val pending = quickNotes.pendingCount()
-                    if (pending > 0) {
-                        quickNotes.flush()
-                        _events.tryEmit("连接已恢复，$pending 条速记已提交管家处理")
-                    }
-                }
+            realConnection.pairingRecovery.collect { reason ->
+                snapshotStore.clear()
+                notifications.clear()
+                _events.tryEmit(recoveryMessage(reason))
             }
         }
     }
 
-    fun setThemeMode(mode: ThemeMode) {
-        _themeMode.value = mode
+    fun setThemeMode(mode: ThemeMode) {        _themeMode.value = mode
         prefs.edit().putString(KEY_THEME, if (mode == ThemeMode.LIGHT) VALUE_LIGHT else VALUE_DARK).apply()
     }
 
@@ -155,10 +168,18 @@ class AppModelContainer private constructor(context: Context) {
         _events.tryEmit(message)
     }
 
+    /** T-S4：恢复原因 → 用户文案（SPEC qr-semantics §4 语义，文案层映射）。 */
+    private fun recoveryMessage(reason: PairingRecoveryReason): String = when (reason) {
+        PairingRecoveryReason.CredentialMissing -> "本机配对密钥缺失，已清除配对态，请重新扫码配对"
+        PairingRecoveryReason.CredentialInvalid -> "本机配对密钥已失效，已清除配对态，请重新扫码配对"
+        PairingRecoveryReason.PairingRevoked -> "桌面已解除与此手机的配对，请重新扫码配对"
+        PairingRecoveryReason.TrustMismatch -> "桌面身份已变化（可能重装），需重新配对"
+    }
+
     companion object {
         @Volatile private var instance: AppModelContainer? = null
 
-        /** 进程级单例：跨 Activity 配置重建（旋转等）保留速记队列与运行状态（FR-43 无丢失）。 */
+        /** 进程级单例：跨 Activity 配置重建（旋转等）保留待发箱与运行状态（FR-43 无丢失）。 */
         fun get(context: Context): AppModelContainer =
             instance ?: synchronized(this) {
                 instance ?: AppModelContainer(context.applicationContext).also { instance = it }

@@ -14,11 +14,29 @@ import javax.crypto.spec.GCMParameterSpec
 /**
  * 配对密钥管理的最小依赖面：连接编排层只依赖此接口（测试注入假实现即可
  * JVM 全速验证编排逻辑，P7），Keystore 真路径归 androidTest（Task 8）。
+ *
+ * T-S4 拆分（SPEC state-model §5.1）：取回与生成显式分流——配对路径不得
+ * 静默重建身份（新身份必须显式走 createForPairing），已配对重连缺文件即为
+ * 失配事实（上报恢复，不悄悄顶替）。
  */
 interface SecretsProvider {
-    fun loadOrCreateStaticPrivateKey(): ByteArray
+    /** 已配对设备取回既有私钥：包裹文件缺失抛 [MissingSecretsException]；密文不可解抛 [SecretsInvalidatedException]。 */
+    fun loadExistingStaticPrivateKey(): ByteArray
+
+    /** 首次配对/换绑时生成新私钥并落盘——仅未配对或 wipe 已完成后调用（生成即是重扫意图本身）。 */
+    fun createForPairingStaticPrivateKey(): ByteArray
+
+    /** 包裹私钥文件存在性（冷启动同步检测用，不触发解密）。 */
+    fun hasStaticPrivateKey(): Boolean
+
     fun wipe()
 }
+
+/**
+ * 已配对但包裹私钥文件缺失（重装/系统清理残留）——上层应清配对态回重扫
+ * 路径并发布 CredentialMissing 恢复，不得静默生成新身份（T-S4，AC6 语义）。
+ */
+class MissingSecretsException : Exception()
 
 /**
  * 包裹密文不可解（Keystore 密钥被系统失效 / 密文损坏）——上层收到本异常应
@@ -36,23 +54,28 @@ class SecretsInvalidatedException : Exception()
  */
 class PairingSecrets(private val context: Context) : SecretsProvider {
 
-    /** 取回静态私钥：包裹文件存在则解包，否则生成新私钥并落盘（重装重扫路径，AC6）。 */
-    override fun loadOrCreateStaticPrivateKey(): ByteArray {
+    /** 取回既有私钥：文件缺失/密文不可解均类型化上抛（语义见接口注释）。 */
+    override fun loadExistingStaticPrivateKey(): ByteArray {
         val wrapped = wrappedFile()
-        if (wrapped.exists()) {
-            return try {
-                unwrap(wrapped.readBytes())
-            } catch (_: Exception) {
-                // 密文/Keystore 已失效：删除残留密文（下次调用重新生成），
-                // 类型化上抛驱动上层自愈——静默重试只会永久卡死连接层（P14）
-                wrapped.delete()
-                throw SecretsInvalidatedException()
-            }
+        if (!wrapped.exists()) throw MissingSecretsException()
+        return try {
+            unwrap(wrapped.readBytes())
+        } catch (_: Exception) {
+            // 密文/Keystore 已失效：删除残留密文，类型化上抛驱动上层自愈——
+            // 静默重试只会永久卡死连接层（P14）
+            wrapped.delete()
+            throw SecretsInvalidatedException()
         }
+    }
+
+    /** 生成新私钥并落盘（显式重建身份：重扫二维码/换绑路径专属）。 */
+    override fun createForPairingStaticPrivateKey(): ByteArray {
         val privateKey = ByteArray(KEY_LEN).also { SecureRandom().nextBytes(it) }
-        atomicWrite(wrapped, wrap(privateKey))
+        atomicWrite(wrappedFile(), wrap(privateKey))
         return privateKey
     }
+
+    override fun hasStaticPrivateKey(): Boolean = wrappedFile().exists()
 
     /**
      * 清除私钥材料：删密文文件 + 删 Keystore AES 密钥。Keystore 密钥销毁后

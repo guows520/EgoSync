@@ -55,6 +55,8 @@ import com.egosync.companion.ui.theme.accent
 @Composable
 fun MemoryScreen(
     uiState: MemoryUiState,
+    /** T-S2：写操作（选择性遗忘）判据——离线时确认钮禁用，不发不可达请求。 */
+    commandReady: Boolean = true,
     onBack: () -> Unit,
     onCategorySelected: (MemoryCategory?) -> Unit,
     onToggleSource: (memoryId: String) -> Unit,
@@ -135,6 +137,7 @@ fun MemoryScreen(
                 MemoryCard(
                     memory = memory,
                     accent = roleAccent,
+                    commandReady = commandReady,
                     expanded = uiState.expandedMemoryId == memory.id,
                     confirming = uiState.confirmingMemoryId == memory.id,
                     sources = uiState.sourcesByMemoryId[memory.id],
@@ -186,6 +189,8 @@ private fun MemoryFilterChip(label: String, selected: Boolean, accent: Color, on
 private fun MemoryCard(
     memory: MemoryItem,
     accent: Color,
+    /** T-S2：写操作（选择性遗忘）判据——透传至确认面板。 */
+    commandReady: Boolean,
     expanded: Boolean,
     confirming: Boolean,
     sources: List<MemorySourceMessage>?,
@@ -230,7 +235,7 @@ private fun MemoryCard(
             // FR-9 遗忘确认面板（卡内嵌，镜像桌面红色调面板）
             if (confirming) {
                 Spacer(Modifier.size(10.dp))
-                ForgetConfirmPanel(onConfirm = onConfirmForget, onCancel = onCancelForget)
+                ForgetConfirmPanel(commandReady = commandReady, onConfirm = onConfirmForget, onCancel = onCancelForget)
             }
 
             Spacer(Modifier.size(10.dp))
@@ -312,9 +317,10 @@ private fun ForgetButton(onClick: () -> Unit) {
 /**
  * 遗忘确认面板（FR-9，文案逐字镜像桌面）。
  * 桌面「确认中双钮禁用」为异步删除守卫；mock 删除即时，该分支不适用（不造假加载态）。
+ * T-S2：确认钮按 commandReady 禁用（离线不可写，与 Tasks/通知响应同判据）。
  */
 @Composable
-private fun ForgetConfirmPanel(onConfirm: () -> Unit, onCancel: () -> Unit) {
+private fun ForgetConfirmPanel(commandReady: Boolean, onConfirm: () -> Unit, onCancel: () -> Unit) {
     Surface(
         color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.3f), // 桌面 red-50/70
         shape = RoundedCornerShape(8.dp),
@@ -330,6 +336,7 @@ private fun ForgetConfirmPanel(onConfirm: () -> Unit, onCancel: () -> Unit) {
             Row {
                 OutlinedButton(
                     onClick = onConfirm,
+                    enabled = commandReady,
                     colors = ButtonDefaults.outlinedButtonColors(
                         contentColor = MaterialTheme.colorScheme.error,
                     ),

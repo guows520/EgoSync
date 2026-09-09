@@ -1,6 +1,33 @@
 package com.egosync.companion.connection
 
 import kotlinx.coroutines.flow.StateFlow
+import org.json.JSONObject
+
+/**
+ * 结构化配对拒绝（T-S5，SPEC qr-semantics §3.2）：桌面拒绝点经已建立
+ * transport 发送的 Notice 判别信息（`{"type":"pairingRejected","reason":...}`）。
+ * 原因码结构化进 [PairingProgress.Failed]，用户文案由配对 VM 层映射——
+ * 连接层不拼文案。
+ */
+enum class PairingRejection(val reasonCode: String) {
+    /** 二维码已使用或已过期（早期准入拒绝 / 窗口已关时的 nonce 校验拒绝）。 */
+    PairingWindowClosed("pairingWindowClosed"),
+
+    /** 二维码已失效——配对码不匹配（窗口开但 nonce 不一致：旧码/并发消费）。 */
+    NonceConsumed("nonceConsumed");
+
+    companion object {
+        /** 识别 Notice 载荷：非 pairingRejected 或未知 reason 返回 null（回退现状）。 */
+        fun fromNoticeData(data: String): PairingRejection? = runCatching {
+            val json = JSONObject(data)
+            if (json.optString("type") == "pairingRejected") {
+                entries.firstOrNull { it.reasonCode == json.optString("reason") }
+            } else {
+                null
+            }
+        }.getOrNull()
+    }
+}
 
 /**
  * 配对进度（PairingScreen CONNECTING 三阶段的真实驱动源）：
@@ -20,7 +47,12 @@ sealed interface PairingProgress {
     data object WaitDesktopConfirm : PairingProgress
 
     data object Success : PairingProgress
-    data class Failed(val message: String) : PairingProgress
+
+    /**
+     * 失败：[rejection] 非空为桌面结构化拒绝（T-S5，文案层据此映射），否则
+     * [message] 为网络/本地类失败描述（既有如实文案，非重配暗示）。
+     */
+    data class Failed(val message: String? = null, val rejection: PairingRejection? = null) : PairingProgress
 }
 
 /**

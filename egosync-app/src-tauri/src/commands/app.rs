@@ -12,7 +12,7 @@ use crate::db::settings;
 use crate::error::AppError;
 use crate::models::agent::SidecarStatus;
 #[cfg(feature = "perf-test")]
-use crate::models::chat::StreamPayload;
+use crate::models::chat::{StreamPayload, STREAM_PHASE_ANSWERING};
 use crate::models::role::{ButlerSkillsConfig, UpdateRoleSkillsInput};
 use crate::services::agent_config::AgentConfigService;
 use crate::services::sidecar::SidecarManager;
@@ -181,7 +181,7 @@ pub async fn app_emit_test_stream(
                 done: false,
                 thinking: false,
                 message_id: None,
-                phase: Some("answering".to_string()),
+                phase: Some(STREAM_PHASE_ANSWERING.to_string()),
                 status_text: None,
                 tool_name: None,
                 process_event: None,

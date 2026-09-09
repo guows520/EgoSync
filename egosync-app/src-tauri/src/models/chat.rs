@@ -47,6 +47,16 @@ pub struct MessageProcessEvent {
     pub created_at: String,
 }
 
+/// `llm:stream` StreamPayload.phase 值域（跨端契约锚点，SPEC-companion-connection-chat-ux）：
+/// Android StreamCoordinator 以 phase 判定正文（answering / null=历史 SSE 路径）、思考、
+/// 工具行、过程事件与收口；companion-android 黄金契约 fixture（app/src/test/resources/streaming/）
+/// 与本常量集对齐。新增或改名 phase 值必须同步本文件测试与手机端判定，否则旧手机静默错乱。
+pub const STREAM_PHASE_THINKING: &str = "thinking";
+pub const STREAM_PHASE_ANSWERING: &str = "answering";
+pub const STREAM_PHASE_TOOL: &str = "tool";
+pub const STREAM_PHASE_PROCESS: &str = "process";
+pub const STREAM_PHASE_DONE: &str = "done";
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StreamPayload {
@@ -91,4 +101,59 @@ pub struct ChatRequest {
     /// 未指定时为 None，走现有 `/message` 路径（AC-6）。
     #[serde(default)]
     pub selected_skill_id: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// WHY：phase 值域是与手机伴侣 StreamCoordinator 的跨端契约——answering/null
+    /// 判定为正文。字面值一旦漂移（改名/拼写），手机端流式归类会静默失效（表现为
+    /// 空光标后整段回填的历史缺陷形态）。本测试是 Android 端黄金契约 fixture
+    /// （companion-android app/src/test/resources/streaming/）的桌面侧锚点（用户裁决 A+B 双轨）。
+    #[test]
+    fn stream_phase_domain_is_locked() {
+        assert_eq!(STREAM_PHASE_THINKING, "thinking");
+        assert_eq!(STREAM_PHASE_ANSWERING, "answering");
+        assert_eq!(STREAM_PHASE_TOOL, "tool");
+        assert_eq!(STREAM_PHASE_PROCESS, "process");
+        assert_eq!(STREAM_PHASE_DONE, "done");
+    }
+
+    /// WHY：手机端按 serde 序列化形状解析 STREAM_TOKEN.data（org.json 逐字段读取）；
+    /// 字段名（camelCase）或 Option skip 语义漂移会让 phase/messageId 永远读不到。
+    #[test]
+    fn stream_payload_serializes_android_contract_shape() {
+        let answering = StreamPayload {
+            conversation_id: "conv-gold".to_string(),
+            token: "早".to_string(),
+            done: false,
+            thinking: false,
+            message_id: Some("m-1".to_string()),
+            phase: Some(STREAM_PHASE_ANSWERING.to_string()),
+            status_text: None,
+            tool_name: None,
+            process_event: None,
+        };
+        let json = serde_json::to_value(&answering).unwrap();
+        assert_eq!(json["conversationId"], "conv-gold");
+        assert_eq!(json["token"], "早");
+        assert_eq!(json["phase"], "answering");
+        assert!(json.get("statusText").is_none());
+
+        let legacy = StreamPayload {
+            conversation_id: "conv-gold".to_string(),
+            token: "历史".to_string(),
+            done: true,
+            thinking: false,
+            message_id: None,
+            phase: None,
+            status_text: None,
+            tool_name: None,
+            process_event: None,
+        };
+        let json = serde_json::to_value(&legacy).unwrap();
+        assert!(json.get("phase").is_none());
+        assert!(json.get("messageId").is_none());
+    }
 }

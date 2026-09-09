@@ -8,7 +8,7 @@ use tokio_util::sync::CancellationToken;
 use crate::db::conversations;
 use crate::db::pool::{ConversationsPool, DbPool};
 use crate::error::AppError;
-use crate::models::chat::{ChatRequest, Conversation, Message, MessageProcessEvent, StreamPayload, TitleUpdatedPayload};
+use crate::models::chat::{ChatRequest, Conversation, Message, MessageProcessEvent, StreamPayload, STREAM_PHASE_DONE, TitleUpdatedPayload};
 use crate::services::agent_config::AgentConfigService;
 use crate::services::agent_engine;
 
@@ -426,7 +426,7 @@ pub async fn chat_send_message(
                     done: true,
                     thinking: false,
                     message_id: None,
-                    phase: Some("done".to_string()),
+                    phase: Some(STREAM_PHASE_DONE.to_string()),
                     status_text: None,
                     tool_name: None,
                     process_event: None,

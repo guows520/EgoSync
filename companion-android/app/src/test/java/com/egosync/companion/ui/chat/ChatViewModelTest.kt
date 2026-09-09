@@ -4,6 +4,7 @@ import com.egosync.companion.command.CommandException
 import com.egosync.companion.command.FakeCommandSender
 import com.egosync.companion.command.StreamCoordinator
 import com.egosync.companion.sync.ChatMessage
+import com.egosync.companion.sync.ChatOutbox
 import com.egosync.companion.sync.DesktopSnapshot
 import com.egosync.companion.sync.SnapshotConversation
 import com.egosync.companion.sync.SnapshotDashboard
@@ -14,6 +15,7 @@ import com.egosync.companion.sync.SnapshotRole
 import com.egosync.companion.sync.SnapshotStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.resetMain
@@ -139,10 +141,12 @@ class ChatViewModelTest {
         store: SnapshotStore = SnapshotStore().apply { applySnapshot(fixtureSnapshot()) },
         commands: FakeCommandSender? = FakeCommandSender(),
         onError: (String) -> Unit = {},
+        outbox: ChatOutbox? = null,
+        commandReady: MutableStateFlow<Boolean> = MutableStateFlow(true),
     ): ChatViewModel {
         // 流式聚合器与 VM 共享（测试直接注入 token 事件驱动状态机）
         val coordinator = StreamCoordinator { snapshot, raw -> store.applySnapshot(snapshot, raw) }
-        return ChatViewModel(store, commands, coordinator, onError)
+        return ChatViewModel(store, commands, coordinator, onError, outbox, commandReady, MutableStateFlow(true))
     }
 
     private fun ChatViewModel.streamField(): StreamCoordinator =
@@ -152,14 +156,16 @@ class ChatViewModelTest {
             it.get(this) as StreamCoordinator
         }
 
-    /** STREAM_TOKEN payload（桌面 llm:stream StreamPayload 形状）。 */
+    /** STREAM_TOKEN payload（桌面 llm:stream StreamPayload 形状：正文默认 phase="answering"）。 */
     private fun tokenJson(
         conversationId: String = "conv-butler-current",
         token: String = "",
         done: Boolean = false,
         thinking: Boolean = false,
         messageId: String? = "m-a-d",
-        phase: String? = null,
+        // 生产正文形状（agent_engine.rs emit_stream_token）；历史 SSE 收口/错误
+        // 帧按用例显式传 null（serde skip 无 phase 字段）
+        phase: String? = "answering",
         statusText: String? = null,
         processEvent: String? = null,
     ): String {
@@ -266,6 +272,165 @@ class ChatViewModelTest {
         assertEquals(1, vm.uiState.value.messages.count { it.fromButler })
     }
 
+    // ── 场景 T-S10：离线待发箱（入队 / 串行 flush / 幂等 / 恢复）────
+
+    @Test
+    fun `离线发送入队待发态且不报桌面引擎不可达`() {
+        // WHY（SPEC state-model §4.4 用户裁决：队列化）：!commandReady 发送不禁用
+        // 也不报错——入待发箱、气泡待发态、恢复后自动发送；若仍弹「桌面引擎
+        // 不可达」即旧遮罩阻断形态借发送路径复活。
+        val errors = mutableListOf<String>()
+        val gate = MutableStateFlow(false)
+        val outbox = ChatOutbox()
+        val vm = newVm(onError = { errors += it }, outbox = outbox, commandReady = gate)
+
+        vm.sendMessage("离线备忘")
+        dispatcher.scheduler.runCurrent()
+
+        val bubble = vm.uiState.value.messages.last { !it.fromButler }
+        assertTrue("离线气泡必须呈待发态", bubble.pending)
+        assertFalse("入队不进入流式（待发条目不置 responding，SPEC §4.4 并发守卫）", vm.uiState.value.thinking)
+        assertFalse(vm.uiState.value.responding)
+        assertEquals(1, outbox.entries.value.size)
+        val entry = outbox.entries.value.single()
+        assertEquals("离线备忘", entry.content)
+        assertEquals(bubble.id, entry.localMessageId)
+        assertEquals("对齐会话按 id 入队（恢复后发回原会话）", "conv-butler-current", entry.conversationId)
+        assertTrue("无「桌面引擎不可达」错误路径触发", errors.isEmpty())
+    }
+
+    @Test
+    fun `恢复后逐条串行重发且等本轮流式收口`() {
+        // WHY（SPEC §4.4）：flush 一次一条、等本轮流式 done 后再发下一条（对齐
+        // 桌面 busy 串行）——并行发出会交错流式渲染，两条回复互相覆盖。
+        val gate = MutableStateFlow(false)
+        val outbox = ChatOutbox()
+        val commands = FakeCommandSender { action, params ->
+            if (action == "chat.send") {
+                JSONObject()
+                    .put("conversationId", "conv-butler-current")
+                    .put("userMessageId", "desk-" + params.optString("content"))
+            } else {
+                JSONObject()
+            }
+        }
+        val vm = newVm(commands = commands, outbox = outbox, commandReady = gate)
+        val coordinator = vm.streamField()
+
+        vm.sendMessage("第一条")
+        vm.sendMessage("第二条")
+        dispatcher.scheduler.runCurrent()
+        assertEquals(listOf("第一条", "第二条"), outbox.entries.value.map { it.content })
+        val firstEntryCommandId = outbox.entries.value.first().commandId
+
+        gate.value = true
+        dispatcher.scheduler.runCurrent()
+
+        // 第一条已发出（携带条目 commandId），流式进行中——第二条必须等待
+        assertEquals(1, commands.calls.count { it.first == "chat.send" })
+        assertEquals(firstEntryCommandId, commands.passedCommandIds.first())
+        assertTrue(vm.uiState.value.responding)
+
+        coordinator.onStreamToken(tokenJson(token = "收到", done = true, phase = null))
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals("流式收口后第二条才发出（串行）", 2, commands.calls.count { it.first == "chat.send" })
+        assertEquals("成功条目删队", 0, outbox.entries.value.size)
+        assertFalse("待发气泡全部转常态", vm.uiState.value.messages.any { it.pending })
+    }
+
+    @Test
+    fun `连接类失败留队静默且重发复用同一commandId`() {
+        // WHY（SPEC §4.4 幂等）：连接类失败是常态而非错误——条目留队等恢复；
+        // 重发复用同一 commandId，桌面 dispatcher 幂等缓存命中首次结果，
+        // 网络重传/竞窗重发零重复执行。
+        val gate = MutableStateFlow(false)
+        val outbox = ChatOutbox()
+        val commands = FakeCommandSender()
+        val errors = mutableListOf<String>()
+        val vm = newVm(commands = commands, onError = { errors += it }, outbox = outbox, commandReady = gate)
+
+        vm.sendMessage("断网备忘")
+        dispatcher.scheduler.runCurrent()
+
+        commands.handler = { _, _ -> throw CommandException("ConnectionError", "连接已断开") }
+        gate.value = true
+        dispatcher.scheduler.advanceUntilIdle()
+        assertEquals("连接类失败条目留队", 1, outbox.entries.value.size)
+        assertTrue("连接类失败不弹错（降级态由状态条呈现）", errors.isEmpty())
+        assertFalse(vm.uiState.value.responding)
+        val firstCommandId = commands.passedCommandIds.single()
+
+        commands.handler = { _, _ -> JSONObject().put("conversationId", "conv-butler-current") }
+        // 断连→重连跨调度拍（生产网络事件必然分拍；同拍翻转会被 StateFlow 聚合吞掉）
+        gate.value = false
+        dispatcher.scheduler.runCurrent()
+        gate.value = true
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(2, commands.calls.count { it.first == "chat.send" })
+        assertEquals("重发必须复用同一 commandId（幂等键稳定）", firstCommandId, commands.passedCommandIds.last())
+        assertEquals(0, outbox.entries.value.size)
+    }
+
+    @Test
+    fun `桌面业务错误删条目并显式提示`() {
+        // WHY（SPEC §4.4）：坏消息（桌面校验拒绝等）留在队列会无限重试、每次
+        // 恢复都重弹——删条目 + 既有 failSend 路径提示，让用户自行修改重发。
+        val gate = MutableStateFlow(false)
+        val outbox = ChatOutbox()
+        val commands = FakeCommandSender { _, _ -> throw CommandException("ValidationError", "内容不合法") }
+        val errors = mutableListOf<String>()
+        val vm = newVm(commands = commands, onError = { errors += it }, outbox = outbox, commandReady = gate)
+
+        vm.sendMessage("坏消息")
+        dispatcher.scheduler.runCurrent()
+        gate.value = true
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals("业务错误条目删队（不无限重试坏消息）", 0, outbox.entries.value.size)
+        assertEquals(listOf("内容不合法"), errors)
+        assertFalse("气泡退出待发态", vm.uiState.value.messages.any { it.pending })
+    }
+
+    @Test
+    fun `进程重建后待发态还原含本地占位会话`() {
+        // WHY（SPEC 裁决 B 落盘恢复）：进程被杀/冷启动后待发消息须在对应会话
+        //（含本地占位会话）恢复为待发态气泡——否则用户以为消息丢失而重发，产生重复。
+        val gate = MutableStateFlow(false)
+        val outbox = ChatOutbox()
+
+        val vm1 = newVm(outbox = outbox, commandReady = gate)
+        vm1.newConversation() // 本地占位会话（ack 空 → 桌面 id 不回填）
+        dispatcher.scheduler.advanceUntilIdle()
+        vm1.sendMessage("占位会话里的离线消息")
+        vm1.selectRole("role-pm")
+        vm1.sendMessage("角色会话的离线消息")
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals(2, outbox.entries.value.size)
+        assertNull("本地占位会话条目 conversationId=null（桌面新建回填）", outbox.entries.value[0].conversationId)
+        assertEquals("conv-pm", outbox.entries.value[1].conversationId)
+
+        // 模拟进程重建：同一待发箱 + 全新 VM（内存会话历史清零）
+        val vm2 = newVm(outbox = outbox, commandReady = gate)
+        dispatcher.scheduler.runCurrent()
+
+        // 本地占位条目 → 新建本地会话承载待发气泡（落最新位，用户可切看）
+        val pendingConv = vm2.uiState.value.conversations.first { c -> c.messages.any { it.pending } }
+        assertEquals("占位会话里的离线消息", pendingConv.messages.single().text)
+        assertTrue(pendingConv.messages.single().pending)
+        vm2.selectConversation(pendingConv.id)
+        assertTrue(vm2.uiState.value.messages.single().pending)
+
+        // 角色会话条目 → 原会话恢复待发气泡（按 localMessageId 幂等去重）
+        vm2.selectRole("role-pm")
+        val pmMsg = vm2.uiState.value.messages.last { !it.fromButler }
+        assertEquals("角色会话的离线消息", pmMsg.text)
+        assertTrue(pmMsg.pending)
+        assertEquals("恢复不消费队列（仍待 flush）", 2, outbox.entries.value.size)
+    }
+
     // ── 场景 3：STREAM_TOKEN 驱动流式状态机（AC:3）────────────────
 
     @Test
@@ -286,6 +451,8 @@ class ChatViewModelTest {
         coordinator.onStreamToken(tokenJson(phase = "tool", statusText = "检索记忆"))
         dispatcher.scheduler.runCurrent()
         assertEquals("检索记忆", vm.uiState.value.streamingToolTitle)
+        // 空光标守卫：工具/思考段无可见文本，不产生 text 为空的气泡项
+        assertTrue(vm.uiState.value.messages.none { it.fromButler && it.text.isBlank() })
 
         // 文本 token 逐字渲染
         coordinator.onStreamToken(tokenJson(token = "你"))
@@ -295,8 +462,8 @@ class ChatViewModelTest {
         assertEquals("你好，", streaming.text)
         assertTrue(streaming.streaming)
 
-        // done 收口
-        coordinator.onStreamToken(tokenJson(token = "我在。", done = true))
+        // done 收口（Error/SSE 收口形状：done+文本、无 phase）
+        coordinator.onStreamToken(tokenJson(token = "我在。", done = true, phase = null))
         dispatcher.scheduler.runCurrent()
 
         val finalMsg = vm.uiState.value.messages.last { it.fromButler }
@@ -310,6 +477,32 @@ class ChatViewModelTest {
         assertEquals("conv-butler-current", commands.paramsOf("suggestion.list")?.optString("conversationId"))
         assertEquals(1, vm.uiState.value.actionCards.size)
         assertEquals("s-1", vm.uiState.value.actionCards.first().id)
+    }
+
+    @Test
+    fun `思考token无可见文本不产生空气泡首个正文token逐字浮现`() {
+        // WHY：空光标守卫（SPEC streaming-protocol §3）——生产时序 thinking token
+        // （phase=thinking）先于 answering token 到达，思考期由 ThinkingBubble 承载；
+        // 消息列表出现 text 为空的流式项即用户报告的「空流式光标」形态。
+        val commands = FakeCommandSender { _, _ -> chatSendAck() }
+        val vm = newVm(commands = commands)
+        val coordinator = vm.streamField()
+
+        vm.sendMessage("早上好")
+        dispatcher.scheduler.runCurrent()
+
+        coordinator.onStreamToken(
+            tokenJson(token = "先分析一下", thinking = true, phase = "thinking", statusText = "思考中..."),
+        )
+        dispatcher.scheduler.runCurrent()
+        assertTrue(vm.uiState.value.thinking)
+        assertTrue(vm.uiState.value.messages.none { it.fromButler && it.text.isBlank() })
+
+        coordinator.onStreamToken(tokenJson(token = "早上"))
+        dispatcher.scheduler.runCurrent()
+        val streaming = vm.uiState.value.messages.last { it.fromButler }
+        assertEquals("早上", streaming.text)
+        assertTrue(streaming.streaming)
     }
 
     @Test
@@ -386,7 +579,7 @@ class ChatViewModelTest {
         assertTrue(vm.uiState.value.messages.any { it.fromButler && it.text == "部分回复" && it.streaming })
 
         // done → 暂存快照补应用 → VM 按快照收敛（id 已对齐，无重复气泡）
-        coordinator.onStreamToken(tokenJson(done = true))
+        coordinator.onStreamToken(tokenJson(done = true, phase = "done"))
         dispatcher.scheduler.runCurrent()
 
         val messages = vm.uiState.value.messages
@@ -440,7 +633,7 @@ class ChatViewModelTest {
         dispatcher.scheduler.runCurrent()
         // 非查看会话不占全局流式态（不锁发送守卫）
         assertFalse(vm.uiState.value.responding)
-        coordinator.onStreamToken(tokenJson(conversationId = historyId, token = "。", done = true, messageId = "m-x"))
+        coordinator.onStreamToken(tokenJson(conversationId = historyId, token = "。", done = true, messageId = "m-x", phase = null))
         dispatcher.scheduler.runCurrent()
 
         // 段落已写入历史会话：切过去即可见（不凭空消失）
@@ -647,7 +840,7 @@ class ChatViewModelTest {
 
         vm.sendMessage("第一轮")
         dispatcher.scheduler.runCurrent()
-        coordinator.onStreamToken(tokenJson(token = "回复", done = true))
+        coordinator.onStreamToken(tokenJson(token = "回复", done = true, phase = null))
         dispatcher.scheduler.runCurrent()
         assertFalse(vm.uiState.value.actionCards.isEmpty())
 

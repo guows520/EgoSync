@@ -58,7 +58,7 @@ import com.egosync.companion.ui.theme.densitySpec
 @Composable
 fun OnboardingScreen(
     uiState: OnboardingUiState,
-    engineAvailable: Boolean,
+    commandReady: Boolean,
     onSendMessage: (String) -> Unit,
     onSkipOnboarding: () -> Unit,
     onRoleProposalConfirm: (name: String, icon: String, color: String, goal: String) -> Unit,
@@ -139,7 +139,7 @@ fun OnboardingScreen(
                     item(key = "role-proposal") {
                         RoleProposalCard(
                             proposal = proposal,
-                            enabled = engineAvailable,
+                            enabled = commandReady,
                             onOpenConfirm = { showRoleConfirm = true },
                             onSkip = onRoleProposalSkip,
                         )
@@ -151,7 +151,7 @@ fun OnboardingScreen(
             // 输入条（镜像桌面：流式中禁用，Play 发送钮，右下跳过链接）
             Surface(color = MaterialTheme.colorScheme.surface) {
                 Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp)) {
-                    if (!engineAvailable) {
+                    if (!commandReady) {
                         Text(
                             "桌面引擎离线，对话暂不可用（依赖引擎的功能已禁用）",
                             style = MaterialTheme.typography.labelSmall,
@@ -165,7 +165,7 @@ fun OnboardingScreen(
                             onValueChange = { input = it },
                             placeholder = { Text(OnboardingUiState.placeholderFor(uiState.step)) },
                             modifier = Modifier.weight(1f),
-                            enabled = engineAvailable && !busy,
+                            enabled = commandReady && !busy,
                             maxLines = 3,
                             shape = RoundedCornerShape(24.dp),
                         )
@@ -175,7 +175,7 @@ fun OnboardingScreen(
                                 onSendMessage(input)
                                 input = ""
                             },
-                            enabled = engineAvailable && input.isNotBlank() && !busy,
+                            enabled = commandReady && input.isNotBlank() && !busy,
                             modifier = Modifier.size(40.dp),
                             contentPadding = PaddingValues(0.dp),
                             shape = RoundedCornerShape(10.dp), // 桌面发送钮 rounded-lg
@@ -314,7 +314,7 @@ private fun OnboardingScreenPreview() {
                 ),
                 step = 2,
             ),
-            engineAvailable = true,
+            commandReady = true,
             onSendMessage = {},
             onSkipOnboarding = {},
             onRoleProposalConfirm = { _, _, _, _ -> },
@@ -335,7 +335,7 @@ private fun OnboardingScreenProposalPreview() {
                 step = 3,
                 roleProposal = onboardingRoleProposal,
             ),
-            engineAvailable = true,
+            commandReady = true,
             onSendMessage = {},
             onSkipOnboarding = {},
             onRoleProposalConfirm = { _, _, _, _ -> },

@@ -105,21 +105,24 @@
 
 1. 进入 **我的** Tab → 滚到底部「关于」卡片
 2. **连点「版本号」7 次**（Android 开发者选项惯例）→ 提示"状态模拟已开启"
-3. 「关于」上方出现 **状态模拟（Debug）** 分组，四档可选：
+3. 「关于」上方出现 **状态模拟（Debug）** 分组，六档可选：
 
 | 档位 | 效果 |
 |------|------|
 | 局域网直连 direct | 全部功能可用 |
 | 中继转发 relay | 全部功能可用 |
-| 离线 · 无缓存 offline | 遮罩显示「离线 · 暂无缓存」+ 速记条 |
-| 降级 · 只读缓存 degraded | 遮罩显示「数据截至 今天 08:15」+ 速记条 |
+| 连接中（宽限） connecting | 顶部状态条「正在连接桌面引擎…」+ 写操作禁用 |
+| 重连中（宽限） reconnecting | 顶部状态条「连接已断开，正在重连…」+ 写操作禁用 |
+| 离线 · 无缓存 offline | 降级横幅「暂无缓存数据」+ 对话入待发箱 |
+| 降级 · 只读缓存 degraded | 降级横幅「数据截至 今天 08:15」+ 对话入待发箱 |
 
-切换即时生效，驱动降级遮罩、对话/任务/通知的操作禁用态全局变化（连接状态可在「我的」页配对设备卡查看）。
+切换即时生效，驱动顶部状态条/降级横幅、对话/任务/通知的操作禁用态全局变化（连接状态可在「我的」页配对设备卡查看）。
 
-### 速记队列（FR-43 演示）
+### 对话离线待发箱（FR-43 演示，T-S10）
 
-切到 offline/degraded → 底部速记条输入文字点「记下」→ 队列计数 +1（多条可累积）→
-切回 direct/relay → 队列自动提交，Snackbar 提示「连接已恢复，N 条速记已提交管家处理」。
+切到 offline/degraded（或任意非就绪档）→ 对话输入仍常开，发消息 → 气泡呈「待发送」态并入队
+（幂等 commandId，Keystore 加密落盘）→ 切回 direct/relay → 队列逐条自动串行发送，
+成功删条目、气泡转常态；连接失败留队待下次恢复。
 
 ### 管家对话 mock 行为
 
@@ -149,32 +152,35 @@ interface ConnectionClient {
     fun unpair()
 }
 
-sealed interface ConnectionState {
-    data object Direct : ConnectionState                  // NSD 发现 → WS 直连桌面
-    data object Relay : ConnectionState                   // WS 连中继，按 relay_id 转发
-    data class Offline(snapshotAvailable: Boolean, dataAsOf: String?) : ConnectionState
+sealed interface TransportStatus {
+    data object Connecting : TransportStatus             // 冷启动宽限态（20s 内不降级）
+    data object Reconnecting : TransportStatus           // 会话失去后重连（宽限重启）
+    data object Direct : TransportStatus                 // NSD 发现 → WS 直连桌面
+    data object Relay : TransportStatus                  // WS 连中继，按 relay_id 转发
+    data class Degraded(snapshotAvailable: Boolean, dataAsOf: String?) : TransportStatus
 }
 ```
 
 真实实现职责：NSD/mDNS 发现（`_egosync._tcp`）→ Noise XX 握手 → 同一加密帧协议双承载（直连 WS / 中继 WS）→ 断线重连发最新快照补齐（SNAPSHOT 帧）。
-UI 已订阅 `state` 流：降级遮罩、引擎可用性（`engineAvailable`）、「我的」页配对设备卡状态全部由该流驱动。
+UI 已订阅 `state` 流：顶部状态条/降级横幅、「我的」页配对设备卡状态由该流驱动；写操作判据为独立三面 `commandReady`（T-S2）+ 配对健康面 `pairingHealth`（T-S3/T-S4）。
 
 ### 2. `sync/SnapshotStore.kt` — 快照数据（mock → SNAPSHOT/STATE_DELTA 帧驱动）
 
 原型中为静态 object。真实层替换为版本化快照存储：`SNAPSHOT` 全量替换 + `STATE_DELTA` 增量合并（对应架构中的 `StateMerger`）。字段口径见架构「快照引擎」节（活跃/近期会话各 200 条、10MB 上限截断明示）。
 
-### 3. `sync/QuickNoteQueue.kt` — 速记队列（内存 → 持久化 FIFO + COMMAND 帧）
+### 3. `sync/ChatOutbox.kt` — 对话离线待发箱（T-S10：FIFO + 幂等 commandId + 落盘）
 
 ```kotlin
-class QuickNoteQueue {
-    val items: StateFlow<List<QuickNote>>  // QuickNote(id: 幂等UUID, text, submitted)
-    fun submit(text: String)               // 降级态入队
-    fun flush()                            // 重连后逐条 COMMAND(幂等ID) 提交，确认后删队
+class ChatOutbox(persistence: ChatOutboxPersistence?) {
+    val entries: StateFlow<List<OutboxEntry>>   // commandId(跨重发稳定)/roleId/conversationId(占位null)/content/localMessageId
+    fun enqueue(entry: OutboxEntry)             // !commandReady 发送入队（变更同步落盘）
+    fun remove(commandId: String)               // 成功/业务错误删条目（同步落盘）
 }
 ```
 
-原型 `flush()` 直接清队；真实层改为逐条发送、桌面确认后删队（无丢失）。
-自动触发点已在 `AppModelContainer.init` 的连接状态收集器中。
+落盘 `chat_outbox.bin`：Keystore AES-GCM 加密 + 原子写（镜像 `SnapshotCacheFile`），
+进程被杀/冷启动构造时恢复；flush 守门 `commandReady && paired` 由 `ChatViewModel`
+判定并逐条串行重发（一次一条、等本轮流式 done；连接类失败留队、业务错误删条目提示）。
 
 ### 4. `notify/NotificationDispatch.kt` — 通知分发抽象（V1 应用内实现）
 

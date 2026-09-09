@@ -14,7 +14,7 @@ use tauri::{AppHandle, Emitter};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::WebSocketStream;
 
-use companion_proto::frames::{decode_frame, encode_frame, Frame, PingPayload};
+use companion_proto::frames::{decode_frame, encode_frame, Frame, NoticePayload, PingPayload};
 use companion_proto::PROTOCOL_VERSION;
 
 use crate::db::paired_devices as paired_devices_db;
@@ -24,7 +24,7 @@ use crate::models::companion::{CompanionStatus, ConnectedDeviceInfo};
 use crate::services::companion_pairing::{
     connected_event_payload, connection_pubkey_allowed, decide_pairing, device_name_from_frame,
     disconnected_event_payload, generate_qr_payload, load_or_create_static_keypair,
-    paired_event_payload, pairing_nonce_from_frame, pending_is_expired,
+    paired_event_payload, pairing_nonce_from_frame, pairing_window_is_open, pending_is_expired,
     validate_and_consume_window_nonce, validate_first_frame, PairingDecision,
     PairingWindow, DEFAULT_DEVICE_NAME, EVENT_CONNECTED, EVENT_DISCONNECTED, EVENT_PAIRED,
     PAIRING_WINDOW_TIMEOUT_SECS,
@@ -536,7 +536,8 @@ async fn relay_connect_and_serve(
     .map_err(|_| AppError::ConnectionError("中继鉴权超时".to_string()))??;
 
     // 转发态：首条 binary 即手机的 E2E XX initiator m1，按直连同款 responder 握手
-    let outcome = match tokio::time::timeout(
+    //（mut：T-S5 拒绝 Notice 需经 transport 加密发出——帧计数随之推进，双端同步）
+    let mut outcome = match tokio::time::timeout(
         std::time::Duration::from_secs(HANDSHAKE_TIMEOUT_SECS),
         crate::services::companion_pairing::run_responder_handshake(
             &state.desktop_static_priv,
@@ -567,6 +568,11 @@ async fn relay_connect_and_serve(
     let allowed =
         connection_pubkey_allowed(pool, &state.pending, &window, now, &pubkey_hex).await?;
     if !allowed {
+        // T-S5（SPEC qr-semantics §3.1）：拒绝前发结构化 Notice——早期准入被拒
+        // 即窗口关闭/已消费，reason 恒 pairingWindowClosed
+        if let Err(e) = send_pairing_rejected(&mut io, &mut outcome.transport, "pairingWindowClosed").await {
+            tracing::debug!(error = %e, "中继路径拒绝 Notice 发送失败（不影响拒绝结论）");
+        }
         tracing::warn!(relay_addr = %relay_addr, "中继路径未配对公钥尝试连接，已拒绝");
         return Ok(());
     }
@@ -642,7 +648,8 @@ async fn handle_connection(
     let mut io = WsIo { ws };
 
     // ── Noise XX 握手（整体超时：半开/恶意慢连接不得长期占用资源）──
-    let outcome = tokio::time::timeout(
+    //（mut：T-S5 拒绝 Notice 需经 transport 加密发出——帧计数随之推进，双端同步）
+    let mut outcome = tokio::time::timeout(
         std::time::Duration::from_secs(HANDSHAKE_TIMEOUT_SECS),
         crate::services::companion_pairing::run_responder_handshake(
             &state.desktop_static_priv,
@@ -660,6 +667,14 @@ async fn handle_connection(
     let allowed =
         connection_pubkey_allowed(&pool, &state.pending, &window, now, &pubkey_hex).await?;
     if !allowed {
+        // T-S5（SPEC qr-semantics §3.1）：拒绝前发结构化 Notice 再关闭——
+        // 旧手机会话循环忽略 Notice 回退现状（双端可独立发布），新手机据此
+        // 呈现「二维码已使用或过期」而非误等桌面确认 120s。仅发判别信息，
+        // 不含密钥/QR 内容（NFR-M7）。早期准入被拒即窗口关闭/已消费，
+        // reason 恒 pairingWindowClosed。
+        if let Err(e) = send_pairing_rejected(&mut io, &mut outcome.transport, "pairingWindowClosed").await {
+            tracing::debug!(error = %e, "拒绝 Notice 发送失败（不影响拒绝结论）");
+        }
         tracing::warn!(peer = %peer_addr, "未配对公钥尝试连接，已拒绝");
         return Ok(()); // 关闭连接
     }
@@ -754,6 +769,20 @@ async fn run_authorized_session(
             validate_and_consume_window_nonce(&mut window, state.now(), submitted_nonce.as_deref())
         };
         if !ok {
+            // T-S5：原因判别（SPEC qr-semantics §3.1）——窗口开而 nonce 不匹配 →
+            // nonceConsumed（旧码/码被并发消费）；窗口已关/过期 → pairingWindowClosed。
+            // 校验失败不改窗口，此处判别读到的是拒绝时的真实窗口态。
+            let reason = if pairing_window_is_open(
+                &state.pairing_window.lock().await.clone(),
+                state.now(),
+            ) {
+                "nonceConsumed"
+            } else {
+                "pairingWindowClosed"
+            };
+            if let Err(e) = send_pairing_rejected(io, &mut transport, reason).await {
+                tracing::debug!(error = %e, "拒绝 Notice 发送失败（不影响拒绝结论）");
+            }
             tracing::warn!(peer = %peer_label, "配对窗口 nonce 校验失败，已拒绝");
             return Ok(());
         }
@@ -1002,6 +1031,22 @@ async fn send_frame(
     bytes: &[u8],
 ) -> Result<(), AppError> {
     io.send(bytes).await
+}
+
+/// 配对拒绝 Notice（T-S5，SPEC qr-semantics §3.1）：`{"type":"pairingRejected",
+/// "reason":...}`——复用既有 Frame::Notice，不新增帧类型、不动协议版本。
+/// 发送尽力而为：失败不改变拒绝结论（连接随后即关闭）。
+async fn send_pairing_rejected(
+    io: &mut dyn crate::services::companion_pairing::HandshakeIo,
+    transport: &mut companion_proto::crypto::TransportSession,
+    reason: &str,
+) -> Result<(), AppError> {
+    let notice = Frame::Notice(NoticePayload {
+        data: serde_json::json!({ "type": "pairingRejected", "reason": reason }).to_string(),
+    });
+    let bytes = encode_frame(&notice, transport)
+        .map_err(|e| AppError::ProtocolError(format!("拒绝 Notice 编码失败: {}", e)))?;
+    send_frame(io, &bytes).await
 }
 
 // ---------------------------------------------------------------------------

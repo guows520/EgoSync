@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.egosync.companion.connection.ConnectionClient
 import com.egosync.companion.connection.PairingConnector
 import com.egosync.companion.connection.PairingProgress
+import com.egosync.companion.connection.PairingRejection
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -123,12 +124,21 @@ class PairingViewModel(
                     }
                     is PairingProgress.Failed -> {
                         _waitDesktopConfirm.value = false
-                        _pairingError.value = progress.message
+                        // T-S5（SPEC qr-semantics §4）：结构化拒绝在文案层映射——
+                        // 连接层不拼用户文案；网络/本地类失败沿用连接层如实描述
+                        _pairingError.value = progress.rejection?.let(::rejectionMessage)
+                            ?: progress.message
                         _step.value = PairingStep.SCAN
                     }
                 }
             }
             }
         }
+    }
+
+    /** T-S5：桌面结构化拒绝 → 用户文案（引导回桌面重新生成，语义不得缩水）。 */
+    private fun rejectionMessage(rejection: PairingRejection): String = when (rejection) {
+        PairingRejection.PairingWindowClosed -> "二维码已使用或已过期，请在桌面重新生成后再扫"
+        PairingRejection.NonceConsumed -> "二维码已失效（配对码不匹配），请使用桌面当前显示的二维码"
     }
 }

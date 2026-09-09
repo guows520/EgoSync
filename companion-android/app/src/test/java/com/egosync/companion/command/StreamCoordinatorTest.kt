@@ -25,7 +25,9 @@ class StreamCoordinatorTest {
         done: Boolean = false,
         thinking: Boolean = false,
         messageId: String? = "m-1",
-        phase: String? = null,
+        // 生产正文 token 形状（桌面 agent_engine.rs emit_stream_token 硬编码
+        // phase="answering"）；历史 SSE 路径/收口帧按用例显式传 null
+        phase: String? = "answering",
         statusText: String? = null,
         toolName: String? = null,
         processEvent: String? = null,
@@ -59,7 +61,7 @@ class StreamCoordinatorTest {
         assertTrue(!s.thinking)
         assertTrue(!s.done)
 
-        coordinator.onStreamToken(token(done = true, messageId = "m-1"))
+        coordinator.onStreamToken(token(done = true, messageId = "m-1", phase = null))
         val done = coordinator.state.value!!
         assertTrue(done.done)
         assertEquals("你好", done.segments.single().text)
@@ -130,7 +132,7 @@ class StreamCoordinatorTest {
         val coordinator = StreamCoordinator { _, _ -> }
         coordinator.streamStarting("conv-a")
         coordinator.onStreamToken(token(conversationId = "conv-a", token = "首轮", messageId = "m-a"))
-        coordinator.onStreamToken(token(conversationId = "conv-a", token = "", done = true, messageId = "m-a"))
+        coordinator.onStreamToken(token(conversationId = "conv-a", token = "", done = true, messageId = "m-a", phase = null))
         assertTrue(coordinator.state.value!!.done)
 
         // 桌面在 conv-b 发起新流：首 token 必须建立 conv-b 的流
@@ -139,6 +141,46 @@ class StreamCoordinatorTest {
         assertEquals("conv-b", s.conversationId)
         assertEquals("新轮", s.segments.single().text)
         assertTrue(!s.done)
+    }
+
+    @Test
+    fun `phase为null的历史SSE形状仍按正文累加`() {
+        // WHY：桌面 SseEvent::Text/Error 路径不带 phase（serde skip 后无字段）——
+        // answering 兼容不得切断历史路径的正文累加（跨端双形状契约，缺一即整段回填回归）。
+        val coordinator = StreamCoordinator { _, _ -> }
+        coordinator.streamStarting("conv-1")
+        coordinator.onStreamToken(token(token = "历史", messageId = "m-1", phase = null))
+        coordinator.onStreamToken(token(token = "形状", messageId = "m-1", phase = null))
+        assertEquals("历史形状", coordinator.state.value!!.segments.single().text)
+    }
+
+    @Test
+    fun `未知phase值保守忽略不误入正文也不扰动思考态`() {
+        // WHY：桌面未来扩展 phase 值时，旧版手机必须 fail-safe：不累加文本
+        // （宁缺勿错显）、不误关思考态——否则新桌面一上线旧手机立刻错乱。
+        val coordinator = StreamCoordinator { _, _ -> }
+        coordinator.streamStarting("conv-1")
+        coordinator.onStreamToken(token(token = "来自未来", messageId = "m-1", phase = "future_phase"))
+        val s = coordinator.state.value!!
+        assertEquals("", s.segments.single().text)
+        assertTrue(s.thinking)
+    }
+
+    @Test
+    fun `thinking段切换到answering正文落段且思考态关闭`() {
+        // WHY：生产时序是 thinking token（phase=thinking）→ answering token——
+        // 判定函数必须让正文在思考后正确落段（用户报告的空光标即此断点）。
+        val coordinator = StreamCoordinator { _, _ -> }
+        coordinator.streamStarting("conv-1")
+        coordinator.onStreamToken(token(token = "先想想", thinking = true, phase = "thinking", statusText = "思考中..."))
+        var s = coordinator.state.value!!
+        assertTrue(s.thinking)
+        assertEquals("", s.segments.single().text)
+
+        coordinator.onStreamToken(token(token = "答案", messageId = "m-1"))
+        s = coordinator.state.value!!
+        assertEquals("答案", s.segments.single().text)
+        assertTrue(!s.thinking)
     }
 
     // ── 快照延后门（Dev Notes §4）────────────────────────────────

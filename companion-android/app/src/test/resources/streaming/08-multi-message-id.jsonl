@@ -1,0 +1,4 @@
+{"conversationId":"conv-gold","token":"稍等，我让产品经理看一下。","done":false,"thinking":false,"messageId":"m-1","phase":"answering"}
+{"conversationId":"conv-gold","token":"来自产品经理的反馈：","done":false,"thinking":false,"messageId":"m-2","phase":"answering"}
+{"conversationId":"conv-gold","token":"可以排期。","done":false,"thinking":false,"messageId":"m-2","phase":"answering"}
+{"conversationId":"conv-gold","token":"","done":true,"thinking":false,"messageId":"m-2","phase":"done"}

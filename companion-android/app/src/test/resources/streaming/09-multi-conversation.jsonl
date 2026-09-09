@@ -1,0 +1,3 @@
+{"conversationId":"conv-a","token":"第一轮","done":false,"thinking":false,"messageId":"m-a","phase":"answering"}
+{"conversationId":"conv-a","token":"","done":true,"thinking":false,"messageId":"m-a","phase":"done"}
+{"conversationId":"conv-b","token":"新轮","done":false,"thinking":false,"messageId":"m-b","phase":"answering"}

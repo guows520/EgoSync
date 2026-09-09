@@ -9,12 +9,16 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -45,6 +49,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.egosync.companion.sync.ActionCardSuggestion
@@ -55,7 +62,9 @@ import com.egosync.companion.sync.DecompositionState
 import com.egosync.companion.sync.ExecutionTraceBlock
 import com.egosync.companion.sync.RoleCard
 import com.egosync.companion.sync.RoleProposalState
+import com.egosync.companion.BuildConfig
 import com.egosync.companion.ui.previewRoles
+import com.egosync.companion.ui.ImeDiagnostics
 import com.egosync.companion.sync.TaskDecompositionProposal
 import com.egosync.companion.sync.ToolStatus
 import com.egosync.companion.ui.components.RoleConfirmDialog
@@ -80,7 +89,7 @@ import java.util.Locale
 @Composable
 fun ChatScreen(
     uiState: ChatUiState,
-    engineAvailable: Boolean,
+    commandReady: Boolean,
     dataCutoffLabel: String? = null,
     onSendMessage: (String) -> Unit,
     onActionCardRespond: (cardId: String, confirmed: Boolean) -> Unit,
@@ -102,6 +111,21 @@ fun ChatScreen(
     val d = densitySpec(InfoDensity.CONVERSATIONAL)
     val activeRole = uiState.activeRoleId?.let { id -> uiState.roles.find { it.id == id } }
     val roleById = remember(uiState.roles) { uiState.roles.associateBy { it.id } }
+
+    // T-S8-A 诊断采样值（仅 debug 块内写入；release 恒 0，零引用零开销）
+    var imeDiagBottom = 0
+    var navDiagBottom = 0
+    if (BuildConfig.DEBUG) {
+        // T-S8-A（SPEC ime-diagnosis.md §A.1）：IME 布局几何快照采样。
+        // ime inset 值变化（动画完成后）→「后」一轮；焦点获得即时 →「前」一轮。
+        // 仅 debug 接线；只记录几何，不记录输入内容。
+        val density = LocalDensity.current
+        imeDiagBottom = WindowInsets.ime.getBottom(density)
+        navDiagBottom = WindowInsets.navigationBars.getBottom(density)
+        LaunchedEffect(imeDiagBottom) {
+            ImeDiagnostics.snapshot("ime-changed", imeDiagBottom, navDiagBottom)
+        }
+    }
 
     // 新消息时跟随滚动到底部
     LaunchedEffect(
@@ -195,7 +219,7 @@ fun ChatScreen(
             items(uiState.actionCards, key = { it.id }) { card ->
                 ActionCard(
                     card = card,
-                    enabled = engineAvailable,
+                    enabled = commandReady,
                     onRespond = { confirmed -> onActionCardRespond(card.id, confirmed) },
                 )
             }
@@ -204,7 +228,7 @@ fun ChatScreen(
                 item(key = proposal.id) {
                     TaskDecompositionCard(
                         proposal = proposal,
-                        enabled = engineAvailable,
+                        enabled = commandReady,
                         onRespond = { accepted ->
                             onDecompositionRespond(proposal.id, accepted)
                         },
@@ -216,7 +240,7 @@ fun ChatScreen(
                 item(key = "role-proposal") {
                     RoleProposalCard(
                         proposal = proposal,
-                        enabled = engineAvailable,
+                        enabled = commandReady,
                         onOpenConfirm = { showRoleConfirm = true },
                         onSkip = onRoleProposalSkip,
                     )
@@ -226,11 +250,20 @@ fun ChatScreen(
         }
 
         // 输入条
-        Surface(color = MaterialTheme.colorScheme.surface) {
+        Surface(
+            color = MaterialTheme.colorScheme.surface,
+            modifier = if (BuildConfig.DEBUG) {
+                // T-S8-A：composer bounds 诊断接线（唯一底部输入面，B 阶段验证基准）
+                Modifier.onGloballyPositioned { ImeDiagnostics.composerBounds = it.boundsInRoot() }
+            } else {
+                Modifier
+            },
+        ) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp)) {
-                if (!engineAvailable) {
+                if (!commandReady) {
+                    // T-S10：输入常开（离线发送入待发箱），提示取代旧「对话暂不可用」禁用文案
                     Text(
-                        "桌面引擎离线，对话暂不可用（依赖引擎的功能已禁用）",
+                        "网络不可用，消息将在恢复后自动发送",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(start = 4.dp, bottom = 6.dp),
@@ -244,8 +277,15 @@ fun ChatScreen(
                         placeholder = {
                             Text(if (activeRole != null) "跟 ${activeRole.name} 说点什么…" else "对管家说点什么…")
                         },
-                        modifier = Modifier.weight(1f),
-                        enabled = engineAvailable && !busy,
+                        modifier = Modifier
+                            .weight(1f)
+                            .onFocusChanged { state ->
+                                if (BuildConfig.DEBUG && state.hasFocus) {
+                                    // T-S8-A：焦点获得即时采「前」一轮（键盘弹出前的几何）
+                                    ImeDiagnostics.snapshot("focus-gained", imeDiagBottom, navDiagBottom)
+                                }
+                            },
+                        enabled = !busy,
                         maxLines = 3,
                         shape = RoundedCornerShape(24.dp),
                     )
@@ -266,7 +306,7 @@ fun ChatScreen(
                                 onSendMessage(input)
                                 input = ""
                             },
-                            enabled = engineAvailable && input.isNotBlank(),
+                            enabled = input.isNotBlank(),
                         ) {
                             Text("发送")
                         }
@@ -654,11 +694,30 @@ private fun MessageBubble(message: ChatMessage, senderRole: RoleCard?) {
             ) {
                 Column(Modifier.padding(horizontal = d.unitPaddingX, vertical = d.unitPaddingY)) {
                     Text(
-                        text = if (message.streaming) "${message.text}▍" else message.text,
+                        // 空光标守卫（SPEC streaming-protocol §3）：无可见文本不追加 ▍
+                        text = if (message.streaming && message.text.isNotEmpty()) "${message.text}▍" else message.text,
                         style = MaterialTheme.typography.bodyMedium,
                         color = if (message.fromButler) MaterialTheme.colorScheme.onSurface
                         else MaterialTheme.colorScheme.onPrimary,
                     )
+                    // T-S10 待发态：离线入队气泡（网络恢复后自动发送，SPEC state-model §4.4）
+                    if (message.pending) {
+                        Spacer(Modifier.size(4.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                LucideIcons.Clock,
+                                contentDescription = "待发送",
+                                modifier = Modifier.size(12.dp),
+                                tint = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.8f),
+                            )
+                            Spacer(Modifier.size(4.dp))
+                            Text(
+                                "待发送 · 网络恢复后自动发送",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.8f),
+                            )
+                        }
+                    }
                     // FR-30 不确定性表达：confidence<0.7 → 内联标注（镜像桌面文案）
                     if (message.lowConfidence) {
                         Spacer(Modifier.size(4.dp))
@@ -972,7 +1031,7 @@ private fun ChatScreenPreview() {
     EgoSyncTheme {
         ChatScreen(
             uiState = ChatUiState.sample(),
-            engineAvailable = true,
+            commandReady = true,
             onSendMessage = {},
             onActionCardRespond = { _, _ -> },
             onRoleSelected = {},
@@ -1003,7 +1062,7 @@ private fun ChatScreenStreamingPreview() {
                 responding = true,
                 streamingToolTitle = "整理竞品对比要点",
             ),
-            engineAvailable = true,
+            commandReady = true,
             onSendMessage = {},
             onActionCardRespond = { _, _ -> },
             onRoleSelected = {},
@@ -1030,7 +1089,7 @@ private fun ChatScreenRoleViewPreview() {
                 roles = previewRoles,
                 traceByMessageId = mapOf(seed.first().id to executionTrace),
             ),
-            engineAvailable = true,
+            commandReady = true,
             onSendMessage = {},
             onActionCardRespond = { _, _ -> },
             onRoleSelected = {},
@@ -1054,7 +1113,7 @@ private fun ChatScreenRoleProposalPreview() {
                 messages = previewInitialChat,
                 roleProposal = roleProposal,
             ),
-            engineAvailable = true,
+            commandReady = true,
             onSendMessage = {},
             onActionCardRespond = { _, _ -> },
             onRoleSelected = {},

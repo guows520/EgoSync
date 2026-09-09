@@ -31,6 +31,10 @@ export function CompanionPairingSection() {
   const [qrSvg, setQrSvg] = useState<string>('');
   const [isLoadingQr, setIsLoadingQr] = useState(false);
   const [qrExpiresAt, setQrExpiresAt] = useState<number | null>(null);
+  // T-S6（SPEC qr-semantics §2）：配对成功即消费当前码——清码后展示「已被使用」
+  const [qrConsumed, setQrConsumed] = useState(false);
+  // T-S6（SPEC qr-semantics §1）：显示态重新生成的二次确认（旧码立即失效）
+  const [confirmingRegenerate, setConfirmingRegenerate] = useState(false);
   const [nowTick, setNowTick] = useState(Date.now());
   const [devices, setDevices] = useState<PairedDevice[]>([]);
   const [status, setStatus] = useState<CompanionStatus | null>(null);
@@ -90,6 +94,12 @@ export function CompanionPairingSection() {
   }, []);
 
   useTauriEvent<{ deviceId: string }>('companion:paired', () => {
+    // T-S6（SPEC qr-semantics §2）：首配/换绑确认均触发本事件——当前码 nonce
+    // 已消费，继续显示为可扫与「二维码单次有效」文案矛盾（Finding 5 核心）。
+    setQrPayload(null);
+    setQrSvg('');
+    setQrExpiresAt(null);
+    setQrConsumed(true);
     refresh();
   }, [refresh]);
 
@@ -132,6 +142,7 @@ export function CompanionPairingSection() {
       setQrPayload(payload);
       setQrSvg(svg);
       setQrExpiresAt(Date.now() + QR_VALIDITY_MS);
+      setQrConsumed(false);
     } catch (e) {
       setError(toFriendlyError(e, '二维码生成失败，请稍后重试'));
     } finally {
@@ -303,6 +314,16 @@ export function CompanionPairingSection() {
                   二维码 {formatCountdown(qrExpiresAt - nowTick)} 后失效，超时需重新生成。
                 </p>
               )}
+              {/* T-S6（SPEC qr-semantics §1）：显示态提供重新生成（次强调，
+                  紧邻倒计时）——有效期内换码是常见诉求（码泄露/扫错人），旧
+                  语义只能干等倒计时走完 */}
+              <button
+                onClick={() => setConfirmingRegenerate(true)}
+                disabled={isLoadingQr}
+                className="mt-1.5 px-3 py-1.5 text-[13px] font-medium border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors disabled:opacity-50"
+              >
+                重新生成二维码
+              </button>
               {qrPayload.relayAddr ? (
                 <p className="text-slate-400 dark:text-slate-500">本二维码含中继地址（{qrPayload.relayAddr}）：手机不在同一局域网时也可扫码，经中继完成配对（需在本页确认后生效）；局域网内则扫码即绑定。</p>
               ) : (
@@ -312,6 +333,22 @@ export function CompanionPairingSection() {
                 <p className="text-slate-400 dark:text-slate-500">连接端口（动态分配）：{status.port}</p>
               ) : null}
             </div>
+          </div>
+        ) : qrConsumed ? (
+          /* T-S6（SPEC qr-semantics §2）：已消费码如实标记 + 重新生成为主操作 */
+          <div className="space-y-3">
+            <div className="rounded-xl border border-emerald-200 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-900/30 px-4 py-3 text-[13px] text-emerald-700 dark:text-emerald-300 flex items-center gap-2">
+              <Check size={14} />
+              <span>二维码已被使用（配对成功）。此码不可复用，绑定新手机请重新生成。</span>
+            </div>
+            <button
+              onClick={handleGenerateQr}
+              disabled={isLoadingQr}
+              className="w-full py-4 border-2 border-dashed border-emerald-300 dark:border-emerald-700 rounded-xl text-[14px] font-medium text-emerald-700 dark:text-emerald-300 hover:border-emerald-400 dark:hover:border-emerald-500 hover:bg-emerald-50/50 dark:hover:bg-emerald-900/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+            >
+              {isLoadingQr ? <Loader2 size={16} className="animate-loading-spin" /> : <QrCode size={16} />}
+              重新生成二维码
+            </button>
           </div>
         ) : (
           <button
@@ -366,6 +403,31 @@ export function CompanionPairingSection() {
         <p className="mt-1.5">首次使用时，Windows 防火墙可能弹出「允许 EgoSync 访问网络」的提示——请勾选「专用网络」并允许，否则手机无法发现电脑。</p>
         <p className="mt-1.5">移除配对后，该手机将立即失去连接资格，重新配对需再次扫码。</p>
       </div>
+
+      {/* T-S6：重新生成确认——旧码立即失效会打断进行中的扫码（破坏性，二次确认） */}
+      {confirmingRegenerate && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/30 px-4">
+          <div className="w-full max-w-md rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-6 shadow-2xl">
+            <h4 className="text-[16px] font-semibold text-slate-800 dark:text-slate-100">重新生成二维码？</h4>
+            <p className="mt-2 text-[13px] leading-relaxed text-slate-500 dark:text-slate-400">
+              重新生成后当前二维码立即失效，正在进行的扫码将无法完成配对。继续？
+            </p>
+            <div className="mt-6 flex justify-end gap-3">
+              <button onClick={() => setConfirmingRegenerate(false)} className="px-4 py-2 rounded-lg border border-slate-300 dark:border-slate-600 text-[13px] font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors">取消</button>
+              <button
+                onClick={() => {
+                  setConfirmingRegenerate(false);
+                  handleGenerateQr();
+                }}
+                className="px-4 py-2 rounded-lg bg-indigo-600 text-[13px] font-medium text-white hover:bg-indigo-700 transition-colors flex items-center gap-1.5"
+              >
+                <QrCode size={14} />
+                重新生成
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 移除确认 */}
       {removingDevice && (

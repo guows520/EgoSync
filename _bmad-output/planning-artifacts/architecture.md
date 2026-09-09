@@ -2040,6 +2040,7 @@ EgoSync/
 **Important Decisions (Shape Architecture):**
 - 局域网发现：NSD/mDNS 广播 `_egosync._tcp`（PRD"无需人工干预"的标准解）
 - 连接状态机：`direct / relay / offline` 三态，prefer-direct 切换策略
+  （2026-09-08 增补，SPEC-companion-connection-chat-ux：呈现层细化为 TransportStatus——Connecting/Reconnecting（20s 宽限）/Direct/Relay/Degraded(snapshotAvailable, dataAsOf)，叠加 PairingHealth 凭据健康面与 commandReady 会话就绪门；凭据失效恢复事件原子清态并回配对流）
 - 中继鉴权：挑战-应答证明公钥所有权（防 ID 抢占）
 - 协议契约：单一 schema 为事实源，生成 TS/Kotlin/Rust 类型
 
@@ -2072,6 +2073,7 @@ EgoSync/
 - 连接通道：NSD 发现 → WS 直连桌面端口；出网 → WS 连中继按 relay_id 转发。同一帧协议。
 - 状态通道：桌面状态变化 → `STATE_DELTA` 主动推送；断线重连 → 全量 `SNAPSHOT` 替换（不做历史回放，PRD 假设保持）
 - 指令通道：手机操作 → `COMMAND` → companion 模块执行现有 services → `COMMAND_RESULT` 回流；流式对话经 `STREAM_TOKEN` 帧镜像 `llm:stream` 语义
+- 配对拒绝（2026-09-08 增补）：桌面两拒绝点（配对窗口关闭/nonce 已消费、已配对后设备被移除）先发 `NOTICE{type:pairingRejected,reason}` 再关连接——复用 Notice 帧类型，无 schema 变更；手机配对 probe 据此结构化失败，会话循环收到则触发 PairingRevoked 恢复
 
 ### 云中继本体
 
@@ -2090,11 +2092,11 @@ EgoSync/
 - 下发：全量替换式；重连即补齐最新快照
 - 手机端：单一版本化文件存储 + 元数据，不引入 Room
 
-### 降级态与速记队列（FR-43）
+### 降级态与离线待发（FR-43，2026-09-08 裁决增补）
 
-- 手机本地持久化 FIFO 速记队列，每条带幂等 ID
-- 恢复连接后逐条提交为管家指令，桌面确认入库后删队，无丢失
-- 降级态 UI：明示离线与数据截止时间；依赖引擎的入口不可交互并说明原因
+- 速记队列（QuickNoteQueue）退役：离线文字录入经对话 composer 进入 ChatOutbox 离线待发箱（幂等 commandId、快照密钥加密落盘，进程被杀不丢）
+- 恢复（commandReady && paired）后串行自动续发，桌面确认入库后出队，无丢失
+- 降级 UI：非阻断紧凑状态指示（Connecting/Reconnecting/Degraded 横幅携带 dataAsOf）+ 依赖引擎的入口逐项禁用并说明原因；全屏阻断遮罩与速记条范式废止
 
 ### 通知分发（FR-42 降级记录）
 

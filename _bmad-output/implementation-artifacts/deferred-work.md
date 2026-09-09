@@ -1,5 +1,12 @@
 # Deferred Work
 
+## Deferred from: SPEC-companion-connection-chat-ux 实施 (2026-09-08)
+
+- **T-S8-B IME 布局修复待真机诊断定案**：T-S8-A 诊断接线已落（MainActivity/AppNavHost/ChatScreen 三层几何快照，仅 debug 构建，`adb logcat -s ImeDiag` 采集；release 零引用）。B 阶段（inset owner 收敛 + bottomBar 处理）依 SPEC ime-diagnosis.md §A.2 单变量 A/B 数据定案——须用户真机执行（原输入法 × 手势/三键导航各一轮），不得以代码推理跳过（AGENTS 规则十三）。定案后诊断日志须完全删除（grep 零残留）。
+- **ChatOutbox 发送窗口丢帧语义**：会话反复闪断时逐条串行 flush 若某条持续失败会阻塞后续条目（FIFO 严格序）；当前以「失败后等待 gate 重开再续」的弱语义实现（无死循环但无跳过）。单条污染/毒丸条目的隔离重试属后续健壮性增强，SPEC 范围外。
+- **恢复事件导航断言仅为代码走查**：AppNavHost 恢复导航（PAIRING + popUpTo(0)）与 PairingScreen recoveryHint 无 Compose UI 测试（仓库无 compose-ui-test/Robolectric 基建，为单断言引入整套基建违反简单至上）——VM/连接层语义已由 JVM 测试覆盖，UI 层留人工验收。T-S7 解绑文案断言同因。
+- **AppModelContainer 恢复收集器无 JVM 测试**：容器 init 的 pairingRecovery → 清快照/通知/事件链需 Android Context，JVM 不可构造；语义（清态 + recoveryMessage 映射）在 RealConnectionClient 测试与文案映射走查覆盖。
+
 ## Deferred from: code review of story-13.3 Chunk B (2026-08-31)
 
 - **actionType 子串分类脆弱**：`StreamCoordinator.kt` `toTraceBlock` 用 `toolName.contains("read"/"edit"/...)` 顺序匹配归类工具——`update_and_read` 之类名字会被首个命中子串随机归类。属展示层图标分类，需对照桌面前端（ChatStream 消费方式）的映射表统一后修正，避免双端分类漂移。

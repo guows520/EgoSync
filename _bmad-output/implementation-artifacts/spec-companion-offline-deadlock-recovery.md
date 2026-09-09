@@ -2,7 +2,7 @@
 title: '伴侣端离线死锁恢复：损坏配对态自愈 + 降级遮罩受控出口'
 type: 'bugfix'
 created: '2026-08-30'
-status: 'done' # 2026-08-30 人工批准 [A]；baseline_commit: 499625c
+status: 'done' # 2026-08-30 人工批准 [A]；baseline_commit: 499625c。superseded-by: SPEC-companion-connection-chat-ux (2026-09-08 裁决：非阻断降级范式)
 context:
   - '_bmad-output/implementation-artifacts/investigations/android-companion-offline-investigation.md'
   - '_bmad-output/project-context.md'

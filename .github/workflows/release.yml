@@ -302,9 +302,62 @@ jobs:
           prerelease: false
           args: ${{ steps.build_args.outputs.args }}
 
-  # ── Task 4: SHA256 发布后验证 ──
+  # ── 手机伴侣 Android APK（v0.1.6-alpha.3 起随桌面同 tag 发布）──
+  # WHY：debug 签名包——仓库未配置正式 keystore；且 debug 构建
+  # 携带 ImeDiagnostics 接线（T-S8-A），真机 IME 诊断依赖它。
+  android:
+    needs: changelog
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Run unit tests
+        working-directory: companion-android
+        run: ./gradlew :app:testDebugUnitTest
+
+      - name: Build debug APK
+        working-directory: companion-android
+        run: ./gradlew :app:assembleDebug
+
+      - name: Rename APK
+        working-directory: companion-android
+        run: cp app/build/outputs/apk/debug/app-debug.apk "EgoSync-Companion-${{ github.ref_name }}-debug.apk"
+
+      - name: Upload APK as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: companion-apk
+          path: companion-android/EgoSync-Companion-*-debug.apk
+          if-no-files-found: error
+
+  # APK 挂到桌面 Release（须等 tauri-action 建好 Release，避免竞态）
+  android-release-upload:
+    needs: [android, release]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download APK
+        uses: actions/download-artifact@v4
+        with:
+          name: companion-apk
+
+      - name: Attach APK to release
+        run: gh release upload "${{ github.ref_name }}" EgoSync-Companion-*-debug.apk --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── Task 4: SHA256 发布后验证（含桌面资产 + 伴侣 APK）──
   verify-release:
-    needs: release
+    needs: [release, android-release-upload]
     runs-on: ubuntu-latest
     steps:
       - name: Download Release Assets and verify SHA256

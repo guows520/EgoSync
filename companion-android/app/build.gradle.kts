@@ -12,8 +12,8 @@ android {
         applicationId = "com.egosync.companion"
         minSdk = 26
         targetSdk = 37
-        versionCode = 2
-        versionName = "0.1.6-alpha.1"
+        versionCode = 3
+        versionName = "0.1.6-alpha.3"
         // Story 12.4 Task 8：androidTest 冒烟需 androidx instrumented runner
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -31,6 +31,9 @@ android {
 
     buildFeatures {
         compose = true
+        // T-S8-A：IME 诊断接线门控需要 BuildConfig.DEBUG 常量
+        //（release 侧常量折叠 + R8 死代码消除 → 诊断零引用零开销）
+        buildConfig = true
     }
 
     testOptions {

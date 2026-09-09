@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "EgoSync",
-  "version": "0.1.6-alpha.2",
+  "version": "0.1.6-alpha.3",
   "identifier": "com.egosync.desktop",
   "build": {
     "frontendDist": "../dist",
@@ -44,7 +44,7 @@
     ],
     "windows": {
       "wix": {
-        "version": "0.1.6.1",
+        "version": "0.1.6.3",
         "language": "zh-CN"
       },
       "nsis": {

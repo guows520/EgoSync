@@ -48,3 +48,13 @@
 ## 5. 并存禁令
 
 实施验收包含显式检查：主界面不得残留任何全屏遮罩挂载路径（`DegradedOverlayHost` 阻断形态零引用）；不得同时存在"遮罩阻断"与"紧凑指示"两条降级呈现代码路径；`engineAvailable`/`ConnectionState.Offline` 不得再被任何 UI 消费（grep 断言）。
+
+## 6. 后续裁决致本规格部分条款失效（2026-09-10）
+
+用户裁决「手机端引导流程整体移除」（`spec-companion-android-remove-onboarding`，FR-21 移动侧退役）使本规格下列 Onboarding 相关条款失去对象（均已行内批注失效，其余条款不受影响）：
+
+| 本规格条款 | 处置 | 说明 |
+| --- | --- | --- |
+| SPEC.md 假设「Onboarding 引导流的 sendMessage 不接入待发箱，仍按 commandReady 禁用」 | **失效** | 引导流已不存在；待发箱边界仅约束 Chat 流 |
+| task-breakdown.md T-S2 落点中的 Onboarding 路由 enabled 改绑 | **部分失效** | 仅 Onboarding 成员失效；Tasks/Memory/NotificationCenter 改绑与 flush 守门仍有效 |
+| state-and-recovery-model.md §4.4-6「Onboarding 边界」 | **失效** | 一次性流程不复存在，队列机制边界自然收缩至 Chat |

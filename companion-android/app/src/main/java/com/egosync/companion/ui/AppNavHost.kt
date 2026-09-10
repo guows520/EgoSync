@@ -57,8 +57,6 @@ import com.egosync.companion.ui.dashboard.DashboardViewModel
 import com.egosync.companion.ui.memory.MemoryScreen
 import com.egosync.companion.ui.memory.MemoryViewModel
 import com.egosync.companion.ui.notify.NotificationCenterScreen
-import com.egosync.companion.ui.onboarding.OnboardingScreen
-import com.egosync.companion.ui.onboarding.OnboardingViewModel
 import com.egosync.companion.ui.review.WeeklyReviewScreen
 import com.egosync.companion.ui.review.WeeklyReviewViewModel
 import com.egosync.companion.ui.settings.SettingsScreen
@@ -82,10 +80,9 @@ private val tabs = listOf(
     TabSpec("settings", "我的", LucideIcons.User),
 )
 
-/** 路由表：pairing 独立根；onboarding 空状态引导（FR-21）；home 壳内四 Tab + 二级页 push。 */
+/** 路由表：pairing 独立根；home 壳内四 Tab + 二级页 push。 */
 object Routes {
     const val PAIRING = "pairing"
-    const val ONBOARDING = "onboarding"
     const val CHAT = "chat"
     const val TASKS = "tasks"
     const val DASHBOARD = "dashboard"
@@ -96,18 +93,17 @@ object Routes {
     const val MEMORY = "memory"
 }
 
+/** 冷启动起始页判定（两态契约，可测纯函数）：未配对→配对流；已配对→主界面。
+ *  2026-09-10 裁决：移动侧无引导——桌面是唯一事实源，初始设置在桌面完成，
+ *  历史遗留的 onboarded 标记缺失/为假都不得再把用户拦进引导屏。 */
+internal fun coldStartDestination(paired: Boolean): String =
+    if (paired) Routes.DASHBOARD else Routes.PAIRING
+
 @Composable
 fun AppNavHost(container: AppModelContainer) {
     val navController = rememberNavController()
     // 首次组合时定格起始页（配对/解除配对由显式导航处理，避免图重建重置返回栈）
-    // FR-21：未配对→配对流；已配对未引导→空状态引导；否则主界面
-    val startDestination = remember {
-        when {
-            !container.connection.paired.value -> Routes.PAIRING
-            !container.isOnboarded() -> Routes.ONBOARDING
-            else -> Routes.DASHBOARD
-        }
-    }
+    val startDestination = remember { coldStartDestination(container.connection.paired.value) }
     val transportStatus by container.connection.state.collectAsState()
     // reduced-motion（系统「移除动画」开启）：页面转场瞬时，不做淡入淡出
     val reducedMotion = rememberReducedMotion()
@@ -137,7 +133,6 @@ fun AppNavHost(container: AppModelContainer) {
         composable(Routes.PAIRING) {
             PairingRoute(navController, container)
         }
-        composable(Routes.ONBOARDING) { OnboardingRoute(navController, container) }
         composable(Routes.CHAT) { MainShellRoute(navController, container, Routes.CHAT) }
         composable(Routes.TASKS) { MainShellRoute(navController, container, Routes.TASKS) }
         composable(Routes.DASHBOARD) { MainShellRoute(navController, container, Routes.DASHBOARD) }
@@ -258,9 +253,8 @@ private fun PairingRoute(navController: NavHostController, container: AppModelCo
         onBack = vm::back,
         onEnterApp = {
             container.completePairing()
-            // FR-21：配对成功后未完成引导 → 进空状态引导屏（而非直接落仪表盘）
-            val target = if (container.isOnboarded()) Routes.DASHBOARD else Routes.ONBOARDING
-            navController.navigate(target) {
+            // 配对成功：清配对栈直达主界面
+            navController.navigate(Routes.DASHBOARD) {
                 popUpTo(Routes.PAIRING) { inclusive = true }
                 launchSingleTop = true
             }
@@ -269,35 +263,6 @@ private fun PairingRoute(navController: NavHostController, container: AppModelCo
         pairingError = pairingError,
         qrHasRelay = qrHasRelay,
         recoveryHint = recoveryHint,
-    )
-}
-
-// ── FR-21 空状态引导流路由 ─────────────────────────────────────────────
-
-@Composable
-private fun OnboardingRoute(navController: NavHostController, container: AppModelContainer) {
-    val vm: OnboardingViewModel = viewModel(
-        factory = viewModelFactory { initializer { OnboardingViewModel(container) } }
-    )
-    val uiState by vm.uiState.collectAsState()
-    // T-S2：写操作判据改绑 commandReady（出站通道绑定），不再读连接展示态
-    val commandReady by container.connection.commandReady.collectAsState()
-    // 完成路径统一出口：清引导栈进主界面（镜像桌面 onComplete → butler 视图）
-    val enterMain = {
-        navController.navigate(Routes.DASHBOARD) {
-            popUpTo(Routes.ONBOARDING) { inclusive = true }
-            launchSingleTop = true
-        }
-    }
-    OnboardingScreen(
-        uiState = uiState,
-        commandReady = commandReady,
-        onSendMessage = vm::sendMessage,
-        onSkipOnboarding = { vm.skipOnboarding(onComplete = enterMain) },
-        onRoleProposalConfirm = { name, icon, color, goal ->
-            vm.confirmRoleProposal(name, icon, color, goal, onCompleted = enterMain)
-        },
-        onRoleProposalSkip = vm::skipRoleProposal,
     )
 }
 

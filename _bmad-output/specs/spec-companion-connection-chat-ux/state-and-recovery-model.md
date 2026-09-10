@@ -105,7 +105,7 @@ stateDiagram-v2
    - 并发守卫保留：thinking/responding 期间的新发送仍按现状忽略（`ChatViewModel.kt:430`），待发条目不置 responding。
    - 现状缺口顺带闭合：`QuickNoteQueue.flush()` 为纯内存 mock（`QuickNoteQueue.kt:38-44`，从未真实发送）；速记条 UI 与 `QuickNoteQueue` 随遮罩退役删除，其"离线录入无丢失"语义由待发箱真实承接。
 5. **flush 守门**：`AppModelContainer` init 收集器改为驱动待发箱 flush，守门 `commandReady && connection.paired.value`（不虚假标记已发送）。
-6. **Onboarding 边界**：引导流 sendMessage 不接入待发箱（一次性在线场景），按 commandReady 禁用——避免把队列机制扩散到一次性流程。
+6. **Onboarding 边界**：引导流 sendMessage 不接入待发箱（一次性在线场景），按 commandReady 禁用——避免把队列机制扩散到一次性流程。（2026-09-10 裁决失效：手机端引导流已移除，spec-companion-android-remove-onboarding）
 
 ## 5. 凭据生命周期与统一恢复事件（CAP-3 核心）
 

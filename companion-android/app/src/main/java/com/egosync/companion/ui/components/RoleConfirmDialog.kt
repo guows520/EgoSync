@@ -44,7 +44,7 @@ import com.egosync.companion.ui.icons.RoleIcons
  * FR-5 角色涌现确认弹窗（镜像桌面 RoleConfirmModal）：
  * 标题+X / 预览块 / 名称（≤20 字）/ 图标 24 网格（8 列）/ 品牌色 8 色板 / 目标（≤80 字）/ 不需要-创建。
  * 图标/颜色经 normalize 白名单回退；创建禁用守卫 = 名称非空（桌面 busy 分支不适用：mock 创建即时）。
- * 自 ChatScreen 平移共享（组 6 onboarding 复用），逻辑零变更。
+ * 自 ChatScreen 平移共享，逻辑零变更。
  */
 @Composable
 fun RoleConfirmDialog(

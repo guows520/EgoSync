@@ -23,7 +23,7 @@ import com.egosync.companion.ui.theme.rememberReducedMotion
 
 /**
  * 管家思考中三点指示：母本 ChatBubble.BounceDots——三圆点 160ms 交错弹跳（1.4s 周期）。
- * 自 ChatScreen 平移共享（组 6 onboarding 复用），逻辑零变更。
+ * 自 ChatScreen 平移共享，逻辑零变更。
  */
 @Composable
 fun ThinkingDots(modifier: Modifier = Modifier) {

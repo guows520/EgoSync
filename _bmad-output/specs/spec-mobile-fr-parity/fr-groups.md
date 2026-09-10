@@ -130,7 +130,7 @@
 
 ---
 
-## 组 6｜onboarding（CAP-6）：FR-21
+## 组 6｜onboarding（CAP-6）：FR-21（2026-09-10 裁决失效：手机端引导流已移除，spec-companion-android-remove-onboarding）
 
 ### FR-21 空状态引导（缺失→完整，强制语义适配）
 
@@ -162,7 +162,7 @@
 3. 组 3 role/memory（3 项）
 4. 组 4 tasks（1 项）
 5. 组 5 review（1 项）
-6. 组 6 onboarding（1 项）
+6. 组 6 onboarding（1 项）（2026-09-10 裁决失效：手机端引导流已移除，勿再交付——spec-companion-android-remove-onboarding）
 7. 组 7 notify（1 项）
 
 ## 每组验收标准

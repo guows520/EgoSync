@@ -144,13 +144,6 @@ class AppModelContainer private constructor(context: Context) {
         connection.completePairing()
     }
 
-    /** FR-21：引导完成标记（镜像桌面 isFirstLaunch 语义；prefs 布尔等价）。 */
-    fun isOnboarded(): Boolean = prefs.getBoolean(KEY_ONBOARDED, false)
-
-    fun completeOnboarding() {
-        prefs.edit().putBoolean(KEY_ONBOARDED, true).apply()
-    }
-
     /** 委托真实客户端（清除信任锚与配对态、终止会话、复位 Debug 覆盖）；
      *  并清除本机快照缓存与内存态、通知与本地已读记录（配对解除后数据不再可信）。 */
     fun unpair() {
@@ -185,7 +178,6 @@ class AppModelContainer private constructor(context: Context) {
                 instance ?: AppModelContainer(context.applicationContext).also { instance = it }
             }
 
-        private const val KEY_ONBOARDED = "onboarded"
         private const val KEY_THEME = "theme"
         const val VALUE_DARK = "dark"
         const val VALUE_LIGHT = "light"

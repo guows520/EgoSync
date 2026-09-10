@@ -2,7 +2,7 @@
 title: 'companion-android onboarding 屏 FR 对齐（组 6：FR-21）'
 type: 'feature'
 created: '2026-08-27'
-status: 'done'
+status: 'done' # superseded-by: spec-companion-android-remove-onboarding (2026-09-10 裁决：手机端引导流程移除)
 baseline_commit: '84a75ef3fe5fa5c863834c177b48e3647b897d3a'
 context:
   - '{project-root}/_bmad-output/specs/spec-mobile-fr-parity/SPEC.md'

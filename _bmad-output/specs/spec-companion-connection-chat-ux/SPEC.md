@@ -87,5 +87,5 @@ sources:
 - 离线待发箱落盘持久化（用户裁决 B）：队列写入应用私有目录（复用既有 `KeystoreSnapshotCipher` 加密，与快照缓存同级保护；原子写），进程被杀/冷启动后恢复队列与待发态气泡，恢复网络后续发。
 - 黄金契约 fixture 采用双轨维护（用户裁决 A+B 都做）：手工快照进 Android 测试资源（P0）+ 桌面 Rust 测试锁定 phase 值域锚定 fixture（必做）。
 - 验收 #8 的字面"发送控件必须不可用"经用户确认（裁决 ①A）正式修订为"发送不产生突兀失败、落入待发箱"；其意图（不允许界面显示正常、点击后突兀报错）不变。非对话写操作（Tasks/Memory/ActionCard 等）仍按原产品裁决逐项禁用。
-- Onboarding 引导流的 sendMessage 不接入待发箱（一次性引导在线场景），仍按 commandReady 禁用。
+- Onboarding 引导流的 sendMessage 不接入待发箱（一次性引导在线场景），仍按 commandReady 禁用。（2026-09-10 裁决失效：手机端引导流已移除，spec-companion-android-remove-onboarding）
 

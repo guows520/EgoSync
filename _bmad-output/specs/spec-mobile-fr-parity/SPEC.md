@@ -39,8 +39,8 @@ sources:
   success: review 组 1 项（FR-17）的桌面基线逐项对照通过，构建成功。
 
 - id: CAP-6
-  intent: 引导屏（onboarding）——用户在未配对/无角色时获得空状态引导，完成初始设置流。
-  success: onboarding 组 1 项（FR-21）的桌面基线逐项对照通过，构建成功。
+  intent: 引导屏（onboarding）——用户在未配对/无角色时获得空状态引导，完成初始设置流。（2026-09-10 裁决失效：手机端引导流已移除，spec-companion-android-remove-onboarding）
+  success: onboarding 组 1 项（FR-21）的桌面基线逐项对照通过，构建成功。（2026-09-10 裁决失效：组 6 已随手机端引导流移除退役，spec-companion-android-remove-onboarding）
 
 - id: CAP-7
   intent: 通知屏（notify）——用户在任务屏与通知中心看到 Q2 保护提醒（徽章+通知条目）。
@@ -51,7 +51,7 @@ sources:
 - 依赖仅限 Compose BOM / Material3 / Navigation-Compose / kotlinx-coroutines + 既有 material-icons-core；禁引入 Room / Hilt / OkHttp / 任何网络库 / material-icons-extended。
 - 数据继续跑 mock / SnapshotStore 只读，不碰后端（桌面 companion Rust 模块 Phase 2/3 整体后延）。
 - 图标一律使用已落地的 `ui/icons/LucideIcons.kt`（40 枚）+ `RoleIcons.kt`（24-id 白名单 + getRoleIcon 兜底），禁止新增 emoji。
-- 18 项 tier-1/2 FR「严格逐项一致」（功能/布局/图标/交互可逐项映射桌面，仅做移动适配）；FR-20/21「强制语义适配」（移动无侧栏/全屏引导尺寸限制）。
+- 18 项 tier-1/2 FR「严格逐项一致」（功能/布局/图标/交互可逐项映射桌面，仅做移动适配）；FR-20/21「强制语义适配」（移动无侧栏/全屏引导尺寸限制）。（2026-09-10 裁决失效：FR-21 移动侧引导已移除，spec-companion-android-remove-onboarding）
 - FR-14/15/7 不在本 spec 范围内（已冻结裁决：语义一致，经后端事件→通知承载，不在本前端工作内）。
 - 每组交付后 `./gradlew :app:assembleDebug` BUILD SUCCESSFUL + `RoleIconsTest` 回归通过。
 - 每屏分组为一个独立 story，不做单次全量交付。
@@ -66,7 +66,7 @@ sources:
 
 ## Success signal
 
-15 项 FR 全部在移动端有对应屏/交互实现，`./gradlew :app:assembleDebug` BUILD SUCCESSFUL，`RoleIconsTest` 通过，24-FR 覆盖矩阵重跑后「完整」数 ≥ 21（原 6 + 新增 12 缺失 + 3 部分升级）。用户人审确认各屏布局/图标/体验与桌面「同一个产品」。
+15 项 FR 全部在移动端有对应屏/交互实现，`./gradlew :app:assembleDebug` BUILD SUCCESSFUL，`RoleIconsTest` 通过，24-FR 覆盖矩阵重跑后「完整」数 ≥ 21（原 6 + 新增 12 缺失 + 3 部分升级）。用户人审确认各屏布局/图标/体验与桌面「同一个产品」。（2026-09-10 裁决失效：手机端引导流已移除——「15 项 FR 全部实现」口径改为 14 项（FR-21 移动侧退役）、「完整」数 ≥ 21 下调为 ≥ 20（括号内算式为历史口径）；本行其余断言（构建/RoleIconsTest/人审确认）不受影响——spec-companion-android-remove-onboarding）
 
 ## Assumptions
 

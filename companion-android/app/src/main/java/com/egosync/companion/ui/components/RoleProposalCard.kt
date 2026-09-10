@@ -33,7 +33,7 @@ import com.egosync.companion.ui.icons.RoleIcons
 
 /**
  * FR-5 角色涌现提案卡（对话流触发器；确认交互在 [RoleConfirmDialog] 内）。
- * 自 ChatScreen 平移共享（组 6 onboarding 复用），逻辑零变更。
+ * 自 ChatScreen 平移共享，逻辑零变更。
  */
 @Composable
 fun RoleProposalCard(

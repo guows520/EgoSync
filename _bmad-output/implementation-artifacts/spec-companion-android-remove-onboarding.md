@@ -2,7 +2,7 @@
 title: 'companion-android 移除引导流程（FR-21 移动侧退役）'
 type: 'chore'
 created: '2026-09-10'
-status: 'in-review'
+status: 'done'
 baseline_commit: '294a8a0c782716e7e0d7b0e28d86911eb8bfdf0b'
 route: 'dispatch'
 review_loop_iteration: 0

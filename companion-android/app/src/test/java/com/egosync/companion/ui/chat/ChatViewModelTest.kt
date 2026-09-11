@@ -340,6 +340,39 @@ class ChatViewModelTest {
     }
 
     @Test
+    fun `待发箱重发ack锚点传入渲染id用锚点`() {
+        // WHY（M1'）：重发路径的锚点契约与直发一致——ack 的 assistantMessageId
+        // 若未传入 streamStarting，离线队列轮次回退合成 id（快照落地 key 翻转、
+        // 溯源孤儿化、守卫降级末条代理），恰是本修复消灭的闪烁类缺陷。
+        val gate = MutableStateFlow(false)
+        val outbox = ChatOutbox()
+        val commands = FakeCommandSender { action, _ ->
+            if (action == "chat.send") {
+                JSONObject()
+                    .put("conversationId", "conv-butler-current")
+                    .put("userMessageId", "desk-u-1")
+                    .put("assistantMessageId", "m-a-d")
+            } else {
+                JSONObject()
+            }
+        }
+        val vm = newVm(commands = commands, outbox = outbox, commandReady = gate)
+        val coordinator = vm.streamField()
+
+        vm.sendMessage("离线备忘")
+        dispatcher.scheduler.runCurrent()
+        gate.value = true
+        dispatcher.scheduler.runCurrent()
+        assertEquals("重发已发出", 1, commands.calls.count { it.first == "chat.send" })
+
+        coordinator.onStreamToken(tokenJson(token = "重发后的回复", messageId = null))
+        dispatcher.scheduler.runCurrent()
+        val streaming = vm.uiState.value.messages.last { it.fromButler }
+        assertEquals("重发轮次渲染 id 用 ack 锚点", "m-a-d", streaming.id)
+        assertTrue(streaming.streaming)
+    }
+
+    @Test
     fun `连接类失败留队静默且重发复用同一commandId`() {
         // WHY（SPEC §4.4 幂等）：连接类失败是常态而非错误——条目留队等恢复；
         // 重发复用同一 commandId，桌面 dispatcher 幂等缓存命中首次结果，
@@ -553,6 +586,200 @@ class ChatViewModelTest {
         assertTrue(vm.uiState.value.responding)
     }
 
+    // ── 场景 3b：锚点渲染 id + 流式溯源实时暴露（M1'/M2'，FR-29/FR-1）──
+
+    @Test
+    fun `普通流式渲染id用ack锚点`() {
+        // WHY（M2'）：渲染用合成 id 而快照用真实 id——快照落地时按 id 重建消息
+        // 列表，气泡换 key 闪烁且溯源块被孤儿化；ack 的 assistantMessageId
+        // 最早可得，全 null 段（普通流）统一用锚点 id。
+        val commands = FakeCommandSender { _, _ -> chatSendAck() }
+        val vm = newVm(commands = commands)
+        val coordinator = vm.streamField()
+
+        vm.sendMessage("你好")
+        dispatcher.scheduler.runCurrent()
+        // 生产形状：正文 token messageId=null（agent_engine.rs BubbleSlot::First → None）
+        coordinator.onStreamToken(tokenJson(token = "部分回复", messageId = null))
+        dispatcher.scheduler.runCurrent()
+
+        val streaming = vm.uiState.value.messages.last { it.fromButler }
+        assertEquals("m-a-d", streaming.id)
+        assertTrue(streaming.streaming)
+    }
+
+    @Test
+    fun `流式中溯源挂载宿主消息气泡上方`() {
+        // WHY（FR-29）：桌面流式中执行过程实时可见（挂锚点消息上方、默认展开）；
+        // 修复前溯源只在 done 后挂合成 id——快照落地即孤儿化消失。
+        val commands = FakeCommandSender { _, _ -> chatSendAck() }
+        val vm = newVm(commands = commands)
+        val coordinator = vm.streamField()
+
+        vm.sendMessage("你好")
+        dispatcher.scheduler.runCurrent()
+        coordinator.onStreamToken(tokenJson(token = "部分回复", messageId = null))
+        dispatcher.scheduler.runCurrent()
+        coordinator.onStreamToken(
+            tokenJson(
+                phase = "process",
+                messageId = "m-a-d",
+                processEvent = """{"eventType":"tool","toolName":"memory_search","status":"completed","summary":"检索记忆库"}""",
+            ),
+        )
+        dispatcher.scheduler.runCurrent()
+
+        // 有宿主（末段可见正文）：trace 挂宿主 id（锚点）；不占独立条目
+        assertEquals(1, vm.uiState.value.traceByMessageId["m-a-d"]?.size)
+        assertNull(vm.uiState.value.streamingTrace)
+    }
+
+    @Test
+    fun `流式中无宿主溯源独立条目done收口清理`() {
+        // WHY（FR-29）：思考/工具期无可见正文（空光标守卫不产消息项），溯源须
+        // 以独立条目实时暴露（桌面同形——无锚 streamingTraceBlocks 独立渲染，
+        // 置 thinking 前）；done 收口无正文可挂即清理。
+        val commands = FakeCommandSender { _, _ -> chatSendAck() }
+        val vm = newVm(commands = commands)
+        val coordinator = vm.streamField()
+
+        vm.sendMessage("你好")
+        dispatcher.scheduler.runCurrent()
+        coordinator.onStreamToken(
+            tokenJson(
+                phase = "process",
+                messageId = "m-a-d",
+                processEvent = """{"eventType":"narration","summary":"开始检索记忆"}""",
+            ),
+        )
+        dispatcher.scheduler.runCurrent()
+
+        // 无可见正文 → 无宿主 → streamingTrace 独立条目
+        assertEquals(1, vm.uiState.value.streamingTrace?.size)
+        // 空光标守卫：无正文不产空气泡（种子问候仍在，只断言无新增空段）
+        assertTrue(vm.uiState.value.messages.none { it.fromButler && it.text.isBlank() })
+
+        // done 收口：无宿主溯源清理（不残留进行态条目）
+        coordinator.onStreamToken(tokenJson(done = true, phase = null, messageId = null))
+        dispatcher.scheduler.runCurrent()
+        assertNull(vm.uiState.value.streamingTrace)
+    }
+
+    @Test
+    fun `委派两段流式渲染两气泡溯源挂末段`() {
+        // WHY（FR-1，M2'）：首段 token messageId=null、唤醒帧/二段 Some(占位id)+
+        // phase=answering——null→Some 切换即分段，两段气泡；溯源挂末段（真实
+        // id）；混合段 null 首段不替换 id——锚点==二段 id，替换会撞 LazyColumn key。
+        val commands = FakeCommandSender { _, _ -> chatSendAck() }
+        val vm = newVm(commands = commands)
+        val coordinator = vm.streamField()
+
+        vm.sendMessage("让产品经理看看")
+        dispatcher.scheduler.runCurrent()
+        coordinator.onStreamToken(tokenJson(token = "稍等，我让产品经理看一下。", messageId = null))
+        dispatcher.scheduler.runCurrent()
+        // 唤醒帧（answering + 空 token + 非 done + Some id）→ null→Some 分段
+        coordinator.onStreamToken(tokenJson(token = "", messageId = "m-a-d"))
+        coordinator.onStreamToken(
+            tokenJson(
+                phase = "process",
+                messageId = "m-a-d",
+                processEvent = """{"eventType":"narration","summary":"产品经理整理反馈"}""",
+            ),
+        )
+        // 先渲染分段态：此刻末段（Some）尚无可见正文，溯源临时挂首段兜底 id
+        dispatcher.scheduler.runCurrent()
+        coordinator.onStreamToken(tokenJson(token = "来自产品经理的反馈：可以排期。", messageId = "m-a-d"))
+        dispatcher.scheduler.runCurrent()
+
+        // 本轮两段 = 用户气泡之后的全部消息（种子问候不计入）
+        val lastUserIdx = vm.uiState.value.messages.indexOfLast { !it.fromButler }
+        val bubbles = vm.uiState.value.messages.subList(lastUserIdx + 1, vm.uiState.value.messages.size)
+        assertEquals(2, bubbles.size)
+        assertEquals("稍等，我让产品经理看一下。", bubbles[0].text)
+        assertEquals("来自产品经理的反馈：可以排期。", bubbles[1].text)
+        assertEquals("混合段保留各自 id：二段用真实（Some）id", "m-a-d", bubbles[1].id)
+        assertNotEquals("null 首段不替换为锚点（防 key 撞车）", "m-a-d", bubbles[0].id)
+        // 溯源挂末段（真实 id）；宿主切换清旧条目（首段承载期不留幽灵溯源）
+        assertEquals(1, vm.uiState.value.traceByMessageId["m-a-d"]?.size)
+        assertNull(vm.uiState.value.traceByMessageId[bubbles[0].id])
+
+        // 收敛（FR-1 桌面契约）：桌面只把 final_text 落库到占位行——首段文本
+        // 仅前缀剥离用、不落任何行；done 后含完成行的快照落地，两气泡塌缩
+        // 为一段（镜像桌面），溯源锚点条目存活。
+        coordinator.onStreamToken(tokenJson(token = "", done = true, phase = null, messageId = "m-a-d"))
+        dispatcher.scheduler.runCurrent()
+        val converged = fixtureSnapshot().let { snap ->
+            snap.copy(
+                conversations = snap.conversations.map { conv ->
+                    if (conv.id == "conv-butler-current") {
+                        conv.copy(
+                            messages = conv.messages + listOf(
+                                SnapshotMessage("m-user-d", "user", "让产品经理看看", "", true, "2026-09-11T01:00:00Z"),
+                                SnapshotMessage("m-a-d", "assistant", "来自产品经理的反馈：可以排期。", "", true, "2026-09-11T01:00:01Z"),
+                            ),
+                        )
+                    } else conv
+                },
+            )
+        }
+        coordinator.deliverSnapshot(converged, null)
+        dispatcher.scheduler.runCurrent()
+
+        val after = vm.uiState.value.messages
+        assertEquals("收敛后仅剩落库二段（首段桌面不落库）", 1, after.count { it.id == "m-a-d" })
+        assertTrue("首段气泡随快照塌缩消失（镜像桌面）", after.none { it.text == "稍等，我让产品经理看一下。" })
+        assertEquals("溯源锚点条目跨快照存活（不孤儿化）", 1, vm.uiState.value.traceByMessageId["m-a-d"]?.size)
+    }
+
+    @Test
+    fun `ack缺assistantMessageId时渲染回退合成id`() {
+        // WHY（M2' 锚点链兜底）：旧桌面/兜底 ack 无 assistantMessageId——全 null
+        // 段回退合成兜底 id（既有行为不变更），不得因锚点缺失产生空 id 或崩溃。
+        val commands = FakeCommandSender { _, _ ->
+            JSONObject("""{"conversationId":"conv-butler-current","userMessageId":"m-user-d"}""")
+        }
+        val vm = newVm(commands = commands)
+        val coordinator = vm.streamField()
+
+        vm.sendMessage("你好")
+        dispatcher.scheduler.runCurrent()
+        coordinator.onStreamToken(tokenJson(token = "部分回复", messageId = null))
+        dispatcher.scheduler.runCurrent()
+
+        val streaming = vm.uiState.value.messages.last { it.fromButler }
+        assertTrue("无锚回退合成兜底 id（stream-序号-段位）", streaming.id.matches(Regex("stream-\\d+-\\d+")))
+        assertEquals("部分回复", streaming.text)
+    }
+
+    @Test
+    fun `停止后流式溯源独立条目被清理`() {
+        // WHY（M2'）：独立溯源条目是流式进行态——停止/超时/断连后残留即幽灵
+        // 「执行过程」（随会话切换跟随用户）。done 路径已有清理，本地收口
+        // （stopStreaming → finalizeStreamLocally）路径同契约。
+        val commands = FakeCommandSender { _, _ -> chatSendAck() }
+        val vm = newVm(commands = commands)
+        val coordinator = vm.streamField()
+
+        vm.sendMessage("你好")
+        dispatcher.scheduler.runCurrent()
+        // 思考/工具期（无可见正文）：溯源以独立条目暴露
+        coordinator.onStreamToken(
+            tokenJson(
+                phase = "process",
+                messageId = "m-a-d",
+                processEvent = """{"eventType":"narration","summary":"开始检索记忆"}""",
+            ),
+        )
+        dispatcher.scheduler.runCurrent()
+        assertEquals(1, vm.uiState.value.streamingTrace?.size)
+
+        vm.stopStreaming()
+        dispatcher.scheduler.runCurrent()
+        assertNull("停止后独立条目清理（不留幽灵溯源）", vm.uiState.value.streamingTrace)
+        assertFalse(vm.uiState.value.responding)
+    }
+
     // ── 场景 4：快照-流式互斥（Dev Notes §4 裁决）────────────────
 
     @Test
@@ -585,6 +812,89 @@ class ChatViewModelTest {
         val messages = vm.uiState.value.messages
         assertEquals(1, messages.count { it.id == "m-user-d" })
         assertEquals(1, messages.count { it.id == "m-a-d" })
+        assertFalse(vm.uiState.value.responding)
+    }
+
+    @Test
+    fun `done时陈旧暂存被丢弃本地文本保留`() {
+        // WHY（M1'）：快照门在流结束时刻回放流中段陈旧快照（含空 assistant
+        // 占位行）——onSnapshotReplaced 掐掉已定文本，气泡消失约 2s 后随写信号
+        // 新快照回归（闪烁）。守卫：陈旧暂存丢弃，本地已定文本保留。
+        val store = SnapshotStore().apply { applySnapshot(fixtureSnapshot()) }
+        val commands = FakeCommandSender { _, _ -> chatSendAck() }
+        val coordinator = StreamCoordinator { snapshot, raw -> store.applySnapshot(snapshot, raw) }
+        val vm = ChatViewModel(store, commands, coordinator)
+
+        vm.sendMessage("你好")
+        dispatcher.scheduler.runCurrent()
+        coordinator.onStreamToken(tokenJson(token = "完整回复", messageId = null))
+        dispatcher.scheduler.runCurrent()
+
+        // 流中段陈旧快照（占位行未完成、content 空）暂存
+        val midStream = fixtureSnapshot().let { snap ->
+            snap.copy(
+                generatedAt = "2026-08-25T08:10:00Z",
+                conversations = snap.conversations.map { conv ->
+                    if (conv.id == "conv-butler-current") {
+                        conv.copy(
+                            messages = conv.messages + listOf(
+                                SnapshotMessage("m-user-d", "user", "你好", "", false, "2026-08-25T08:10:00Z"),
+                                SnapshotMessage("m-a-d", "assistant", "", "", false, "2026-08-25T08:10:01Z"),
+                            ),
+                        )
+                    } else conv
+                },
+            )
+        }
+        coordinator.deliverSnapshot(midStream, null)
+        dispatcher.scheduler.runCurrent()
+        assertTrue("流式中段暂存不掐气泡", vm.uiState.value.responding)
+
+        coordinator.onStreamToken(tokenJson(token = "", done = true, phase = null, messageId = "m-a-d"))
+        dispatcher.scheduler.runCurrent()
+
+        // 陈旧暂存被丢弃：本地已定文本保留（不因回放占位快照而消失）
+        val finalMsg = vm.uiState.value.messages.last { it.fromButler }
+        assertEquals("完整回复", finalMsg.text)
+        assertEquals("m-a-d", finalMsg.id)
+        assertFalse(vm.uiState.value.responding)
+    }
+
+    @Test
+    fun `done后含完成行快照落地溯源存活且消息id不变`() {
+        // WHY（AC，M2'）：done 触发 flush——含完成行的暂存照常应用，
+        // onSnapshotReplaced 按快照重建；锚点 id == 快照行 id → 气泡不换 key
+        //（无闪烁）、溯源锚点条目保留（不孤儿化）。
+        val store = SnapshotStore().apply { applySnapshot(fixtureSnapshot()) }
+        val commands = FakeCommandSender { _, _ -> chatSendAck() }
+        val coordinator = StreamCoordinator { snapshot, raw -> store.applySnapshot(snapshot, raw) }
+        val vm = ChatViewModel(store, commands, coordinator)
+
+        vm.sendMessage("你好")
+        dispatcher.scheduler.runCurrent()
+        coordinator.onStreamToken(tokenJson(token = "你好，", messageId = null))
+        coordinator.onStreamToken(
+            tokenJson(
+                phase = "process",
+                messageId = "m-a-d",
+                processEvent = """{"eventType":"narration","summary":"检索记忆"}""",
+            ),
+        )
+        dispatcher.scheduler.runCurrent()
+        assertEquals(1, vm.uiState.value.traceByMessageId["m-a-d"]?.size)
+
+        // 含完成行的快照暂存（守卫通过）→ done flush 直通应用
+        coordinator.deliverSnapshot(convergedSnapshot(), null)
+        dispatcher.scheduler.runCurrent()
+        assertTrue(vm.uiState.value.responding)
+
+        coordinator.onStreamToken(tokenJson(token = "我在。", done = true, phase = null, messageId = "m-a-d"))
+        dispatcher.scheduler.runCurrent()
+
+        val finalMsg = vm.uiState.value.messages.last { it.fromButler }
+        assertEquals("m-a-d", finalMsg.id)
+        assertEquals("你好，我在。", finalMsg.text)
+        assertEquals("trace 锚点条目存活（不孤儿化）", 1, vm.uiState.value.traceByMessageId["m-a-d"]?.size)
         assertFalse(vm.uiState.value.responding)
     }
 
@@ -639,6 +949,31 @@ class ChatViewModelTest {
         // 段落已写入历史会话：切过去即可见（不凭空消失）
         vm.selectConversation(historyId)
         assertTrue(vm.uiState.value.messages.any { it.text == "桌面侧回复。" })
+    }
+
+    @Test
+    fun `流式中切走后done落库段落id用ack锚点`() {
+        // WHY（M2'）：非查看会话的 done 落库 id 不得回退合成兜底——切回 +
+        // 快照落地时合成 id 会 key 翻转闪烁、溯源孤儿化；ack 锚点跨「停止→
+        // 迟到 token 重启流」窗口须保留（foldNew 同会话不覆写）。
+        val commands = FakeCommandSender { _, _ -> chatSendAck() }
+        val vm = newVm(commands = commands)
+        val coordinator = vm.streamField()
+        val historyId = vm.uiState.value.conversations.first { it.title == butlerHistoryTitle }.id
+
+        vm.sendMessage("你好")
+        dispatcher.scheduler.runCurrent()
+        // 流式中切走（触发 stop 收口——迟到 token 经 foldNew 重启流）
+        vm.selectConversation(historyId)
+        coordinator.onStreamToken(tokenJson(token = "切走后回复", messageId = null))
+        dispatcher.scheduler.runCurrent()
+        coordinator.onStreamToken(tokenJson(token = "。", done = true, phase = null, messageId = "m-a-d"))
+        dispatcher.scheduler.runCurrent()
+
+        vm.selectConversation("conv-butler-current")
+        val persisted = vm.uiState.value.messages.last { it.fromButler }
+        assertEquals("落库段落 id = ack 锚点（快照落地 key 稳定）", "m-a-d", persisted.id)
+        assertEquals("切走后回复。", persisted.text)
     }
 
     @Test

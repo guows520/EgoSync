@@ -50,6 +50,8 @@ data class ChatUiState(
     val roleProposal: RoleProposal? = null,
     /** FR-29：按消息挂执行溯源块（Think/Narration/Action） */
     val traceByMessageId: Map<String, List<ExecutionTraceBlock>> = emptyMap(),
+    /** FR-29（M2'）：流式中无宿主（无可见正文）的溯源独立条目（ChatScreen 置 thinking 前）；null=无 */
+    val streamingTrace: List<ExecutionTraceBlock>? = null,
     /** FR-33：流式期间工具执行状态行（工具名）；null=无 */
     val streamingToolTitle: String? = null,
     /** FR-33：流式打字机进行中（停止按钮可用态） */
@@ -107,6 +109,9 @@ class ChatViewModel(
     /** 流式渲染基线（流开始时的消息流，多段续写时累加其上）。按会话隔离。 */
     private var streamBase: List<ChatMessage>? = null
     private var renderedStreamConv: String? = null
+
+    /** 流式溯源当前挂载宿主 id（M2'）：宿主切换（无锚路径锚点迟到致 id 翻转）清旧条目防幽灵溯源。 */
+    private var streamTraceHostId: String? = null
 
     /** 流序号：无 messageId 段落的兜底 id 组成部分（跨流唯一，评审 C6）。 */
     private var streamSeq = 0
@@ -189,6 +194,9 @@ class ChatViewModel(
                                 thinking = false,
                                 responding = false,
                                 streamingToolTitle = null,
+                                // M2'：流式溯源独立条目随解配显式清空（不依赖
+                                // 上方 stopStreaming 顺序间接清理）
+                                streamingTrace = null,
                                 actionCards = emptyList(),
                                 decomposition = null,
                                 roleProposal = null,
@@ -517,7 +525,9 @@ class ChatViewModel(
                 val convId = result.optString("conversationId").ifEmpty { currentId }
                 val userId = result.optString("userMessageId").ifEmpty { userMsgId }
                 adoptChatIds(currentId, convId, userMsgId, userId, roleId)
-                stream.streamStarting(convId)
+                // M1'：ack 的 assistantMessageId 作本轮锚点（快照落地 key 稳定、
+                // trace 不孤儿化、flush 守卫按锚点行校验）
+                stream.streamStarting(convId, result.optString("assistantMessageId").ifEmpty { null })
                 resetWatchdog(convId)
             } catch (e: CommandException) {
                 failSend(e.message ?: "发送失败")
@@ -586,7 +596,8 @@ class ChatViewModel(
             // 成功删条目（SPEC §4.4 结果处理）——漏删会让 drain 对同一条目无限重发
             outbox?.remove(entry.commandId)
             markBubbleNotPending(entry.localMessageId)
-            stream.streamStarting(convId)
+            // M1'：ack 的 assistantMessageId 作本轮锚点（同 sendMessage）
+            stream.streamStarting(convId, result.optString("assistantMessageId").ifEmpty { null })
             resetWatchdog(convId)
             true
         } catch (e: CommandException) {
@@ -685,7 +696,9 @@ class ChatViewModel(
         sawStream = false
         closedStreamConv = null
         watchdogJob?.cancel()
-        _uiState.update { it.copy(thinking = false, responding = false, streamingToolTitle = null) }
+        // streamingTrace 与其余流式进行态同清单复位（M2' 显式清理——不依赖
+        // 调用顺序间接经 finalizeStreamLocally 收口）
+        _uiState.update { it.copy(thinking = false, responding = false, streamingToolTitle = null, streamingTrace = null) }
     }
 
     /** ack 三 id 对齐：本地临时 id 替换为桌面 id（快照替换时 LazyColumn key 稳定无闪烁）。 */
@@ -758,9 +771,12 @@ class ChatViewModel(
                 closedStreamConv = s.conversationId
                 sawStream = false
                 streamSeq++
+                // M2'：非查看 done 落库同 id 规则——全 null 段用锚点（快照替换
+                // 后 LazyColumn key 稳定），混合段保留各自 id
+                val allNullSegments = s.segments.none { it.messageId != null }
                 val segMsgs = s.segments.filter { it.text.isNotBlank() }.mapIndexed { i, seg ->
                     ChatMessage(
-                        id = seg.messageId ?: "stream-$streamSeq-$i",
+                        id = segmentRenderId(seg, allNullSegments, s.roundAssistantId, "stream-$streamSeq-$i"),
                         fromButler = true,
                         text = seg.text,
                     )
@@ -788,6 +804,7 @@ class ChatViewModel(
             renderedStreamConv = s.conversationId
             streamSeq++
             streamBase = _uiState.value.messages
+            streamTraceHostId = null
         }
         // 停止/超时后的 done 回声：本流已本地收口，跳过二次收口（否则误触发建议现查）
         if (s.done && closedStreamConv == s.conversationId) return
@@ -796,9 +813,10 @@ class ChatViewModel(
         val roleId = _uiState.value.activeRoleId
         // 空光标守卫（SPEC streaming-protocol §3）：无可见文本的段落不产生消息项
         // （思考期由 ThinkingBubble、工具期由 ToolStatusRow 承载）——禁止纯 ▍ 空气泡
+        val allNullSegments = s.segments.none { it.messageId != null }
         val segMsgs = s.segments.filter { it.text.isNotBlank() }.mapIndexed { i, seg ->
             ChatMessage(
-                id = seg.messageId ?: "stream-$streamSeq-$i",
+                id = segmentRenderId(seg, allNullSegments, s.roundAssistantId, "stream-$streamSeq-$i"),
                 fromButler = true,
                 text = seg.text,
                 streaming = !s.done && i == s.segments.lastIndex && !seg.sealed,
@@ -806,24 +824,38 @@ class ChatViewModel(
                 senderRoleId = roleId,
             )
         }
+        // FR-29（M2'）：溯源实时挂载与流式渲染合入同一次 update——有宿主（末段
+        // 可见正文）挂宿主 id（气泡上方、随正文浮现），无宿主置 streamingTrace
+        // 独立条目，done 统一挂末段（快照落地 trace 保留、锚点条目不孤儿化）。
+        // 单次发射：每 token 帧两次 update = 两次重组（token 密集流在低端机
+        // 上可感卡顿），溯源增量先算后并入。
+        val traceHostId = segMsgs.lastOrNull()?.id
+        val oldHostId = streamTraceHostId
+        var traceMap = _uiState.value.traceByMessageId
+        var traceStandalone: List<ExecutionTraceBlock>? = null
+        if (s.traceBlocks.isNotEmpty()) {
+            if (traceHostId != null) {
+                if (oldHostId != null && oldHostId != traceHostId) traceMap = traceMap - oldHostId
+                traceMap = traceMap + (traceHostId to s.traceBlocks)
+                streamTraceHostId = traceHostId
+            } else if (!s.done) {
+                traceStandalone = s.traceBlocks
+            }
+        }
         _uiState.update {
             it.copy(
                 messages = base + segMsgs,
                 thinking = s.thinking,
                 responding = !s.done,
                 streamingToolTitle = if (s.done) null else s.toolTitle,
+                traceByMessageId = traceMap,
+                streamingTrace = traceStandalone,
             )
         }
         if (s.done) {
             watchdogJob?.cancel()
             closedStreamConv = s.conversationId
             sawStream = false
-            val lastId = segMsgs.lastOrNull()?.id
-            if (s.traceBlocks.isNotEmpty() && lastId != null) {
-                _uiState.update {
-                    it.copy(traceByMessageId = it.traceByMessageId + (lastId to s.traceBlocks))
-                }
-            }
             persistCurrentMessages()
             renderedStreamConv = null
             streamBase = null
@@ -834,6 +866,18 @@ class ChatViewModel(
             resetWatchdog(s.conversationId)
         }
     }
+
+    /**
+     * 段落渲染/落库 id（M2'）：段自身 messageId；全 null 段（普通流）用锚点 id
+     * （ack 的 assistantMessageId——快照落地 key 稳定、trace 不孤儿化）；混合段
+     * （委派）null 首段不替换——锚点==二段真实 id，替换会撞 LazyColumn key。
+     */
+    private fun segmentRenderId(
+        segment: StreamCoordinator.StreamSegment,
+        allNullSegments: Boolean,
+        anchorId: String?,
+        fallbackId: String,
+    ): String = segment.messageId ?: (if (allNullSegments) anchorId else null) ?: fallbackId
 
     /** 流结束/失败后的本地收口（保留已浮现文本，清进行态）。 */
     private fun finalizeStreamLocally() {
@@ -849,6 +893,8 @@ class ChatViewModel(
                     thinking = false,
                     responding = false,
                     streamingToolTitle = null,
+                    // M2'：本地收口清流式溯源独立条目（无宿主形态；已挂宿主的历史条目保留）
+                    streamingTrace = null,
                 )
             }
             persistCurrentMessages()
@@ -856,7 +902,7 @@ class ChatViewModel(
             // 未渲染流（切走会话期间流式/看门狗超时）：只清全局进行态——
             // 不得触碰查看会话的消息与 updatedAt（评审 C4：看门狗误伤查看会话）
             _uiState.update {
-                it.copy(thinking = false, responding = false, streamingToolTitle = null)
+                it.copy(thinking = false, responding = false, streamingToolTitle = null, streamingTrace = null)
             }
         }
         renderedStreamConv = null

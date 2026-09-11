@@ -135,9 +135,11 @@ fun ChatScreen(
         uiState.roleProposal,
         uiState.thinking,
         uiState.streamingToolTitle,
+        uiState.streamingTrace,
         uiState.messages.lastOrNull()?.text,
     ) {
         val totalItems = uiState.messages.size +
+            (if (uiState.streamingTrace != null) 1 else 0) +
             (if (uiState.thinking) 1 else 0) +
             (if (uiState.streamingToolTitle != null) 1 else 0) +
             uiState.actionCards.size +
@@ -199,14 +201,22 @@ fun ChatScreen(
             verticalArrangement = Arrangement.spacedBy(d.itemSpacing),
         ) {
             items(uiState.messages, key = { it.id }) { message ->
-                // FR-29 执行溯源：桌面渲染在气泡上方，默认折叠
+                // FR-29 执行溯源：桌面渲染在气泡上方；流式中（宿主消息流式进行时）
+                // 默认展开、历史折叠（镜像桌面 defaultExpanded=executionTraceDefaultExpanded）
                 val trace = uiState.traceByMessageId[message.id]
                 Column {
                     if (trace != null) {
-                        ExecutionTrace(trace)
+                        ExecutionTrace(trace, initiallyExpanded = message.streaming)
                         Spacer(Modifier.size(4.dp))
                     }
                     MessageBubble(message, roleById[message.senderRoleId])
+                }
+            }
+            // FR-29（M2'）：流式中无宿主（无可见正文）的溯源独立条目——思考/工具期
+            // 实时可见，置于 thinking 前（镜像桌面无锚 streamingTraceBlocks 独立渲染）
+            uiState.streamingTrace?.let { trace ->
+                item(key = "streaming-trace") {
+                    ExecutionTrace(trace, initiallyExpanded = true)
                 }
             }
             if (uiState.thinking) {
@@ -527,10 +537,14 @@ private fun RoleChip(
 
 // ── FR-29 执行溯源（可折叠，ChevronRight）──────────────────────────────
 
-/** 镜像桌面 ChatBubble.ExecutionTrace：折叠头（ChevronRight）+ Think/Narration/Action 三类块。 */
+/** 镜像桌面 ChatBubble.ExecutionTrace：折叠头（ChevronRight）+ Think/Narration/Action 三类块。
+ *  M2'：initiallyExpanded——流式中展开（宿主消息 streaming / 独立条目），历史折叠
+ *  （镜像桌面 ExecutionTrace 的 defaultExpanded 参数）。remember 键取 initiallyExpanded
+ *  而非 blocks：块增长不重置（用户手动折叠保持，镜像桌面 useState 挂载时初始化一次）；
+ *  streaming→false 翻转时重置（收口即折叠，镜像桌面完成时元素身份切换重建）。 */
 @Composable
-private fun ExecutionTrace(blocks: List<ExecutionTraceBlock>) {
-    var expanded by remember(blocks) { mutableStateOf(false) }
+private fun ExecutionTrace(blocks: List<ExecutionTraceBlock>, initiallyExpanded: Boolean) {
+    var expanded by remember(initiallyExpanded) { mutableStateOf(initiallyExpanded) }
     Column(Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier

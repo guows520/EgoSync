@@ -309,6 +309,8 @@ Hypothesis 5（新增）：用户最初报告的两个症状若实际观察于�
 
 ### 手机侧修复方案（定稿，暂不执行）
 
+> **2026-09-11 已执行收口**：M1/M4/M5/M2'/M6 全部落地并经三层评审+补丁轮加固（`spec-fix-companion-chat-stream-ux.md`，status done，commit b783a73；273 tests 全绿，桌面零改动）。方法级优化：M1 守卫按 ack 锚点行校验新鲜度、M5 用 ack `assistantMessageId` 锚点渲染 id（比位置匹配精确）。
+
 | 项 | 针对 | 改动 | 依据/风险 |
 | - | ---- | ---- | --------- |
 | **M1（P0）** flushStash 新鲜度守卫 | 症状②根因 | flush 前校验暂存快照已含本轮完成 assistant（按 conversationId 找最后一条 is_complete=true 且非空的 assistant）；不含则丢弃暂存 | done 必触发新快照（Finding 10 链第 6 步），2s 后到达；快照为全量重建，丢弃不丢任何数据。风险：新快照因断连丢失 → 需超时兜底（如 10s 强制应用） |

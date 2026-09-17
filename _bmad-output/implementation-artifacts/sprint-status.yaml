@@ -1,5 +1,5 @@
 # generated: 2026-05-21
-# last_updated: 2026-09-04T22:45:00+08:00
+# last_updated: 2026-09-17T20:18:00+08:00
 # project: 探索 (EgoSync)
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-21
-last_updated: 2026-09-04T22:45:00+08:00
+last_updated: 2026-09-17T20:18:00+08:00
 project: "探索 (EgoSync)"
 project_key: NOKEY
 tracking_system: file-system
@@ -206,3 +206,32 @@ development_status:
   14-1-degraded-mode-and-quicknote-queue: backlog
   14-2-in-app-notifications-and-notificationdispatch-interface: backlog
   epic-14-retrospective: optional
+
+  # ============================================================
+  # 云端托管版赛道 (Cloud Edition — 2026-09-17 立项, V1 收尾后启动)
+  # 依据: sprint-change-proposal-2026-09-17.md (已批准)
+  #       epics.md 增量拆分块「云端托管版 Cloud Edition（Epic 15 起）」
+  # ============================================================
+
+  # Epic 15: 引擎无头化与服务器形态 (Headless Engine & Server)
+  epic-15: backlog
+  15-1-engine-crate-skeleton-and-pure-module-migration: backlog
+  15-2-event-bus-handle-seam-and-generic-service-migration: backlog
+  15-3-chat-domain-migration-and-chatsessionregistry: backlog
+  15-4-server-binary-and-single-user-auth: backlog
+  15-5-frontend-transport-and-parity-test-suite: backlog
+  epic-15-retrospective: optional
+
+  # Epic 16: WEB 客户端 (Web Client)
+  epic-16: backlog
+  16-1-web-entry-auth-and-first-visit-flow: backlog
+  16-2-realtime-streaming-and-browser-compat: backlog
+  16-3-desktop-remote-mode-fr48-optional: backlog
+  epic-16-retrospective: optional
+
+  # Epic 17: 自托管部署与运维 (Self-Hosted Deployment & Ops)
+  epic-17: backlog
+  17-1-docker-deploy-secrets-and-tls: backlog
+  17-2-resident-work-loop-hardening-fr47: backlog
+  17-3-backup-cicd-and-release: backlog
+  epic-17-retrospective: optional

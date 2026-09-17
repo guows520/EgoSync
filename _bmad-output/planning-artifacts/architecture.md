@@ -2388,3 +2388,606 @@ FR-42 冲突已在决策阶段当面裁决并落档（降级 + PRD 修订待办 
 1. Story 1：`crates/companion-proto` —— 冻结 Noise 参数套件、定义 8 种帧 schema、snow/noise-java 互通冒烟测试
 2. Story 2：桌面 `companion_pairing`（QR 生成 + paired_devices migration）
 3. 后续按 Implementation Sequence 2~8 顺延
+---
+
+## Incremental Project Context Analysis — 云端托管版（FR-44～FR-48）
+
+> 本章为 2026-09-17 立项的云端托管版（决策 #19）增量章节，遵循手机伴侣基建章节的增量范式；基线章节与既有增量章节的规则全量继承，未提及处一律沿用。启动时点：V1 收尾后（Epic 15 → {16, 17}，可并行），不与 Epic 12-14 交叉。本章所有耦合点数据来自 2026-09-17 代码验证。
+
+### Requirements Overview
+
+**功能需求（FR-44~48）：**
+
+| FR | 内容 | 架构影响 |
+|----|------|----------|
+| FR-44 | 云端部署形态（Docker 一键、完整引擎、单实例单用户、单事实源） | 引擎与 Tauri 解耦、抽出可独立运行的 server binary；桌面版与云端版共用同一引擎 |
+| FR-45 | WEB 客户端（任意现代浏览器、核心体验功能集） | 前端传输层双 transport（invoke ⇄ HTTP/SSE）；React 双目标；桌面专属能力（原生对话框）需能力门控 |
+| FR-46 | 访问认证（单用户凭据、全端点强制认证、TLS、密钥不下发） | 认证中间件 + 令牌哈希存储 + httpOnly 会话 Cookie；服务端 secret store；安全响应头 |
+| FR-47 | 常驻工作循环（7×24、按计划时间生成、不依赖客户端在线） | 调度器语义平移 + 触发去重持久化 + 容器时区语义；停机诚实代价 |
+| FR-48 | 桌面客户端远程模式（可选、后置） | 传输对等基建的第二消费者；连接状态机与单事实源守卫 |
+
+**隐性需求（决策 #19 边界条件）：**
+- **云脑单源**：不做双引擎同步层——云端实例是唯一事实源时，桌面/浏览器一律是客户端
+- **桌面零回归**：硬边界，抽取必须分步可验证，每步桌面测试全绿
+- **自托管单用户**：无注册体系、无多租户、无计费——一切"以防万一"的多租户抽象都是违约
+
+**非功能需求：**
+- 安全 = 公网端点最小攻击面：全端点认证（除 healthz 与静态资源）、TLS、认证失败不泄露信息
+- 运维 = 服务器重启自动恢复（数据/配置无损）、healthz、结构化日志、$5-10/月单 VPS 可承载
+- 数据主权 = 复用既有导出/导入闭环；官方零持有零落地
+
+**Scale & Complexity:**
+- Primary domain: 双宿主系统（无头引擎 crate + Tauri 桌面壳 + axum server binary + 浏览器客户端）
+- Complexity level: Medium-High —— 复杂度不在新代码量，在"改动既有引擎代码而不改变桌面行为"的抽取纪律
+- 预计新增架构组件：engine crate、server binary、传输抽象层、认证/事件桥——约 6~8 个
+
+### Technical Constraints & Dependencies
+
+| 约束 | 来源 | 影响 |
+|------|------|------|
+| 引擎-Tauri 耦合现状 | 代码验证（2026-09-17，双评审复核） | 16 个 service 文件引用 tauri::（事件发射/任务派生/托管状态/事件监听四类）；commands/chat.rs（1092 行）持有 StreamingState、CancelTokens、OpencodeSessions、OnboardingConversations、MemoryExtractionState、OpencodeMcpScopeLock 六组托管状态——命令层并非纯薄层，抽取的真正工作量在此 |
+| 桌面零回归 | 决策 #19 / 本章硬边界 | 每步抽取以 `npm run test:all` + tests/e2e 全绿为收口条件 |
+| 单事实源 | FR-44 ASSUMPTION | 远程模式与桌面本地模式互斥；不出现任何合并/同步路径 |
+| 仓库根禁建 Cargo workspace | 伴侣章节反模式 | engine crate 走 crates/ 目录 path 依赖先例（companion-proto） |
+| 浏览器 EventSource 不能带 Authorization 头 | Web 平台事实 | SSE 通道的会话凭证必须走 Cookie（httpOnly）或查询串——选 Cookie |
+| HTTP/1.1 下 SSE 每浏览器每域名 6 连接上限 | MDN 平台事实 | Caddy h2 场景无碍；用户既有反代若为 HTTP/1.1，多标签+XHR 会触顶——部署文档须提示"反代需支持 HTTP/2 或限制并发标签" |
+| 容器时区默认 UTC | Docker 事实 | FR-47 需要 TZ 环境变量语义 + tzdata 进镜像 |
+
+### Cross-Cutting Concerns Identified
+
+1. **引擎宿主无关化** — services 对 Tauri 的耦合收敛为四类：事件发射（AppHandle.emit）、任务派生（async_runtime::spawn，含 setup 同步入口的 runtime 上下文问题）、托管状态（app.manage）、**事件监听（AppHandle.listen——companion_dispatch.rs:707 与 companion_snapshot.rs:796/803 对 `llm:stream` 的 Rust 侧消费，为手机伴侣流式镜像服务；裁决：这两个 service 留桌面壳不迁 engine，见 ①）**
+2. **双传输协议对等** — command 面（invoke ⇄ HTTP）与事件面（Tauri Event ⇄ SSE）的对等契约与验证
+3. **密钥边界** — keyring 仅桌面；服务端 env/0600 明文文件（见 ④）；浏览器只见过 api_key_ref
+4. **时间语义** — chrono::Local 平移到容器 TZ；触发去重从内存态升级为持久化
+5. **公网安全面** — 认证、TLS、CSP/CORS、浏览器存储策略
+
+## Incremental Starter Template Evaluation — 云端托管版（FR-44～FR-48）
+
+### Primary Technology Domain
+
+双宿主系统：无头引擎 crate（既有 Rust 代码平移）+ 桌面 Tauri 壳（现有 egosync-app 瘦身）+ 自建 server binary（axum）+ 浏览器客户端（同一 React 应用双目标）
+
+### Setup Strategy
+
+**Manual/Minimal Init（抽取式，非新建式）** —— 无任何脚手架能"新建"出云端版；全部价值在于把既有引擎代码的外壳换掉。三个子项目各自最小起步：
+
+| 子项目 | 初始化方式 | 理由 |
+|--------|-----------|------|
+| `crates/egosync-engine/` | `cargo new --lib` + 逐模块平移 | companion-proto 的 path 依赖先例；无 workspace |
+| `server/` | `cargo new` + axum 最小骨架 | 与 relay-server 同构（axum 0.8 + tokio 1） |
+| 前端 | 现有 src/ 增量加传输抽象层 | 零 UI 重写（决策 #19 的复用前提） |
+
+### Initialization Commands
+
+```bash
+# 引擎 crate：
+cd crates && cargo new egosync-engine --lib
+# server：
+cargo new server
+# 依赖：axum 0.8（SSE 为内建能力，ws feature 预留）+ tokio 1 + sqlx 0.8 + path 依赖 ../crates/egosync-engine
+# 部署：多阶段 Dockerfile（web 构建 → server 构建 → runtime 含 opencode 与 tzdata）→ docker compose up
+```
+
+### Architectural Decisions Provided by Starter
+
+**Language & Runtime:** Rust edition 2021 + tokio（与桌面/中继同一异步运行时心智）；axum 0.8（与 relay-server 同版本）
+**Build Tooling:** Cargo ×3（互相 path 依赖，无 workspace）；Vite 单一构建产物双宿主复用（运行时探测宿主）
+**Testing Framework:** cargo test（engine 内聚）；传输对等测试套件（Epic 15.5）；wdio 增加 web 模式（驱动浏览器连 server）
+**Code Organization:**
+
+```
+EgoSync/
+├── crates/egosync-engine/   # [N] 无头引擎（唯一业务逻辑所在）
+├── egosync-app/src-tauri/   # [M] 瘦身为 Tauri 壳（command 注册 + 桌面适配器）
+├── egosync-app/src/         # [M] 加 transport 抽象（UI 零重写）
+└── server/                  # [N] axum server binary + Docker
+```
+
+**否决记录：**
+- ~~根 Cargo workspace 统一构建~~ — 伴侣章节已裁决禁止（扰动基线构建行为）；path 依赖足够
+- ~~Tauri 2 headless/server 模式~~ — 仍绑定 Tauri 运行时与壳概念，公网面失控；axum 独立二进制更无聊更可控
+- ~~server 内置 rustls TLS 监听~~ — 自托管用户域名/证书形态多样，反代终结（compose 内置 Caddy）是更无聊的路径；server 进程内只讲 HTTP（FR-46 允许"内置或反向代理终结"）
+- ~~GraphQL / 双套 REST 资源建模~~ — 120 个 command 的 1:1 机械映射胜过任何手工资源模型（防映射表漂移）
+- ~~WebSocket 双向事件通道~~ — 既有引擎事件全部单向（Rust→UI）；`skill-scope-updated` 是前端→前端事件（代码验证：Rust 侧无监听），浏览器端进程内消化——SSE 单向通道语义完全对齐，V1 不引入 WS
+
+## Incremental Core Architectural Decisions — 云端托管版（FR-44～FR-48）
+
+**本章范式：「同一引擎、双宿主」（single engine, dual host）** —— 全部业务逻辑收敛于无头引擎 crate；桌面 Tauri 壳与云端 axum server 都是薄适配层；宿主差异只允许存在于四处接缝（EngineEvents / SecretStore / sidecar 路径注入 / **runtime Handle 注入**——tauri setup 闭包无 runtime 上下文，同步启动入口必须由宿主传入 Handle）与 command 注册表。任何"云端专属业务逻辑"都是对本范式的违约。
+
+### Decision Priority Analysis
+
+**Critical Decisions (Block Implementation):**
+
+| # | 决策 | 裁决 | 理由 |
+|---|------|------|------|
+| 1 | 引擎无头化形态 | `crates/egosync-engine` 承载全部业务逻辑（db/models/llm/error/services/ChatSessionRegistry/migrations）；Tauri 壳与 server 都是薄适配层 | 双宿主共用同一引擎是决策 #19 全部增量价值的最小实现；path 依赖沿用 companion-proto 先例 |
+| 2 | 事件解耦 | `EngineEvents` trait：`emit(event: &str, payload: serde_json::Value)`；桌面实现=TauriEventBus（转发 app_handle.emit），服务端实现=SseEventBus（tokio broadcast 扇出）；**events.rs 事件名常量是唯一发射源**（现状事件名为 Rust/TS 两侧散落字面量，各 ≥9/≥8 处——收编为常量后禁止再出现字面量发射）；TS 侧事件名与 payload 类型构建期从 events.rs 生成 | AppHandle 耦合收敛到单一接缝；payload 定为 Value 是刻意的——泛型方法使 trait 不可对象安全（非显而易见的坑，落死）；发射源唯一化使"事件形状一致"测试可枚举全集 |
+| 3 | 任务派生 | 三个随 service 迁入 engine 的 lib.rs setup 同步启动入口（spawn_scheduler / 两个 spawn_hourly_watch）改为接收宿主注入的 `tokio::runtime::Handle`；service 层任务体内的 `tauri::async_runtime::spawn` → `tokio::spawn`（任务体内已有 runtime 上下文，安全）；register_stream_mirror 所在的 companion_dispatch 留桌面壳，其 spawn 不变 | **tauri setup 闭包在主线程事件循环中同步执行、无 runtime 上下文**（tauri 2.11.5 源码证实；本项目 companion_dispatch.rs 注释即记录"裸 tokio::spawn 在此会 panic 'there is no reactor running'——v0.1.6-alpha.1 启动即退出的根因"）；tauri::async_runtime 经全局单例可从任意线程调用，裸 tokio::spawn 不能——替换非"无行为变更的同义改写"，需第四条接缝 |
+| 4 | API 面 | 单一 `POST /api/cmd/{command_name}`（camelCase 参数体、返回值原样 JSON）+ `GET /api/events`（SSE）+ 认证/setup/export/healthz 少量辅助端点；**注册表条目携带参数 schema**（Tauri command 签名经过程宏导出 JSON Schema，HTTP handler 据此驱动反序列化——`State<'_, T>` 注入参数与客户端参数的区分由 schema 标注，禁止 B 侧人肉阅读 120 个签名） | 与 Tauri command 一一对应靠"同一注册表"而非手工路由表：command 清单从 lib.rs generate_handler 抽出为共享清单，桌面注册与 server 路由同源生成；注册表以**构建期 JSON 工件**（commands.json：名字+参数 schema+capability）同时供 vitest 与 server 测试消费——对等测试用例由工件**全量生成**（禁止抽样与手抄清单） |
+| 5 | 认证 | 单用户令牌：`EGOSYNC_TOKEN` env 预置或首访 `/api/setup` 设置；服务端只存 Argon2id 哈希；登录换 httpOnly SameSite=Strict 会话 Cookie；SSE 用 Cookie；**env/setup 优先级冻结**：env 存在 ⇒ /api/setup 拒绝（库内哈希忽略）、login 仅常时比对 env；env 不存在 ⇒ 以库内 Argon2id 哈希为准；两态切换须重启进程，已发 Cookie 不随切换失效 | 无注册体系（FR-46）；EventSource 不能带 Authorization 头（平台约束）倒逼 Cookie；常时比较 + 认证失败统一 401 不泄露信息；优先级落死消除"任一通过即可"的 fail-open 读法；**passkey 取舍登记**：PRD FR-46"令牌/passkey"为或然措辞，本章裁决 V1 仅令牌，WebAuthn 延后 V2 |
+| 6 | 命令能力门控 | command 清单带 capability 标记（desktop-only：4 个 rfd 对话框类 command + 7 个 companion_* command（云端实例无桌面伴侣连接语义，裁决 C）+ **data_export/data_import 两个 command（桌面版落点=用户经 rfd 选取的目录/文件，属桌面交互链；云端的导出/导入走 /api/export、/api/import 专用 HTTP 流端点，复用 data_export service 的纯逻辑——同名能力双落点，注册表内 command 与 HTTP 端点各自登记）**；web-ok：其余）；server 物理排除 desktop-only，UI 按 capability 门控入口 | `chat_pick_working_directory` 等在无头容器无意义且 rfd 会失败——从注册表源头排除，而非运行时报错 |
+| 7 | 触发去重持久化 | FR-47 硬化：调度器内存去重 map（last_triggered_map / last_briefing_trigger_date / last_review_trigger_week，代码验证三处均为循环内局部变量）升级为 egosync.db 持久化（`scheduler_triggers` 小表）；**大石头保护除外**——其现状已是 DB 持久化（bigrock_protection.rs 读表内 last_reminded_at，代码验证），本决策对它是"替换入统一表"而非新增，含数据迁移 | 7×24 常驻 + 升级重启场景下，同分钟重启会重复触发晨间简报（现状内存 map 丢失）——桌面低频重启未暴露，云端必须补 |
+| 8 | 时区语义 | 容器 TZ 环境变量（compose 文档化 `TZ=Asia/Shanghai` 示例）+ 镜像装 tzdata；scheduler 的 chrono::Local 语义零改动 | 比给 DB 加用户时区配置更无聊；Local 在 Linux 读 TZ env，行为可预期 |
+
+**Important Decisions (Shape Architecture):**
+- 传输选择：单一 Vite 构建产物 + 运行时探测宿主（`window.__TAURI_INTERNALS__` 存在 ⇒ TauriTransport，否则 HttpTransport）——不做双构建配置
+- services/*.ts 改造：import 从 `@tauri-apps/api/core` 换 `src/transport/`（每文件一行级改动，函数签名不变）
+- `useTauriEvent` → `useEngineEvent`（内部走 transport 事件通道；Tauri 分支行为不变；迁移完成后旧 hook 退役）
+- opencode 进 server 镜像：sidecar.rs 生命周期管理原样平移，二进制路径经 `EGOSYNC_OPENCODE_PATH` 注入，agent_bridge 协议零改动（127.0.0.1:port 在同容器网络命名空间成立）
+- 备份恢复：卷级（停容器复制卷）+ 逻辑级（复用 data_export service 的 export_all/import_all 纯逻辑，经 /api/export、/api/import HTTP 流——与桌面版 command 的目录落点是同一能力的双落点，见决策 #6）双路径；不新造备份机制
+
+**Deferred Decisions (Post-V1):**
+- FR-48 桌面远程模式（第二阶段，状态机已裁决见"开放问题裁决 B"）
+- Android 直连云端实例（开放问题裁决 C：远期形态，帧协议收敛方向已定）
+- WS 双向通道、多实例横向扩展、官方托管 SaaS（Non-Goal 不变）
+
+### ①引擎无头化抽取（FR-44 前置）
+
+**耦合点清单（代码验证 2026-09-17，复核 2026-09-17 评审）：**
+- 事件发射：16 个 service 文件经 `AppHandle.emit` 发事件（agent_engine.rs 耦合最深，22 处）
+- 任务派生：service 层 9 处/8 文件 `tauri::async_runtime::spawn`；**全代码库共 19 处/13 文件**（commands 层 5 处 + lib.rs 5 处——后者含 4 个同步启动入口，是 runtime Handle 接缝的由来；commands/lib.rs 的 spawn 随宿主层留壳，不属 engine 抽取范围）
+- 托管状态：lib.rs `app.manage()` 16 处；其中 commands/chat.rs 持有**六组**会话状态（StreamingState=Arc<Mutex<HashSet>>、CancelTokens、OpencodeSessions、OnboardingConversations、MemoryExtractionState、OpencodeMcpScopeLock）
+- 事件监听（第四类）：companion_dispatch.rs:707 与 companion_snapshot.rs:796/803 经 `app_handle.listen("llm:stream")` 消费引擎事件（Rust→Rust 镜像，供手机伴侣流式转发）
+- 对话框：4 个 rfd 原生对话框 command（chat_pick_working_directory、skill_pick_custom_directory、data 侧导出目录/导入文件选取）——desktop-only
+- 无耦合部分：db/、models/、llm/、error.rs、agent_bridge（纯 reqwest 客户端）、sidecar（裸 tokio::process::Command，非 Tauri sidecar API）、data_export 等可直接平移
+
+**companion 服务归属裁决：全部四个 companion_* service（pairing/connection/dispatch/snapshot）留桌面壳，不迁 engine。** 理由：①dispatch/snapshot 的耦合点恰是第四类 listen（EngineEvents 为 emit-only，加 subscribe 面只为迁文件——反向妥协）；companion_connection 虽仅 emit 耦合，但其功能（NSD 广播、WS 监听）为桌面宿主专属，云端无消费者，不值得为迁移而改造；companion_pairing 本无 tauri 耦合，同为桌面专属功能随行留壳；②手机伴侣只连桌面引擎（裁决 C：V1 不动任何伴侣代码），这些 service 在云端宿主无消费者；③与 7 个 companion_* command 列 desktop-only、paired_devices 云端闲置自洽。代价登记：若裁决 C 的远期形态（Android 直连云端）落地，流式镜像需在 engine 侧重建——届时 EngineEvents 的 SseEventBus 天然可加内部订阅（broadcast 本就支持），不是单向门。
+
+**抽取顺序（绞杀者模式，每步收口=桌面全绿）：**
+1. `crates/egosync-engine` 骨架 + 无 Tauri 依赖模块平移（db/、models/、llm/、error.rs、agent_bridge、data_export 等纯逻辑）——纯代码搬移，src-tauri 以 `pub use` 回引保持既有路径引用不断
+2. `EngineEvents` trait + TauriEventBus 落地；按域迁移 13 个耦合 service（16 个名单减去留壳的 companion_dispatch/companion_snapshot/companion_connection；chat/agent_engine 域最重，单独成步收口），lib.rs 构造处注入——事件发射点从强类型 payload（`emit("llm:stream", StreamPayload{..})`）机械改写为"events.rs 常量名 + Value"是抽取期**唯一豁免规则三的改写**（显式豁免：Value 签名与常量源是本章裁决，不改写即违约；现状发射点 20+ 处传强类型，代码验证）；改写前后桌面 e2e 必须全绿
+3. 任务派生双轨替换：①service 层任务体内的 `tauri::async_runtime::spawn` → `tokio::spawn`（任务体内已有 runtime 上下文，安全；现状已混用）；②三个迁入 engine 的同步启动入口（spawn_scheduler / 两个 spawn_hourly_watch；register_stream_mirror 随 companion_dispatch 留壳不变）改为接收 `tokio::runtime::Handle` 参数——桌面壳传 `tauri::async_runtime::handle()`，server 传 `tokio::runtime::Handle::current()`。**验收必须含桌面启动路径 e2e 断言**（setup → 各启动入口不 panic——本项目 v0.1.6-alpha.1 曾因裸 spawn 在此崩溃，前车之鉴）
+4. ChatSessionRegistry 抽取：**六组**会话状态从 commands/chat.rs 移入 engine（Arc 组合、无 Tauri 类型，含 OpencodeMcpScopeLock）；Tauri command 与 axum handler 都薄调用它；**特征测试先行**——动代码前先落 busy 互斥特征测试：同会话并发双发恰触发一次 LLM 调用、恰一条 busy 落库消息、busy 经 **Ok 通道**返回（现状契约，代码验证 chat.rs:301-309；companion_dispatch 以 `msg.role != "user"` 探测 busy——该隐式协议禁止破坏，busy 禁止改为 Err 通道）
+5. command 清单抽为共享注册表（桌面 generate_handler 与 server 路由同源）
+
+**回归兜底（硬边界）：**
+- 每步完成后：`npm run test:all`（vitest + cargo test）+ `tests/e2e` 全量（wdio 桌面套件）全绿才进下一步——跳过任何一项即未完成（显式失败原则）
+- vitest 既有 mock（@tauri-apps/api 模块）随 transport 抽象同步迁移到 mock transport——测试意图不变，mock 对象替换
+- 迁移期间禁止任何"顺手重构"（规则三）；模块平移保持文件内容逐字节等价（import 路径除外；**唯一例外**=事件发射点的"强类型 payload→Value + 字面量→events.rs 常量"机械改写，见抽取顺序第 2 步）
+- 空转防线补强（对抗性评审 F6）：busy 互斥与 companion role 探测协议在现状代码中**零测试覆盖**——"桌面全绿"对这些语义是空集，抽取时锁粒度被"细化"或 busy 改 Err 通道都不会红；Registry 抽取故事的第一交付物就是上述特征测试，特征测试不绿不得动 Registry
+
+### ②server binary（axum）
+
+**API 面（与 Tauri command 一一对应）：**
+
+| 端点 | 方法 | 语义 | 对应 Tauri 机制 |
+|------|------|------|----------------|
+| `/api/cmd/{command}` | POST | 参数体 camelCase（与 invoke args 同构），返回值原样 JSON | `invoke()` |
+| `/api/events` | GET (SSE) | 事件名=SSE event 字段，data=payload JSON（与 emit 同构） | `listen()` / Tauri Event |
+| `/api/auth/status`、`/api/auth/login` | GET/POST | 初始化状态 / 令牌换会话 Cookie | 无对应（云端新增） |
+| `/api/setup` | POST | 首次初始化设置令牌（仅在无凭据时挂载） | 无对应 |
+| `/api/export`、`/api/import` | POST | 复用 data_export 全量导出/导入（下载/上传流） | data_* command 的文件落点改为 HTTP 流 |
+| `/healthz` | GET | 存活探针（无认证、无数据） | 无 |
+
+**技术要点：**
+- axum 0.8 + tokio 1；业务路由由共享 command 注册表生成，非手工维护
+- SSE：axum 内建 `axum::response::sse` + KeepAlive（30s 注释心跳）；事件经 tokio broadcast 扇出给全部在线客户端——**Tauri emit 本就是全局广播，多浏览器=多窗口，语义平移而非新设计**
+- 慢客户端：broadcast 滞后即断开该连接（EventSource 自动重连 + UI 经 command 全量补齐状态）——对齐伴侣"重连即快照、不做历史回放"哲学
+- 限流（收敛到认证面）：`/api/auth/*` 与 `/api/setup` 按 IP 5 次/分钟；业务端点 V1 不限流（自托管单用户，无滥用多租户面）
+- TLS：server 进程只讲 HTTP；compose 内置 Caddy 服务（自动 HTTPS，域名自备）或文档化对接用户既有反代；Caddy 对 `text/event-stream` 响应默认即逐写刷新（该类型下 flush_interval 被官方忽略），Caddyfile 仍显式配 `flush_interval -1` 作冗余保险
+- 静态资源：server 内嵌 web dist（axum 静态服务 + SPA 回退 index.html）；Caddy 只做 TLS 终结与代理
+- **错误语义冻结（F4）**：全部 AppError variant 一律 `200 + 原样 serde JSON`（单键 map 形状 `{"DbError": "..."}`，14 个 variant 不逐个分类——与 invoke 错误通道同构）；非 200 白名单仅四类传输层错误：401（认证失败）、429（限流）、404（路由/命令不存在）、5xx（进程级故障：panic/启动失败）；对等测试含**错误路径黄金用例**（每 variant 断言双通道解包所得错误对象逐字节同构）
+- **请求边界（F11）**：请求体上限 50MB 写进注册表契约（axum DefaultBodyLimit 默认 2MB 会掐断大附件——与 Tauri invoke 无限制的差异显式登记）；业务端点禁用响应超时（chat_send_message 分钟级挂起是正常态），仅保留 idle 超时；Caddyfile 样例同时含 `request_body max_size=50MB` 且不设 write timeout（与 server 侧上限对齐，防代理层第二道暗限）
+
+### ③前端传输对等
+
+```
+React UI（同一份组件体系，视觉零分叉）
+    │ services/*.ts（函数签名不变）
+    ▼
+src/transport/ ── Transport 接口：invoke<T>(cmd, args) / on(event, cb) / capabilities / onConnectionStateChange
+    ├── TauriTransport：@tauri-apps/api invoke + listen（行为与现状逐字节一致）
+    └── HttpTransport：fetch POST /api/cmd/{cmd} + EventSource /api/events
+运行时探测：window.__TAURI_INTERNALS__ 存在 ⇒ Tauri；否则 Http
+```
+
+- 单一 Vite 构建产物双宿主复用：tauri.conf 的 frontendDist 与 server 镜像内嵌的是同一份 dist
+- `skill-scope-updated`（唯一前端→前端事件，代码验证 Rust 侧无监听）：Tauri 分支保持 emit/listen；浏览器分支进程内 EventEmitter——不进传输契约
+- 断线重连：EventSource 原生自动重连；连接状态经 healthz 探测呈现（Connecting/Online/Reconnecting，伴侣 TransportStatus 的同构简化）
+- 命令能力门控：`transport.capabilities`（来自共享清单）驱动 UI 入口显隐——web 端不出现"选工作目录"等桌面专属入口
+- 桌面壳耦合组件：`TitleBar.tsx` 与 `App.tsx` 直接引 `@tauri-apps/api/window`（getCurrentWindow，窗口控制，代码验证）——web 构建按同一宿主探测门控：Tauri 下渲染原样，浏览器下窗口控制区退化为普通标题栏（布局差异属 UX 阶段细化）
+- **重连补齐协议（F5，双传输对等契约组成部分）**：HttpTransport 在 SSE onopen-after-error 时触发重连信号（TauriTransport 恒 Online 不触发）；补齐由 **transport 层**（非 UI 层）执行——重放冻结的**只读 query command 白名单**（会话列表/角色/任务/通知等查询类；写入类 command 一律不重放，防 `notification_ack` 类副作用重放）；白名单进 commands.json 工件；UI 只订阅连接状态呈现
+- **capabilities 同源（F9）**：capabilities.ts 由构建期从 engine capabilities.rs 生成（禁止手写双清单——漂移的产物是 web 端入口可见但请求 404，用户看到"网络错误"）；对等测试断言"TS 能力清单 == 引擎注册表"
+
+### ④密钥管理
+
+| 形态 | LLM Key 存储 | 读取方 | 浏览器可见性 |
+|------|--------------|--------|--------------|
+| 桌面版 | 系统 keyring（不变） | 引擎 | N/A（无浏览器） |
+| 云端版 | env（`EGOSYNC_SECRET_{api_key_ref}`，原样区分大小写）或数据卷文件 /data/secrets.json（**0600 权限保护的明文**——"加密"措辞废除：加密密钥来源无无聊答案，不造方案；安全边界与 env 同级），实现为 SecretStore trait 的服务端适配器 | 引擎 | **永不可见** |
+
+- **键映射冻结（F3，代码验证 llm_config.rs:120）**：`api_key_ref = llm_{uuid}_api_key`（全小写，UUID 运行时生成）；env 变量名 = `EGOSYNC_SECRET_{api_key_ref}` **原样区分大小写拼接**（ref 段不做任何大小写转换——"前缀大写"等读法全部非法，落死一处）
+- **env 定位收窄（评审复核）**：UUID 键用户无法预知——env 对用户创建的 LLM Key 实际不可行，定位为**固定名 secret 的引导通道**；用户创建的 LLM Key 只经 secrets.json（save 路径）。读取顺序 = **文件优先、env 兜底**——UI 重录即时生效，env 不构成运行时遮蔽源（不存在"重录后仍被 env 旧值遮蔽且无测试可发现"的静默失效路径）
+- **迁移可达性探测**：导入完成后对每个 api_key_ref 探测 SecretStore 可达性，缺失时返回指明重录路径的结构化错误（现状 task_classifier/mission_inferrer/llm_config 三处各自拼 ValidationError 文案——收敛为一处）
+
+- 结构性保证（代码验证）：`LlmConfig` 出参只有 `api_key_ref`（keyring 引用）；key 仅在 Create/Update 入参与 test_connection 用户主动输入时出现——"key 不下发"在现有模型中已成立，云端版只需守住不破坏（API 响应形状测试断言无 key 字段）
+- secret_store 抽 trait：keyring 实现留桌面壳；server 实现为 env/文件适配器（读取顺序与写入语义见上）
+- 桌面→云端迁移的用户路径：配置经导出/导入平移，LLM Key 需在云端重录一次（keyring 不导出——安全边界如此，文档明示）
+
+### ⑤opencode 服务端化
+
+- sidecar.rs 平移进 engine，生命周期管理（spawn/健康检查/退出清理/watchdog）零改动；二进制路径从 tauri resources 解析改为路径注入（桌面壳继续传 resources 路径，server 传 `EGOSYNC_OPENCODE_PATH`——同一注入点两个值）
+- agent_bridge 协议零改动：reqwest → `http://127.0.0.1:{port}`，同容器内成立
+- Dockerfile：opencode 二进制随镜像分发，版本 pin 在 Dockerfile（与 engine 版本同 tag 发布）
+- **与提案 §4.2-7 措辞冲突的显式裁决**：提案写"docker compose：server+opencode+WEB 静态"三件并列；本章裁决 **opencode 并入 server 镜像**（保 sidecar 生命周期代码零改动），compose 实际两服务（egosync-server + caddy），WEB 静态由 server 内嵌服务。理由：三容器方案要求把进程管理让渡给 compose restart 策略并改造 agent_bridge 连接目标——改动更大的"分离"没有换来任何能力；WEB 静态与 opencode 的物理位置不影响提案的运维意图（一键部署、单卷数据）
+
+### ⑥数据与备份
+
+- 双 SQLite（egosync.db + conversations.db）挂命名卷 `egosync-data`；WAL 模式单容器单写入者，并发语义与桌面同构（引擎内既有互斥平移）
+- 备份双路径：①逻辑级——复用 data_export `export_all`（经 /api/export 下载）/`import_all`（上传恢复），单用户数据主权闭环；②卷级——停容器后复制卷（文档化，适合升级前快照）；不新造备份机制
+- 服务器重启自动恢复：compose `restart: unless-stopped` + 引擎启动幂等（migrations 幂等既有）；WAL 卷快照必须停容器或走逻辑级导出（运行中直接复制 WAL 卷有一致性风险——文档明示）
+- 秘密文件（secrets.json）与数据卷同卷，0600；不进镜像、不进 git
+
+### ⑦部署（docker compose）
+
+```yaml
+# server/docker-compose.yml（示意）
+services:
+  egosync-server:
+    image: egosync/server:tag        # 含 engine + opencode + web dist + tzdata
+    volumes: [egosync-data:/data]
+    environment:
+      - TZ=Asia/Shanghai
+      - EGOSYNC_SECRET_llm_9f8e7d6a_api_key=...   # = EGOSYNC_SECRET_{api_key_ref}，ref 形态与映射规则见 ④
+    restart: unless-stopped
+    healthcheck: { test: ["CMD", "wget", "-q", "http://localhost:8080/healthz"] }
+  caddy:                             # 可选：自动 HTTPS（域名自备）；已有反代的用户可去除此服务
+    image: caddy:2
+    ports: ["443:443", "80:80"]
+    volumes: [./Caddyfile:/etc/caddy/Caddyfile]
+volumes: { egosync-data: {} }
+```
+
+- healthz：两级——存活（进程/端口）与深度（DB 连通、opencode 存活，`?deep=1`）；compose 用存活级，升级前巡检用深度级
+- 结构化日志：tracing JSON 到 stdout（`RUST_LOG` 控制），与 relay-server 同范式；密钥与事件 payload 明文永不入日志（零知识纪律继承）
+- CI：`server-docker.yml` 多阶段镜像构建发布（实现期故事 17.3）
+
+### ⑧安全威胁模型
+
+| 威胁 | 缓解 |
+|------|------|
+| 令牌暴力破解 | Argon2id 哈希存储、常时比较、认证/setup 端点 IP 限流 5/min、失败统一 401 不泄露用户存在性 |
+| 中间人窃听 | TLS 强制（Caddy 自动 HTTPS 或用户既有反代）；healthz 之外全端点拒绝明文部署——文档明示 |
+| XSS 窃取会话/数据 | httpOnly Cookie（JS 不可读）；CSP：`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'`（React 内联样式）；`connect-src 'self'`；无第三方 CDN |
+| CSRF | Cookie SameSite=Strict + 全同源架构（静态/API/SSE 同域）；无跨源请求面 |
+| 浏览器侧数据残留 | V1 明确策略：业务数据仅内存态（React state），不写 localStorage/IndexedDB；刷新=从服务端重取（FR-45"刷新恢复"由服务端持久化兜底）；登出清 Cookie |
+| 密钥泄露至浏览器 | ④的结构性保证 + API 响应形状测试（断言无 key 字段） |
+| 公网扫描/未知漏洞 | 攻击面=单进程 + 静态资源；无注册/多租户面；boring 栈（Rust+axum+SQLite）；升级路径=换镜像 tag |
+
+- CORS：同源架构下无需跨源——CORS 中间件显式拒绝一切跨源请求（默认拒绝优于静默允许）
+- 单用户缩小攻击面是设计选择而非偷懒：多租户的隔离/计费/合规是另一个量级的运营责任（决策 #19 后议）
+
+### ⑨工作循环常驻化（FR-47）
+
+- 语义平移：scheduler 循环、角色工作循环、晨间简报/周复盘生成逻辑零改动进 engine；桌面版 FR-10 行为不变（同一 engine，桌面壳只在应用运行时启动调度——宿主决定调度启动时机，引擎不知道自己跑在哪）
+- 时区：`TZ` env + tzdata（决策 #8）；简报时间=容器时区时间（用户自托管即用户时区），compose 示例落死
+- 去重持久化（决策 #7）：触发键（date+hhmm / week 维度）落 egosync.db——升级重启不再重复触发晨间简报
+- 停机诚实代价（PRD ASSUMPTION 保持）：错过的时间窗不补跑（桌面同语义：关机错过晨间简报不回溯）；恢复后按计划继续
+- 常驻生成的建议仍走"待确认→用户确认"（FR-11 边界不变）；通知在 WEB 端为应用内通知（无 Service Worker 推送，页面关闭即无通知；iOS Safari 普通浏览无 Notification API，16.4+ 仅限加主屏 PWA——降级语义与伴侣 FR-42 一致）
+- **时间源三分表（评审 F7 落死，防"顺手一致化"）**：①持久化时间戳一律 `chrono_now_pub` 的 UTC RFC3339 串（现状，代码验证 db/settings.rs:144——**禁止**借 TZ 平移顺手改 Local，桌面/云端行为同构）；②调度判定一律容器 `Local`（决策 #8）；③前端渲染一律按浏览器 TZ 解析 UTC 串（云端浏览器 TZ ≠ 容器 TZ 是常态——海外 VPS + 国内访问）；简报文本内日期为容器 Local 拼好的字符串，与前端格式化并存是现状语义，不在抽取范围
+- `scheduler_triggers` 键含时区维度（或文档明示：变更 TZ 后首个周期可能重复/跳过一次触发——date+hhmm 键跨时区会错位）
+- **桌面侧边缘行为变化加注（诚实登记）**：决策 #7 的去重持久化是引擎级变更，桌面版同样获得——桌面"重启窗口内不再重复触发"（现状：重启后同分钟可再次触发）是行为变化而非回归，收口时不得误判
+
+### Data Architecture（增量）
+
+- 云端版引擎同库同 schema，仅新增 `scheduler_triggers` 触发去重小表（migration 编号顺延）
+- 双库均挂 `/data` 卷；`paired_devices` 表在云端实例中闲置（无桌面伴侣连接）——不迁移不清理，保持 schema 单一
+- 无任何跨实例复制/同步路径——单源即无同步
+
+### 开放问题裁决
+
+**A. 多端并发会话语义（多浏览器同时在线）**
+
+裁决：**广播 + 既有互斥平移，不引入会话管理协议**。
+- 读：全并发（查询 command 无状态）
+- 事件：SSE 全客户端广播（= Tauri emit 对多窗口的本有语义，非新设计）
+- 同会话流式互斥：StreamingState 语义平移——流式期间第二个发送请求收到"我还在想上一个问题，请稍等片刻…"busy 消息（现状行为，代码验证），无论请求来自哪个浏览器标签
+- 跨会话并发：各自独立 opencode 会话，互不干扰（现状语义）
+- 设置/仪表盘并发编辑：单用户现实下令牌级 last-write-wins，不做字段级冲突解决——两台设备同时改同一设置是伪场景
+- 不做：设备列表、会话踢出、多光标、presence——单用户产品无此需求（简单至上）
+
+**B. 桌面客户端远程模式（FR-48）连接状态机**
+
+裁决：**本地/远程互斥双态 + 显式切换，永不合并数据**。
+
+```
+LOCAL（默认）──用户在设置中配置远端并确认──▶ REMOTE_CONNECTING
+LOCAL ◀──用户显式切回（本地引擎以最后本地数据重启）── REMOTE_ONLINE
+REMOTE_CONNECTING ──远端连通+认证通过──▶ REMOTE_ONLINE
+REMOTE_CONNECTING / REMOTE_ONLINE ──远端不可达──▶ REMOTE_OFFLINE
+REMOTE_OFFLINE ──指数退避重连（1s→30s 封顶+抖动，伴侣同范式）──▶ REMOTE_CONNECTING
+```
+
+- LOCAL→REMOTE 守卫：本地引擎完整停机（sidecar 杀进程、调度器取消、连接池关闭）后才切传输——单事实源不变式；切换时提示"本地数据停留在切换时点，不会与云端合并"（诚实代价明示，FR-48"不触发任何数据合并"的架构落地）
+- REMOTE 态桌面 = 一个浏览器等价物（复用裁决 A 的全部语义）；本地引擎待机不产生任何数据
+- REMOTE_OFFLINE：无本地数据兜底（远程模式不落业务数据到磁盘），呈现重连 UI——与伴侣降级态同哲学，但无快照
+- 第二阶段交付（FR-48 时序）；传输对等基建（Epic 15）是其唯一前置
+
+**C. 与中继/伴侣协议的远期收敛（Android 直连云端实例）**
+
+裁决：**确认为远期形态，帧协议是收敛契约，V1 不动任何伴侣代码**。
+- 现状：手机伴侣 ↔ Noise XX 加密帧 ↔ 桌面引擎（直连/中继双承载）——Epic 12-14 照常，零改动
+- 收敛方向：云端实例作为帧协议的第三种承载（WSS + 令牌认证替代 Noise 配对层）——SNAPSHOT/COMMAND/STATE_DELTA 等帧类型与 schema 不变，安全层换（云端已有 TLS+单用户令牌，叠 Noise 无增益）
+- 驱动力：云端版用户没有常开的桌面引擎可供配对——手机直连云是自然终点形态；但这是"云端版发布后"的独立立项，不进 Epic 15-17
+- 旧章节关系显式登记（只追加不回改原则）：①伴侣章节 Deferred 中"云端数据同步"仍是 Non-Goal（双引擎同步依旧否决）；该 Deferred 里的"托管"一词，语义已被决策 #19 重新定义为"自托管单实例"——以本文与决策日志 #19 为准。②伴侣章节约束表"工作循环仅桌面运行时执行……不存在云端代替桌面跑循环"（FR-10 在当时拓扑下成立）——云端形态下由 FR-47 取代该假设（宿主决定调度启动时机，见 ⑨），桌面版 FR-10 行为不变。③两处以本文为准，不回改旧章节
+
+### Decision Impact Analysis
+
+**Implementation Sequence（对齐 Epic 15 → {16, 17}）:**
+1. engine crate 骨架 + 纯模块平移（Epic 15.1 前半）
+2. EngineEvents/TauriEventBus + 耦合 service 逐域迁移（15.1 后半，chat/agent_engine 单列）
+3. ChatSessionRegistry 抽取（15.1 收尾）
+4. tokio::spawn 替换 + command 注册表共享（15.1 硬化）
+5. server/ axum 骨架：cmd 路由 + SSE 总线 + healthz（15.2）
+6. 前端 transport 抽象 + useEngineEvent + 运行时探测（15.3）
+7. 传输对等测试套件（15.4：command 集合双通道一致 + 事件形状一致 + 响应无 key 字段断言）
+8. WEB 认证/首访/响应式（16.1-16.4）
+9. 触发去重持久化 + TZ 语义（FR-47 硬化，并入 16/17 之间）
+10. Docker/compose/CI/备份恢复（17.1-17.4）
+11. （后置）FR-48 桌面远程模式（16.5）
+
+**Cross-Component Dependencies:**
+- egosync-engine ← 被 src-tauri 与 server 共同 path 依赖（EventBus/SecretStore trait 先行冻结，最高优先级）
+- 共享 command 注册表 ← 被桌面 generate_handler、server 路由、前端 capabilities、对等测试四方消费
+- SseEventBus ← 依赖 EngineEvents；HttpTransport ← 依赖注册表生成的 URL 面
+- data_export ← 备份 API 复用（文件落点改 HTTP 流）
+
+## Implementation Patterns Addendum — 云端托管版（FR-44～FR-48）
+
+### Pattern Categories Defined
+
+基线 100 条规则 + 伴侣章节增量规则继续全量生效；本节只定义云端版引入的 **5 类新冲突点**，未提及处一律继承。
+
+### Naming Patterns
+
+**引擎 crate（crates/egosync-engine）：**
+- 平移模块保持原文件名与目录结构（db/、models/、llm/、services/ 原样进 crate）——不借抽取改名
+- 新增：`events.rs`（EngineEvents trait + 事件名常量）、`registry.rs`（ChatSessionRegistry）、`capabilities.rs`（command 清单与 desktop-only 标记）
+
+**server/（对齐 relay-server 布局）：**
+- `src/{main.rs, routes.rs（cmd 路由生成）, sse.rs, auth.rs, secret_store.rs, static_files.rs}`
+- HTTP 辅助端点命名：`/api/{kebab-case}`；command 名在 URL 中保持 snake_case 原名（一一对应的可 grep 性优先于 REST 美观）
+
+**前端：**
+- `src/transport/{index.ts, types.ts, tauri.ts, http.ts, capabilities.ts}`；`useEngineEvent`（useTauriEvent 的传输无关继任者）
+
+### Format Patterns
+
+- command 参数/返回：camelCase JSON（与 Tauri invoke 惯例同构，serde rename_all 不变）
+- SSE：`event: {事件名}` + `data: {payload JSON}`；心跳为注释行（30s）
+- 环境变量：`EGOSYNC_` 前缀大写（EGOSYNC_TOKEN、EGOSYNC_OPENCODE_PATH、EGOSYNC_SECRET_{KEY}、EGOSYNC_DATA_DIR）
+- 事件名继续域前缀冒号风格（llm:stream、notification:new 等）；云端不新增事件名——服务端只是承载，不是事件源
+
+### Communication Patterns
+
+- **双传输对等契约**：同一 command 名、同一参数形状、同一返回形状、同一事件名/载荷——任何一侧单独改契约都是违约；变更必须双通道同步 + 对等测试更新
+- command 面：`POST /api/cmd/{command}` 是唯一业务入口；禁止在 server 上新增"更 RESTful"的旁路端点（export/import 的 HTTP 流除外，其语义已在注册表登记）
+- 错误语义：HTTP 状态码承载传输层错误（401/429/5xx）；业务错误 = 200 + AppError JSON（与 invoke 错误形状同构）——前端 transport 统一解包，两侧错误路径同构
+
+### Process Patterns
+
+- 重连退避：1s→30s 封顶 + 随机抖动（伴侣同范式）；SSE 由 EventSource 原生处理，应用层只管状态呈现
+- 日志：tracing JSON；密钥与事件 payload 明文永不入日志（零知识纪律继承）；桌面壳沿用 tracing 现状
+- 触发去重：调度器所有"每窗口一次"判断统一走 scheduler_triggers 持久化键——不允许多套去重机制并存（大石头保护现状 DB 去重随决策 #7 替换迁入，属显式迁移而非并存例外）
+
+### Structure Patterns
+
+**测试位置：**
+- engine：随模块 `#[cfg(test)]`（平移时测试跟着文件走）+ `tests/` 集成测试（EventBus 桩、Registry 并发）
+- server：`tests/`（路由生成完整性、认证、SSE 广播、能力门控排除 desktop-only）
+- 传输对等：`egosync-app/src/transport/` 测试（双通道黄金用例：同一 service 函数集双通道跑，断言响应逐字节同构）
+- WEB e2e：tests/e2e 增加 `web` 模式（wdio 驱动浏览器连本地 server，复用既有用例集）
+
+### Enforcement Guidelines
+
+**All AI Agents MUST:**
+1. 引擎代码（crates/egosync-engine）禁止依赖 tauri——engine 的 Cargo.toml 不声明 tauri 依赖，物理不可能（CI 兜底）
+2. 任何 command/事件契约变更必须双通道同步 + 对等测试更新
+3. 抽取故事收口条件：桌面 `npm run test:all` + tests/e2e 全绿——跳过任何一项即未完成（显式失败原则）
+4. 云端新增端点必须经共享注册表（禁止旁路 API）
+
+**Anti-Patterns (禁止):**
+- ❌ engine 内出现 tauri::（物理封禁）
+- ❌ 为多租户/多用户预留任何抽象（单用户是规格不是阶段）
+- ❌ 手工维护 120 条路由映射表（必须从注册表生成）
+- ❌ 浏览器 localStorage/IndexedDB 缓存业务数据（V1 明确禁止）
+- ❌ server 引入第二套日志/配置/错误范式
+- ❌ 抽取期顺手重构被平移的代码（规则三全程生效）
+
+## Project Structure Addendum — 云端托管版（FR-44～FR-48）
+
+### Complete Project Directory Structure
+
+标记：`[N]` 新增；`[M]` 修改现有；`[→]` 平移（原位置消失）；未标记处不动。
+
+```text
+EgoSync/
+├── crates/
+│   ├── companion-proto/                    # 既有不动
+│   └── egosync-engine/                     # [N] 无头引擎
+│       ├── Cargo.toml                      #   依赖 sqlx/tokio/reqwest/chrono；不含 tauri 与 keyring（经 trait 注入）
+│       ├── migrations/                     # [→] 自 src-tauri/migrations 平移（新增 scheduler_triggers）
+│       └── src/
+│           ├── {db,models,llm,services}/…  # [→] 逐模块平移（含内联测试；companion_dispatch/companion_snapshot 留桌面壳）
+│           ├── events.rs                   # [N] EngineEvents + 事件名常量
+│           ├── registry.rs                 # [N] ChatSessionRegistry（六组会话状态）
+│           └── capabilities.rs             # [N] command 清单 + desktop-only 标记
+├── egosync-app/
+│   ├── src/
+│   │   ├── transport/                      # [N] 双传输（index/types/tauri/http/capabilities）
+│   │   ├── services/*.ts                   # [M] import 换 transport（签名不变）
+│   │   └── hooks/useEngineEvent.ts         # [N]（useTauriEvent 迁移完成后退役）
+│   ├── vite.config.ts                      # [M] 仅按需加 dev proxy（/api → localhost:8080）
+│   └── src-tauri/
+│       ├── Cargo.toml                      # [M] path 依赖 egosync-engine
+│       ├── src/lib.rs                      # [M] 注册表驱动 generate_handler + TauriEventBus 注入 + Handle 注入
+│       └── src/{commands/, secret_store_keyring.rs, sidecar_path.rs}  # [M] 薄化；rfd 对话框留壳；companion_dispatch/companion_snapshot 留壳（见 ①）
+├── server/                                 # [N] axum server binary
+│   ├── Cargo.toml                          #   path 依赖 egosync-engine
+│   ├── Dockerfile                          #   多阶段：web dist → server → runtime（opencode + tzdata）
+│   ├── docker-compose.yml                  #   egosync-server + caddy（可选）+ egosync-data 卷
+│   ├── Caddyfile                           #   反代 + flush_interval -1（SSE 冗余保险）+ request_body 50MB
+│   └── src/{main,routes,sse,auth,secret_store,static_files}.rs
+└── .github/workflows/server-docker.yml     # [N] 镜像构建发布
+```
+
+### Architectural Boundaries
+
+**五条硬边界：**
+
+1. **引擎边界**：crates/egosync-engine 无 tauri 依赖（Cargo.toml 物理封禁）；事件只经 EngineEvents，密钥只经 SecretStore trait，opencode 路径只经注入——宿主差异到此为止
+2. **API 边界**：server 唯一业务入口 `/api/cmd/{command}` + `/api/events`；端点集合由共享注册表生成；desktop-only command 物理不路由
+3. **密钥边界**：LLM Key 只存在于 SecretStore 实现之后（keyring / env / 0600 明文文件，见 ④）；API 出参形状测试断言无 key 字段
+4. **浏览器边界**：不落业务数据（仅内存态）；不持有 LLM Key；能力门控外的入口不可见
+5. **数据边界**：单事实源不变式——远程模式/多客户端只是视图；无任何合并/同步代码路径存在
+
+**数据边界（云端形态）：**
+
+| 数据 | 位置 | 规则 |
+|------|------|------|
+| 业务双库 | egosync-data 卷（/data） | WAL；单容器单写者；卷级（停机）+逻辑级双备份 |
+| 访问令牌哈希 | egosync.db settings | Argon2id；只增不外发 |
+| LLM Key | env 或 /data/secrets.json（0600） | 不进镜像/git/日志/浏览器 |
+| 会话 Cookie | 浏览器（httpOnly） | 登出即清；SameSite=Strict |
+| opencode 工作区 | /data 下 | 随卷备份；子进程生命周期由 sidecar 管 |
+| 浏览器业务数据 | 仅内存 | 刷新即从服务端重取 |
+
+### Requirements to Structure Mapping
+
+| FR | 归属 |
+|----|------|
+| FR-44 | egosync-engine + server/ + compose |
+| FR-45 | src/transport/ + 同一 dist 双宿主 + useEngineEvent + 能力门控 |
+| FR-46 | auth.rs + Caddyfile + SecretStore 服务端实现 + CSP 中间件 |
+| FR-47 | scheduler 平移 + scheduler_triggers + TZ 语义 |
+| FR-48（后置） | 桌面壳传输切换 + 状态机（第二阶段） |
+
+### Integration Points & Data Flow
+
+```text
+[命令] 浏览器 UI → transport(http) → POST /api/cmd/{command} → routes → ChatSessionRegistry/services → JSON 返回
+[事件] engine emit → SseEventBus → broadcast 扇出 → 各浏览器 SSE → useEngineEvent → UI
+[流式] chat_send_message(POST) 挂起至完成；llm:stream 经 /api/events 实时达各端
+[桌面同位] Tauri 壳 → TauriEventBus → window emit → useTauriEvent/useEngineEvent（行为与现状逐字节一致）
+[备份] export_all → /api/export 下载；反向 import_all 恢复
+[认证] 首访 /api/setup 设令牌 → /api/auth/login 换 Cookie → 全端点中间件校验
+```
+
+**外部集成：**
+- 无新增第三方云依赖（Caddy 与 opencode 均随镜像自托管分发）
+- 云端实例不连接伴侣中继（paired_devices 闲置，裁决 C 的远期收敛是后话）
+
+### Development Workflow Integration
+
+```bash
+# 引擎：cd crates/egosync-engine && cargo test
+# 桌面：流程不变——cd egosync-app && npm run tauri dev / npm run test:all
+# server 本地：cd server && cargo run（EGOSYNC_* env 就绪后 http://localhost:8080）
+# WEB 本地：cd egosync-app && npm run dev（vite proxy /api → localhost:8080）或直连 server 内嵌静态
+# 云端整链路：cd server && docker compose up --build
+```
+
+## Architecture Validation Results — 云端托管版（FR-44～FR-48）
+
+_本次验证覆盖本章与基线/伴侣章节、PRD §4.15、决策 #19 的一致性；未修改业务代码，未运行任何测试（抽取尚未开始）；结论仅表示具备实施指导能力。耦合点数据来自 2026-09-17 代码验证。_
+
+### Coherence Validation ✅
+
+| 检查项 | 结果 | 说明 |
+|--------|------|------|
+| engine crate path 依赖（无 workspace） | 通过 | companion-proto 先例延续；src-tauri/server 各自独立声明 |
+| axum 0.8 + tokio 1 与 relay-server 同栈 | 通过 | 同语言同运行时心智；SSE 为 axum 内建能力 |
+| tokio::spawn 替换安全性 | 有条件通过 | service 层任务体内安全（现状已混用）；**三个迁入 engine 的同步启动入口必须走 Handle 注入接缝**（register_stream_mirror 随 companion_dispatch 留壳不变）——tauri setup 闭包无 runtime 上下文，裸 spawn 会 panic（本项目 v0.1.6-alpha.1 亲历，companion_dispatch.rs 注释存证）；抽取含桌面启动路径 e2e 断言 |
+| companion 服务归属 | 通过 | 全部四个 companion_* service 留桌面壳不迁 engine（裁决见 ①）——listen 是第四类耦合且桌面专属；EngineEvents 保持 emit-only；与 companion_* command desktop-only、paired_devices 云端闲置三方自洽 |
+| EventSource→Cookie 认证链 | 通过 | 平台约束（无自定义头）倒逼；httpOnly + SameSite=Strict + 同源架构自洽 |
+| 与基线 100 条规则 + 伴侣章节 | 通过 | 全量继承；伴侣 Deferred"云端数据同步"仍 Non-Goal，"托管"语义更新已显式登记（裁决 C） |
+| 桌面零回归路径 | 通过 | 绞杀者五步，每步全绿收口；物理封禁 tauri 入 engine |
+
+### Requirements Coverage Validation ✅
+
+- **FR-44**：Docker 一键（compose 两服务）/ 完整引擎（engine+opencode+双库）/ 单实例单用户 / 单事实源（边界 5）——全覆盖
+- **FR-45**：浏览器双端访问 / 核心功能集（capability 门控 + 组件复用，视觉零分叉）/ 流式（SSE）/ 刷新恢复（服务端持久化 + 重取）——覆盖；功能分档清单留 UX 阶段（PRD ASSUMPTION 保持）
+- **FR-46**：初始化凭据（env 或首访 setup）/ 全端点强制认证（除 healthz 与静态）/ TLS（Caddy 或反代）/ Key 不下发（结构性保证 + 测试断言）——覆盖
+- **FR-47**：常驻调度平移 / TZ 语义 / 去重持久化硬化 / 停机诚实代价 / FR-11 确认边界 / 桌面 FR-10 不变——覆盖
+- **FR-48**：状态机裁决完毕（裁决 B）；后置交付不阻塞 FR-44~47——与 PRD 时序一致
+
+### Implementation Readiness Validation ✅
+
+- 决策完整性：Critical×8 全带理由；9 决策域 + 3 开放问题全部显式裁决
+- 结构完整性：目录树到文件级；五条硬边界；数据边界表
+- 模式完整性：5 类新冲突点约定 + 反模式清单齐备
+
+### Gap Analysis Results
+
+**Critical Gaps：无**
+
+**Important Gaps（不阻塞，首故事内解决）：**
+1. opencode 二进制获取与版本 pin 方式（官方 standalone 二进制 vs npm 分发进镜像）——Dockerfile 故事内定夺
+2. Caddy SSE 反代的回归性验证（text/event-stream 理论上默认逐写刷新，`flush_interval -1` 为冗余保险——compose 起来后实测 token 流不断流即可）
+3. vitest 既有 @tauri-apps/api mock 的迁移规模（14 个测试文件级机械替换，代码验证；量大但无歧义）——15.3 故事内一次完成
+4. sqlx migrations 路径平移的编译期修正（已确认：db/pool.rs 的 `sqlx::migrate!("./migrations")` 宏按 crate 根解析相对路径，31 个迁移文件随 engine 平移后宏路径自然成立，但需验证 checksum 一致性不触发重跑）——平移故事内处理
+
+**Nice-to-Have Gaps（明确延后）：**
+- WS 双向通道、多实例横向扩展、Litestream 流式备份、浏览器通知 Service Worker 化
+
+### Validation Issues Addressed
+
+- 提案 §4.2-7"三件并列"与本章"opencode 并入 server 镜像"的措辞冲突已在 ⑤ 显式裁决（理由记录在案）
+- 伴侣章节 Deferred"云端托管"的语义演化与约束表"不存在云端代替桌面跑循环"（FR-10 当时拓扑下成立）均已登记（裁决 C ①②），无静默矛盾
+- FR-10（桌面运行时执行）与 FR-47（常驻）的形态分叉在引擎层不存在（同一 engine，宿主决定调度启动时机）——已在 ⑨ 说明
+- **双镜头评审（2026-09-17，报告存 `architecture/reviews/`）**：①事实核实（PASS-WITH-FIXES）——初稿决策 #3"spawn 替换无行为变更"经 tauri 2.11.5 源码与本项目 v0.1.6-alpha.1 历史证伪，已改为 Handle 注入接缝；事件监听第四类耦合、六组状态、Caddy flush_interval 过强断言、env 键名、数字勘误均已按报告修正；②对抗性（PASS-WITH-FIXES）——契约形状层 11 条收紧（参数 schema、事件常量源、secret 键映射、AppError 白名单、重连补齐协议、特征测试先行等）已全部落入正文。两评审相互矛盾的 command 计数（120 vs 126）经独立复核取 120
+
+### Architecture Completeness Checklist
+
+**Requirements Analysis**
+- [x] 项目上下文深度分析（含代码级耦合点验证）
+- [x] 规模与复杂度评估
+- [x] 技术约束识别（含 EventSource/TZ/UTC 平台约束）
+- [x] 跨切关注点映射
+
+**Architectural Decisions**
+- [x] 关键决策含版本与理由（Critical×8）
+- [x] 技术栈完整指定（与既有栈对齐）
+- [x] 集成模式定义（双传输对等契约）
+- [x] 性能考量（SSE 扇出/慢客户端断开/退避）
+
+**Implementation Patterns**
+- [x] 命名规范（增量部分）
+- [x] 结构模式（测试位置四类）
+- [x] 通信模式（对等契约 + 错误码语义）
+- [x] 流程模式（重连/日志/收口条件/去重统一）
+
+**Project Structure**
+- [x] 完整目录结构（文件级）
+- [x] 组件边界（五条硬边界）
+- [x] 集成点映射
+- [x] 需求到结构映射完成
+
+### Architecture Readiness Assessment
+
+**Overall Status:** READY WITH MINOR GAPS
+
+**Confidence Level:** Medium-High（不确定性集中在 chat/agent_engine 域的事件耦合迁移——22 处 emit 与流式状态纠缠，是抽取故事最大一块；spawn/时区/密钥等事实性风险已经双评审收敛，实现期验证点已登记 Gap 清单）
+
+**Key Strengths:**
+- "同一引擎、双宿主"把全部云端价值收敛为三条 trait 接缝 + 一张注册表，桌面零回归有物理封禁与分步收口双保险
+- API 面从共享注册表生成，1:1 对应靠机制不靠纪律
+- 单用户/单源/无同步的不变式贯穿三个开放问题裁决
+- 密钥不下发在现有数据模型中已结构性成立（api_key_ref），云端只需守住不破坏
+
+**Areas for Future Enhancement:**
+- FR-48 桌面远程模式（第二阶段，状态机已裁决）
+- Android 直连云端实例（裁决 C 的远期形态）
+- 官方托管 SaaS（决策 #19 后议）
+
+### Implementation Handoff
+
+**AI Agent Guidelines:**
+- 本文档（含云端托管版增量章节）与 `project-context.md`、伴侣章节共同构成实施规范；冲突时以本文（更新者）为准并显式记录
+- 抽取期规则三（外科手术式修改）全程生效；每步收口=桌面全绿
+- 遵守五条硬边界与反模式清单
+
+**First Implementation Priority:**
+1. Story 15.1a：`crates/egosync-engine` 骨架 + 无 Tauri 模块平移（db/models/llm/error/agent_bridge/data_export）+ 桌面全绿收口
+2. Story 15.1b：EngineEvents + TauriEventBus + chat/agent_engine 域迁移（最重一块）
+3. 后续按 Implementation Sequence 3~11 顺延

@@ -3534,3 +3534,681 @@ So that 我不逐页翻找也能在通知中心统一看到桌面想让我知道
 **Then** 覆盖：NOTICE 帧 → InAppAdapter 呈现、三级分组与角标、上限节流、离线不投递重连补齐、Dispatch 接口对 InAppAdapter 的调用契约
 **And** 通知中心截图零回归（UX-M3）
 
+
+---
+
+# 增量拆分：云端托管版 Cloud Edition（Epic 15 起，2026-09-17 追加）
+
+> **追加说明**：本节为既有 Epic 1～14 之后的增量拆分，不触动上文任何内容。范围仅覆盖 PRD §4.15 云端托管版（自托管）：FR-44～FR-48；桌面既有需求已由 Epic 1～11 覆盖、手机伴侣由 Epic 12～14 覆盖，不在此重复。启动时点：V1 收尾后（不与 Epic 12-14 交叉、无顺序约束）。
+>
+> **权威输入**：`architecture.md` 文末「云端托管版（FR-44～FR-48）」六个增量章节（2026-09-17 定稿，含双镜头评审收敛：runtime Handle 接缝、事件常量源、secret 键映射、AppError 白名单、重连补齐协议等契约收紧）；`sprint-change-proposal-2026-09-17.md`（§4.4 Epic 15-17 骨架已定）；`prd-egosync.md` §4.15（FR-44~48 定稿版）；`.decision-log.md` 决策 #19（立项裁决：路径 B 云端托管 × 云脑单源 × 自托管单用户 × V1 收尾后启动 × Android 伴侣照常）。
+>
+> **范围排除（不拆故事）**：Android 直连云端实例（架构裁决 C：远期形态，帧协议为收敛契约）；多租户 SaaS / 官方托管（Non-Goal）；WS 双向通道（Deferred）。**FR-48 桌面远程模式为可选后置故事（16.3，第二阶段）**，不交付不阻塞云端版首版验收。**WEB UX 章节（提案步骤 3）尚未产出**——按提案依赖图（史诗仅依赖 PRD+架构）先行拆分；UX 定稿后如有新约束，以勘注补入本块，不回改。
+
+## Requirements Inventory（增量）
+
+### Functional Requirements
+
+来源：`prd-egosync.md` §4.15
+
+- **FR-44**: 云端部署形态 — 自有服务器（VPS/NAS）Docker 一键部署完整引擎（Rust 编排层 server binary + opencode + SQLite）；单实例单用户，无多租户；同一用户同一时刻只有一个事实源实例（桌面版或云端版二选一持有数据，另一形态作为客户端访问）；服务器重启后自动恢复、数据与配置完整 `[ASSUMPTION: 单实例单用户自托管；不做多实例间数据同步]`
+- **FR-45**: WEB 客户端 — 任意现代浏览器（桌面/移动，含 iOS Safari）访问云端实例，覆盖核心体验功能集；流式对话、任务操作、建议确认/拒绝、仪表盘、晨间简报与周复盘均可用；与桌面版共用同一 React 组件体系（视觉零分叉）；浏览器刷新或断线重连后恢复会话状态、不丢已产生消息 `[ASSUMPTION: 核心体验功能集分档清单由 UX 阶段确定]`
+- **FR-46**: 访问认证 — 无注册体系，初始化时设置单用户访问凭据（令牌；passkey/WebAuthn 已裁决延后 V2）；除健康检查等运维必需端点外全部端点强制认证、未认证请求被拒且不泄露任何用户数据；全程 TLS（反代终结）；LLM Key 等服务端密钥仅存服务端（env / 0600 明文文件），任何 API 响应不下发给浏览器 `[ASSUMPTION: 凭初始化凭据访问，无账号注册体系]`
+- **FR-47**: 常驻工作循环 — 角色工作循环随服务器常驻运行（7×24），晨间简报/周复盘按计划时间自动生成并留存、不依赖任何客户端在线；停机期间无新建议（诚实代价）、恢复后按计划继续；常驻生成的建议仍走"待确认→用户确认"（FR-11 边界不变）；不改变桌面版 FR-10 行为（应用运行时执行）`[ASSUMPTION: 服务器停机期间无新建议产生]`
+- **FR-48**: 桌面客户端远程模式 `[可选后置]` — 桌面应用切换为连接云端实例的客户端使用（本地引擎待机，不产生本地数据副本）；远程/本地模式可切换，切换为连接目标变更、不触发任何数据合并或同步；依赖 Epic 15 传输对等基建，作为云端赛道第二阶段交付
+
+### NonFunctional Requirements
+
+来源：`architecture.md` 云端托管版增量章节 + PRD Privacy/Cost/Platform 守则（决策 #19）
+
+- **NFR-C1 公网最小攻击面**：除 healthz 与静态资源外全端点强制认证；认证失败统一 401 不泄露用户存在性；CSP 严格 + CORS 显式拒绝跨源；攻击面收敛为单进程 + 静态资源
+- **NFR-C2 运维自恢复**：服务器重启后实例自动恢复、数据配置无损（compose restart + 启动幂等）；两级 healthz；tracing JSON 结构化日志（密钥与事件 payload 明文永不入日志）；单 VPS $5-10/月承载
+- **NFR-C3 数据主权闭环**：复用既有导出/导入机制作为备份/恢复路径；EgoSync 官方零持有零落地；浏览器端不落任何业务数据（仅内存态）
+- **NFR-C4 桌面零回归（硬边界）**：engine crate 物理禁 tauri 依赖（Cargo.toml 不声明）；绞杀者抽取每步收口 = `npm run test:all` + tests/e2e 桌面套件全绿；抽取期禁止顺手重构（规则三，唯一豁免=事件发射点机械改写）
+- **NFR-C5 云脑单源**：无任何跨实例复制/同步代码路径；远程模式/多客户端只是视图；LOCAL↔REMOTE 互斥切换永不合并
+- **NFR-C6 传输对等**：同一 command 名、参数形状、返回形状、事件名/载荷、错误形状在 invoke 与 HTTP/SSE 双通道同构；契约变更必须双通道同步 + 对等测试更新
+- **NFR-C7 诚实代价明示**：停机期间无新建议；TZ 变更后首个周期可能跳过/重复一次触发；密钥缺失返回指明重录路径的结构化错误——UI 明示而非掩盖
+
+### Additional Requirements
+
+来源：`architecture.md` 云端托管版增量章节（技术需求，拆故事的直接依据；双评审收敛后的契约口径）
+
+1. **engine crate**：`crates/egosync-engine` 承载全部业务逻辑（db/models/llm/error/services/migrations 平移），Cargo.toml 不声明 tauri（物理封禁）；宿主差异收敛于四接缝：EngineEvents / SecretStore / sidecar 路径注入 / **runtime Handle 注入**；绞杀者五步抽取（纯模块平移 → EventBus+耦合 service 迁移 → Registry → spawn/注册表 → server），每步桌面全绿收口；migrations 平移验证 checksum 一致性不触发重跑
+2. **事件契约**：events.rs 事件名常量是唯一发射源（现状 Rust/TS 两侧散落字面量 ≥9/≥8 处收编）；TS 事件名与 payload 类型构建期生成；发射点"强类型 payload → 常量名+Value"机械改写是抽取期唯一豁免规则三的改写
+3. **Handle 注入接缝**：三个随 service 迁入 engine 的同步启动入口（spawn_scheduler / 两个 spawn_hourly_watch；register_stream_mirror 随 companion_dispatch 留桌面壳不变）改为接收 `tokio::runtime::Handle`（桌面壳传 tauri handle，server 传 current）——tauri setup 闭包无 runtime 上下文，裸 tokio::spawn 会 panic（v0.1.6-alpha.1 前车之鉴）；验收含桌面启动路径 e2e 断言。**全部四个 companion_* service（pairing/connection/dispatch/snapshot）留桌面壳不迁**（桌面宿主专属功能，云端无消费者；16 个耦合 service 名单实际迁入 13 个）
+4. **ChatSessionRegistry**：六组会话状态（StreamingState/CancelTokens/OpencodeSessions/OnboardingConversations/MemoryExtractionState/OpencodeMcpScopeLock）从 commands/chat.rs 移入 engine；**busy 互斥特征测试先行**（并发双发恰一次 LLM 调用、恰一条 busy 落库、busy 经 Ok 通道返回；companion 的 `msg.role != "user"` 探测协议冻结，禁止改 Err 通道）
+5. **command 注册表**：commands.json 构建期工件（名字+参数 schema+capability 标记）四方消费（桌面 generate_handler / server 路由 / 前端 capabilities / 对等测试）；对等测试用例由工件**全量生成**（禁抽样禁手抄）；desktop-only 清单 = 4 个 rfd 对话框 command + 7 个 companion_* command + data_export/data_import（云端走 /api/export、/api/import HTTP 流，同一能力双落点）
+6. **server binary（axum 0.8）**：`POST /api/cmd/{command}`（参数 camelCase 与 invoke 同构）+ `GET /api/events`（SSE，KeepAlive 30s，broadcast 扇出、慢客户端滞后断开）+ auth/setup/export/import/healthz 辅助端点；**错误白名单**：全部 AppError variant 一律 200+原样 serde JSON（单键 map 形状），非 200 仅 401/429/404/进程级 5xx 四类；body 上限 50MB；业务端点禁用响应超时（chat 分钟级挂起是正常态）
+7. **认证**：`EGOSYNC_TOKEN` env 或首访 `/api/setup` 设置；服务端只存 Argon2id 哈希；登录换 httpOnly SameSite=Strict Cookie（SSE 用 Cookie——EventSource 不能带 Authorization 头）；env/setup 优先级冻结（env 存在 ⇒ setup 拒绝、login 仅比对 env；切换须重启）；auth/setup 端点 IP 限流 5 次/分钟
+8. **前端 transport**：`src/transport/` 双实现（TauriTransport 行为与现状逐字节一致 / HttpTransport fetch+EventSource）+ 运行时探测（`window.__TAURI_INTERNALS__`）；单一 Vite 构建产物双宿主复用；`useEngineEvent` 接替 useTauriEvent；capabilities.ts 构建期从 capabilities.rs 生成（禁手写双清单）；**重连补齐协议**：Transport 定义 onConnectionStateChange，重连后由 transport 层重放只读 query command 白名单（写入类一律不重放）；TitleBar/App 的 window API 引用按宿主探测门控；`skill-scope-updated` 前端→前端事件浏览器进程内消化
+9. **密钥管理**：SecretStore trait（keyring 实现留桌面壳；server 实现 env/文件适配器）；键映射 `EGOSYNC_SECRET_{api_key_ref}` 原样区分大小写（api_key_ref = `llm_{uuid}_api_key` 全小写）；**文件优先、env 兜底**（写入永远落 /data/secrets.json 0600 明文——"加密"措辞已废除；env 仅固定名 secret 引导通道）；导入完成后对每个 api_key_ref 探测可达性并给指明重录路径的结构化错误；浏览器只见过 api_key_ref（API 响应形状测试断言无 key 字段）
+10. **opencode 服务端化**：sidecar.rs 生命周期管理原样平移零改动，二进制路径经注入点（桌面传 resources 路径 / server 传 `EGOSYNC_OPENCODE_PATH`）；agent_bridge 协议零改动（127.0.0.1:port 同容器成立）；opencode 并入 server 镜像（版本 pin，与 engine 同 tag）；compose 实际两服务（egosync-server + caddy 可选）
+11. **数据与备份**：双 SQLite 挂命名卷 /data（WAL 单容器单写者）；备份双路径 = 逻辑级（export_all/import_all 经 HTTP 流）+ 卷级（停容器复制卷，运行中复制有一致性风险须文档明示）；secrets.json 同卷 0600 不进镜像不进 git
+12. **部署运维**：docker compose（egosync-server + caddy 可选反代，Caddyfile 含 request_body 50MB 与 flush_interval -1 冗余保险）；TZ env + tzdata 进镜像；两级 healthz（存活 compose 用 / 深度 `?deep=1` 升级前巡检）；tracing JSON stdout；CI `server-docker.yml` 多阶段镜像构建；HTTP/1.1 反代下 SSE 6 连接上限的部署文档提示
+13. **FR-47 硬化**：调度器内存去重 map（last_triggered_map / last_briefing_trigger_date / last_review_trigger_week）升级为 `scheduler_triggers` 持久化小表（大石头保护现状已 DB 持久化，替换迁入含数据迁移）；**时间源三分表**（持久化 UTC RFC3339 禁改 Local / 调度判定容器 Local / 前端渲染浏览器 TZ）；scheduler_triggers 键含时区维度（或文档明示 TZ 变更首周期跳过/重复）；桌面侧边缘行为变化加注（重启窗口内不再重复触发是行为变化非回归）
+
+### UX Design Requirements（WEB UX 章节定稿前的基础约束）
+
+来源：`architecture.md` 云端托管版增量章节 ③（UX 章节定稿后可增补勘注）
+
+- **UX-C1 视觉零分叉**：WEB 客户端与桌面版共用同一 React 组件体系（同一 Vite 构建产物双宿主复用），禁止重做 UI——与既有"UI 实现零重做"约束同构
+- **UX-C2 能力门控可见性**：desktop-only 能力（选工作目录、配对管理等）在 web 端入口不出现（经 capabilities 驱动显隐，而非运行时报错）
+- **UX-C3 桌面壳组件退化**：TitleBar 窗口控制在浏览器退化为普通标题栏（Tauri 下渲染原样；布局细节归 UX 阶段）
+- **UX-C4 响应式与浏览器兼容**：桌面/移动浏览器（含 iOS Safari）可用；断点与移动交互细节由 UX 阶段确定；SSE/EventSource 兼容性已验证（iOS Safari 4.0+ 全支持）
+
+## Epic List（增量）
+
+### Epic 15: 引擎无头化与服务器形态（Headless Engine & Server）
+
+EgoSync 全部业务逻辑物理迁入 `crates/egosync-engine`（Cargo.toml 不声明 tauri——物理封禁），桌面 Tauri 壳以四条接缝（EngineEvents / SecretStore / sidecar 路径 / runtime Handle）注入宿主能力，桌面行为与现状逐字节一致（每故事收口 = `npm run test:all` + tests/e2e 桌面套件全绿）；axum server binary 以同一 command 注册表暴露 HTTP/SSE API，认证随 server 首次交付一体落地；前端获得双传输抽象及其对等验证。完成后：引擎可脱离 Tauri 运行于任意宿主——云端赛道全部后续故事的唯一前置。桌面版同时获得引擎物理分层、busy 互斥特征测试护栏与事件常量源（E15 的独立价值）。
+
+**FRs covered:** FR-44（引擎/服务器形态基础）、FR-46（认证后端）；NFR-C4, NFR-C5, NFR-C6
+**Additional reqs covered:** 1, 2, 3, 4, 5, 6, 7, 8
+**UX-DRs covered:** UX-C2（能力门控机制层）
+
+**Story 列表（顺序=架构 Implementation Sequence 步骤 1～7；15.1/15.2 分立因纯平移与接缝改造性质不同，合并将致单故事触碰 35 文件、收口粒度过粗）：**
+- **15.1** 引擎 crate 骨架与纯模块平移——`crates/egosync-engine` + db/models/llm/error/agent_bridge/sidecar/data_export 平移（逐字节等价）+ SecretStore/sidecar 路径两接缝就位 + migrations checksum 验证
+- **15.2** 事件总线、Handle 接缝与泛域服务迁移——EngineEvents trait + events.rs 常量源 + TauriEventBus + 12 个泛域 service 迁移（发射点机械改写=规则三唯一豁免）+ Handle 注入 3 入口 + spawn 双轨 + 桌面启动路径 e2e
+- **15.3** chat/agent_engine 域迁移与 ChatSessionRegistry 抽取——busy 互斥特征测试**先行**（并发双发恰一次 LLM 调用/恰一条 busy 落库/Ok 通道返回）→ agent_engine 22 处 emit 改写 + chat 命令层事件面 → 六组会话状态入 Registry（无壳内桥接中间态）→ 特征测试重跑锁粒度守恒
+- **15.4** server binary 与单用户认证——commands.json 构建期工件（名字+参数 schema+capability）+ axum `POST /api/cmd/{command}` + SSE `/api/events` + healthz 两级 + 错误白名单 + body 50MB + Argon2id/Cookie/限流/env-setup 优先级冻结（认证随 server 首次交付，无 dev 旁路）
+- **15.5** 前端双传输与对等测试套件——`src/transport/` 双实现（TauriTransport 逐字节一致 / HttpTransport fetch+EventSource）+ 运行时探测 + useEngineEvent + capabilities 同源生成 + 重连补齐协议 + TitleBar web 门控 + **对等用例由 commands.json 全量生成**（禁抽样禁手抄）+ 错误路径黄金用例 + 无 key 字段断言
+
+---
+
+### Epic 16: WEB 客户端（Web Client）
+
+任意现代浏览器（桌面/移动，含 iOS Safari）访问云端实例使用核心体验：流式对话、任务操作、建议确认/拒绝、仪表盘、简报复盘；刷新/断线重连恢复状态；视觉零分叉（同一 React 组件体系、同一 Vite 构建产物双宿主复用）；desktop-only 入口不出现。完成后 = FR-45 全部四条验收 + FR-46 前端流程；FR-48 作为可选后置故事（16.3）在此交付。
+
+**FRs covered:** FR-45（主体）、FR-46（认证前端流程）、FR-48（16.3 可选后置）；NFR-C1（前端侧）, NFR-C3（浏览器不落盘）, NFR-C6, NFR-C7（重连明示）
+**Additional reqs covered:** 8（前端消费侧）, 9（浏览器永不见 key 的前端守卫）
+**UX-DRs covered:** UX-C1, UX-C2, UX-C3, UX-C4
+
+**Story 列表（顺序=架构 Implementation Sequence 步骤 8 + 11）：**
+- **16.1** WEB 入口、认证与首访流——server 内嵌静态 + SPA 回退 + 运行时探测 + 能力门控 UI + TitleBar 浏览器退化 + 首访 setup 向导 / 登录 / 401 全局拦截 / 登出（入口与认证一体交付）
+- **16.2** 实时事件、流式体验与浏览器适配——useEngineEvent 全量接入 + 流式对话实时渲染 + 断线重连状态呈现与只读补齐 + 刷新恢复 + 响应式基线（含 iOS Safari）+ 视觉零回归对比
+- **16.3** `[可选后置]` 桌面客户端远程模式（FR-48）——LOCAL/REMOTE 互斥状态机 + 切换 UI（本地引擎停机守卫 + "不合并数据"明示）+ REMOTE_OFFLINE 重连退避 + 本地数据零副本断言
+
+---
+
+### Epic 17: 自托管部署与运维（Self-Hosted Deployment & Ops）
+
+用户在自有 VPS/NAS 上 `docker compose up` 一键部署并长期运维：TLS、密钥安全注入、24/7 常驻工作循环（时区正确、升级重启不重复触发）、备份/恢复闭环、CI 镜像发布。完成后 = FR-44 部署侧验收 + FR-47 全部五条验收。
+
+**FRs covered:** FR-44（部署/重启恢复/备份）、FR-47；NFR-C1, NFR-C2, NFR-C3, NFR-C7
+**Additional reqs covered:** 9, 10, 11, 12, 13
+**UX-DRs covered:** —（运维故事无 UI 面；16.x 承载用户可见面）
+
+**Story 列表（顺序=架构 Implementation Sequence 步骤 9～10）：**
+- **17.1** Docker 化部署、密钥注入与 TLS——多阶段 Dockerfile（opencode 并入 server 镜像 + tzdata + 版本 pin）+ compose 两服务 + Caddy 自动 HTTPS（request_body 50MB + flush 冗余保险）+ 重启自愈 + SecretStore 服务端适配器（文件优先 env 兜底 + `EGOSYNC_SECRET_{api_key_ref}` 原样区分大小写）+ 导入后可达性探测 + SSE 6 连接上限文档提示
+- **17.2** 常驻工作循环硬化（FR-47）——scheduler_triggers 持久化小表（内存去重三处替换 + bigrock 替换迁移含数据迁移）+ 时间源三分表落死（持久化 UTC / 调度 Local / 渲染浏览器 TZ）+ 时区维度键 + 桌面边缘行为变化加注
+- **17.3** 备份恢复、CI/CD 与发布——`/api/export`/`/api/import` HTTP 流（复用纯逻辑 + 原子性）+ 卷级停机复制文档 + `server-docker.yml` 镜像构建发布 + tests/e2e web 模式（桌面模式零改动）+ 深度 healthz + CI 三链路并行阻塞
+
+---
+
+## Epic 依赖图（增量）
+
+```
+E15 (引擎+服务器+传输对等) ──→ {E16 (WEB 客户端) ∥ E17 (部署运维)}
+    └─ 依赖桌面既有 Epic 1～11 已实现的引擎代码（抽取对象）；与 Epic 12-14 无交叉
+
+Story 间序列（同一架构约束，强顺序——每步桌面全绿收口）：
+15.1 → 15.2 → 15.3 → 15.4 → 15.5
+  → {16.1 → 16.2 ∥ 17.1 → 17.2 → 17.3}
+  → 16.3（可选后置：依赖 15.4/15.5 + 16.1-16.2 + 产品决策）
+（16.3 不阻塞云端版首版验收——FR-48 可选后置语义）
+```
+
+## FR Coverage Map（增量）
+
+| 需求 | 归属 Epic / Story | 验收对应 |
+|------|----------------|----------|
+| FR-44 云端部署形态 | E15（15.1–15.4 引擎/服务器）+ E17（17.1 部署与重启恢复、17.3 备份） | Docker 一键含完整引擎 / 单实例单用户 / 单事实源 / 重启自动恢复 / 桌面云端各自独立部署——五条逐条落位 |
+| FR-45 WEB 客户端 | E16（16.1–16.2）+ E15（15.5 传输对等基建） | 浏览器双端核心操作 / 流式实时渲染体验一致 / 刷新重连恢复状态——四条逐条落位 |
+| FR-46 访问认证 | E15（15.4 后端全链）+ E16（16.1 前端流程）+ E17（17.1 TLS/密钥） | 初始化凭据无注册 / 全端点强制认证不泄露 / 全程 TLS / Key 仅服务端——四条逐条落位 |
+| FR-47 常驻工作循环 | E17（17.2 硬化）；引擎平移在 15.2 | 常驻按计划执行无客户端在线 / 简报复盘按时生成留存 / 停机无新建议恢复后继续 / 待确认边界不变 / 桌面 FR-10 不变——五条逐条落位 |
+| FR-48 桌面远程模式 `[可选后置]` | E16 / 16.3 | 切换远程本地待机 / 切换不触发合并 / 第二阶段时序不阻塞首版——三条逐条落位 |
+
+### NFR / Additional / UX 覆盖核查
+
+| 项 | 归属 |
+|----|------|
+| NFR-C1 公网最小攻击面 | 15.4（认证/限流/401）+ 16.1（前端流程）+ 17.1（TLS/安全头） |
+| NFR-C2 运维自恢复 | 17.1（compose restart/healthz）+ 17.2（重启不重复）+ 17.3（CI/巡检） |
+| NFR-C3 数据主权闭环 | 16.1（浏览器不落盘）+ 17.3（导出导入/卷备份） |
+| NFR-C4 桌面零回归（硬边界） | E15 全部故事的收口条件（test:all + e2e 全绿；物理封禁 tauri） |
+| NFR-C5 云脑单源 | 15.3（Registry 单份状态）+ 16.3（LOCAL/REMOTE 互斥守卫） |
+| NFR-C6 传输对等 | 15.4（API 面同源）+ 15.5（对等测试套件）+ 16.2（SSE 消费验证） |
+| NFR-C7 诚实代价明示 | 16.2（重连状态呈现）+ 17.1（密钥缺失重录路径）+ 17.2（TZ 跳过/重复明示） |
+| Additional 1～13 | 1→15.1/15.2；2→15.2/15.3；3→15.2；4→15.3；5→15.4/15.5；6→15.4；7→15.4；8→15.5/16.1/16.2；9→17.1；10→17.1；11→17.3；12→17.1/17.3；13→17.2 |
+| UX-C1～C4 | 16.1（首屏/探测/门控/TitleBar）/ 16.2（流式/重连/响应式）；UX 章节定稿后如有新约束以勘注补入 |
+
+---
+
+## Epic 15: 引擎无头化与服务器形态（Headless Engine & Server）
+
+EgoSync 全部业务逻辑物理迁入 `crates/egosync-engine`（无 tauri 依赖），桌面 Tauri 壳以四条接缝注入宿主能力、行为逐字节一致；axum server binary 以同一 command 注册表暴露 HTTP/SSE API（认证一体交付）；前端获得双传输抽象及其对等验证。桌面版全程零回归（每故事收口 = `npm run test:all` + tests/e2e 全绿）。
+
+**FRs covered:** FR-44（引擎/服务器形态基础）、FR-46（认证后端）；NFR-C4, NFR-C5, NFR-C6
+**Additional reqs covered:** 1, 2, 3, 4, 5, 6, 7, 8
+
+### Story 15.1: 引擎 crate 骨架、宿主接缝与纯模块平移
+
+As a 云端赛道开发者,
+I want 一个无 tauri/keyring 依赖的 `crates/egosync-engine` crate，承载全部纯逻辑模块（db/models/llm/error 及无宿主耦合的 services 与 migrations），并就位两条宿主接缝（SecretStore trait、sidecar 路径注入）,
+So that 引擎获得脱离 Tauri 运行的物理形态，后续解耦故事不被密钥与进程路径卡住，且桌面版行为零变化。
+
+**FRs covered:** FR-44（引擎形态基础）；Additional 1（骨架与纯模块部分）
+**NFRs covered:** NFR-C4
+
+**Acceptance Criteria:**
+
+**Given** 仓库根目录
+**When** 查看 `crates/egosync-engine/`
+**Then** Cargo.toml 声明 sqlx/tokio/reqwest/chrono（与 src-tauri 同版本），**不声明 tauri 与 keyring**（物理封禁）；src-tauri 以 path 依赖引用；仓库根无 Cargo workspace（companion-proto 先例延续）
+**And** src-tauri 既有 `pub use` 回引使 commands/ 与未迁移模块的路径引用零改动，`npm run tauri dev` 正常启动
+
+**Given** SecretStore 接缝（四接缝之一）
+**When** 实现完成
+**Then** engine 定义 `SecretStore` trait（按 api_key_ref 的 save/load/delete）；桌面壳提供 keyring 实现并注入；engine 内零 keyring 引用
+**And** 依赖密钥的纯逻辑 service（如 llm_config）经 trait 读写，行为与现状一致
+
+**Given** sidecar 路径接缝（四接缝之一）
+**When** opencode 二进制路径参数化
+**Then** sidecar 的路径解析改为入参注入（桌面壳传 tauri resources 解析结果）；sidecar.rs 平移进 engine，进程管理（spawn/健康检查/退出清理/watchdog）逐字节等价
+
+**Given** 纯模块平移
+**When** 迁移 db/、models/、llm/、error.rs、agent_bridge、data_export 及全部无 tauri/keyring 依赖的 services
+**Then** 文件内容逐字节等价（import 路径调整与接缝调用除外）；内联 `#[cfg(test)]` 测试随文件迁移且全部通过
+**And** 全部四个 companion_* service（pairing/connection/dispatch/snapshot）留桌面壳不动（架构归属裁决）
+
+**Given** migrations 平移
+**When** `sqlx::migrate!` 宏路径在 engine crate 内生效
+**Then** 对既有桌面 dev 库验证 `_sqlx_migrations` 无 dirty、已应用迁移不重跑（checksum 一致性）
+
+**Given** 桌面回归收口（硬边界）
+**When** 执行 `npm run test:all` + tests/e2e 全量
+**Then** 全绿——跳过任何一项即本故事未完成（显式失败原则）
+
+---
+
+### Story 15.2: 事件总线、Handle 接缝与泛域服务迁移
+
+As a 云端赛道开发者,
+I want EngineEvents trait（events.rs 事件名常量为唯一发射源）+ TauriEventBus + 12 个泛域 service 迁入 engine，外加三个同步启动入口的 Handle 注入与 spawn 双轨替换,
+So that engine 泛域服务不再触碰 tauri::，事件名收编为单一事实源，桌面启动路径无 runtime panic 风险，桌面行为零变化。
+
+**FRs covered:** FR-44；Additional 1、2、3（主体）
+**NFRs covered:** NFR-C4、NFR-C7（事件常量源）
+
+**Acceptance Criteria:**
+
+**Given** EngineEvents 接缝（四接缝之一）
+**When** trait 定义完成
+**Then** 方法签名为 `emit(event: &str, payload: serde_json::Value)`（对象安全——非泛型方法，架构决策 #2 落死）；engine 内全部事件发射经 trait，零 `tauri::` 残留（物理封禁，CI 断言 engine 不依赖 tauri）
+
+**Given** events.rs 事件名常量源
+**When** 收编现状散落字面量
+**Then** Rust 侧 ≥9 个事件名全部以常量定义；engine 内发射点零字面量；桌面壳 TauriEventBus 将 trait 调用转发 `app_handle.emit`，事件名与 payload JSON 形状与现状逐字节一致
+**And** 壳内监听侧（companion_dispatch/companion_snapshot 的 `listen("llm:stream")`）改用常量引用，行为不变
+
+**Given** 发射点机械改写（规则三唯一豁免）
+**When** 强类型 payload（如 `emit("llm:stream", StreamPayload{..})`）改写为"常量名 + Value"
+**Then** 这是抽取期唯一允许的改写（架构决策 #2 显式豁免）；改写不改语义——桌面 e2e 对流式/通知/任务分类等事件驱动行为的断言全绿
+
+**Given** 泛域服务迁移
+**When** 12 个 service（bigrock_protection / bigrock_reminder / briefing_generator / delegate_bridge / event_router / mission_inferrer / q2_protection_reminder / review_generator / scheduler / task_classifier / task_deadline_watch / task_protection_watch）迁入 engine
+**Then** 各自的 AppHandle 参数换为 EventBus 注入；任务体内 `tauri::async_runtime::spawn` → `tokio::spawn`（任务体内已有 runtime 上下文，安全；现状已混用）
+
+**Given** Handle 注入接缝（四接缝之一）
+**When** 三个迁入 engine 的同步启动入口（spawn_scheduler / 两个 spawn_hourly_watch）签名改造
+**Then** 接收 `tokio::runtime::Handle` 参数；lib.rs setup 传 `tauri::async_runtime::handle()`；register_stream_mirror 随 companion_dispatch 留壳、其 spawn 不变
+
+**Given** 桌面启动路径（v0.1.6-alpha.1 前车之鉴）
+**When** 启动 e2e 执行
+**Then** setup → 三个入口正常派生任务、无 "there is no reactor running" panic——**本 AC 为验收必含项**
+
+**Given** 桌面回归收口（硬边界）
+**When** 执行 `npm run test:all` + tests/e2e 全量
+**Then** 全绿
+
+---
+
+### Story 15.3: chat/agent_engine 域迁移与 ChatSessionRegistry 抽取
+
+As a 云端赛道开发者,
+I want 耦合最深的 chat 域整体入 engine：agent_engine 事件面（22 处 emit）经总线发射、chat 命令层六组会话状态抽为 ChatSessionRegistry——且 busy 互斥特征测试**先行**落位,
+So that 云端赛道最大的抽取风险在一故事内出清、会话状态成为引擎能力（server 复用同一份），现状零测试覆盖的并发语义获得护栏——"桌面全绿"防线对这些语义不再是空集。
+
+**FRs covered:** FR-44；Additional 2（chat 域部分）、4
+**NFRs covered:** NFR-C4、NFR-C5
+
+**Acceptance Criteria:**
+
+**Given** 特征测试先行（动任何代码**之前**的第一交付物）
+**When** 特征测试落位并运行
+**Then** 同会话并发双发：恰触发一次 LLM 调用、恰一条 busy 落库消息、busy 经 **Ok 通道**返回（chat.rs:301-309 现状契约，代码验证）
+**And** companion 的 `msg.role != "user"` busy 探测协议冻结——busy 禁止改为 Err 通道（隐式协议破坏 = 测试红）
+**And** 特征测试在**抽取前的现状代码**上即全绿（证明护栏有效）
+
+**Given** agent_engine.rs（22 处 tauri:: 引用，16 个耦合文件之最）
+**When** 迁移完成
+**Then** 平移进 engine，全部 emit 经 EventBus + events.rs 常量；`llm:stream` 的 StreamPayload 序列化形状与现状逐字节一致（conversationId / token / thinking 等 camelCase 字段不变）
+
+**Given** chat 命令层事件面
+**When** `emit_chat_event` 改造
+**Then** commands/chat.rs 的事件发射（message:saved / conversation:created / conversation:deleted）经注入的 EventBus
+
+**Given** ChatSessionRegistry 抽取
+**When** 六组状态（StreamingState / CancelTokens / OpencodeSessions / OnboardingConversations / MemoryExtractionState / OpencodeMcpScopeLock）从 commands/chat.rs 迁入 engine
+**Then** Arc 组合、无 Tauri 类型；Tauri command 与（未来的）axum handler 薄调用同一 Registry；lib.rs 六个 `app.manage` 改为注入 Registry
+**And** 不设"壳内桥接"中间态——特征测试保护下一次性完成（合并故事的结构收益）
+
+**Given** 锁粒度守恒验证
+**When** 抽取后特征测试重跑
+**Then** 行为与抽取前逐项一致——"顺手细化锁粒度"在此变红（空转防线闭合，对抗性评审 F6 的闭合条款）
+
+**Given** 手机伴侣流式镜像（跨域回归面）
+**When** companion_dispatch 的 `listen("llm:stream")` 监听
+**Then** TauriEventBus 转发至 app_handle.emit 后监听侧仍收到事件（事件链路对壳内消费者无感）
+
+**Given** 桌面回归收口（硬边界）
+**When** 执行 `npm run test:all` + tests/e2e 全量（含对话流式 token 逐字渲染、`chat_stop_streaming` 停止、同会话 busy 拒绝"我还在想上一个问题，请稍等片刻…"）
+**Then** 全绿
+
+---
+
+### Story 15.4: server binary 与单用户认证
+
+As a 云端实例运营者,
+I want 一个以同一 command 注册表驱动的 axum server binary（cmd/SSE API 面随附完整单用户认证），认证与 server 一体交付、无任何 dev 旁路,
+So that 实例从第一天起就以可公网部署的形态存在，API 面与 Tauri command 一一对应靠机制（同一注册表）而非纪律。
+
+**FRs covered:** FR-44（服务器形态）、FR-45（传输基建）、FR-46（后端四条全部）；Additional 5、6、7
+**NFRs covered:** NFR-C1、NFR-C6
+
+**Acceptance Criteria:**
+
+**Given** commands.json 构建期工件
+**When** 从 command 签名导出
+**Then** 每条 command 含：名字、参数 schema（`State<'_, T>` 注入参数与客户端参数由 schema 标注区分——server handler 据此驱动反序列化，禁止人肉阅读 120 个签名）、capability 标记（desktop-only = 4 个 rfd 对话框 + 7 个 companion_* + data_export/data_import；web-ok = 其余）
+**And** 工件被四方消费：桌面 generate_handler、server 路由、前端 capabilities、对等测试（15.5）
+
+**Given** server 路由生成
+**When** axum 0.8 启动
+**Then** `POST /api/cmd/{command}` 覆盖全部 web-ok command（desktop-only 物理不路由，请求得 404）；参数 camelCase 反序列化与 invoke 同构；`server/` 与 relay-server 同栈同布局范式
+
+**Given** SSE 事件流
+**When** `GET /api/events` 连接
+**Then** 事件名 = SSE event 字段、data = payload JSON（与 emit 同构）；tokio broadcast 扇出至全部连接；KeepAlive 30s 心跳；慢客户端滞后即断开（EventSource 自动重连 + 客户端补齐兜底）
+
+**Given** 错误白名单（架构 ② 冻结口径）
+**When** 业务错误发生
+**Then** 全部 14 个 AppError variant 一律 `200 + 原样单键 map JSON`（与 invoke 错误通道同构）；非 200 仅限 401 / 429 / 404 / 进程级 5xx 四类
+
+**Given** 请求边界
+**When** 大请求与慢响应
+**Then** body 上限 50MB（显式覆盖 axum 默认 2MB）；业务端点禁用响应超时（chat 分钟级挂起是正常态）、保留 idle 超时
+
+**Given** healthz
+**When** `GET /healthz`（无认证）与 `GET /healthz?deep=1`
+**Then** 分别返回存活态与深度态（DB 连通 + opencode 存活）
+
+**Given** 初始化优先级（架构决策 #5 冻结）
+**When** env 存在 `EGOSYNC_TOKEN` / env 不存在
+**Then** env 存在 ⇒ `/api/setup` 拒绝（库内哈希忽略）、`/api/auth/login` 仅常时比对 env；env 不存在 ⇒ 首访 `/api/setup` 设置令牌（Argon2id 哈希入库）；两态切换须重启进程、已发 Cookie 不随切换失效
+**And** 任何实现不得出现"任一通过即可"的 fail-open 组合读法
+
+**Given** 登录与会话
+**When** `POST /api/auth/login` 令牌正确 / 错误
+**Then** 正确 ⇒ 换发 httpOnly SameSite=Strict 会话 Cookie（SSE/EventSource 用 Cookie 凭证——平台约束倒逼）；错误 ⇒ 统一 401 不泄露用户存在性
+**And** 未认证请求任意业务端点（含 SSE）⇒ 401；仅 healthz 与静态资源豁免
+
+**Given** 限流与跨源
+**When** `/api/auth/*` 与 `/api/setup` 按 IP 超过 5 次/分钟 / 跨源请求
+**Then** 分别 429 / 显式拒绝（同源架构默认拒绝）；CSP 按 ⑧ 配置（default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'）
+
+**Given** 无旁路验证
+**When** 检查代码库
+**Then** 不存在任何 dev 免认证旁路（认证与 server 同故事交付——原拆分方案的 `EGOSYNC_DEV_NO_AUTH` 登记项随合并消除）
+
+**Given** 本地冒烟与测试
+**When** `cargo run` + curl / `cargo test`
+**Then** cmd/SSE/认证面以真实令牌可调通；env 态 / 库态 / 优先级切换 / 限流 / 401 形状全路径覆盖
+
+---
+
+### Story 15.5: 前端双传输与对等测试套件
+
+As a 云端 WEB 客户端开发者,
+I want services/*.ts 之下的 Transport 抽象（TauriTransport 与 HttpTransport 双实现）+ 运行时宿主探测 + useEngineEvent + capabilities 同源生成，及其全量生成的双传输对等测试套件,
+So that 同一 React 应用既在 Tauri 里跑也在浏览器里跑（UI 零重写、桌面行为逐字节不变），且"API 面与 Tauri command 一一对应"从纪律变成机制——任何单侧契约漂移在 CI 变红。
+
+**FRs covered:** FR-45（传输基建）；Additional 5（测试消费方）、8
+**NFRs covered:** NFR-C4、NFR-C6
+
+**Acceptance Criteria:**
+
+**Given** `src/transport/`
+**When** 实现完成
+**Then** Transport 接口（`invoke<T>(cmd, args)` / `on(event, cb)` / `capabilities` / `onConnectionStateChange`）+ TauriTransport（`@tauri-apps/api`，行为与现状逐字节一致）+ HttpTransport（fetch `POST /api/cmd/{cmd}` + EventSource `/api/events`，Cookie 凭证自动携带）
+
+**Given** 运行时宿主探测
+**When** `window.__TAURI_INTERNALS__` 存在与否
+**Then** 分别选择 Tauri/Http transport；**单一 Vite 构建产物**双宿主复用（tauri.conf frontendDist 与 server 内嵌为同一 dist——不做双构建配置）
+
+**Given** services/*.ts 改造
+**When** import 替换
+**Then** 全部 22 个 service 文件 import 自 `src/transport/`（函数签名零变化、每文件一行级改动）；`useTauriEvent` → `useEngineEvent`（Tauri 分支行为不变；迁移完成后旧 hook 退役删除）
+
+**Given** capabilities 同源
+**When** capabilities.ts 生成
+**Then** 构建期从 engine capabilities.rs（经 commands.json 工件）生成，**禁止手写双清单**（漂移产物 = web 端入口可见但请求 404）；对等断言 TS 能力清单 == 引擎注册表
+
+**Given** 重连补齐协议（Transport 层职责）
+**When** SSE 断开后恢复
+**Then** transport 触发 onConnectionStateChange 并重放**只读 query command 白名单**（写入类 command 永不重放——防 notification_ack 类副作用重放）；Tauri 分支恒 Online 不触发
+**And** 白名单进 commands.json 工件
+
+**Given** 桌面壳组件门控
+**When** TitleBar.tsx / App.tsx 的 `@tauri-apps/api/window` 引用
+**Then** 按同一宿主探测门控：Tauri 下渲染原样；浏览器下窗口控制区退化为普通标题栏（布局细节归 UX 阶段）
+**And** `skill-scope-updated`（唯一前端→前端事件，Rust 侧无监听）在浏览器分支进程内 EventEmitter 消化——不进传输契约
+
+**Given** 测试迁移
+**When** 14 个 vitest mock 文件替换
+**Then** `@tauri-apps/api` mock 换 mock transport（测试意图不变，mock 对象替换）
+
+**Given** 工件驱动的全量对等生成
+**When** 测试用例生成
+**Then** 对等用例由 commands.json **全量生成**（全部 web-ok command 逐条，禁抽样禁手抄——架构 ② 裁决）；vitest 与 server `cargo test` 消费**同一**构建期 JSON 工件；同参数经双通道（invoke / HTTP）调用的响应 JSON 逐字节同构（含 AppError 错误对象形状）
+
+**Given** 事件与错误对等
+**When** 事件全集枚举 / AppError 各 variant 逐一触发
+**Then** Rust 发射事件名集合 == TS 订阅集合 == 测试枚举集合（三集合同源驱动，禁止手抄）；14 个 variant 的 `200 + 单键 map` 形状双通道一致，401/429/404 仅 HTTP 侧存在且形状冻结
+
+**Given** 无 key 字段断言（密钥边界的测试化）
+**When** 扫描任意 API 响应（llm_config 全量出参）
+**Then** 无 api_key 字段（LlmConfig 只有 api_key_ref 的结构性保证 + 本断言共同闭合）
+
+**Given** CI 接入与桌面回归收口
+**When** 套件运行 / `npm run test:all` + tests/e2e
+**Then** 进 CI；红 = 契约漂移必须双侧同步修复（禁止单侧改契约变绿）；桌面全绿
+
+---
+
+## Epic 16: WEB 客户端（Web Client）
+
+任意现代浏览器（含 iOS Safari）访问云端实例使用核心体验：流式对话、任务操作、建议确认/拒绝、仪表盘、简报复盘；刷新/断线重连恢复状态；视觉零分叉（同一 React 组件体系、同一 Vite 构建产物）。FR-48 桌面远程模式作为可选后置故事 16.3 在此交付。
+
+**FRs covered:** FR-45（主体）、FR-46（前端流程）、FR-48（16.3）；NFR-C1（前端侧）, NFR-C3, NFR-C6, NFR-C7
+**UX-DRs covered:** UX-C1, UX-C2, UX-C3, UX-C4
+
+### Story 16.1: WEB 入口、认证与首访流
+
+As a 拥有云端实例的 EgoSync 用户,
+I want 在浏览器打开实例地址即可进入与桌面版同一外观的应用：首访时被引导设置访问令牌，之后用令牌登录，登出清除会话，且 WEB 端与桌面版视觉完全一致,
+So that 我不安装任何桌面软件就能安全地查看和操作我的数据。
+
+**FRs covered:** FR-45（浏览器可用与视觉零分叉两条）、FR-46（前端流程部分）；Additional 7（前端消费）、8（消费侧）
+**NFRs covered:** NFR-C1（401 全局处理）、NFR-C3（浏览器不落业务数据）
+**UX-DRs covered:** UX-C1, UX-C2, UX-C3
+
+**Acceptance Criteria:**
+
+**Given** server 二进制与前端构建产物
+**When** server 启动并访问根路径
+**Then** 内嵌静态资源服务 dist/（与 tauri.conf frontendDist 为**同一构建产物**——单一 Vite 构建双宿主复用，架构 ③ 裁决）；SPA 回退路由（未知路径回 index.html）
+
+**Given** 浏览器宿主（无 `window.__TAURI_INTERNALS__`）
+**When** 应用初始化
+**Then** 运行时探测选中 HttpTransport；Tauri 专属入口（选工作目录、配对管理、本地数据导入导出）**不出现**（capabilities 驱动显隐，UX-C2——非运行时点击报错）
+**And** TitleBar 窗口控制区退化为普通标题栏（布局细节按 UX 阶段勘注微调）；App.tsx 的 Tauri 启动逻辑（单实例、窗口准备）按探测跳过
+
+**Given** 首屏数据
+**When** 已认证用户进入仪表盘/任务/会话
+**Then** 各视图经 HttpTransport 拉取真实数据渲染；**浏览器端不落任何业务数据**（无 localStorage/IndexedDB 业务缓存——内存态组件持有，架构 ③ NFR 落位；仅允许存非业务态如主题偏好）
+
+**Given** 未初始化实例（无 env 令牌、库内无哈希）
+**When** 浏览器首访
+**Then** `/api/auth/status` 返回未初始化 → 前端呈现 setup 向导（首访引导，中文文案）；设置成功后进入登录态
+**And** env 令牌态下 setup 入口呈现"已由环境变量锁定"说明（后端拒绝；前端如实呈现——诚实代价原则）
+
+**Given** 已初始化实例
+**When** 访问任意页面 / 登录页提交令牌
+**Then** 未携带有效 Cookie ⇒ 401 全局拦截 → 登录页；正确令牌进入应用；错误呈现统一失败文案（不泄露实例/用户存在性——与后端 401 语义配对）；登录成功换发 httpOnly Cookie（传输层自动携带）
+
+**Given** 登出
+**When** 用户点击登出
+**Then** 调用登出端点清 Cookie → 回登录页；此后浏览器内刷新仍需重新登录
+
+**Given** 视觉零分叉（UX-C1）
+**When** WEB 首屏与桌面版并排对照
+**Then** 同一组件体系同一 Tailwind 产物渲染；差异仅限宿主门控（TitleBar 退化、desktop-only 入口缺席）——截图对比留档
+
+**Given** 前端测试
+**When** vitest 执行
+**Then** setup 向导（含 env 锁定态）/ 登录 / 401 拦截 / 登出路径全覆盖（mock transport）
+
+---
+
+### Story 16.2: 实时事件、流式体验与浏览器适配
+
+As a WEB 端用户,
+I want 对话流式输出、任务/通知/仪表盘变化实时刷新，断线时有明确状态并自动重连补齐，且在手机浏览器（含 iOS Safari）中正常使用,
+So that 浏览器端体验与桌面版一致——数据是活的、断线是诚实呈现的、设备不受限。
+
+**FRs covered:** FR-45（流式实时渲染一致性、刷新恢复、含 iOS Safari 三条）
+**NFRs covered:** NFR-C6（SSE 消费验证）、NFR-C7（断线状态明示）、NFR-C3
+**UX-DRs covered:** UX-C1、UX-C4（响应式；断点细节归 UX 阶段）
+
+**Acceptance Criteria:**
+
+**Given** useEngineEvent 接入（15.5 交付的 hook）
+**When** SSE 连接建立
+**Then** 全部事件驱动视图（llm:stream 流式 token、notification:new 通知、task:classified 任务刷新等）在浏览器实时更新——组件层零改动（hook 内部分支）
+
+**Given** 流式对话
+**When** WEB 端发起对话
+**Then** token 逐字渲染体验与桌面一致；`chat_stop_streaming` 停止可用；同会话 busy 提示一致（Ok 通道语义经传输层透传）
+
+**Given** 断线（网络中断/服务器重启）
+**When** SSE 断开
+**Then** UI 呈现连接状态（连接中/在线/重连中——NFR-C7 诚实明示，非静默失败）；EventSource 自动重连 + transport 层只读补齐白名单重放（15.5 协议）恢复视图数据；重连后白名单 query 重放使视图反映最新态，写入类操作不重放（无重复确认副作用）
+
+**Given** 浏览器刷新
+**When** F5 重载
+**Then** 已产生消息不丢（服务端事实源——消息已落库，刷新后重拉）；进行中流式会话恢复为已完成部分或按服务端状态呈现（不伪造进行态）
+
+**Given** 移动视口（375px 级）与 iOS Safari
+**When** 浏览核心界面 / 完整使用流程
+**Then** 布局响应式可用（导航/对话/任务/仪表盘不溢出、可操作；断点方案按 UX 阶段勘注定稿，本故事交付可用基线）；EventSource 流式正常（iOS Safari 4.0+ 支持已验证——架构 ③）；httpOnly Cookie SameSite=Strict 正常携带；100vh 地址栏抖动等已知问题有缓解处理
+
+**Given** 桌面浏览器 vs 桌面版
+**When** 并排截图对比
+**Then** 视觉零回归（唯一允许差异 = 宿主门控项）——截图留档进 PR
+
+**Given** 核心体验功能集
+**When** 按分档清单逐项走查
+**Then** 一档全部可用；分档清单以 UX 章节定稿为准（未定稿前按 PRD §4.15 FR-45 列举的流式/任务/建议确认拒绝/仪表盘/简报复盘验收，UX 勘注后如有调整补走查）
+
+**Given** e2e（17.3 web 模式前置能力）
+**When** 本地 server + 浏览器驱动测试
+**Then** 流式/事件/断线重连至少各一条端到端用例通过
+
+---
+
+### Story 16.3: 桌面客户端远程模式（FR-48，可选后置）
+
+As a 桌面版用户,
+I want 将桌面应用切换为连接云端实例的客户端（本地引擎待机、不产生本地数据副本），并可切回本地模式,
+So that 我在已部署云端实例后，桌面上只维护一个入口，且两种模式的数据永不混淆。
+
+**FRs covered:** FR-48（三条全部：切换远程本地待机 / 切换不触发合并 / 第二阶段时序）
+**NFRs covered:** NFR-C5（LOCAL/REMOTE 互斥是单源纪律的桌面侧延伸）
+**UX-DRs covered:** UX-C2（模式切换入口与状态可视）
+
+**Acceptance Criteria:**
+
+**Given** 本地模式桌面应用（现状默认态）
+**When** 用户在设置中选择远程模式并输入实例地址+令牌
+**Then** 切换前呈现确认（明示"本地引擎将完全停机、不再产生本地数据；两侧数据不合并"——诚实代价文案）
+**And** 切换执行时本地引擎完全关闭（调度器/sidecar/后台任务全停——复用 15.2 的启动入口做对称停机），前端切 HttpTransport 指向远端
+
+**Given** 远程模式运行中
+**When** 查看 app
+**Then** 状态可视（REMOTE 态标识 + 连接状态：连接中/在线/离线重连中）；远程不可达时指数退避重连（1s→30s 封顶 + 抖动，架构裁决 B）
+
+**Given** 模式切回本地
+**When** 用户选择切回
+**Then** 远端连接关闭、本地引擎重启恢复（FR-48：切换=连接目标变更）；**两侧数据零合并零同步**——本地库与远端库各自独立，切换过程无任何数据迁移代码路径（NFR-C5 断言）
+
+**Given** 远程模式下的能力
+**When** desktop-only command 被调用
+**Then** 远程模式下这些能力指向远端（远端无此路由则 capabilities 已隐藏）或按 UX 勘注处理；本地文件选择类能力（选工作目录）在远程模式禁用并说明原因
+
+**Given** 启动恢复
+**When** 远程模式中重启桌面 app
+**Then** 记忆上次模式，直接进入远程态（本地引擎不启动）
+
+---
+
+## Epic 17: 自托管部署与运维（Self-Hosted Deployment & Ops）
+
+VPS/NAS 上 `docker compose up` 一键部署并长期运维：TLS、密钥安全注入、24/7 常驻工作循环（时区正确、升级重启不重复触发）、备份/恢复闭环、CI 镜像发布。完成后 = FR-44 部署侧验收 + FR-47 全部五条验收。
+
+**FRs covered:** FR-44（部署/重启恢复/备份）、FR-47；NFR-C1, NFR-C2, NFR-C3, NFR-C7
+**Additional reqs covered:** 9, 10, 11, 12, 13
+
+### Story 17.1: Docker 化部署、密钥注入与 TLS
+
+As a 想在自有 VPS/NAS 部署 EgoSync 的用户,
+I want 一条 `docker compose up -d` 完成部署并自动申请 HTTPS 证书，LLM API Key 等服务端密钥经安全通道注入（浏览器永远看不到任何密钥）,
+So that 不懂容器细节也能在半小时内拥有公网可访问的云端实例，且密钥不因 WEB 客户端暴露而泄露。
+
+**FRs covered:** FR-44（Docker 一键部署完整引擎、单实例单用户、重启恢复）、FR-46（Key 仅服务端、全程 TLS 两条的服务端部分）；Additional 9、10、12（部署部分）
+**NFRs covered:** NFR-C1、NFR-C2、NFR-C7（密钥缺失的结构化错误）
+
+**Acceptance Criteria:**
+
+**Given** 仓库部署物
+**When** 查看部署目录
+**Then** 存在多阶段 Dockerfile（前端构建 → server 构建 → 运行时层）与 docker-compose.yml；运行时层**包含 opencode 二进制**（架构 ⑤ 裁决：并入 server 镜像，非独立容器——覆盖提案 §4.2-7 三容器表述）+ tzdata + ca-certificates；opencode 版本 pin 且与 engine 同 tag（Additional 10）
+
+**Given** compose 拓扑
+**When** 启动
+**Then** 两服务：`egosync-server`（engine+opencode 单容器）+ `caddy`（可选反代，自动 HTTPS）；双 SQLite 库挂命名卷 /data（WAL 单容器单写者）；TZ env 透传（Additional 12）
+
+**Given** Caddyfile
+**When** 反代生效
+**Then** `request_body max_size 50MB`（与 server body 上限对齐）；`flush_interval -1` 作为 text/event-stream 冗余保险（Caddy 对 SSE 本自动刷新——架构 ⑦ 修正后口径）；自动 HTTPS 证书签发与续期
+
+**Given** 服务器重启
+**When** 宿主机 reboot
+**Then** compose restart 策略使实例自愈；数据与配置无损（FR-44 验收条款）
+
+**Given** 资源约束验证与部署文档
+**When** 在 1C1G VPS 级环境运行 / 新用户按文档操作
+**Then** 常驻内存占用在文档标注的预算内（NFR-C2：$5-10/月 VPS 承载）；从零到浏览器可访问的步骤完整（域名解析、compose 启动、首访 setup 指向 16.1）；HTTP/1.1 反代下 SSE 每域名 6 连接上限的提示写入（架构 ⑦ 约束表条款）
+
+**Given** SecretStore 服务端适配器（15.1 trait 的 server 实现）
+**When** server 启动读取密钥
+**Then** 双通道：固定名引导 secret 走 env（如 EGOSYNC_TOKEN）；UUID 型 api_key_ref 走 /data/secrets.json（0600 明文文件——"加密"措辞已废除，架构 ④ 裁决）；**读取顺序文件优先、env 兜底**（env 仅在文件缺失时生效——防 env 静默遮蔽文件值）
+
+**Given** 键映射
+**When** env 方式注入某 api_key_ref
+**Then** 变量名 = `EGOSYNC_SECRET_{api_key_ref}` 原样**区分大小写**拼接（api_key_ref = `llm_{uuid}_api_key` 全小写，如 `EGOSYNC_SECRET_llm_9f8e7d6a_api_key`——架构 ④ 冻结口径，F3 修复后唯一拼写）
+
+**Given** 写路径
+**When** 用户在 WEB 端录入/更新密钥
+**Then** 永远写入 /data/secrets.json（env 不可写——文件是运行时唯一可写事实源）；secrets.json 不进镜像层、不进 git（.dockerignore 验证）
+
+**Given** 导入后的可达性探测（Additional 9）
+**When** data_import 完成（从桌面导出包恢复）
+**Then** 对导入的每个 api_key_ref 探测：secrets.json/env 均无值 ⇒ 返回结构化错误**指明重录路径**（设置页哪个入口重录——NFR-C7 诚实明示，非泛型 "secret not found"）
+
+**Given** TLS 与密钥边界回归
+**When** 浏览器访问 / 15.5 的"无 key 字段"断言运行
+**Then** 全程 TLS（Caddy 自动 HTTPS 或用户自有反代——文档给两种路径；HTTP 明文访问被重定向或拒绝）；在 server 配置了真实密钥的环境下断言仍全绿（密钥只存在服务端内存与 /data/secrets.json 两处）
+
+---
+
+### Story 17.2: 常驻工作循环硬化（FR-47）
+
+As a 云端实例用户,
+I want 晨间简报/周复盘在服务器上 7×24 按计划时间自动生成，即使经历重启也不重复不遗漏（时区变更的诚实代价除外）,
+So that 我不打开任何客户端，每天早上也能在 WEB 端看到当天的简报。
+
+**FRs covered:** FR-47（五条全部——本故事是 FR-47 的闭合故事）
+**NFRs covered:** NFR-C2（重启自愈不重复）、NFR-C7（TZ 诚实代价）
+
+**Acceptance Criteria:**
+
+**Given** 调度器现状（内存去重 map：last_triggered_map / last_briefing_trigger_date / last_review_trigger_week 为循环局部变量——仅 bigrock 已 DB 持久化）
+**When** 本故事实施
+**Then** 新增 `scheduler_triggers` 持久化小表替换三处内存去重（含 bigrock 现状 DB 去重的**替换迁移**——决策 #7 口径：替换入统一表，非另起一张）；表结构含触发键（job 类型 + 周期标识）+ 时区维度 + last_triggered_at；migration 032 落数据迁移（bigrock 既有值迁入）
+
+**Given** 重启场景（FR-47 核心验收）
+**When** 服务器在简报已发后的当天重启
+**Then** 重启后调度器读持久化表，**不再重复触发**当日简报（现状内存 map 重启即失忆——这是桌面可容忍、云端不可容忍的缺陷）；停机跨过计划时刻 ⇒ 该次跳过（诚实代价，不补发不堆积）
+
+**Given** 时间源三分表（架构 ⑨ 冻结口径）
+**When** 审计全部时间相关代码
+**Then** ①持久化层一律 UTC RFC3339（chrono_now_pub 现状即 UTC——保持禁改 Local）；②调度判定用容器 Local（TZ env 生效，简报按用户时区的早晨触发）；③前端渲染用浏览器 TZ（组件层不动——已有行为）；三分边界在代码注释与架构文档双重标注
+
+**Given** 时区变更
+**When** 用户改 TZ env 并重启
+**Then** 首个周期可能跳过或重复一次触发（键含时区维度的设计权衡——架构 ⑨ 已裁决：宁可一次跳过/重复也不静默双发或漏发整天）；该行为在部署文档明示（NFR-C7）
+
+**Given** 桌面侧边缘行为
+**When** 该表在桌面版生效
+**Then** 桌面重启窗口内不再重复触发——**行为变化非回归**（现状：桌面重启后当日简报可能重发；硬化后：不重发）；桌面 release note 加注（架构 ⑨ "桌面边缘行为变化加注"条款）
+
+**Given** 常驻验收（FR-47 全链路）
+**When** 无任何客户端连接的 server 运行过计划时刻
+**Then** 简报/复盘按时生成并**留存**（落库）；用户次日打开 WEB 端可见；生成的建议仍走"待确认→用户确认"（FR-11 边界——常驻不豁免确认纪律，e2e 断言建议处于待确认态）
+
+---
+
+### Story 17.3: 备份恢复、CI/CD 与发布
+
+As a 云端实例运营者与赛道维护者,
+I want 一键导出全量数据下载到本地、对称的恢复路径、server 镜像的自动构建发布与云端版的 CI 验证链路,
+So that 我对数据拥有完整主权（随时迁走/恢复/不依赖官方服务），且每次发布有质量门禁、升级是拉新 tag 的一步操作。
+
+**FRs covered:** FR-44（备份恢复闭环）；Additional 11、12（CI 部分）
+**NFRs covered:** NFR-C2（可运维性的机制化）、NFR-C3（官方零持有零落地、复用导出导入机制）
+
+**Acceptance Criteria:**
+
+**Given** `/api/export`（云端专用 HTTP 落点——data_export command 在云端列 desktop-only，同一能力双落点）
+**When** 已认证用户请求导出
+**Then** 复用 15.1 平移的 data_export service 纯逻辑，经 HTTP 流式返回导出包（双库数据 + 配置 + 密钥**引用**清单——不含密钥值）；导出包含版本标识（与桌面导出包同格式，跨形态可互导——同一引擎同一导出逻辑的必然收益）
+
+**Given** `/api/import`
+**When** 上传导出包恢复
+**Then** 复用 data_import 纯逻辑；导入完成后触发 17.1 的密钥可达性探测（缺失密钥给重录路径结构化错误）；导入过程原子性（失败不半写）
+
+**Given** 卷级备份路径（Additional 11 双路径之二）
+**When** 运营者按文档操作
+**Then** 文档给出停机复制流程（compose down → 复制 /data 卷 → compose up）；**运行中复制的 WAL 一致性风险明示**（架构 ⑥ 口径：运行中卷复制有一致性风险，必须文档明示而非静默允许）
+
+**Given** 数据主权验证
+**When** 全流程走查
+**Then** 导出→新实例导入→数据完整（会话/任务/记忆/配置逐项抽查）；EgoSync 官方服务零参与（无遥测、无云存储——NFR-C3；架构 ⑥ 条款）
+
+**Given** `.github/workflows/server-docker.yml`
+**When** push tag / main
+**Then** 多阶段镜像构建（前端 → server → 运行时含 opencode）；镜像 tag 与 engine 版本同步（Additional 10 版本 pin 条款）；推送到镜像仓库
+
+**Given** tests/e2e `web` 模式
+**When** CI 或本地执行
+**Then** wdio 驱动浏览器连本地 server（区别于既有 Tauri 模式）：启动 server 容器/进程 → 浏览器访问 → 认证 → 核心流程（对话流式/任务/建议确认）断言；**桌面模式 e2e 保持零改动全绿**（双模式共存，不是替换）
+**And** 导出导入往返用例（往返后核心数据一致）纳入本模式或 server cargo test
+
+**Given** 深度 healthz 扩展与升级路径
+**When** `GET /healthz?deep=1` / 拉新镜像 tag 重启
+**Then** 返回 DB 连通 + opencode 存活 + migrations 状态（升级前巡检用途——compose 不用它做存活探针防误杀，架构 ⑥ 两级口径）；migrations 自动前滚；17.2 的持久化触发表保证升级重启不重复触发；升级文档（compose pull → up -d 两步）进部署文档
+
+**Given** CI 全链路
+**When** PR 触发
+**Then** 桌面 `npm run test:all`（含 15.5 对等套件）+ server cargo test + web e2e 冒烟三者并行执行——三链路任一红即阻塞合并（NFR-C4 桌面零回归的 CI 化落位）

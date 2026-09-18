@@ -9,10 +9,10 @@ use tracing_subscriber::util::SubscriberInitExt;
 // Story 12.2: db/services/models/error 声明为 pub 以供 tests/test_companion.rs
 // 集成测试访问（rlib 仅被测试消费，无运行时影响）
 pub mod commands;
-pub mod db;
-pub mod error;
-mod llm;
-pub mod models;
+// Story 15.1：db/models/error 自引擎 crate 回引，路径语义不变
+pub use egosync_engine::{db, error, models};
+// llm 可见性语义保持：原先即为私有 mod，私有 use 使 crate::llm 照常可用
+use egosync_engine::llm;
 pub mod services;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -65,6 +65,8 @@ pub fn run() {
 
             app.manage(pool.clone());
             app.manage(conv_pool.clone());
+            // Story 15.1 接缝一：注入桌面侧 SecretStore（keyring 实现）
+            app.manage(services::secret_store_keyring::KeyringSecretStore::new());
             app.manage(commands::chat::OpencodeMcpScopeLock::default());
             app.manage(commands::chat::StreamingState::default());
             app.manage(commands::chat::CancelTokens::default());
@@ -178,8 +180,12 @@ pub fn run() {
                 let ac_ref: &services::agent_config::AgentConfigService = app
                     .state::<services::agent_config::AgentConfigService>()
                     .inner();
+                // Story 15.1 接缝一：密钥读取经注入的桌面侧 SecretStore
+                let secrets: &services::secret_store_keyring::KeyringSecretStore = app
+                    .state::<services::secret_store_keyring::KeyringSecretStore>()
+                    .inner();
                 if let Err(error) = tauri::async_runtime::block_on(async {
-                    services::llm_config::sync_default_to_opencode(pool_ref, ac_ref).await
+                    services::llm_config::sync_default_to_opencode(pool_ref, secrets, ac_ref).await
                 }) { tracing::warn!("同步默认 LLM 配置到 opencode.json 失败: {}", error); }
             }
 

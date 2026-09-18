@@ -1696,32 +1696,9 @@ mod tests {
         assert_eq!(completed.protection_status, "normal", "完成即交互，应复位 normal");
     }
 
-    #[tokio::test]
-    async fn recompute_protection_status_clears_then_marks_in_one_pass() {
-        // 端到端验证 service 层 recompute_protection_status 在单次调用内
-        // 先 clear（恢复已解除的）再 mark（标记过期的），且组合幂等：
-        // 已是 at_risk 且仍过期的任务保持不变、不重复计入返回值。
-        // 使用 2020/2099 这类远离 now±3天 阈值的固定时间戳，避免依赖真实时钟。
-        let pool = setup_test_db().await;
-        // 过期、未完成、Q2、当前 normal → 应被 mark 为 at_risk（计入返回值）
-        insert_protection_task(&pool, "q2-stale-normal", "Q2", false, "normal", "2020-01-01T00:00:00Z").await;
-        // 过期、未完成、Q2、当前已是 at_risk → 保持 at_risk，不被 clear，不重复计数
-        insert_protection_task(&pool, "q2-stale-at-risk", "Q2", false, "at_risk", "2020-01-01T00:00:00Z").await;
-        // at_risk 的 Q1（已非 Q2）→ 应被 clear 回 normal
-        insert_protection_task(&pool, "q1-at-risk", "Q1", false, "at_risk", "2020-01-01T00:00:00Z").await;
-        // 近期 Q2 normal → 不动
-        insert_protection_task(&pool, "q2-recent", "Q2", false, "normal", "2099-01-01T00:00:00Z").await;
-
-        let marked = crate::services::task_protection_watch::recompute_protection_status(&pool)
-            .await
-            .expect("recompute protection status");
-
-        assert_eq!(marked, 1, "仅本次新标记的过期 Q2 计入返回值（已 at_risk 的不重复计数）");
-        assert_eq!(protection_status_of(&pool, "q2-stale-normal").await, "at_risk");
-        assert_eq!(protection_status_of(&pool, "q2-stale-at-risk").await, "at_risk", "仍过期保持 at_risk");
-        assert_eq!(protection_status_of(&pool, "q1-at-risk").await, "normal", "非 Q2 被清回 normal");
-        assert_eq!(protection_status_of(&pool, "q2-recent").await, "normal", "近期 Q2 不标记");
-    }
+    // 注：recompute_protection_status_clears_then_marks_in_one_pass 原在此处，
+    // 因调用桌面壳留守的 services::task_protection_watch（Story 15.1 迁移边界），
+    // 已随该 service 留在 src-tauri/src/services/task_protection_watch.rs。
 
     // ---- Story 3.7: list_all_tasks 跨 owner 查询 ----
 

@@ -6666,24 +6666,24 @@ mod tests {
         .await
         .expect("failed to create roles table");
 
-        sqlx::raw_sql(include_str!("../../migrations/004_memories.sql"))
+        sqlx::raw_sql(include_str!("../../../../crates/egosync-engine/migrations/004_memories.sql"))
             .execute(&pool)
             .await
             .expect("failed to create memories table");
         sqlx::raw_sql(include_str!(
-            "../../migrations/005_memory_role_scoped_dedupe.sql"
+            "../../../../crates/egosync-engine/migrations/005_memory_role_scoped_dedupe.sql"
         ))
         .execute(&pool)
         .await
         .expect("failed to migrate memory dedupe index");
         sqlx::raw_sql(include_str!(
-            "../../migrations/006_memory_single_owner_dedupe.sql"
+            "../../../../crates/egosync-engine/migrations/006_memory_single_owner_dedupe.sql"
         ))
         .execute(&pool)
         .await
         .expect("failed to migrate memory single-owner dedupe");
         sqlx::raw_sql(include_str!(
-            "../../migrations/007_forgotten_memory_sources.sql"
+            "../../../../crates/egosync-engine/migrations/007_forgotten_memory_sources.sql"
         ))
         .execute(&pool)
         .await
@@ -6699,41 +6699,41 @@ mod tests {
         .execute(&pool)
         .await
         .expect("failed to create app_settings table");
-        sqlx::raw_sql(include_str!("../../migrations/008_skills_registry.sql"))
+        sqlx::raw_sql(include_str!("../../../../crates/egosync-engine/migrations/008_skills_registry.sql"))
             .execute(&pool)
             .await
             .expect("failed to create skills table");
-        sqlx::raw_sql(include_str!("../../migrations/009_skill_role_bindings.sql"))
+        sqlx::raw_sql(include_str!("../../../../crates/egosync-engine/migrations/009_skill_role_bindings.sql"))
             .execute(&pool)
             .await
             .expect("failed to create skill role bindings table");
-        sqlx::raw_sql(include_str!("../../migrations/011_mcp_servers.sql"))
+        sqlx::raw_sql(include_str!("../../../../crates/egosync-engine/migrations/011_mcp_servers.sql"))
             .execute(&pool)
             .await
             .expect("failed to create MCP servers table");
-        sqlx::raw_sql(include_str!("../../migrations/012_mcp_server_standard_types.sql"))
+        sqlx::raw_sql(include_str!("../../../../crates/egosync-engine/migrations/012_mcp_server_standard_types.sql"))
             .execute(&pool)
             .await
             .expect("failed to apply MCP server standard types migration");
-        sqlx::raw_sql(include_str!("../../migrations/013_tasks.sql"))
+        sqlx::raw_sql(include_str!("../../../../crates/egosync-engine/migrations/013_tasks.sql"))
             .execute(&pool)
             .await
             .expect("failed to create tasks table");
         // Story 3.3: 任务自动分类元数据，agent_engine 测试自建 schema 也需同步。
-        sqlx::raw_sql(include_str!("../../migrations/014_task_classification_metadata.sql"))
+        sqlx::raw_sql(include_str!("../../../../crates/egosync-engine/migrations/014_task_classification_metadata.sql"))
             .execute(&pool)
             .await
             .expect("failed to apply task classification metadata migration");
-        sqlx::raw_sql(include_str!("../../migrations/015_task_owner_scope.sql"))
+        sqlx::raw_sql(include_str!("../../../../crates/egosync-engine/migrations/015_task_owner_scope.sql"))
             .execute(&pool)
             .await
             .expect("failed to apply task owner scope migration");
-        sqlx::raw_sql(include_str!("../../migrations/020_mission.sql"))
+        sqlx::raw_sql(include_str!("../../../../crates/egosync-engine/migrations/020_mission.sql"))
             .execute(&pool)
             .await
             .expect("failed to create mission table");
         sqlx::raw_sql(include_str!(
-            "../../migrations/027_task_decomposition_proposals.sql"
+            "../../../../crates/egosync-engine/migrations/027_task_decomposition_proposals.sql"
         ))
         .execute(&pool)
         .await
@@ -6747,7 +6747,7 @@ mod tests {
             .await
             .expect("failed to create test conv db");
 
-        let schema = include_str!("../../migrations/002_conversations.sql");
+        let schema = include_str!("../../../../crates/egosync-engine/migrations/002_conversations.sql");
         sqlx::raw_sql(schema)
             .execute(&pool)
             .await

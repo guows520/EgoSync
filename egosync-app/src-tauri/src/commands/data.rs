@@ -7,6 +7,7 @@ use crate::error::AppError;
 use crate::services::data_export::{
     destroy_all_data, export_all, ExportFormat, ExportResult, ImportResult, import_all,
 };
+use crate::services::secret_store_keyring::KeyringSecretStore;
 
 #[tauri::command]
 pub async fn data_export(
@@ -68,13 +69,15 @@ pub async fn data_destroy(
     app_handle: AppHandle,
     pool: State<'_, DbPool>,
     conv_pool: State<'_, ConversationsPool>,
+    secrets: State<'_, KeyringSecretStore>,
 ) -> Result<(), AppError> {
     let app_data_dir = app_handle
         .path()
         .app_data_dir()
         .map_err(|e| AppError::ValidationError(format!("获取应用数据目录失败: {}", e)))?;
 
-    destroy_all_data(&pool, &conv_pool, &app_data_dir).await?;
+    // Story 15.1 接缝一：keyring 密钥删除经注入的桌面侧 SecretStore
+    destroy_all_data(&pool, &conv_pool, secrets.inner(), &app_data_dir).await?;
 
     // 销毁后回收手机伴侣运行时状态（keyring 不可用时 state 未管理，跳过）：
     // 终止会话、清 pending/配对窗口、注销 NSD、删除静态密钥

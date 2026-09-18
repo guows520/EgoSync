@@ -109,4 +109,137 @@ mod tests {
         // 1970-01-01 对应 Unix days = 0
         assert_eq!(days_to_ymd(0), (1970, 1, 1));
     }
+
+    // ---- Story 15.1：自 db/tasks.rs 迁入的端到端重算测试 ----
+    // 原测试位于引擎 crate 的 db/tasks.rs 内联测试中，因调用本模块（桌面壳留守
+    // service）而随 Story 15.1 迁移边界迁至本文件，断言与辅助函数保持原样。
+
+    async fn setup_protection_test_db() -> SqlitePool {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("failed to create test db");
+
+        sqlx::query(
+            "CREATE TABLE roles (
+                id TEXT PRIMARY KEY NOT NULL,
+                name TEXT NOT NULL,
+                icon TEXT NOT NULL DEFAULT 'target',
+                color TEXT NOT NULL DEFAULT '#4F46E5',
+                goal TEXT NOT NULL DEFAULT '',
+                personality_prompt TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'active',
+                energy INTEGER NOT NULL DEFAULT 100,
+                energy_updated_at TEXT,
+                skills_config TEXT NOT NULL DEFAULT '{}',
+                proactivity_level TEXT NOT NULL DEFAULT 'moderate',
+                archived_at TEXT,
+                created_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00Z',
+                updated_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00Z'
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("failed to create roles table");
+
+        sqlx::query("INSERT INTO roles (id, name) VALUES ('role-a', '产品')")
+            .execute(&pool)
+            .await
+            .expect("failed to insert role-a");
+        sqlx::query("INSERT INTO roles (id, name) VALUES ('role-b', '学习')")
+            .execute(&pool)
+            .await
+            .expect("failed to insert role-b");
+
+        sqlx::query(
+            "CREATE TABLE tasks (
+                id TEXT PRIMARY KEY NOT NULL,
+                owner_type TEXT NOT NULL DEFAULT 'role' CHECK (owner_type IN ('role', 'butler')),
+                role_id TEXT,
+                title TEXT NOT NULL,
+                deadline TEXT,
+                quadrant TEXT NOT NULL DEFAULT 'Q2' CHECK (quadrant IN ('Q1', 'Q2', 'Q3', 'Q4')),
+                is_big_rock INTEGER NOT NULL DEFAULT 0,
+                is_completed INTEGER NOT NULL DEFAULT 0,
+                completed_at TEXT,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                protection_status TEXT NOT NULL DEFAULT 'normal',
+                confidence REAL,
+                manual_override INTEGER NOT NULL DEFAULT 0,
+                classification_reason TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                deleted_at TEXT,
+                CHECK ((owner_type = 'role' AND role_id IS NOT NULL) OR (owner_type = 'butler' AND role_id IS NULL)),
+                FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("failed to create tasks table");
+
+        pool
+    }
+
+    /// 直接 INSERT 一条任务，精确控制 quadrant / is_completed / protection_status / updated_at，
+    /// 避免依赖真实时钟与 create_task 的默认值。
+    #[allow(clippy::too_many_arguments)]
+    async fn insert_protection_task(
+        pool: &SqlitePool,
+        id: &str,
+        quadrant: &str,
+        is_completed: bool,
+        protection_status: &str,
+        updated_at: &str,
+    ) {
+        sqlx::query(
+            "INSERT INTO tasks (id, owner_type, role_id, title, quadrant, is_completed, protection_status, created_at, updated_at)
+             VALUES (?1, 'role', 'role-a', ?2, ?3, ?4, ?5, '2026-01-01T00:00:00Z', ?6)",
+        )
+        .bind(id)
+        .bind(format!("任务 {}", id))
+        .bind(quadrant)
+        .bind(is_completed as i32)
+        .bind(protection_status)
+        .bind(updated_at)
+        .execute(pool)
+        .await
+        .expect("insert protection task");
+    }
+
+    async fn protection_status_of(pool: &SqlitePool, id: &str) -> String {
+        sqlx::query_scalar::<_, String>("SELECT protection_status FROM tasks WHERE id = ?1")
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .expect("fetch protection_status")
+    }
+
+    #[tokio::test]
+    async fn recompute_protection_status_clears_then_marks_in_one_pass() {
+        // 端到端验证 service 层 recompute_protection_status 在单次调用内
+        // 先 clear（恢复已解除的）再 mark（标记过期的），且组合幂等：
+        // 已是 at_risk 且仍过期的任务保持不变、不重复计入返回值。
+        // 使用 2020/2099 这类远离 now±3天 阈值的固定时间戳，避免依赖真实时钟。
+        let pool = setup_protection_test_db().await;
+        // 过期、未完成、Q2、当前 normal → 应被 mark 为 at_risk（计入返回值）
+        insert_protection_task(&pool, "q2-stale-normal", "Q2", false, "normal", "2020-01-01T00:00:00Z").await;
+        // 过期、未完成、Q2、当前已是 at_risk → 保持 at_risk，不被 clear，不重复计数
+        insert_protection_task(&pool, "q2-stale-at-risk", "Q2", false, "at_risk", "2020-01-01T00:00:00Z").await;
+        // at_risk 的 Q1（已非 Q2）→ 应被 clear 回 normal
+        insert_protection_task(&pool, "q1-at-risk", "Q1", false, "at_risk", "2020-01-01T00:00:00Z").await;
+        // 近期 Q2 normal → 不动
+        insert_protection_task(&pool, "q2-recent", "Q2", false, "normal", "2099-01-01T00:00:00Z").await;
+
+        let marked = recompute_protection_status(&pool)
+            .await
+            .expect("recompute protection status");
+
+        assert_eq!(marked, 1, "仅本次新标记的过期 Q2 计入返回值（已 at_risk 的不重复计数）");
+        assert_eq!(protection_status_of(&pool, "q2-stale-normal").await, "at_risk");
+        assert_eq!(protection_status_of(&pool, "q2-stale-at-risk").await, "at_risk", "仍过期保持 at_risk");
+        assert_eq!(protection_status_of(&pool, "q1-at-risk").await, "normal", "非 Q2 被清回 normal");
+        assert_eq!(protection_status_of(&pool, "q2-recent").await, "normal", "近期 Q2 不标记");
+    }
 }

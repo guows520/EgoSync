@@ -20,6 +20,7 @@ use crate::models::settings::LlmConfig;
 use crate::models::suggestion::Suggestion;
 use crate::models::task::CrossRoleTask;
 use crate::models::weekly_review::WeeklyReview;
+use crate::services::secret_store::SecretStore;
 
 const EXPORT_VERSION: &str = "1.0";
 
@@ -1371,6 +1372,7 @@ pub async fn import_all(
 pub async fn destroy_all_data(
     pool: &DbPool,
     conv_pool: &ConversationsPool,
+    secrets: &dyn SecretStore,
     _app_data_dir: &Path,
 ) -> Result<(), AppError> {
     // 1. 创建隐藏备份（失败则中止销毁）
@@ -1429,7 +1431,7 @@ pub async fn destroy_all_data(
 
     // 6. 删除 Keyring 密钥（DB 事务全部提交成功后才执行，失败只记 warn 不阻塞）
     for key_ref in &api_key_refs {
-        if let Err(e) = crate::services::secret_store::delete_secret(key_ref) {
+        if let Err(e) = secrets.delete_secret(key_ref) {
             tracing::warn!(key = %key_ref, "删除 keyring 密钥失败: {}", e);
         }
     }
@@ -1505,6 +1507,28 @@ pub fn cleanup_old_backups() -> Result<(), AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 测试用内存密钥库：接缝注入后 destroy 路径不再依赖宿主 keyring，
+    /// 与原行为等价（删除 best-effort、语义一致）。
+    #[derive(Default)]
+    struct InMemorySecretStore(std::sync::Mutex<std::collections::HashMap<String, String>>);
+
+    impl SecretStore for InMemorySecretStore {
+        fn save_secret(&self, key: &str, value: &str) -> Result<(), AppError> {
+            self.0
+                .lock()
+                .unwrap()
+                .insert(key.to_string(), value.to_string());
+            Ok(())
+        }
+        fn load_secret(&self, key: &str) -> Result<Option<String>, AppError> {
+            Ok(self.0.lock().unwrap().get(key).cloned())
+        }
+        fn delete_secret(&self, key: &str) -> Result<(), AppError> {
+            self.0.lock().unwrap().remove(key);
+            Ok(())
+        }
+    }
 
     #[test]
     fn generate_markdown_with_empty_data_produces_valid_structure() {
@@ -1918,9 +1942,23 @@ mod tests {
         let app_data_dir = dir.path().join("app_data");
         std::fs::create_dir_all(&app_data_dir).expect("create app_data dir");
 
-        destroy_all_data(&pool, &conv_pool, &app_data_dir)
+        // 预置与 llm_configs.api_key_ref 同名的密钥：Story 15.1 的 IO 矩阵承诺
+        // 「keyring 条目删除时序不变（DB 事务成功后、best-effort）」，
+        // destroy 必须同步清掉 SecretStore 里的条目——漏掉这步测试仍会绿。
+        let secrets = InMemorySecretStore::default();
+        secrets
+            .save_secret("test_key_ref_1", "sk-destroy-test")
+            .expect("seed secret");
+
+        destroy_all_data(&pool, &conv_pool, &secrets, &app_data_dir)
             .await
             .expect("destroy should succeed");
+
+        // 接缝断言：密钥条目随数据销毁一并删除
+        assert_eq!(
+            secrets.load_secret("test_key_ref_1").expect("load secret"),
+            None
+        );
 
         // 验证主库表为空
         let role_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM roles")
@@ -1985,7 +2023,7 @@ mod tests {
                 .await
                 .expect("count migrations before");
 
-        destroy_all_data(&pool, &conv_pool, &app_data_dir)
+        destroy_all_data(&pool, &conv_pool, &InMemorySecretStore::default(), &app_data_dir)
             .await
             .expect("destroy should succeed");
 
@@ -2005,7 +2043,7 @@ mod tests {
         let app_data_dir = dir.path().join("app_data");
         std::fs::create_dir_all(&app_data_dir).expect("create app_data dir");
 
-        destroy_all_data(&pool, &conv_pool, &app_data_dir)
+        destroy_all_data(&pool, &conv_pool, &InMemorySecretStore::default(), &app_data_dir)
             .await
             .expect("destroy should succeed");
 
@@ -2036,7 +2074,7 @@ mod tests {
         let app_data_dir = dir.path().join("app_data");
         std::fs::create_dir_all(&app_data_dir).expect("create app_data dir");
 
-        destroy_all_data(&pool, &conv_pool, &app_data_dir)
+        destroy_all_data(&pool, &conv_pool, &InMemorySecretStore::default(), &app_data_dir)
             .await
             .expect("destroy should succeed");
 
@@ -2098,7 +2136,7 @@ mod tests {
         // 销毁所有数据
         let app_data_dir = dir.path().join("app_data");
         std::fs::create_dir_all(&app_data_dir).expect("create app_data dir");
-        destroy_all_data(&pool, &conv_pool, &app_data_dir).await.expect("destroy data");
+        destroy_all_data(&pool, &conv_pool, &InMemorySecretStore::default(), &app_data_dir).await.expect("destroy data");
 
         // 验证数据已清空
         let role_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM roles")
@@ -2221,7 +2259,7 @@ mod tests {
         // 销毁现有数据
         let app_data_dir = dir.path().join("app_data");
         std::fs::create_dir_all(&app_data_dir).expect("create app_data dir");
-        destroy_all_data(&pool, &conv_pool, &app_data_dir).await.expect("destroy data");
+        destroy_all_data(&pool, &conv_pool, &InMemorySecretStore::default(), &app_data_dir).await.expect("destroy data");
         let role_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM roles")
             .fetch_one(&pool).await.expect("count");
         assert_eq!(role_count, 0);
@@ -2353,7 +2391,7 @@ mod tests {
         // 销毁
         let app_data_dir = dir.path().join("app_data");
         std::fs::create_dir_all(&app_data_dir).expect("create app_data dir");
-        destroy_all_data(&pool, &conv_pool, &app_data_dir).await.expect("destroy");
+        destroy_all_data(&pool, &conv_pool, &InMemorySecretStore::default(), &app_data_dir).await.expect("destroy");
 
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM butler_mcp_servers")
             .fetch_one(&pool).await.expect("count");
@@ -2414,7 +2452,7 @@ mod tests {
 
         let app_data_dir = dir.path().join("app_data");
         std::fs::create_dir_all(&app_data_dir).expect("create app_data dir");
-        destroy_all_data(&pool, &conv_pool, &app_data_dir).await.expect("destroy");
+        destroy_all_data(&pool, &conv_pool, &InMemorySecretStore::default(), &app_data_dir).await.expect("destroy");
 
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM butler_mcp_servers")
             .fetch_one(&pool).await.expect("count");

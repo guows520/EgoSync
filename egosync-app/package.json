@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "test:frontend": "vitest run",
-    "test:all": "vitest run && cd src-tauri && cargo test"
+    "test:all": "vitest run && cd src-tauri && cargo test && cd ../../crates/egosync-engine && cargo test"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

@@ -314,3 +314,31 @@ All items resolved in the same session:
 
 - **ChatScreen 渲染行为无执行级测试**：FR-29「流式中展开/历史折叠」、独立溯源条目布局、`initiallyExpanded` 翻转记忆等 Compose 渲染契约仅由 VM 状态断言间接覆盖（traceByMessageId/streamingTrace 值正确，渲染位置与折叠态无断言）。根因与既有缺口同源：仓库无 compose-ui-test/Robolectric 基建（依赖白名单约束），CI 常规路径仅 `:app:testDebugUnitTest` + `:app:assembleDebug`。修法：引入 Compose UI 测试依赖后为流式渲染区补渲染级用例，或以真机预览人审清单过渡。source_spec: `_bmad-output/implementation-artifacts/spec-fix-companion-chat-stream-ux.md`；evidence: 评审验证缺口层 mutation 实验全绿 + 全测试树 grep 无 ChatScreen 引用。
 - **非查看会话的流式轮次整轮丢失执行溯源**：`onStreamState` 非查看 done 路径（ChatViewModel.kt `appendStreamSegments` 分支）落库段落但从不挂载 `s.traceBlocks`——用户流式中切走、done 落库后切回，该轮无任何 FR-29 溯源；桌面从 DB 回放 process 事件（ChatStream.tsx processEventsByMessageId）而手机快照无 trace 域，属跨端数据通道缺口非本变更引入。修法：非查看 done 分支同挂溯源（锚点 id 已可用）或快照 schema 增 per-message trace（见案件 backlog #6）。source_spec: `_bmad-output/implementation-artifacts/spec-fix-companion-chat-stream-ux.md`；evidence: 评审盲扫层 diff 追踪（挂载仅存在于 renderStream 查看路径）+ 桌面 ChatStream processEventsByMessageId 对照。
+
+## Deferred from: bmad-build 实现 of 15-1-engine-crate-skeleton-and-pure-module-migration (2026-09-17)
+
+- **e2e 测试平台在本机不可运行（环境级，先于本故事）**：tests/e2e 对任何构建（含基线 9979f3e 对照实验）均在 IPC Origin 校验处失败——WebDriver 自动化上下文落于 about:blank（origin "null"），tauri 2.11.2 `ipc/protocol.rs:495` 拒绝；系 WebKitGTK 2.52.6（本机）× tauri-driver 2.0.6 × wry 0.55.1 自动化握手错位。另有三个基建缺陷：① beforeSession `pkill -f egosync` 命令行子串误杀 wdio 自身（已修为 `pkill -x`，随 15.1 交付）；② beforeSession 擦除目录 `~/.config/com.egosync.app` 与应用实际数据目录 `~/.local/share/com.egosync.desktop` 不符，DB 隔离从未生效；③ afterSession `kill()` 仅杀 wrapper shell，detached tauri-driver 跨会话泄漏致端口冲突。历史佐证：CI e2e 自 2026-06-29 b0590e1 起被官方禁用（tauri-driver 平台兼容性问题）。修法：独立 spec 系统性恢复（升级/锁定 WebKitGTK 与 tauri-driver 组合、修正 pkill 与 DB 目录、driver 生命周期改进程组终止），完成后重启用 CI e2e 步骤。source_spec: `_bmad-output/implementation-artifacts/15-1-engine-crate-skeleton-and-pure-module-migration.md`；evidence: 基线对照实验同 spec 同错误 + 诊断 spec 抓取 about:blank 上下文 + git 历史禁用记录。
+
+## Deferred from: bmad-build 评审 of 15-1-engine-crate-skeleton-and-pure-module-migration (2026-09-17, 第二批)
+
+- source_spec: `_bmad-output/implementation-artifacts/15-1-engine-crate-skeleton-and-pure-module-migration.md`
+  summary: KeyringSecretStore 的 roundtrip 测试在所有自动化环境（本机与 GitHub runner 均无 dbus+keyring 服务）静默走跳过分支，接缝一的桌面实现从未在任何自动化环境跑通完整 save→load→delete。
+  evidence: 评审盲扫层：测试源码内 eprintln 跳过路径 + CI 环境无 keyring 服务；跳过信息在通过的测试结果里不可见，违反「跳过必须显式」精神。修法：CI 以 dbus-run-session 起 gnome-keyring 跑该分支，或改为 #[ignore]+显式说明。
+- source_spec: `_bmad-output/implementation-artifacts/15-1-engine-crate-skeleton-and-pure-module-migration.md`
+  summary: engine 与 src-tauri 双 Cargo.lock 解析版本分歧（实测 131/272 共享包，如 tokio 1.53.1 vs 1.52.3），engine 独立 CI 验证的依赖集与桌面二进制实际链接的不同。
+  evidence: python 解锁比对全量输出；根因是「仓库根禁 workspace」的用户裁决下无跨 crate 锁对齐机制（companion-proto 先例同属性），声明版本已一致（spec 要求），分歧均在 semver 兼容区间内。对齐手段（精确降级 131 包或引入 workspace）均超出本故事边界；若未来引入 workspace 或统一锁，此处一并解决。
+- source_spec: `_bmad-output/implementation-artifacts/15-1-engine-crate-skeleton-and-pure-module-migration.md`
+  summary: AGENTS.md 的 test:all 描述与项目地图、_bmad-output/project-context.md 均未反映 crates/egosync-engine 分层，后续故事执行者不可见。
+  evidence: AGENTS.md:14 仍写「vitest + cargo test」；两文档均无 engine 条目。修复须编辑 agent-context 文件（按评审路由规则 defer）。
+- source_spec: `_bmad-output/implementation-artifacts/15-1-engine-crate-skeleton-and-pure-module-migration.md`
+  summary: 测试手抄 schema DDL 构成 migrations 之外的第三份副本（壳侧 task_protection_watch.rs 的 setup_protection_test_db 与 engine db/tasks.rs 测试各一份），032+ 迁移加列后测试将针对过期 schema 验证。
+  evidence: 评审盲扫层：两处完整手抄 CREATE TABLE；本故事沿用既有模式（外科边界），收敛为共享 migrate! 测试建库助手属测试基建重构。修法：engine 暴露测试助手（基于 migrate! 的内存/临时库）供两侧复用。
+- source_spec: `_bmad-output/implementation-artifacts/15-1-engine-crate-skeleton-and-pure-module-migration.md`
+  summary: AppError::KeyringError 变体名把宿主实现概念烧进引擎错误契约，15.4 server 宿主的非 keyring SecretStore 实现失败时也将以 KeyringError 形状返回。
+  evidence: error.rs 逐字节平移的既定后果；冻结块禁止本故事改名（variant 原样透传已冻结）。修法：15.2/15.4 冻结错误形状时决策——改名 SecretStoreError 或保留并记录；若改名需同步前端错误匹配。
+- source_spec: `_bmad-output/implementation-artifacts/15-1-engine-crate-skeleton-and-pure-module-migration.md`
+  summary: e2e beforeSession 只 pkill egosync 不清理应用拉起的 opencode sidecar，完整环境下孤儿进程占 4096 端口致下个会话 sidecar 启动失败。
+  evidence: 边缘层：本机无 opencode 二进制（启动日志降级模式）不可复现，但完整 dev/CI 环境成立；先于本故事（pkill -f 旧写法同样不清理）。修法并入已登记的 e2e 平台恢复工作项。
+- source_spec: `_bmad-output/implementation-artifacts/15-1-engine-crate-skeleton-and-pure-module-migration.md`
+  summary: 桌面 SecretStore State 注入链路（manage↔state↔7 条命令）无任何执行级验证——删除 manage 行会让应用启动 panic 且全部门禁保持绿色。
+  evidence: 验证缺口层（预验证）：三方无编译期检查，mock-app 装配测试需新测试基建非平凡；现有缓解=release 二进制启动冒烟实证装配成功（delegate bridge 正常监听）。修法：15.5 传输对等故事中补 tauri mock-app 装配测试，或抽取 manage 集合为可测函数；注意 15.5 验证 HTTP 侧时桌面 invoke 路径仍无覆盖。

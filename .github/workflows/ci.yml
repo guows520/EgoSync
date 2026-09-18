@@ -234,3 +234,39 @@ jobs:
       - name: Run companion-proto tests
         working-directory: crates/companion-proto
         run: cargo test
+
+  # ── egosync-engine 引擎 crate（Story 15.1：纯逻辑测试 + tauri/keyring 物理封禁兜底） ──
+  egosync-engine:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache engine cargo builds
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/egosync-engine -> target
+
+      - name: Run egosync-engine tests
+        working-directory: crates/egosync-engine
+        run: cargo test
+
+      - name: Assert engine declares no tauri/keyring
+        working-directory: crates/egosync-engine
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 物理封禁断言：声明面（含 TOML 节式拼写）+ 解析面（Cargo.lock 传递闭包）
+          if grep -nE '^\s*(tauri|keyring)\s*=|^\s*\[\s*(dev-)?dependencies\.(tauri|keyring)\s*\]' Cargo.toml; then
+            echo "::error::engine crate 物理依赖了 tauri/keyring（Story 15.1 硬边界）"
+            exit 1
+          fi
+          if grep -qE '^name = "(tauri|keyring)"$' Cargo.lock; then
+            echo "::error::engine 依赖闭包经传递引入了 tauri/keyring（Story 15.1 硬边界）"
+            exit 1
+          fi
+          echo "OK: egosync-engine 无 tauri/keyring 依赖声明与传递闭包"

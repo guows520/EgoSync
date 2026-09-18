@@ -1,0 +1,37 @@
+[package]
+name = "egosync-engine"
+version = "0.1.0"
+edition = "2021"
+# lock 文件为 v4 格式（cargo 1.78+ 才能解析）；低于此版本给出明确错误而非解析失败
+rust-version = "1.78"
+description = "EgoSync 引擎 crate：db/models/llm/error 与泛域纯逻辑 services（无 tauri/keyring 依赖，宿主能力经接缝注入）"
+
+[lib]
+name = "egosync_engine"
+path = "src/lib.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+async-trait = "0.1"
+thiserror = "1"
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
+futures = "0.3"
+chrono = "0.4"
+tokio-util = "0.7"
+# 迁移集实际用量：models/companion_command.rs 的帧长度常量（版本与 src-tauri 一致）
+companion-proto = { version = "0.1.0", path = "../companion-proto" }
+
+[dev-dependencies]
+tempfile = "3"
+filetime = "0.2"
+
+[dependencies.sysinfo]
+version = "0.32"
+default-features = false
+features = ["system"]

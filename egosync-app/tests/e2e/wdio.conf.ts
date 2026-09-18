@@ -114,7 +114,11 @@ export const config: WebdriverIO.Config = {
       if (isWindows) {
         execSync('taskkill /f /im egosync.exe 2>nul', { stdio: 'ignore' });
       } else {
-        execSync('pkill -f egosync 2>/dev/null', { stdio: 'ignore' });
+        // 精确进程名匹配（对齐 Windows 分支 /im 的精确语义）：
+        // `-f egosync` 会按命令行子串误杀本测试进程自身
+        // （node .../egosync-app/tests/e2e/... 路径含 "egosync"），
+        // 导致 Linux 本地运行在 beforeSession 秒级自杀。
+        execSync('pkill -x egosync 2>/dev/null', { stdio: 'ignore' });
       }
     } catch {
       // ignore if no process found
@@ -178,7 +182,11 @@ export const config: WebdriverIO.Config = {
       if (isWindows) {
         execSync('taskkill /f /im egosync.exe 2>nul', { stdio: 'ignore' });
       } else {
-        execSync('pkill -f egosync 2>/dev/null', { stdio: 'ignore' });
+        // 精确进程名匹配（对齐 Windows 分支 /im 的精确语义）：
+        // `-f egosync` 会按命令行子串误杀本测试进程自身
+        // （node .../egosync-app/tests/e2e/... 路径含 "egosync"），
+        // 导致 Linux 本地运行在 beforeSession 秒级自杀。
+        execSync('pkill -x egosync 2>/dev/null', { stdio: 'ignore' });
       }
     } catch {
       // ignore

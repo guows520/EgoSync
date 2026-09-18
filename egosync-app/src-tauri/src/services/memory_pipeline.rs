@@ -1289,36 +1289,36 @@ mod tests {
             .connect("sqlite::memory:")
             .await
             .expect("create main db");
-        sqlx::raw_sql(include_str!("../../migrations/001_initial_schema.sql"))
+        sqlx::raw_sql(include_str!("../../../../crates/egosync-engine/migrations/001_initial_schema.sql"))
             .execute(&pool)
             .await
             .expect("create settings schema");
-        sqlx::raw_sql(include_str!("../../migrations/003_roles.sql"))
+        sqlx::raw_sql(include_str!("../../../../crates/egosync-engine/migrations/003_roles.sql"))
             .execute(&pool)
             .await
             .expect("create roles schema");
-        sqlx::raw_sql(include_str!("../../migrations/019_energy_updated_at.sql"))
+        sqlx::raw_sql(include_str!("../../../../crates/egosync-engine/migrations/019_energy_updated_at.sql"))
             .execute(&pool)
             .await
             .expect("add energy_updated_at column");
-        sqlx::raw_sql(include_str!("../../migrations/004_memories.sql"))
+        sqlx::raw_sql(include_str!("../../../../crates/egosync-engine/migrations/004_memories.sql"))
             .execute(&pool)
             .await
             .expect("create memories schema");
         sqlx::raw_sql(include_str!(
-            "../../migrations/005_memory_role_scoped_dedupe.sql"
+            "../../../../crates/egosync-engine/migrations/005_memory_role_scoped_dedupe.sql"
         ))
         .execute(&pool)
         .await
         .expect("migrate memory dedupe index");
         sqlx::raw_sql(include_str!(
-            "../../migrations/006_memory_single_owner_dedupe.sql"
+            "../../../../crates/egosync-engine/migrations/006_memory_single_owner_dedupe.sql"
         ))
         .execute(&pool)
         .await
         .expect("migrate memory single-owner dedupe index");
         sqlx::raw_sql(include_str!(
-            "../../migrations/007_forgotten_memory_sources.sql"
+            "../../../../crates/egosync-engine/migrations/007_forgotten_memory_sources.sql"
         ))
         .execute(&pool)
         .await
@@ -1330,7 +1330,7 @@ mod tests {
         let pool = sqlx::SqlitePool::connect("sqlite::memory:")
             .await
             .expect("create conversations db");
-        sqlx::raw_sql(include_str!("../../migrations/002_conversations.sql"))
+        sqlx::raw_sql(include_str!("../../../../crates/egosync-engine/migrations/002_conversations.sql"))
             .execute(&pool)
             .await
             .expect("create conversations schema");

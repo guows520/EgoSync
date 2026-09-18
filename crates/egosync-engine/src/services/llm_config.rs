@@ -13,7 +13,7 @@ use crate::models::settings::{
     CreateLlmConfigInput, LlmConfig, NetworkLocation, UpdateLlmConfigInput,
 };
 use crate::services::agent_config::AgentConfigService;
-use crate::services::secret_store;
+use crate::services::secret_store::SecretStore;
 
 /// 从 URL 中提取规范化的 host（不含 scheme/port/path）。
 /// 用于 NO_PROXY 匹配和内外网冲突检测。
@@ -101,6 +101,7 @@ pub async fn list_configs(pool: &SqlitePool) -> Result<Vec<LlmConfig>, AppError>
 
 pub async fn create_config(
     pool: &SqlitePool,
+    secrets: &dyn SecretStore,
     input: CreateLlmConfigInput,
 ) -> Result<LlmConfig, AppError> {
     let _write_guard = LLM_CONFIG_WRITE_LOCK.lock().await;
@@ -119,7 +120,7 @@ pub async fn create_config(
     let id = uuid::Uuid::new_v4().to_string();
     let api_key_ref = format!("llm_{}_api_key", id);
 
-    secret_store::save_secret(&api_key_ref, &input.api_key)?;
+    secrets.save_secret(&api_key_ref, &input.api_key)?;
 
     let is_first = db::count_llm_configs(pool).await? == 0;
 
@@ -145,6 +146,7 @@ pub async fn create_config(
 
 pub async fn update_config(
     pool: &SqlitePool,
+    secrets: &dyn SecretStore,
     id: String,
     input: UpdateLlmConfigInput,
 ) -> Result<LlmConfig, AppError> {
@@ -174,7 +176,7 @@ pub async fn update_config(
 
     if let Some(api_key) = &input.api_key {
         if !api_key.is_empty() {
-            secret_store::save_secret(&existing.api_key_ref, api_key)?;
+            secrets.save_secret(&existing.api_key_ref, api_key)?;
         }
     }
 
@@ -195,12 +197,16 @@ pub async fn update_config(
     Ok(updated)
 }
 
-pub async fn delete_config(pool: &SqlitePool, id: String) -> Result<(), AppError> {
+pub async fn delete_config(
+    pool: &SqlitePool,
+    secrets: &dyn SecretStore,
+    id: String,
+) -> Result<(), AppError> {
     let config = db::get_llm_config(pool, &id).await?;
 
     db::delete_llm_config(pool, &id).await?;
 
-    let _ = secret_store::delete_secret(&config.api_key_ref);
+    let _ = secrets.delete_secret(&config.api_key_ref);
 
     tracing::info!(config_id = %id, "LLM 配置已删除");
     Ok(())
@@ -212,10 +218,14 @@ pub async fn set_default(pool: &SqlitePool, id: String) -> Result<(), AppError> 
     Ok(())
 }
 
-pub async fn test_connection(pool: &SqlitePool, id: String) -> Result<(), AppError> {
+pub async fn test_connection(
+    pool: &SqlitePool,
+    secrets: &dyn SecretStore,
+    id: String,
+) -> Result<(), AppError> {
     let config = db::get_llm_config(pool, &id).await?;
 
-    let api_key = secret_store::load_secret(&config.api_key_ref)?.ok_or_else(|| {
+    let api_key = secrets.load_secret(&config.api_key_ref)?.ok_or_else(|| {
         AppError::KeyringError(format!(
             "未找到配置 '{}' 的 API Key，请重新保存",
             config.name
@@ -256,10 +266,14 @@ pub async fn test_connection(pool: &SqlitePool, id: String) -> Result<(), AppErr
 /// a single config file contains agents, MCP, tools AND provider/model —
 /// eliminating project-vs-global config conflicts.
 /// Best-effort: logs on failure.
-pub async fn sync_default_to_opencode(pool: &SqlitePool, agent_config: &AgentConfigService) -> Result<(), AppError> {
+pub async fn sync_default_to_opencode(
+    pool: &SqlitePool,
+    secrets: &dyn SecretStore,
+    agent_config: &AgentConfigService,
+) -> Result<(), AppError> {
     (|| async {
         let config = db::get_default_llm_config(pool).await?;
-        let api_key = secret_store::load_secret(&config.api_key_ref)?.ok_or_else(|| {
+        let api_key = secrets.load_secret(&config.api_key_ref)?.ok_or_else(|| {
             AppError::KeyringError(format!("未找到配置 '{}' 的 API Key", config.name))
         })?;
 
@@ -353,10 +367,11 @@ pub async fn sync_default_to_opencode(pool: &SqlitePool, agent_config: &AgentCon
 /// 根据已保存配置的 ID 获取模型列表。
 pub async fn list_models(
     pool: &SqlitePool,
+    secrets: &dyn SecretStore,
     id: String,
 ) -> Result<Vec<String>, AppError> {
     let config = db::get_llm_config(pool, &id).await?;
-    let api_key = secret_store::load_secret(&config.api_key_ref)?.ok_or_else(|| {
+    let api_key = secrets.load_secret(&config.api_key_ref)?.ok_or_else(|| {
         AppError::KeyringError(format!(
             "未找到配置 '{}' 的 API Key，请重新保存",
             config.name
@@ -696,5 +711,67 @@ mod tests {
         assert!(no_proxy.contains("127.0.0.1"));
         assert!(no_proxy.contains("internal.corp.com"));
         assert!(!no_proxy.contains("api.openai.com"));
+    }
+
+    /// 测试用内存密钥库（与 data_export 测试同构）：验证 create/delete 真实走
+    /// SecretStore 接缝——Story 15.1 把 keyring 自由函数改造为接缝注入，
+    /// 落库形状（llm_{id}_api_key）与删除时序是桌面零回归的契约，
+    /// 若接缝误接线（改回直连/漏传/键名漂移）下列断言会失败。
+    #[derive(Default)]
+    struct InMemorySecretStore(std::sync::Mutex<std::collections::HashMap<String, String>>);
+
+    impl crate::services::secret_store::SecretStore for InMemorySecretStore {
+        fn save_secret(&self, key: &str, value: &str) -> Result<(), AppError> {
+            self.0
+                .lock()
+                .unwrap()
+                .insert(key.to_string(), value.to_string());
+            Ok(())
+        }
+        fn load_secret(&self, key: &str) -> Result<Option<String>, AppError> {
+            Ok(self.0.lock().unwrap().get(key).cloned())
+        }
+        fn delete_secret(&self, key: &str) -> Result<(), AppError> {
+            self.0.lock().unwrap().remove(key);
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn create_and_delete_config_drive_secret_store_seam() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let pool = crate::db::pool::init_db(&dir.path().join("seam-test.db"))
+            .await
+            .expect("init db");
+        let secrets = InMemorySecretStore::default();
+
+        let config = create_config(
+            &pool,
+            &secrets,
+            CreateLlmConfigInput {
+                name: "接缝测试".into(),
+                provider: "openai_compatible".into(),
+                base_url: "https://api.openai.com/v1".into(),
+                model: "gpt-4o".into(),
+                api_key: "sk-seam-test".into(),
+                network_location: NetworkLocation::External,
+            },
+        )
+        .await
+        .expect("create config");
+
+        // 接缝落库形状：密钥必须以 llm_{id}_api_key 为键写入 SecretStore
+        let key_ref = format!("llm_{}_api_key", config.id);
+        assert_eq!(
+            secrets.load_secret(&key_ref).expect("load secret"),
+            Some("sk-seam-test".to_string())
+        );
+        assert_eq!(config.api_key_ref, key_ref);
+
+        // 删除时序：delete_config 须同步清掉 SecretStore 中的条目
+        delete_config(&pool, &secrets, config.id.clone())
+            .await
+            .expect("delete config");
+        assert_eq!(secrets.load_secret(&key_ref).expect("load secret"), None);
     }
 }

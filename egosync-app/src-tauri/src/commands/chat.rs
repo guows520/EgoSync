@@ -689,7 +689,7 @@ mod tests {
         let pool = SqlitePool::connect("sqlite::memory:")
             .await
             .expect("create conversations db");
-        sqlx::raw_sql(include_str!("../../migrations/002_conversations.sql"))
+        sqlx::raw_sql(include_str!("../../../../crates/egosync-engine/migrations/002_conversations.sql"))
             .execute(&pool)
             .await
             .expect("create conversations schema");
@@ -730,11 +730,11 @@ mod tests {
         let pool = SqlitePool::connect("sqlite::memory:")
             .await
             .expect("create main db");
-        sqlx::raw_sql(include_str!("../../migrations/003_roles.sql"))
+        sqlx::raw_sql(include_str!("../../../../crates/egosync-engine/migrations/003_roles.sql"))
             .execute(&pool)
             .await
             .expect("create roles schema");
-        sqlx::raw_sql(include_str!("../../migrations/019_energy_updated_at.sql"))
+        sqlx::raw_sql(include_str!("../../../../crates/egosync-engine/migrations/019_energy_updated_at.sql"))
             .execute(&pool)
             .await
             .expect("add energy_updated_at column");

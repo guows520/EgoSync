@@ -141,7 +141,9 @@ pub async fn count_llm_configs(pool: &SqlitePool) -> Result<i64, AppError> {
     Ok(row.0)
 }
 
-pub(crate) fn chrono_now_pub() -> String {
+// Story 15.1：原 pub(crate) —— crate 拆分后桌面壳留守模块（companion_pairing 等）
+// 仍经 crate::db::settings:: 引用，可见性小幅放宽是拆分的机械后果（同 pub mod llm）。
+pub fn chrono_now_pub() -> String {
     chrono_now()
 }
 

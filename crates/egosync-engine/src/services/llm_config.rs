@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use sqlx::SqlitePool;
 
@@ -259,6 +260,45 @@ pub async fn test_connection(
     provider.test_connection().await?;
     tracing::info!(config_id = %id, "LLM 连接测试成功");
     Ok(())
+}
+
+/// Story 15.2: 自桌面壳 agent_engine 提取的默认 provider 构造（provider 构造归位）。
+///
+/// 密钥经 SecretStore 接缝读取；返回 `Arc<dyn LlmProvider>` 供
+/// briefing / review / suggestion / 委派执行等调用方共享。
+pub async fn resolve_default_provider(
+    main_pool: &SqlitePool,
+    secret: &dyn SecretStore,
+) -> Result<Arc<dyn LlmProvider>, AppError> {
+    let config = db::get_default_llm_config(main_pool).await?;
+
+    let api_key = secret.load_secret(&config.api_key_ref)?.ok_or_else(|| {
+        AppError::KeyringError(format!(
+            "未找到配置 '{}' 的 API Key，请在设置中重新保存",
+            config.name
+        ))
+    })?;
+
+    let net_loc = config.network_location.clone();
+    let no_proxy = net_loc == NetworkLocation::Internal;
+
+    let provider: Arc<dyn LlmProvider> = match config.provider.as_str() {
+        "anthropic" => Arc::new(AnthropicProvider::new(
+            config.base_url,
+            api_key,
+            config.model,
+            no_proxy,
+        )?),
+        "minimax" => Arc::new(OpenAiProvider::new_with_reasoning_split(
+            config.base_url,
+            api_key,
+            config.model,
+            no_proxy,
+        )?),
+        _ => Arc::new(OpenAiProvider::new(config.base_url, api_key, config.model, no_proxy)?),
+    };
+
+    Ok(provider)
 }
 
 /// Sync the current default LLM config (provider + model + API key) into

@@ -3,12 +3,9 @@ use tauri::State;
 use crate::db::pool::DbPool;
 use crate::db::tasks;
 use crate::error::AppError;
+use crate::events::TASK_CLASSIFIED_EVENT;
 use crate::models::task::{CreateTaskInput, CrossRoleTask, Task, UpdateTaskInput};
 use crate::services::task_classifier;
-
-/// 任务创建后自动分类完成（或降级）时推送的事件名。
-/// 前端据此用最新任务替换卡片并清除「分类中」标记。
-pub const TASK_CLASSIFIED_EVENT: &str = "task:classified";
 
 /// Story 13.1：命令层补发写事件（快照引擎订阅触发 STATE_DELTA；payload
 /// 沿用域对象供前端自由消费——引擎只看事件名不看 payload）。
@@ -25,6 +22,7 @@ pub async fn task_create(
     input: CreateTaskInput,
     app_handle: tauri::AppHandle,
     pool: State<'_, DbPool>,
+    secrets: State<'_, crate::services::secret_store_keyring::KeyringSecretStore>,
 ) -> Result<Task, AppError> {
     use tauri::Emitter;
 
@@ -43,8 +41,10 @@ pub async fn task_create(
         let pool = pool.inner().clone();
         let app = app_handle.clone();
         let task_id = task.id.clone();
+        let secret = secrets.inner().clone();
         tauri::async_runtime::spawn(async move {
-            let classified = match task_classifier::classify_and_persist(&pool, &task_id).await {
+            let classified =
+                match task_classifier::classify_and_persist(&pool, &task_id, &secret).await {
                 Ok(updated) => Some(updated),
                 Err(e) => {
                     tracing::warn!(task_id = %task_id, error = %e, "任务创建后自动分类失败，保留默认 Q2");
@@ -150,18 +150,20 @@ pub async fn task_check_protection_status(pool: State<'_, DbPool>) -> Result<u64
 
 /// Story 4.6：手动触发 Q2 保护提醒检查。
 /// 前端可在打开管家视角时主动调用，确保 at_risk 状态即时反映。
-/// 传入 `app_handle` 以 emit `q2:reminder` 事件，与调度器路径一致，
+/// 事件经注入的事件总线 emit `q2:reminder`，与调度器路径一致，
 /// 保证手动触发生成的提醒也能即时刷新管家对话。
 #[tauri::command]
 pub async fn task_check_q2_reminders(
-    app_handle: tauri::AppHandle,
     pool: State<'_, DbPool>,
     conv_pool: State<'_, crate::db::pool::ConversationsPool>,
+    bus: State<'_, crate::services::tauri_event_bus::TauriEventBus>,
 ) -> Result<(), AppError> {
+    // Story 15.2：emit 改经注入的事件总线（EngineEvents 接缝），
+    // 语义与调度器路径一致，手动触发的提醒同样即时刷新管家对话。
     crate::services::q2_protection_reminder::check_and_generate_reminders(
         &pool,
         &conv_pool,
-        Some(&app_handle),
+        Some(bus.inner()),
     )
     .await
 }

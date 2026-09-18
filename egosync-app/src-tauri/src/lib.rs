@@ -10,7 +10,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 // 集成测试访问（rlib 仅被测试消费，无运行时影响）
 pub mod commands;
 // Story 15.1：db/models/error 自引擎 crate 回引，路径语义不变
-pub use egosync_engine::{db, error, models};
+pub use egosync_engine::{db, error, events, models};
 // llm 可见性语义保持：原先即为私有 mod，私有 use 使 crate::llm 照常可用
 use egosync_engine::llm;
 pub mod services;
@@ -67,6 +67,9 @@ pub fn run() {
             app.manage(conv_pool.clone());
             // Story 15.1 接缝一：注入桌面侧 SecretStore（keyring 实现）
             app.manage(services::secret_store_keyring::KeyringSecretStore::new());
+            // Story 15.2 接缝二：注入桌面侧事件总线（转发 app_handle.emit），
+            // engine 侧服务经 EngineEvents 发射，命令层可经 State 取用。
+            app.manage(services::tauri_event_bus::TauriEventBus::new(app.handle().clone()));
             app.manage(commands::chat::OpencodeMcpScopeLock::default());
             app.manage(commands::chat::StreamingState::default());
             app.manage(commands::chat::CancelTokens::default());
@@ -298,11 +301,20 @@ pub fn run() {
 
             // Story 3.3: 每小时检查临期任务，自动升入 Q1。
             // 内部错误只 warn，不阻塞 Tauri setup。
-            services::task_deadline_watch::spawn_hourly_watch(pool.clone());
+            // Story 15.2 接缝四：注入宿主 runtime Handle 派生任务
+            // （setup 同步上下文无 reactor，裸 tokio::spawn 会 panic）。
+            // tauri 全局运行时经 handle() 取出，inner() 即其 tokio Handle。
+            services::task_deadline_watch::spawn_hourly_watch(
+                pool.clone(),
+                tauri::async_runtime::handle().inner().clone(),
+            );
 
             // Story 3.5: 每小时检查 Q2 任务保护状态，连续被挤压标记 at_risk。
             // 内部错误只 warn，不阻塞 Tauri setup。
-            services::task_protection_watch::spawn_hourly_watch(pool.clone());
+            services::task_protection_watch::spawn_hourly_watch(
+                pool.clone(),
+                tauri::async_runtime::handle().inner().clone(),
+            );
 
             // ── Story 12.2: 手机伴侣 WS 监听 + NSD 广播（非阻塞降级） ──
             // keyring 不可用时降级：companion_* 命令调用会因 state 未管理而失败，
@@ -372,7 +384,22 @@ pub fn run() {
             // Story 4.1: 角色后台调度器，按 proactivity_level 配置频率运行工作循环。
             // 60 秒基础 tick，每次 tick 动态查询角色列表，passive 跳过。
             // 内部错误只 warn，不阻塞 Tauri setup。
-            services::scheduler::spawn_scheduler(pool.clone(), conv_pool.clone(), app.handle().clone());
+            // Story 15.2 接缝二/四：事件经 EngineEvents、密钥经 SecretStore
+            // 注入；注入宿主 runtime Handle 派生任务（setup 同步上下文无
+            // reactor，裸 tokio::spawn 会 panic）。KeyringSecretStore 为 unit
+            // struct，即席构造零成本（与 agent_engine 调用点同款手法）。
+            let scheduler_event_bus: Arc<dyn services::event_bus::EngineEvents> = Arc::new(
+                services::tauri_event_bus::TauriEventBus::new(app.handle().clone()),
+            );
+            let scheduler_secret: Arc<dyn egosync_engine::services::secret_store::SecretStore> =
+                Arc::new(services::secret_store_keyring::KeyringSecretStore::new());
+            services::scheduler::spawn_scheduler(
+                pool.clone(),
+                conv_pool.clone(),
+                scheduler_event_bus,
+                scheduler_secret,
+                tauri::async_runtime::handle().inner().clone(),
+            );
 
             Ok(())
         })

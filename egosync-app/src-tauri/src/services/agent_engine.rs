@@ -9,8 +9,6 @@ use tokio_util::sync::CancellationToken;
 use crate::db::pool::{ConversationsPool, DbPool};
 use crate::db::{conversations, memories, tasks};
 use crate::error::AppError;
-use crate::llm::anthropic::AnthropicProvider;
-use crate::llm::openai::OpenAiProvider;
 use crate::llm::traits::{
     ChatCompletionMessage, ChatOptions, LlmProvider, StreamEvent, ToolCall, ToolDefinition,
 };
@@ -21,7 +19,16 @@ use crate::models::task::{CreateTaskInput, TaskOwnerType};
 use crate::models::task_decomposition::{
     CreateTaskDecompositionProposalInput, TaskDecompositionItem,
 };
-use crate::services::secret_store;
+// Story 15.2：三提取件（resolve_default_provider / build_role_task_summary /
+// build_role_memory_summary）与 4 个共享 helper 已搬入 engine（role_context /
+// llm_config），此处回引使既有调用点文本零改动。
+pub use crate::services::llm_config::resolve_default_provider;
+use crate::services::role_context::{
+    build_role_memory_summary, build_role_task_summary, format_memory_reference_line,
+    format_task_context_line, select_task_context_items, truncate_chars,
+    BUTLER_MEMORY_PER_ROLE, BUTLER_MEMORY_TOTAL_CHARS, TASK_CONTEXT_VISIBLE_LIMIT,
+};
+use crate::services::secret_store_keyring::KeyringSecretStore;
 
 const OPENCODE_FALLBACK_NOTICE: &str = "Agent 引擎暂时不可用，当前为基础对话模式。\n\n";
 const OPENCODE_TOOL_EXECUTION_TIMEOUT: Duration = Duration::from_secs(60);
@@ -1204,11 +1211,6 @@ const HISTORY_LIMIT: i64 = 20;
 const CROSS_ROLE_SUMMARY_PER_ROLE: i64 = 4;
 const CROSS_ROLE_SUMMARY_PER_LINE_CHARS: usize = 40;
 const CROSS_ROLE_SUMMARY_TOTAL_CHARS: usize = 2000;
-const BUTLER_MEMORY_PER_ROLE: usize = 6;
-const BUTLER_MEMORY_PER_LINE_CHARS: usize = 90;
-const BUTLER_MEMORY_TOTAL_CHARS: usize = 3000;
-const TASK_CONTEXT_VISIBLE_LIMIT: usize = 50;
-const TASK_CONTEXT_TITLE_CHARS: usize = 80;
 
 const MISSION_VALUE_BASIS_RULES: &str = "\
 [使命与价值观依据]\n\
@@ -1323,84 +1325,6 @@ async fn build_butler_mission_context(main_pool: &DbPool) -> Result<String, AppE
     ))
 }
 
-fn truncate_chars(value: &str, limit: usize) -> String {
-    value.chars().take(limit).collect()
-}
-
-fn task_status_label(task: &crate::models::task::Task) -> &'static str {
-    if task.is_completed {
-        "已完成"
-    } else {
-        "未完成"
-    }
-}
-
-fn format_task_context_line(task: &crate::models::task::Task) -> String {
-    let mut badges = vec![format!("[{}]", task_status_label(task)), format!("[{}]", task.quadrant)];
-    if task.is_big_rock {
-        badges.push("[大石头]".to_string());
-    }
-    if task.protection_status != "normal" {
-        badges.push(format!("[{}]", task.protection_status));
-    }
-    let deadline = task
-        .deadline
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| format!(" 截止:{}", value))
-        .unwrap_or_default();
-    format!(
-        "- id={} {}{} {}",
-        task.id,
-        badges.join(""),
-        deadline,
-        truncate_chars(task.title.trim(), TASK_CONTEXT_TITLE_CHARS)
-    )
-}
-
-fn select_task_context_items(tasks: &[crate::models::task::Task]) -> (Vec<&crate::models::task::Task>, usize) {
-    let mut selected = tasks
-        .iter()
-        .filter(|task| !task.is_completed)
-        .collect::<Vec<_>>();
-    let remaining_slots = TASK_CONTEXT_VISIBLE_LIMIT.saturating_sub(selected.len());
-    let completed = tasks
-        .iter()
-        .filter(|task| task.is_completed)
-        .collect::<Vec<_>>();
-    let omitted_completed_count = completed.len().saturating_sub(remaining_slots);
-    selected.extend(completed.into_iter().take(remaining_slots));
-    (selected, omitted_completed_count)
-}
-
-pub async fn build_role_task_summary(
-    main_pool: &DbPool,
-    role_id: &str,
-) -> Result<String, AppError> {
-    let role = crate::db::roles::get_role(main_pool, role_id).await?;
-    let role_tasks = tasks::list_tasks_by_role(main_pool, role_id).await?;
-    if role_tasks.is_empty() {
-        return Ok(String::new());
-    }
-
-    let (selected, omitted_completed_count) = select_task_context_items(&role_tasks);
-    let mut lines = selected
-        .into_iter()
-        .map(format_task_context_line)
-        .collect::<Vec<_>>();
-    if omitted_completed_count > 0 {
-        lines.push(format!("- 另有 {} 条已完成任务未注入。", omitted_completed_count));
-    }
-
-    Ok(format!(
-        "[当前角色任务]\n{}：\n{}\n规则：这是 EgoSync 内部任务列表；当用户询问任务、待办、安排或下一步时，优先依据本段回答，不要去工作目录寻找任务文件。未完成任务必须全部覆盖；已完成任务只在总量不超过 {} 条时补充。任务 ID 仅用于 complete_task / delete_task 工具参数，不得在自然语言回复中展示。",
-        role.name,
-        lines.join("\n"),
-        TASK_CONTEXT_VISIBLE_LIMIT
-    ))
-}
-
 pub async fn build_butler_task_summary(main_pool: &DbPool) -> Result<String, AppError> {
     let roles = crate::db::roles::list_all_roles(main_pool).await?;
     if roles.is_empty() {
@@ -1447,27 +1371,6 @@ pub async fn build_butler_task_summary(main_pool: &DbPool) -> Result<String, App
         blocks.join("\n"),
         TASK_CONTEXT_VISIBLE_LIMIT
     ))
-}
-
-fn format_memory_reference_label(memory: &crate::models::memory::Memory) -> String {
-    chrono::DateTime::parse_from_rfc3339(&memory.created_at)
-        .map(|created_at| {
-            created_at
-                .with_timezone(&chrono::Local)
-                .format("%Y/%m/%d %H:%M")
-                .to_string()
-        })
-        .unwrap_or_else(|_| memory.created_at.clone())
-}
-
-fn format_memory_reference_line(memory: &crate::models::memory::Memory) -> String {
-    format!(
-        "- [[记忆#{}]](egosync-memory://{}) [{}] {}",
-        format_memory_reference_label(memory),
-        memory.id,
-        memory.category,
-        truncate_chars(memory.content.trim(), BUTLER_MEMORY_PER_LINE_CHARS)
-    )
 }
 
 pub async fn build_butler_memory_summary(main_pool: &DbPool) -> Result<String, AppError> {
@@ -1870,28 +1773,6 @@ const ROLE_BASE_PERSONA_PROMPT: &str = "\
 用户自己就是「{name}」，你帮助 TA 以这个身份思考、规划和执行相关目标与任务。\
 你不是独立于用户的另一个人，你是用户作为「{name}」时的延伸。\
 用简洁自然的中文回复，不用 emoji。";
-
-pub async fn build_role_memory_summary(
-    main_pool: &DbPool,
-    role_id: &str,
-) -> Result<String, AppError> {
-    let role = crate::db::roles::get_role(main_pool, role_id).await?;
-    let memories = memories::list_memories(main_pool, Some(role_id), None, None, None).await?;
-    if memories.is_empty() {
-        return Ok(String::new());
-    }
-
-    let lines = memories
-        .into_iter()
-        .take(BUTLER_MEMORY_PER_ROLE)
-        .map(|memory| format_memory_reference_line(&memory))
-        .collect::<Vec<_>>();
-    let mut summary = format!("[当前角色记忆]\n{}：\n{}", role.name, lines.join("\n"));
-    if summary.chars().count() > BUTLER_MEMORY_TOTAL_CHARS {
-        summary = truncate_chars(&summary, BUTLER_MEMORY_TOTAL_CHARS) + "…";
-    }
-    Ok(summary)
-}
 
 async fn build_role_system_prompt(
     main_pool: &DbPool,
@@ -2352,43 +2233,6 @@ fn get_onboarding_chat_options(step: u8) -> ChatOptions {
             tool_choice: None,
         }
     }
-}
-
-pub async fn resolve_default_provider(
-    main_pool: &DbPool,
-) -> Result<Arc<dyn LlmProvider>, AppError> {
-    use crate::db::settings as db;
-    use crate::models::settings::NetworkLocation;
-
-    let config = db::get_default_llm_config(main_pool).await?;
-
-    let api_key = secret_store::load_secret(&config.api_key_ref)?.ok_or_else(|| {
-        AppError::KeyringError(format!(
-            "未找到配置 '{}' 的 API Key，请在设置中重新保存",
-            config.name
-        ))
-    })?;
-
-    let net_loc = config.network_location.clone();
-    let no_proxy = net_loc == NetworkLocation::Internal;
-
-    let provider: Arc<dyn LlmProvider> = match config.provider.as_str() {
-        "anthropic" => Arc::new(AnthropicProvider::new(
-            config.base_url,
-            api_key,
-            config.model,
-            no_proxy,
-        )?),
-        "minimax" => Arc::new(OpenAiProvider::new_with_reasoning_split(
-            config.base_url,
-            api_key,
-            config.model,
-            no_proxy,
-        )?),
-        _ => Arc::new(OpenAiProvider::new(config.base_url, api_key, config.model, no_proxy)?),
-    };
-
-    Ok(provider)
 }
 
 #[derive(Debug)]
@@ -3573,7 +3417,8 @@ pub async fn run_stream(
             build_butler_messages(&conv_pool, &main_pool, &conversation_id, &user_message).await?
         }
     };
-    let provider = resolve_default_provider(&main_pool).await?;
+    let provider =
+        resolve_default_provider(&main_pool, &KeyringSecretStore::new()).await?;
 
     let chat_options = match (onboarding_step, role_id.as_deref()) {
         // onboarding：原有 create_role 工具（分阶段开启），与本 story 互斥
@@ -4701,7 +4546,7 @@ async fn execute_delegated_task_calls(main_pool: &DbPool, role_id: &str, calls: 
                 let pool = main_pool.clone();
                 let task_id = task.id.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = crate::services::task_classifier::classify_and_persist(&pool, &task_id).await {
+                    if let Err(e) = crate::services::task_classifier::classify_and_persist(&pool, &task_id, &KeyringSecretStore::new()).await {
                         tracing::warn!("[delegate] 任务自动分类失败，保留默认 Q2: task_id={} error={}", task_id, e);
                     }
                 });
@@ -5084,7 +4929,7 @@ pub(crate) async fn execute_delegate_to_role_with_source(
         );
     }
 
-    let provider = match resolve_default_provider(main_pool).await {
+    let provider = match resolve_default_provider(main_pool, &KeyringSecretStore::new()).await {
         Ok(p) => p,
         Err(e) => {
             tracing::error!("[delegate] 获取 provider 失败: {}", e);
@@ -5498,6 +5343,7 @@ mod tests {
     }
 
     use super::*;
+    use crate::services::role_context::format_memory_reference_label;
     use std::collections::VecDeque;
 
     struct ScriptedDelegateProvider {

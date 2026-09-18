@@ -3,6 +3,7 @@ use tauri::{AppHandle, State};
 use crate::db::pool::{ConversationsPool, DbPool};
 use crate::db::tasks;
 use crate::error::AppError;
+use crate::events::TASK_CLASSIFIED_EVENT;
 use crate::models::task::{CreateTaskInput, Task, TaskOwnerType};
 use crate::models::weekly_review::WeeklyReview;
 use crate::services::review_generator;
@@ -25,9 +26,17 @@ pub async fn review_get_by_week(
 pub async fn review_generate_now(
     pool: State<'_, DbPool>,
     conv_pool: State<'_, ConversationsPool>,
-    app_handle: AppHandle,
+    bus: State<'_, crate::services::tauri_event_bus::TauriEventBus>,
+    secrets: State<'_, crate::services::secret_store_keyring::KeyringSecretStore>,
 ) -> Result<bool, AppError> {
-    review_generator::generate_review_if_needed(&pool, &conv_pool, Some(&app_handle)).await
+    // Story 15.2：事件/密钥经 EngineEvents / SecretStore 接缝注入
+    review_generator::generate_review_if_needed(
+        &pool,
+        &conv_pool,
+        Some(bus.inner()),
+        secrets.inner(),
+    )
+    .await
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -45,6 +54,7 @@ pub async fn review_plan_bigrocks(
     items: Vec<BigRockPlanItem>,
     app_handle: AppHandle,
     pool: State<'_, DbPool>,
+    secrets: State<'_, crate::services::secret_store_keyring::KeyringSecretStore>,
 ) -> Result<Vec<Task>, AppError> {
     use std::collections::HashMap;
     use tauri::Emitter;
@@ -79,16 +89,18 @@ pub async fn review_plan_bigrocks(
         let task_id = task.id.clone();
         let pool_clone = pool.inner().clone();
         let app_clone = app_handle.clone();
+        let secret = secrets.inner().clone();
         tauri::async_runtime::spawn(async move {
-            let classified = match task_classifier::classify_and_persist(&pool_clone, &task_id).await {
-                Ok(updated) => Some(updated),
-                Err(e) => {
-                    tracing::warn!(task_id = %task_id, error = %e, "大石头创建后自动分类失败，保留默认 Q2");
-                    tasks::get_active_task_pub(&pool_clone, &task_id).await.ok()
-                }
-            };
+            let classified =
+                match task_classifier::classify_and_persist(&pool_clone, &task_id, &secret).await {
+                    Ok(updated) => Some(updated),
+                    Err(e) => {
+                        tracing::warn!(task_id = %task_id, error = %e, "大石头创建后自动分类失败，保留默认 Q2");
+                        tasks::get_active_task_pub(&pool_clone, &task_id).await.ok()
+                    }
+                };
             if let Some(updated) = classified {
-                let _ = app_clone.emit(crate::commands::task::TASK_CLASSIFIED_EVENT, updated);
+                let _ = app_clone.emit(TASK_CLASSIFIED_EVENT, updated);
             }
         });
         created_tasks.push(task);
@@ -99,8 +111,9 @@ pub async fn review_plan_bigrocks(
 #[tauri::command]
 pub async fn review_get_bigrock_suggestions(
     pool: State<'_, DbPool>,
+    secrets: State<'_, crate::services::secret_store_keyring::KeyringSecretStore>,
 ) -> Result<Vec<review_generator::RoleBigRockSuggestions>, AppError> {
-    review_generator::generate_bigrock_suggestions(&pool).await
+    review_generator::generate_bigrock_suggestions(&pool, secrets.inner()).await
 }
 
 #[cfg(test)]

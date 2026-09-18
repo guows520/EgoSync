@@ -64,7 +64,7 @@ impl EventRouter {
     /// Run the long-running event pump. Subscribes to opencode's global
     /// event stream and dispatches each event by sessionID. Reconnects with
     /// backoff when the stream closes. This is an async fn so the caller
-    /// chooses the runtime (Tokio vs `tauri::async_runtime::spawn`).
+    /// chooses the runtime (Tokio vs the desktop host's async runtime).
     pub async fn run_pump(self: Arc<Self>, bridge: AgentBridge) {
         loop {
             let (tx, mut rx) = mpsc::channel::<BusEvent>(128);

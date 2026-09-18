@@ -10,25 +10,24 @@
 use std::sync::Arc;
 
 use sqlx::SqlitePool;
-use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
 use tokio::time::{timeout, Duration};
 
 use crate::db;
 use crate::db::pool::ConversationsPool;
 use crate::error::AppError;
+use crate::events::REVIEW_GENERATED_EVENT;
 use crate::llm::traits::{ChatCompletionMessage, ChatOptions, LlmProvider, StreamEvent};
 use crate::models::dashboard::DashboardStatus;
 use crate::models::role::Role;
 use crate::models::task::CrossRoleTask;
 use chrono::{Datelike, Local, NaiveDate, TimeZone, Utc};
-use crate::services::agent_engine;
+use crate::services::event_bus::EngineEvents;
+use crate::services::llm_config;
+use crate::services::secret_store::SecretStore;
 
 const LLM_TIMEOUT_SECS: u64 = 60;
 const MAX_REVIEW_RESPONSE_BYTES: usize = 128 * 1024;
-
-/// Tauri Event 名称
-pub const REVIEW_GENERATED_EVENT: &str = "review:generated";
 
 /// `review:generated` 事件 payload
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -72,7 +71,8 @@ struct ReviewData {
 pub async fn generate_review_if_needed(
     pool: &SqlitePool,
     conv_pool: &ConversationsPool,
-    app_handle: Option<&AppHandle>,
+    events: Option<&dyn EngineEvents>,
+    secret: &dyn SecretStore,
 ) -> Result<bool, AppError> {
     let today = chrono::Local::now().date_naive();
     let week_start = today - chrono::Duration::days(today.weekday().num_days_from_monday() as i64);
@@ -105,7 +105,7 @@ pub async fn generate_review_if_needed(
     let prompt = build_review_prompt(&data, &week_start_str, &week_end_str);
 
     // 解析 LLM provider
-    let provider = match agent_engine::resolve_default_provider(pool).await {
+    let provider = match llm_config::resolve_default_provider(pool, secret).await {
         Ok(p) => p,
         Err(e) => {
             tracing::warn!(error = %e, "解析 LLM provider 失败（降级跳过复盘生成）");
@@ -170,14 +170,17 @@ pub async fn generate_review_if_needed(
     // 创建"轻触"通知
     create_review_notification(pool).await;
 
-    // emit Tauri Event
-    if let Some(handle) = app_handle {
+    // emit 事件
+    if let Some(bus) = events {
         let payload = ReviewGeneratedPayload {
             review_id: review.id.clone(),
             week_start: review.week_start.clone(),
             week_end: review.week_end.clone(),
         };
-        if let Err(e) = handle.emit(REVIEW_GENERATED_EVENT, &payload) {
+        if let Err(e) = serde_json::to_value(&payload)
+            .map_err(|e| e.to_string())
+            .and_then(|payload| bus.emit(REVIEW_GENERATED_EVENT, payload))
+        {
             tracing::warn!(error = %e, "emit review:generated 事件失败");
         }
     }
@@ -579,6 +582,7 @@ pub struct RoleBigRockSuggestions {
 /// LLM 失败/超时/解析失败 → 返回空列表（前端降级为手动输入）
 pub async fn generate_bigrock_suggestions(
     pool: &SqlitePool,
+    secret: &dyn SecretStore,
 ) -> Result<Vec<RoleBigRockSuggestions>, AppError> {
     let roles = db::roles::list_active_roles(pool)
         .await
@@ -602,7 +606,7 @@ pub async fn generate_bigrock_suggestions(
 
     let prompt = build_suggestion_prompt(&roles, &incomplete_bigrocks);
 
-    let provider = match agent_engine::resolve_default_provider(pool).await {
+    let provider = match llm_config::resolve_default_provider(pool, secret).await {
         Ok(p) => p,
         Err(e) => {
             tracing::warn!(error = %e, "解析 LLM provider 失败（大石头建议降级为空列表）");

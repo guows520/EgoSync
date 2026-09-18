@@ -22,7 +22,7 @@ use crate::llm::openai::OpenAiProvider;
 use crate::llm::traits::{ChatCompletionMessage, ChatOptions, LlmProvider, StreamEvent};
 use crate::models::role::Role;
 use crate::models::task::{ProtectionStatus, Task};
-use crate::services::secret_store;
+use crate::services::secret_store::SecretStore;
 
 /// LLM 调用超时上限（秒）。failure 后降级到 Q2，不阻塞用户创建任务。
 const LLM_TIMEOUT_SECS: u64 = 12;
@@ -65,14 +65,18 @@ pub struct ClassificationOutcome {
 /// 2. 否则读取 role + 同角色历史任务 → 构造 prompt → 调用默认 LLM 获取分类。
 /// 3. LLM 失败/超时/JSON 非法 → 降级到 Q2 + 中文 reason，仍写入 DB。
 /// 4. 始终通过 `db::tasks::update_task_classification` 写入，确保不修改 sort_order 等字段。
-pub async fn classify_and_persist(pool: &SqlitePool, task_id: &str) -> Result<Task, AppError> {
+pub async fn classify_and_persist(
+    pool: &SqlitePool,
+    task_id: &str,
+    secret: &dyn SecretStore,
+) -> Result<Task, AppError> {
     let task = db::tasks::get_active_task_pub(pool, task_id).await?;
     if task.manual_override {
         // 用户已显式选择，不调用 LLM 也不写库。
         return Ok(task);
     }
 
-    let outcome = classify_task(pool, &task).await;
+    let outcome = classify_task(pool, &task, secret).await;
     log_outcome(&task, &outcome);
 
     db::tasks::update_task_classification(
@@ -86,7 +90,11 @@ pub async fn classify_and_persist(pool: &SqlitePool, task_id: &str) -> Result<Ta
 }
 
 /// 仅做分类（不写库），便于单测与上层组合。
-pub async fn classify_task(pool: &SqlitePool, task: &Task) -> ClassificationOutcome {
+pub async fn classify_task(
+    pool: &SqlitePool,
+    task: &Task,
+    secret: &dyn SecretStore,
+) -> ClassificationOutcome {
     // 管家任务没有角色，使用通用上下文分类。
     if task.owner_type == "butler" {
         let recent = db::tasks::list_recent_tasks_by_owner(
@@ -105,7 +113,7 @@ pub async fn classify_task(pool: &SqlitePool, task: &Task) -> ClassificationOutc
         let today = current_date();
         let prompt = build_butler_classification_prompt(task, &recent, &today);
 
-        let provider = match build_default_provider(pool).await {
+        let provider = match build_default_provider(pool, secret).await {
             Ok(p) => p,
             Err(e) => {
                 tracing::warn!(task_id = %task.id, error = %e, "未能加载默认 LLM 配置，分类降级到 Q2");
@@ -182,7 +190,7 @@ pub async fn classify_task(pool: &SqlitePool, task: &Task) -> ClassificationOutc
     let today = current_date();
     let prompt = build_classification_prompt(task, &role, &recent, &today);
 
-    let provider = match build_default_provider(pool).await {
+    let provider = match build_default_provider(pool, secret).await {
         Ok(p) => p,
         Err(e) => {
             tracing::warn!(task_id = %task.id, error = %e, "未能加载默认 LLM 配置，分类降级到 Q2");
@@ -274,7 +282,8 @@ async fn call_llm_with_timeout(
     // Spawn a background task to collect stream tokens into a buffer.
     // This decouples the provider future from the buffer collection so
     // we can apply a timeout to the combined operation.
-    let collector = tauri::async_runtime::spawn(async move {
+    // （任务体上下文内已有 runtime，engine 侧直接 tokio::spawn。）
+    let collector = tokio::spawn(async move {
         let mut buffer = String::new();
         while let Some(event) = rx.recv().await {
             match event {
@@ -304,9 +313,12 @@ async fn call_llm_with_timeout(
     }
 }
 
-async fn build_default_provider(pool: &SqlitePool) -> Result<Box<dyn LlmProvider>, AppError> {
+async fn build_default_provider(
+    pool: &SqlitePool,
+    secret: &dyn SecretStore,
+) -> Result<Box<dyn LlmProvider>, AppError> {
     let config = db::settings::get_default_llm_config(pool).await?;
-    let api_key = secret_store::load_secret(&config.api_key_ref)?
+    let api_key = secret.load_secret(&config.api_key_ref)?
         .ok_or_else(|| AppError::KeyringError(format!("未找到配置 '{}' 的 API Key", config.name)))?;
 
     use crate::models::settings::NetworkLocation;

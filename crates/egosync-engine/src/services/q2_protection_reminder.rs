@@ -4,23 +4,21 @@
 //! - 查询所有 `protection_status = 'at_risk'` 的 Q2 未完成任务
 //! - 对每个任务按频率限制（每日 ≤ 1 次、连续 3 天后停止）生成提醒
 //! - 创建"轻触"级通知 + 写入管家对话消息
-//! - emit Tauri Event `q2:reminder` 供前端实时更新
+//! - emit 事件 `q2:reminder` 供前端实时更新
 
 use sqlx::SqlitePool;
-use tauri::{AppHandle, Emitter};
 
 use crate::db;
 use crate::db::pool::ConversationsPool;
 use crate::error::AppError;
+use crate::events::Q2_REMINDER_EVENT;
+use crate::services::event_bus::EngineEvents;
 use crate::services::notification_service;
 use crate::services::suggestion_generator::NotificationLevel;
 use crate::services::task_protection_watch::AT_RISK_DAYS;
 
 /// 连续提醒 3 天无响应后停止提醒（AC3）
 const MAX_REMINDER_DAYS: i64 = 3;
-
-/// Tauri Event 名称
-pub const Q2_REMINDER_EVENT: &str = "q2:reminder";
 
 /// Q2 提醒事件 payload，发给前端
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -59,13 +57,13 @@ fn parse_iso_to_local_date(s: &str) -> Option<chrono::NaiveDate> {
 ///
 /// - `pool`: 主数据库连接池（tasks / notifications / q2_reminders）
 /// - `conv_pool`: 对话数据库连接池（管家对话消息）
-/// - `app_handle`: 可选，有则 emit `q2:reminder` 事件给前端
+/// - `events`: 可选，有则 emit `q2:reminder` 事件给前端
 ///
 /// 错误只 `tracing::warn!`，不阻塞其他任务的提醒生成。
 pub async fn check_and_generate_reminders(
     pool: &SqlitePool,
     conv_pool: &ConversationsPool,
-    app_handle: Option<&AppHandle>,
+    events: Option<&dyn EngineEvents>,
 ) -> Result<(), AppError> {
     let at_risk_tasks = db::tasks::list_at_risk_q2_tasks(pool).await?;
 
@@ -74,7 +72,7 @@ pub async fn check_and_generate_reminders(
     }
 
     for task in &at_risk_tasks {
-        if let Err(e) = process_single_task(pool, conv_pool, app_handle, task).await {
+        if let Err(e) = process_single_task(pool, conv_pool, events, task).await {
             tracing::warn!(
                 task_id = %task.id,
                 task_title = %task.title,
@@ -90,7 +88,7 @@ pub async fn check_and_generate_reminders(
 async fn process_single_task(
     pool: &SqlitePool,
     conv_pool: &ConversationsPool,
-    app_handle: Option<&AppHandle>,
+    events: Option<&dyn EngineEvents>,
     task: &crate::models::task::CrossRoleTask,
 ) -> Result<(), AppError> {
     // a. 查询已有提醒记录
@@ -205,8 +203,8 @@ async fn process_single_task(
     // 至少一项投递成功 → 自增提醒计数（AC3 频率/上限控制）
     db::q2_reminders::upsert_reminder(pool, &task.id).await?;
 
-    // emit Tauri Event
-    if let Some(handle) = app_handle {
+    // emit 事件
+    if let Some(bus) = events {
         let payload = Q2ReminderPayload {
             task_id: task.id.clone(),
             task_title: task.title.clone(),
@@ -215,7 +213,10 @@ async fn process_single_task(
             message: message.clone(),
             notification_id: notification_id.clone(),
         };
-        if let Err(e) = handle.emit(Q2_REMINDER_EVENT, &payload) {
+        if let Err(e) = serde_json::to_value(&payload)
+            .map_err(|e| e.to_string())
+            .and_then(|payload| bus.emit(Q2_REMINDER_EVENT, payload))
+        {
             tracing::warn!(
                 task_id = %task.id,
                 error = %e,

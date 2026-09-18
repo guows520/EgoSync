@@ -1018,7 +1018,11 @@ async fn generate_title(
         },
     ];
 
-    let provider = agent_engine::resolve_default_provider(&main_pool).await?;
+    let provider = agent_engine::resolve_default_provider(
+        &main_pool,
+        &crate::services::secret_store_keyring::KeyringSecretStore::new(),
+    )
+    .await?;
 
     let (tx, mut rx) = mpsc::channel::<StreamEvent>(128);
     let provider_clone = provider.clone();

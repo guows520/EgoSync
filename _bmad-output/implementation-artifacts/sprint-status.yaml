@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-21
-last_updated: 2026-09-17T23:12:00+08:00
+last_updated: 2026-09-18T13:05:00+08:00
 project: "探索 (EgoSync)"
 project_key: NOKEY
 tracking_system: file-system
@@ -82,7 +82,7 @@ development_status:
   # ============================================================
   # Epic 3: 任务管理与智能四象限 (Task Management & Eisenhower Matrix)
   # ============================================================
-  epic-3: in-progress
+  epic-3: done
   3-1-task-crud-role-view: done
   3-2-task-drag-sort-complete: done
   3-3-auto-quadrant-classification: done
@@ -167,7 +167,7 @@ development_status:
   # ============================================================
   # Epic 10: 可控的 Agent 能力调用与工具管理
   # ============================================================
-  epic-10: in-progress
+  epic-10: done
   10-1-select-and-use-specified-skill-for-current-task: done
   10-2-manage-and-restore-butler-mcp-server-bindings: done
   epic-10-retrospective: optional
@@ -175,25 +175,25 @@ development_status:
   # ============================================================
   # Epic 11: 可筛选的跨 Agent 活动洞察
   # ============================================================
-  epic-11: in-progress
+  epic-11: done
   11-1-view-and-filter-cross-agent-activity-statistics: done
   epic-11-retrospective: optional
 
   # ============================================================
   # Epic 12: 手机伴侣配对与加密连接 (Pairing & Encrypted Connection)
   # ============================================================
-  epic-12: in-progress
+  epic-12: done
   12-1-companion-proto-crate-frame-schema-and-interop: done
   12-2-desktop-pairing-and-connection-service: done
   12-3-relay-server-stateless-relay-and-docker: done
   12-4-android-scan-pairing-and-tri-state-connection: done
-  12-5-relay-first-pairing-and-remote-confirm: review
+  12-5-relay-first-pairing-and-remote-confirm: done
   epic-12-retrospective: optional
 
   # ============================================================
   # Epic 13: 手机实时视图与远程操作 (Live View & Remote Commands)
   # ============================================================
-  epic-13: in-progress
+  epic-13: done
   13-1-desktop-snapshot-engine-and-state-push: done
   13-2-mobile-realtime-snapshot-view: done
   13-3-command-channel-and-streaming-chat: done
@@ -215,8 +215,8 @@ development_status:
 
   # Epic 15: 引擎无头化与服务器形态 (Headless Engine & Server)
   epic-15: in-progress
-  15-1-engine-crate-skeleton-and-pure-module-migration: review
-  15-2-event-bus-handle-seam-and-generic-service-migration: backlog
+  15-1-engine-crate-skeleton-and-pure-module-migration: done
+  15-2-event-bus-handle-seam-and-generic-service-migration: review
   15-3-chat-domain-migration-and-chatsessionregistry: backlog
   15-4-server-binary-and-single-user-auth: backlog
   15-5-frontend-transport-and-parity-test-suite: backlog

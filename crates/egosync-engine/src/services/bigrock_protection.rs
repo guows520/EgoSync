@@ -10,17 +10,15 @@
 
 use chrono::{Datelike, Local};
 use sqlx::SqlitePool;
-use tauri::{AppHandle, Emitter};
 
 use crate::db;
 use crate::db::pool::ConversationsPool;
 use crate::error::AppError;
+use crate::events::BIGROCK_PROTECTION_EVENT;
 use crate::models::task::CrossRoleTask;
+use crate::services::event_bus::EngineEvents;
 use crate::services::notification_service;
 use crate::services::suggestion_generator::NotificationLevel;
-
-/// Tauri Event 名称
-pub const BIGROCK_PROTECTION_EVENT: &str = "bigrock:protection";
 
 /// 大石头保护提醒事件 payload，发给前端
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -86,27 +84,27 @@ fn is_friday() -> bool {
 ///
 /// - `pool`: 主数据库连接池（tasks / notifications / big_rock_protection_reminders）
 /// - `conv_pool`: 对话数据库连接池（管家对话消息）
-/// - `app_handle`: 可选，有则 emit `bigrock:protection` 事件给前端
+/// - `events`: 可选，有则 emit `bigrock:protection` 事件给前端
 ///
 /// 错误只 `tracing::warn!`，不阻塞其他任务的提醒生成。
 pub async fn check_and_generate_protection_reminders(
     pool: &SqlitePool,
     conv_pool: &ConversationsPool,
-    app_handle: Option<&AppHandle>,
+    events: Option<&dyn EngineEvents>,
 ) -> Result<(), AppError> {
     // 非工作日跳过（AC1："工作日调度循环中检测"）
     if !is_weekday() {
         return Ok(());
     }
 
-    check_and_generate_protection_reminders_inner(pool, conv_pool, app_handle).await
+    check_and_generate_protection_reminders_inner(pool, conv_pool, events).await
 }
 
 /// 核心逻辑（不含工作日守卫）— 供测试直接调用，避免日期依赖。
 async fn check_and_generate_protection_reminders_inner(
     pool: &SqlitePool,
     conv_pool: &ConversationsPool,
-    app_handle: Option<&AppHandle>,
+    events: Option<&dyn EngineEvents>,
 ) -> Result<(), AppError> {
     let big_rock_tasks = db::tasks::list_all_tasks(pool, None, Some(true)).await?;
 
@@ -121,7 +119,7 @@ async fn check_and_generate_protection_reminders_inner(
     }
 
     for task in &stale_tasks {
-        if let Err(e) = process_single_bigrock(pool, conv_pool, app_handle, task).await {
+        if let Err(e) = process_single_bigrock(pool, conv_pool, events, task).await {
             tracing::warn!(
                 task_id = %task.id,
                 task_title = %task.title,
@@ -138,7 +136,7 @@ async fn check_and_generate_protection_reminders_inner(
 async fn process_single_bigrock(
     pool: &SqlitePool,
     conv_pool: &ConversationsPool,
-    app_handle: Option<&AppHandle>,
+    events: Option<&dyn EngineEvents>,
     task: &CrossRoleTask,
 ) -> Result<(), AppError> {
     // a. 查询已有提醒记录
@@ -238,8 +236,8 @@ async fn process_single_bigrock(
     // g. 至少一项投递成功 → 自增提醒计数
     db::big_rock_protection_reminders::upsert_reminder(pool, &task.id).await?;
 
-    // h. emit Tauri Event
-    if let Some(handle) = app_handle {
+    // h. emit 事件
+    if let Some(bus) = events {
         let payload = BigRockProtectionPayload {
             task_id: task.id.clone(),
             task_title: task.title.clone(),
@@ -248,7 +246,10 @@ async fn process_single_bigrock(
             message: message.clone(),
             notification_id: notification_id.clone(),
         };
-        if let Err(e) = handle.emit(BIGROCK_PROTECTION_EVENT, &payload) {
+        if let Err(e) = serde_json::to_value(&payload)
+            .map_err(|e| e.to_string())
+            .and_then(|payload| bus.emit(BIGROCK_PROTECTION_EVENT, payload))
+        {
             tracing::warn!(
                 task_id = %task.id,
                 error = %e,
@@ -275,7 +276,7 @@ async fn process_single_bigrock(
 pub async fn check_friday_bigrock_status(
     pool: &SqlitePool,
     conv_pool: &ConversationsPool,
-    app_handle: Option<&AppHandle>,
+    events: Option<&dyn EngineEvents>,
 ) -> Result<bool, AppError> {
     // 非周五返回
     if !is_friday() {
@@ -297,7 +298,7 @@ pub async fn check_friday_bigrock_status(
     // 创建"轻触"通知（用第一个活跃角色的 ID）
     let notification_id = create_notification_if_possible(pool, &message).await;
     write_butler_message(conv_pool, &message).await;
-    emit_protection_event(app_handle, &notification_id, &message);
+    emit_protection_event(events, &notification_id, &message);
 
     tracing::info!(
         unfinished_count = count,
@@ -386,8 +387,8 @@ async fn write_butler_message(conv_pool: &ConversationsPool, message: &str) {
 }
 
 /// emit `bigrock:protection` 事件给前端。
-fn emit_protection_event(app_handle: Option<&AppHandle>, notification_id: &str, message: &str) {
-    if let Some(handle) = app_handle {
+fn emit_protection_event(events: Option<&dyn EngineEvents>, notification_id: &str, message: &str) {
+    if let Some(bus) = events {
         let payload = BigRockProtectionPayload {
             task_id: String::new(),
             task_title: String::new(),
@@ -396,7 +397,10 @@ fn emit_protection_event(app_handle: Option<&AppHandle>, notification_id: &str, 
             message: message.to_string(),
             notification_id: notification_id.to_string(),
         };
-        if let Err(e) = handle.emit(BIGROCK_PROTECTION_EVENT, &payload) {
+        if let Err(e) = serde_json::to_value(&payload)
+            .map_err(|e| e.to_string())
+            .and_then(|payload| bus.emit(BIGROCK_PROTECTION_EVENT, payload))
+        {
             tracing::warn!(error = %e, "emit bigrock:protection 事件失败");
         }
     }

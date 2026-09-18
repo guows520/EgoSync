@@ -800,7 +800,7 @@ pub fn register_write_signal_listeners(
     }
 
     let tx = notify_tx.clone();
-    app_handle.listen("llm:stream".to_string(), move |event| {
+    app_handle.listen(crate::events::LLM_STREAM_EVENT.to_string(), move |event| {
         // 仅记判别结果，不落 payload 内容（NFR-M7）
         if llm_stream_done(event.payload()) {
             let _ = tx.try_send(WriteSignal {
@@ -930,9 +930,17 @@ mod tests {
             "命令层 emit 的事件未被快照引擎订阅（STATE_DELTA 静默断链）: {missing:?}"
         );
 
-        // 既有常量契约（评审 B16）：task.rs 的 TASK_CLASSIFIED_EVENT 与
-        // 清单里的字符串必须指向同一事件，防止两处漂移。
+        // 既有常量契约（评审 B16）：TASK_CLASSIFIED_EVENT 与清单里的字符串
+        // 必须指向同一事件，防止两处漂移。
+        // Story 15.2：常量已迁 engine events.rs（值不变），改引新源。
         assert!(WRITE_SIGNAL_EVENTS
-            .contains(&crate::commands::task::TASK_CLASSIFIED_EVENT));
+            .contains(&crate::events::TASK_CLASSIFIED_EVENT));
+
+        // Story 15.2 评审轮补丁：commands/notification.rs 的 notification:new
+        // 字面量已改引 engine 常量，source-scan 提取器对常量型发射失明——
+        // 此钉子补偿覆盖：scheduler（engine）与通知命令共用的 notification:new
+        // 必须仍在订阅清单内，否则 STATE_DELTA 推送静默断链。
+        assert!(WRITE_SIGNAL_EVENTS
+            .contains(&crate::events::NOTIFICATION_NEW_EVENT));
     }
 }

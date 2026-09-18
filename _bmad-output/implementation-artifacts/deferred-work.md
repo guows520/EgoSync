@@ -342,3 +342,27 @@ All items resolved in the same session:
 - source_spec: `_bmad-output/implementation-artifacts/15-1-engine-crate-skeleton-and-pure-module-migration.md`
   summary: 桌面 SecretStore State 注入链路（manage↔state↔7 条命令）无任何执行级验证——删除 manage 行会让应用启动 panic 且全部门禁保持绿色。
   evidence: 验证缺口层（预验证）：三方无编译期检查，mock-app 装配测试需新测试基建非平凡；现有缓解=release 二进制启动冒烟实证装配成功（delegate bridge 正常监听）。修法：15.5 传输对等故事中补 tauri mock-app 装配测试，或抽取 manage 集合为可测函数；注意 15.5 验证 HTTP 侧时桌面 invoke 路径仍无覆盖。
+- source_spec: `_bmad-output/implementation-artifacts/15-2-event-bus-handle-seam-and-generic-service-migration.md`
+  summary: 桌面启动路径（三个 Handle 注入入口的 reactor 安全）无可重复验证——冒烟为一次性手动操作，CI e2e 步骤全部禁用，test:all 从不启动应用。
+  evidence: 评审验证缺口层（预验证）：冒烟命令仅记录于 15.2 Implementation Notes（xvfb-run + 35s 存活 + 无 panic 文本），无脚本化载体；后续任何触碰启动路径的故事无法低成本回归。修法并入 e2e 平台恢复工作项（复用其 release 二进制 + xvfb 基建），或独立最小启动冒烟脚本入 CI。
+- source_spec: `_bmad-output/implementation-artifacts/15-2-event-bus-handle-seam-and-generic-service-migration.md`
+  summary: e2e cold-start spec 断言按钮文案「配置 AI 模型」，前端实际渲染「配置大模型服务」（OnboardingView.tsx:269），文案漂移使该 spec 恒败。
+  evidence: 评审盲扫层 + 15.2 e2e 执行记录：15.2 零前端改动（git diff 无 src/ 文件），漂移先于本故事；DB 目录与 driver 抖动两类失败已被 15-1 既有 e2e 平台条目覆盖，此选择器漂移未登记。修法：更新 spec 选择器（或为文案加常量契约），并入 e2e 平台恢复工作项一并处理。
+- source_spec: `_bmad-output/implementation-artifacts/15-2-event-bus-handle-seam-and-generic-service-migration.md`
+  summary: TestSecretStore 测试桩在 mission_inferrer.rs 与 scheduler.rs 两处复制粘贴，15.3 迁移更多吃 SecretStore 的服务时将继续繁殖。
+  evidence: 评审盲扫层：两份同注释桩逐字相同；抽取共享测试助手属测试基建重构（15-1 #16 migrate! 助手同裁决），违反本故事逐字节平移边界故 defer。修法：engine services/secret_store.rs 内置 #[cfg(test)] 公开桩供两侧复用。
+- source_spec: `_bmad-output/implementation-artifacts/15-2-event-bus-handle-seam-and-generic-service-migration.md`
+  summary: 引擎内并存三份默认 provider 构造（llm_config::resolve_default_provider Arc 版 + task_classifier/mission_inferrer 各自私有 build_default_provider Box 版），同一逻辑三处维护。
+  evidence: 评审盲扫层：逐字节平移约束下本故事不可合并（三份均为既有代码原样迁移/提取）；15.4 冻结错误形状时须改三处（两份私有版错误文案较短、无「请在设置中重新保存」提示）。修法：15.3/15.4 收编 task_classifier 调用链时统一为 resolve_default_provider 单源。
+- source_spec: `_bmad-output/implementation-artifacts/15-2-event-bus-handle-seam-and-generic-service-migration.md`
+  summary: lib.rs setup 对 TauriEventBus 与 KeyringSecretStore 各构造两份实例（manage 一份供 State、spawn_scheduler 一份 Arc::new/即席 new），同一接缝双实例化。
+  evidence: 评审盲扫层：两实例均无状态（包同一 app_handle / 委托同一自由函数），行为等价、无线上风险；但 15.3 迁移更多服务将复制此模式。修法：manage(Arc<TauriEventBus>) 后经 state.inner().clone() 复用单实例（KeyringSecretStore 同理），随 15.3 接线统一。
+- source_spec: `_bmad-output/implementation-artifacts/15-2-event-bus-handle-seam-and-generic-service-migration.md`
+  summary: CI 第三断言 grep 口径含注释（'tauri::' 在注释中同样命中），已迫使 event_router 注释改写一次，未来记述 tauri 历史事故的引擎注释将反复撞闸。
+  evidence: 评审盲扫层：event_router.rs 为过闸改写 1 行注释（已披露的平移例外）；口径未明示为规约。修法二选一：剥注释后仅查代码（口径收窄），或在 AGENTS.md/engine 文档明示「引擎注释禁现 tauri::」为团队规约。
+- source_spec: `_bmad-output/implementation-artifacts/15-2-event-bus-handle-seam-and-generic-service-migration.md`
+  summary: companion_snapshot 的 source-scan 契约测试只提取命令文件中的字符串字面量，常量型发射（如已改引 NOTIFICATION_NEW_EVENT 的通知命令）对其失明，未来命令层经常量发射的事件逃逸 STATE_DELTA 覆盖检查。
+  evidence: 评审验证缺口层（预验证）：extract_event_names 仅匹配字面量；现有补偿 = events.rs 值钉 + WRITE_SIGNAL_EVENTS.contains 两条断言（TASK_CLASSIFIED/NOTIFICATION_NEW 已钉），其余 7 名尚未经命令层常量发射故暂无暴露面。修法：提取器同时解析 `crate::events::X_EVENT` 引用并展开常量（测试基建改动，15.3/15.5 顺带）。
+- source_spec: `_bmad-output/implementation-artifacts/15-2-event-bus-handle-seam-and-generic-service-migration.md`
+  summary: payload「逐字节一致」依赖 serde_json/preserve_order 特性在桌面图经 tauri-build→schemars 传递激活（非显式声明）；engine 独立依赖图无此特性，非桌面宿主（15.4 server）to_value 输出键序为字母序。
+  evidence: 评审验证缺口层（预验证）：cargo tree -e features 实证两图差异；消费方（JS 与 serde_json::Value 解析）均键序不敏感，当前无行为破坏；15.5 传输对等测试若做字节级 payload 断言将被键序差异击穿。修法：engine Cargo.toml 显式声明 serde_json preserve_order（对齐桌面行为），或对等测试归一化键序后比对。

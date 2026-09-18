@@ -20,9 +20,11 @@ pub async fn accept(
     if created {
         for task in tasks {
             let pool = pool.clone();
+            // Story 15.2：unit struct 即席构造零成本（接缝签名需 'static 移入闭包）
+            let secret = crate::services::secret_store_keyring::KeyringSecretStore::new();
             tokio::spawn(async move {
                 if let Err(e) =
-                    crate::services::task_classifier::classify_and_persist(&pool, &task.id).await
+                    crate::services::task_classifier::classify_and_persist(&pool, &task.id, &secret).await
                 {
                     tracing::warn!(
                         "拆分任务自动分类失败，保留默认 Q2: task_id={} error={}",
@@ -43,9 +45,11 @@ pub async fn keep_single(
     let (task, created) = task_decomposition::keep_single_proposal_once(pool, id).await?;
     if created {
         let classify_pool = pool.clone();
+        // Story 15.2：unit struct 即席构造零成本（接缝签名需 'static 移入闭包）
+        let secret = crate::services::secret_store_keyring::KeyringSecretStore::new();
         tokio::spawn(async move {
             if let Err(e) =
-                crate::services::task_classifier::classify_and_persist(&classify_pool, &task.id).await
+                crate::services::task_classifier::classify_and_persist(&classify_pool, &task.id, &secret).await
             {
                 tracing::warn!(
                     "单任务自动分类失败，保留默认 Q2: task_id={} error={}",

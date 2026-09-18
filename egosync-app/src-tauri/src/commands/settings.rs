@@ -3,18 +3,16 @@ use tauri::State;
 use crate::db::app_settings;
 use crate::db::pool::DbPool;
 use crate::error::AppError;
+// Story 15.2：8 个调度常量已下沉 engine scheduler（值不变），此处回引
+use crate::services::scheduler::{
+    DEFAULT_BIGROCK_REMINDER_DAY, DEFAULT_BIGROCK_REMINDER_TIME, DEFAULT_REVIEW_DAY,
+    DEFAULT_REVIEW_TIME, KEY_BIGROCK_REMINDER_DAY, KEY_BIGROCK_REMINDER_TIME, KEY_REVIEW_DAY,
+    KEY_REVIEW_TIME,
+};
 
 const DEFAULT_BRIEFING_TIME: &str = "08:00";
-pub const DEFAULT_REVIEW_DAY: &str = "7";
-pub const DEFAULT_REVIEW_TIME: &str = "20:00";
-pub const DEFAULT_BIGROCK_REMINDER_DAY: &str = "1";
-pub const DEFAULT_BIGROCK_REMINDER_TIME: &str = "09:00";
 
 const KEY_BRIEFING_TIME: &str = "briefing_time";
-pub const KEY_REVIEW_DAY: &str = "review_day";
-pub const KEY_REVIEW_TIME: &str = "review_time";
-pub const KEY_BIGROCK_REMINDER_DAY: &str = "bigrock_reminder_day";
-pub const KEY_BIGROCK_REMINDER_TIME: &str = "bigrock_reminder_time";
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -595,6 +595,7 @@ impl CommandExecutor for AppHandleCommandExecutor {
                     input,
                     app.clone(),
                     app.state::<DbPool>(),
+                    app.state::<crate::services::secret_store_keyring::KeyringSecretStore>(),
                 )
                 .await?;
                 to_json_value(&task)
@@ -704,7 +705,7 @@ pub fn register_stream_mirror(app_handle: tauri::AppHandle, state: Arc<Companion
             state.try_enqueue_single(frame).await;
         }
     });
-    app_handle.listen("llm:stream".to_string(), move |event| {
+    app_handle.listen(crate::events::LLM_STREAM_EVENT.to_string(), move |event| {
         if let Some(frame) = mirror_stream_payload(event.payload()) {
             if mirror_tx.try_send(frame).is_err() {
                 // 仅记判别式，不含内容（NFR-M7）

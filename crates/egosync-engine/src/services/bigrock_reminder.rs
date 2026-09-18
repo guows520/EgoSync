@@ -7,18 +7,16 @@
 //! - 错误只 `tracing::warn!`，不 panic，不阻塞调度器
 
 use sqlx::SqlitePool;
-use tauri::{AppHandle, Emitter};
 
 use crate::db;
 use crate::db::pool::ConversationsPool;
 use crate::error::AppError;
+use crate::events::BIGROCK_REMINDER_EVENT;
+use crate::services::event_bus::EngineEvents;
 use crate::services::notification_service;
 use crate::services::suggestion_generator::NotificationLevel;
 
-/// Tauri Event 名称
-pub const BIGROCK_REMINDER_EVENT: &str = "bigrock:reminder";
-
-/// 大石头提醒事件 payload，发给前端
+/// `bigrock:reminder` 事件 payload，发给前端
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BigrockReminderPayload {
@@ -33,14 +31,14 @@ const REMINDER_MESSAGE: &str = "还没规划本周大石头，要安排一下吗
 ///
 /// - `pool`: 主数据库连接池（tasks / notifications）
 /// - `conv_pool`: 对话数据库连接池（管家对话消息）
-/// - `app_handle`: 可选，有则 emit `bigrock:reminder` 事件给前端
+/// - `events`: 可选，有则 emit `bigrock:reminder` 事件给前端
 ///
 /// 返回 `Ok(true)` 表示已触发提醒，`Ok(false)` 表示跳过（已有大石头）。
 /// 错误只 `tracing::warn!`，不阻塞调度器。
 pub async fn check_and_remind_if_needed(
     pool: &SqlitePool,
     conv_pool: &ConversationsPool,
-    app_handle: Option<&AppHandle>,
+    events: Option<&dyn EngineEvents>,
 ) -> Result<bool, AppError> {
     // 查询所有大石头任务（list_all_tasks 已过滤 deleted_at IS NULL）
     let big_rock_tasks = db::tasks::list_all_tasks(pool, None, Some(true)).await?;
@@ -59,7 +57,7 @@ pub async fn check_and_remind_if_needed(
     // 无未完成的大石头 → 创建通知 + 写入管家对话 + emit 事件
     let notification_id = create_notification_if_possible(pool).await;
     write_butler_message(conv_pool).await;
-    emit_reminder_event(app_handle, &notification_id);
+    emit_reminder_event(events, &notification_id);
 
     tracing::info!(
         notification_id = %notification_id,
@@ -148,13 +146,16 @@ async fn write_butler_message(conv_pool: &ConversationsPool) {
 }
 
 /// emit `bigrock:reminder` 事件给前端。
-fn emit_reminder_event(app_handle: Option<&AppHandle>, notification_id: &str) {
-    if let Some(handle) = app_handle {
+fn emit_reminder_event(events: Option<&dyn EngineEvents>, notification_id: &str) {
+    if let Some(bus) = events {
         let payload = BigrockReminderPayload {
             message: REMINDER_MESSAGE.to_string(),
             notification_id: notification_id.to_string(),
         };
-        if let Err(e) = handle.emit(BIGROCK_REMINDER_EVENT, &payload) {
+        if let Err(e) = serde_json::to_value(&payload)
+            .map_err(|e| e.to_string())
+            .and_then(|payload| bus.emit(BIGROCK_REMINDER_EVENT, payload))
+        {
             tracing::warn!(error = %e, "emit bigrock:reminder 事件失败");
         }
     }

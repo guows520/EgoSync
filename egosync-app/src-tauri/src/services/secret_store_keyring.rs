@@ -5,7 +5,8 @@ use egosync_engine::services::secret_store::SecretStore;
 ///
 /// 委托既有 `services::secret_store` 自由函数（keyring 唯一直接引用点），
 /// 错误语义与 KeyringError 路径保持现状；引擎经 trait 解除对 keyring 的物理依赖。
-#[derive(Default)]
+/// Story 15.2：加 Clone（unit struct 零成本），供命令层 spawn 闭包经 State 取用。
+#[derive(Clone, Default)]
 pub struct KeyringSecretStore;
 
 impl KeyringSecretStore {

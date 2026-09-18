@@ -270,3 +270,24 @@ jobs:
             exit 1
           fi
           echo "OK: egosync-engine 无 tauri/keyring 依赖声明与传递闭包"
+
+      - name: Assert engine source has no tauri references
+        working-directory: crates/egosync-engine
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 物理封禁断言（Story 15.2 第三断言）：源码零 tauri:: 引用
+          # （含注释——与本地收口命令 grep -rn 'tauri::' 同口径）
+          # 评审轮补丁：显式区分 grep 退出码——rc=1 无命中（通过），
+          # rc=2 grep 自身失败（须报错，不得按无命中放行空转通过）。
+          rc=0
+          grep -rn 'tauri::' src/ || rc=$?
+          if [ "$rc" -eq 2 ]; then
+            echo "::error::grep 执行失败（src/ 不可读？），断言未生效"
+            exit 1
+          fi
+          if [ "$rc" -eq 0 ]; then
+            echo "::error::engine 源码存在 tauri:: 引用（Story 15.2 硬边界：四接缝之外宿主细节不入引擎）"
+            exit 1
+          fi
+          echo "OK: egosync-engine 源码零 tauri:: 引用"

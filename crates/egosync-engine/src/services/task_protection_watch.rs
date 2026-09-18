@@ -71,9 +71,13 @@ fn days_to_ymd(days: i64) -> (i64, u32, u32) {
 
 /// 启动每小时 Q2 保护检查后台任务。在 Tauri `setup` 中调用。
 ///
+/// Story 15.2 接缝四：调用方（桌面壳 setup 同步上下文）注入宿主
+/// runtime Handle 派生任务——裸 tokio::spawn 在无 reactor 上下文会
+/// panic（v0.1.6-alpha.1 历史事故）。
+///
 /// 首次 tick 立即执行（便于启动后快速检查），之后每 3600 秒一次。错误只 warn，不 panic。
-pub fn spawn_hourly_watch(pool: SqlitePool) {
-    tauri::async_runtime::spawn(async move {
+pub fn spawn_hourly_watch(pool: SqlitePool, handle: tokio::runtime::Handle) {
+    handle.spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
         // 首次 tick 立即返回
         interval.tick().await;

@@ -1,4 +1,4 @@
-use tauri::{AppHandle, State};
+use tauri::State;
 
 use crate::db::pool::{ConversationsPool, DbPool};
 use crate::error::AppError;
@@ -14,7 +14,15 @@ pub async fn briefing_get_latest(pool: State<'_, DbPool>) -> Result<Option<Brief
 pub async fn briefing_generate_now(
     pool: State<'_, DbPool>,
     conv_pool: State<'_, ConversationsPool>,
-    app_handle: AppHandle,
+    bus: State<'_, crate::services::tauri_event_bus::TauriEventBus>,
+    secrets: State<'_, crate::services::secret_store_keyring::KeyringSecretStore>,
 ) -> Result<bool, AppError> {
-    briefing_generator::generate_briefing_if_needed(&pool, &conv_pool, Some(&app_handle)).await
+    // Story 15.2：事件/密钥经 EngineEvents / SecretStore 接缝注入
+    briefing_generator::generate_briefing_if_needed(
+        &pool,
+        &conv_pool,
+        Some(bus.inner()),
+        secrets.inner(),
+    )
+    .await
 }

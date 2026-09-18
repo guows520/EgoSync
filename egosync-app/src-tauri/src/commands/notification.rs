@@ -4,6 +4,7 @@ use tauri::{AppHandle, Emitter, State};
 use crate::db;
 use crate::db::pool::DbPool;
 use crate::error::AppError;
+use crate::events::NOTIFICATION_NEW_EVENT;
 use crate::models::notification::{
     CreateNotificationInput, Notification, NotificationNewPayload, NotificationWithRole,
 };
@@ -53,7 +54,7 @@ pub async fn notification_create(
     let (notification, payload) = create_and_build_payload(&pool, &input).await?;
 
     let _ = app
-        .emit("notification:new", &payload)
+        .emit(NOTIFICATION_NEW_EVENT, &payload)
         .map_err(|e| AppError::DbError(format!("发送通知事件失败: {}", e)));
 
     Ok(notification)

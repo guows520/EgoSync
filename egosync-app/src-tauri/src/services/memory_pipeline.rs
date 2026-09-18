@@ -37,7 +37,11 @@ async fn extract_for_conversation_inner(
     conv_pool: &ConversationsPool,
     conversation_id: &str,
 ) -> Result<usize, AppError> {
-    let provider = agent_engine::resolve_default_provider(main_pool).await?;
+    let provider = agent_engine::resolve_default_provider(
+        main_pool,
+        &crate::services::secret_store_keyring::KeyringSecretStore::new(),
+    )
+    .await?;
     extract_for_conversation_with_provider(main_pool, conv_pool, conversation_id, provider).await
 }
 

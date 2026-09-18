@@ -20,7 +20,7 @@ use crate::error::AppError;
 use crate::llm::anthropic::AnthropicProvider;
 use crate::llm::openai::OpenAiProvider;
 use crate::llm::traits::{ChatCompletionMessage, ChatOptions, LlmProvider, StreamEvent};
-use crate::services::secret_store;
+use crate::services::secret_store::SecretStore;
 
 /// LLM 调用超时上限（秒）。与 task_classifier 一致。
 const LLM_TIMEOUT_SECS: u64 = 12;
@@ -125,6 +125,7 @@ pub async fn check_eligibility(
 pub async fn infer_values(
     pool: &SqlitePool,
     conv_pool: &ConversationsPool,
+    secret: &dyn SecretStore,
 ) -> Result<InferenceOutcome, AppError> {
     // 1. 检查数据充足性
     let conversations = db::conversations::list_all_conversations(conv_pool).await?;
@@ -164,7 +165,7 @@ pub async fn infer_values(
     // 4. 构造 prompt 并调用 LLM
     let prompt = build_inference_prompt(&conversation_text, &task_text, &memory_text, &role_text);
 
-    let provider = match build_default_provider(pool).await {
+    let provider = match build_default_provider(pool, secret).await {
         Ok(p) => p,
         Err(e) => {
             tracing::warn!(error = %e, "未能加载默认 LLM 配置，价值观推断降级为 None");
@@ -404,7 +405,8 @@ async fn call_llm_with_timeout(
         ..ChatOptions::default()
     };
 
-    let collector = tauri::async_runtime::spawn(async move {
+    // （任务体上下文内已有 runtime，engine 侧直接 tokio::spawn。）
+    let collector = tokio::spawn(async move {
         let mut buffer = String::new();
         while let Some(event) = rx.recv().await {
             match event {
@@ -431,9 +433,12 @@ async fn call_llm_with_timeout(
     }
 }
 
-async fn build_default_provider(pool: &SqlitePool) -> Result<Box<dyn LlmProvider>, AppError> {
+async fn build_default_provider(
+    pool: &SqlitePool,
+    secret: &dyn SecretStore,
+) -> Result<Box<dyn LlmProvider>, AppError> {
     let config = db::settings::get_default_llm_config(pool).await?;
-    let api_key = secret_store::load_secret(&config.api_key_ref)?
+    let api_key = secret.load_secret(&config.api_key_ref)?
         .ok_or_else(|| AppError::KeyringError(format!("未找到配置 '{}' 的 API Key", config.name)))?;
 
     use crate::models::settings::NetworkLocation;
@@ -471,6 +476,22 @@ fn truncate(s: &str, max_len: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 测试用 SecretStore 桩：数据不足路径不触达密钥读取，
+    /// 仅满足接缝签名（load 恒返回 None）。
+    struct TestSecretStore;
+
+    impl crate::services::secret_store::SecretStore for TestSecretStore {
+        fn save_secret(&self, _key: &str, _value: &str) -> Result<(), AppError> {
+            Ok(())
+        }
+        fn load_secret(&self, _key: &str) -> Result<Option<String>, AppError> {
+            Ok(None)
+        }
+        fn delete_secret(&self, _key: &str) -> Result<(), AppError> {
+            Ok(())
+        }
+    }
 
     #[test]
     fn parse_inference_response_accepts_clean_json() {
@@ -589,7 +610,7 @@ mod tests {
             .expect("failed to set mission");
 
         // mission 已设定但数据不足，仍应跳过（不再因 mission 跳过）。
-        let outcome = infer_values(&pool, &conv_pool).await.expect("should not error");
+        let outcome = infer_values(&pool, &conv_pool, &TestSecretStore).await.expect("should not error");
         assert!(outcome.values.is_none(), "数据不足时不应返回推断值");
         assert_eq!(outcome.source, InferenceSource::SkippedInsufficientData);
     }
@@ -600,7 +621,7 @@ mod tests {
         let conv_pool = setup_conv_pool().await;
         // mission 为空（无记录）且对话数为 0 < MIN_CONVERSATIONS。
 
-        let outcome = infer_values(&pool, &conv_pool).await.expect("should not error");
+        let outcome = infer_values(&pool, &conv_pool, &TestSecretStore).await.expect("should not error");
         assert!(outcome.values.is_none(), "数据不足时不应返回推断值");
         assert_eq!(outcome.source, InferenceSource::SkippedInsufficientData);
     }

@@ -35,8 +35,10 @@ pub async fn mission_update(
 pub async fn mission_infer(
     pool: State<'_, DbPool>,
     conv_pool: State<'_, ConversationsPool>,
+    secrets: State<'_, crate::services::secret_store_keyring::KeyringSecretStore>,
 ) -> Result<Option<InferredValues>, AppError> {
-    let outcome = mission_inferrer::infer_values(&pool, &conv_pool).await?;
+    // Story 15.2：密钥经 SecretStore 接缝注入
+    let outcome = mission_inferrer::infer_values(&pool, &conv_pool, secrets.inner()).await?;
     Ok(outcome.values)
 }
 

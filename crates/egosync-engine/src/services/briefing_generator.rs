@@ -10,27 +10,26 @@
 use std::sync::Arc;
 
 use sqlx::SqlitePool;
-use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
 use tokio::time::{timeout, Duration};
 
 use crate::db;
 use crate::db::pool::ConversationsPool;
 use crate::error::AppError;
+use crate::events::BRIEFING_GENERATED_EVENT;
 use crate::llm::traits::{ChatCompletionMessage, ChatOptions, LlmProvider, StreamEvent};
 use crate::models::dashboard::DashboardStatus;
 use crate::models::memory::Memory;
 use crate::models::notification::NotificationWithRole;
 use crate::models::task::Task;
-use crate::services::agent_engine;
+use crate::services::event_bus::EngineEvents;
+use crate::services::llm_config;
+use crate::services::secret_store::SecretStore;
 
 const LLM_TIMEOUT_SECS: u64 = 30;
 const MAX_BRIEFING_RESPONSE_BYTES: usize = 128 * 1024;
 const BRIEFING_TIME_KEY: &str = "briefing_time";
 const DEFAULT_BRIEFING_TIME: &str = "08:00";
-
-/// Tauri Event 名称
-pub const BRIEFING_GENERATED_EVENT: &str = "briefing:generated";
 
 /// `briefing:generated` 事件 payload
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -54,7 +53,8 @@ struct BriefingData {
 pub async fn generate_briefing_if_needed(
     pool: &SqlitePool,
     conv_pool: &ConversationsPool,
-    app_handle: Option<&AppHandle>,
+    events: Option<&dyn EngineEvents>,
+    secret: &dyn SecretStore,
 ) -> Result<bool, AppError> {
     let today = chrono::Local::now().date_naive().format("%Y-%m-%d").to_string();
 
@@ -81,7 +81,7 @@ pub async fn generate_briefing_if_needed(
     let prompt = build_briefing_prompt(&data, &today);
 
     // 解析 LLM provider
-    let provider = match agent_engine::resolve_default_provider(pool).await {
+    let provider = match llm_config::resolve_default_provider(pool, secret).await {
         Ok(p) => p,
         Err(e) => {
             tracing::warn!(error = %e, "解析 LLM provider 失败（降级跳过简报生成）");
@@ -130,13 +130,16 @@ pub async fn generate_briefing_if_needed(
         }
     }
 
-    // emit Tauri Event
-    if let Some(handle) = app_handle {
+    // emit 事件
+    if let Some(bus) = events {
         let payload = BriefingGeneratedPayload {
             briefing_id: briefing.id.clone(),
             date: briefing.date.clone(),
         };
-        if let Err(e) = handle.emit(BRIEFING_GENERATED_EVENT, &payload) {
+        if let Err(e) = serde_json::to_value(&payload)
+            .map_err(|e| e.to_string())
+            .and_then(|payload| bus.emit(BRIEFING_GENERATED_EVENT, payload))
+        {
             tracing::warn!(error = %e, "emit briefing:generated 事件失败");
         }
     }

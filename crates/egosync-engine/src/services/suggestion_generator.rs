@@ -11,7 +11,9 @@ use crate::error::AppError;
 use crate::llm::traits::{ChatCompletionMessage, ChatOptions, LlmProvider, StreamEvent};
 use crate::models::role::Role;
 use crate::models::suggestion::{CreateSuggestionInput, Suggestion};
-use crate::services::agent_engine;
+use crate::services::llm_config;
+use crate::services::role_context;
+use crate::services::secret_store::SecretStore;
 
 const LLM_SUGGESTION_TIMEOUT_SECS: u64 = 60;
 const MAX_SUGGESTION_RESPONSE_BYTES: usize = 128 * 1024;
@@ -168,8 +170,9 @@ fn seven_days_ago_iso() -> String {
 pub async fn generate_suggestions(
     main_pool: &DbPool,
     role: &Role,
+    secret: &dyn SecretStore,
 ) -> Result<Vec<CreateSuggestionInput>, AppError> {
-    let task_summary = match agent_engine::build_role_task_summary(main_pool, &role.id).await {
+    let task_summary = match role_context::build_role_task_summary(main_pool, &role.id).await {
         Ok(summary) => summary,
         Err(e) => {
             tracing::warn!(
@@ -181,7 +184,7 @@ pub async fn generate_suggestions(
         }
     };
 
-    let memory_summary = match agent_engine::build_role_memory_summary(main_pool, &role.id).await {
+    let memory_summary = match role_context::build_role_memory_summary(main_pool, &role.id).await {
         Ok(summary) => summary,
         Err(e) => {
             tracing::warn!(
@@ -229,7 +232,7 @@ pub async fn generate_suggestions(
 
     let prompt = build_suggestion_prompt(role, &task_summary, &memory_summary, &recent_suggestions, &rejected_suggestions);
 
-    let provider = match agent_engine::resolve_default_provider(main_pool).await {
+    let provider = match llm_config::resolve_default_provider(main_pool, secret).await {
         Ok(p) => p,
         Err(e) => {
             tracing::warn!(

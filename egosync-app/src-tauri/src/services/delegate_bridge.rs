@@ -407,8 +407,9 @@ impl DelegateBridge {
 
         self.request_runtime_refresh().await;
         if let Some(app_handle) = self.app_handle.as_ref() {
+            // Story 15.2：事件名改引 engine events 常量源（值不变）
             let _ = app_handle.emit(
-                "skill-registry-updated",
+                crate::events::SKILL_REGISTRY_UPDATED_EVENT,
                 serde_json::json!({ "ownerId": owner_id, "skillId": entry.id }),
             );
         }
@@ -503,8 +504,16 @@ impl DelegateBridge {
                 let pool = self.main_pool.clone();
                 let task_id = task.id.clone();
                 let app_handle = self.app_handle.clone();
+                // Story 15.2：unit struct 即席构造零成本（接缝签名需 'static 移入闭包）
+                let secret = crate::services::secret_store_keyring::KeyringSecretStore::new();
                 tauri::async_runtime::spawn(async move {
-                    let classified = match crate::services::task_classifier::classify_and_persist(&pool, &task_id).await {
+                    let classified = match crate::services::task_classifier::classify_and_persist(
+                        &pool,
+                        &task_id,
+                        &secret,
+                    )
+                    .await
+                    {
                         Ok(updated) => Some(updated),
                         Err(e) => {
                             tracing::warn!(task_id = %task_id, error = %e, "bridge 创建任务后自动分类失败，保留默认 Q2");
@@ -513,7 +522,8 @@ impl DelegateBridge {
                     };
                     if let Some(updated) = classified {
                         if let Some(ref app) = app_handle {
-                            let _ = app.emit("task:classified", &updated);
+                            // Story 15.2：事件名改引 engine events 常量源（值不变）
+                            let _ = app.emit(crate::events::TASK_CLASSIFIED_EVENT, &updated);
                         }
                     }
                 });

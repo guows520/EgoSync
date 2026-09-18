@@ -13,19 +13,22 @@
 //! Story 4.2: `run_work_loop_for_role` 调用建议生成服务，写入 pending 建议。
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{Datelike, Local, Timelike};
 use sqlx::SqlitePool;
-use tauri::{AppHandle, Emitter};
 use tokio::time::Instant;
 
 use crate::db;
 use crate::db::pool::ConversationsPool;
 use crate::error::AppError;
+use crate::events::NOTIFICATION_NEW_EVENT;
 use crate::models::notification::NotificationNewPayload;
 use crate::models::role::Role;
+use crate::services::event_bus::EngineEvents;
 use crate::services::notification_service;
+use crate::services::secret_store::SecretStore;
 use crate::services::suggestion_generator::NotificationLevel;
 
 /// `moderate` 角色的默认触发时间点（本地时间）：09:00、14:00、21:00（每日 3 次）
@@ -39,6 +42,18 @@ pub const MODERATE_TIMES_KEY: &str = "scheduler.moderate_times";
 
 /// app_settings 中存储 proactive 时间点的 key
 pub const PROACTIVE_TIMES_KEY: &str = "scheduler.proactive_times";
+
+// Story 15.2：以下 8 个调度常量自桌面壳 commands/settings.rs 下沉本文件
+// （engine 不能反向引用壳），壳侧改 use 回引，值不变。
+pub const DEFAULT_REVIEW_DAY: &str = "7";
+pub const DEFAULT_REVIEW_TIME: &str = "20:00";
+pub const DEFAULT_BIGROCK_REMINDER_DAY: &str = "1";
+pub const DEFAULT_BIGROCK_REMINDER_TIME: &str = "09:00";
+
+pub const KEY_REVIEW_DAY: &str = "review_day";
+pub const KEY_REVIEW_TIME: &str = "review_time";
+pub const KEY_BIGROCK_REMINDER_DAY: &str = "bigrock_reminder_day";
+pub const KEY_BIGROCK_REMINDER_TIME: &str = "bigrock_reminder_time";
 
 /// 调度器基础 tick 间隔：60 秒
 const BASE_TICK_SECS: u64 = 60;
@@ -153,7 +168,8 @@ pub async fn run_work_loop_for_role(
     pool: &SqlitePool,
     conv_pool: &ConversationsPool,
     role: &Role,
-    app_handle: Option<&AppHandle>,
+    events: Option<&dyn EngineEvents>,
+    secret: &dyn SecretStore,
 ) -> Result<(), AppError> {
     tracing::info!(
         role_id = %role.id,
@@ -162,8 +178,10 @@ pub async fn run_work_loop_for_role(
         "工作循环触发"
     );
 
-    let suggestions = match crate::services::suggestion_generator::generate_suggestions(pool, role)
-        .await
+    let suggestions = match crate::services::suggestion_generator::generate_suggestions(
+        pool, role, secret,
+    )
+    .await
     {
         Ok(list) => list,
         Err(e) => {
@@ -250,8 +268,8 @@ pub async fn run_work_loop_for_role(
                             "通知已创建"
                         );
 
-                        // emit Tauri Event（如果有 AppHandle）
-                        if let Some(handle) = app_handle {
+                        // emit 事件（如果有事件总线）
+                        if let Some(bus) = events {
                             let payload = NotificationNewPayload {
                                 id: notification.id.clone(),
                                 level: notification.level.clone(),
@@ -262,7 +280,9 @@ pub async fn run_work_loop_for_role(
                                 role_color: role.color.clone(),
                                 created_at: notification.created_at.clone(),
                             };
-                            let _ = handle.emit("notification:new", &payload);
+                            let _ = serde_json::to_value(&payload)
+                                .map_err(|e| e.to_string())
+                                .and_then(|payload| bus.emit(NOTIFICATION_NEW_EVENT, payload));
                         }
                     }
                     Err(e) => {
@@ -319,8 +339,18 @@ pub async fn run_work_loop_for_role(
 ///
 /// 首次启动延迟：消耗 `interval.tick()` 的首次立即返回，避免启动时并发太多后台任务。
 /// 同一角色同一时间点（同一日期+同一 HH:MM）只触发一次，跨天自动重置。
-pub fn spawn_scheduler(pool: SqlitePool, conv_pool: crate::db::pool::ConversationsPool, app_handle: AppHandle) {
-    tauri::async_runtime::spawn(async move {
+///
+/// Story 15.2 接缝二/四：事件经 EngineEvents 注入；调用方（桌面壳 setup
+/// 同步上下文）注入宿主 runtime Handle 派生任务——裸 tokio::spawn 在无
+/// reactor 上下文会 panic（v0.1.6-alpha.1 历史事故）。
+pub fn spawn_scheduler(
+    pool: SqlitePool,
+    conv_pool: crate::db::pool::ConversationsPool,
+    events: Arc<dyn EngineEvents>,
+    secret: Arc<dyn SecretStore>,
+    handle: tokio::runtime::Handle,
+) {
+    handle.spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(BASE_TICK_SECS));
         // 消耗首次立即 tick，避免启动时并发太多后台任务
         interval.tick().await;
@@ -402,12 +432,20 @@ pub fn spawn_scheduler(pool: SqlitePool, conv_pool: crate::db::pool::Conversatio
                 let pool_clone = pool.clone();
                 let conv_pool_clone = conv_pool.clone();
                 let role_clone = role.clone();
-                let handle_clone = app_handle.clone();
+                let events_clone = events.clone();
+                let secret_clone = secret.clone();
                 tokio::spawn(async move {
                     // 墙钟时间戳（ISO 8601），便于日志排查实际触发时刻
                     let triggered_at = crate::db::settings::chrono_now_pub();
                     let start = Instant::now();
-                    let result = run_work_loop_for_role(&pool_clone, &conv_pool_clone, &role_clone, Some(&handle_clone)).await;
+                    let result = run_work_loop_for_role(
+                        &pool_clone,
+                        &conv_pool_clone,
+                        &role_clone,
+                        Some(events_clone.as_ref()),
+                        secret_clone.as_ref(),
+                    )
+                    .await;
                     let elapsed = start.elapsed().as_millis() as u64;
 
                     match result {
@@ -452,12 +490,14 @@ pub fn spawn_scheduler(pool: SqlitePool, conv_pool: crate::db::pool::Conversatio
                     last_briefing_trigger_date = Some(today_date.clone());
                     let pool_clone = pool.clone();
                     let conv_pool_clone = conv_pool.clone();
-                    let handle_clone = app_handle.clone();
+                    let events_clone = events.clone();
+                    let secret_clone = secret.clone();
                     tokio::spawn(async move {
                         match crate::services::briefing_generator::generate_briefing_if_needed(
                             &pool_clone,
                             &conv_pool_clone,
-                            Some(&handle_clone),
+                            Some(events_clone.as_ref()),
+                            secret_clone.as_ref(),
                         )
                         .await
                         {
@@ -480,7 +520,7 @@ pub fn spawn_scheduler(pool: SqlitePool, conv_pool: crate::db::pool::Conversatio
             if let Err(e) = crate::services::q2_protection_reminder::check_and_generate_reminders(
                 &pool,
                 &conv_pool,
-                Some(&app_handle),
+                Some(events.as_ref()),
             )
             .await
             {
@@ -491,7 +531,7 @@ pub fn spawn_scheduler(pool: SqlitePool, conv_pool: crate::db::pool::Conversatio
             if let Err(e) = crate::services::bigrock_protection::check_and_generate_protection_reminders(
                 &pool,
                 &conv_pool,
-                Some(&app_handle),
+                Some(events.as_ref()),
             )
             .await
             {
@@ -515,13 +555,13 @@ pub fn spawn_scheduler(pool: SqlitePool, conv_pool: crate::db::pool::Conversatio
                     last_bigrock_trigger_week = Some(current_week.clone());
                     let pool_clone = pool.clone();
                     let conv_pool_clone = conv_pool.clone();
-                    let handle_clone = app_handle.clone();
+                    let events_clone = events.clone();
                     let week_clone = current_week.clone();
                     tokio::spawn(async move {
                         match crate::services::bigrock_reminder::check_and_remind_if_needed(
                             &pool_clone,
                             &conv_pool_clone,
-                            Some(&handle_clone),
+                            Some(events_clone.as_ref()),
                         )
                         .await
                         {
@@ -554,13 +594,15 @@ pub fn spawn_scheduler(pool: SqlitePool, conv_pool: crate::db::pool::Conversatio
                     last_review_trigger_week = Some(current_week.clone());
                     let pool_clone = pool.clone();
                     let conv_pool_clone = conv_pool.clone();
-                    let handle_clone = app_handle.clone();
+                    let events_clone = events.clone();
+                    let secret_clone = secret.clone();
                     let week_clone = current_week.clone();
                     tokio::spawn(async move {
                         match crate::services::review_generator::generate_review_if_needed(
                             &pool_clone,
                             &conv_pool_clone,
-                            Some(&handle_clone),
+                            Some(events_clone.as_ref()),
+                            secret_clone.as_ref(),
                         )
                         .await
                         {
@@ -586,12 +628,12 @@ pub fn spawn_scheduler(pool: SqlitePool, conv_pool: crate::db::pool::Conversatio
                     last_bigrock_friday_check_date = Some(today_date.clone());
                     let pool_clone = pool.clone();
                     let conv_pool_clone = conv_pool.clone();
-                    let handle_clone = app_handle.clone();
+                    let events_clone = events.clone();
                     tokio::spawn(async move {
                         match crate::services::bigrock_protection::check_friday_bigrock_status(
                             &pool_clone,
                             &conv_pool_clone,
-                            Some(&handle_clone),
+                            Some(events_clone.as_ref()),
                         )
                         .await
                         {
@@ -610,7 +652,6 @@ pub fn spawn_scheduler(pool: SqlitePool, conv_pool: crate::db::pool::Conversatio
 
 /// 读取周复盘时间配置（Story 6.4 实现触发逻辑）
 pub async fn get_review_schedule(pool: &SqlitePool) -> Result<(String, String), AppError> {
-    use crate::commands::settings::{DEFAULT_REVIEW_DAY, DEFAULT_REVIEW_TIME, KEY_REVIEW_DAY, KEY_REVIEW_TIME};
     let day = db::app_settings::get_setting(pool, KEY_REVIEW_DAY)
         .await?
         .unwrap_or_else(|| DEFAULT_REVIEW_DAY.to_string());
@@ -622,10 +663,6 @@ pub async fn get_review_schedule(pool: &SqlitePool) -> Result<(String, String), 
 
 /// 读取大石头规划提醒时间配置（Story 6.3 实现触发逻辑）
 pub async fn get_bigrock_reminder_schedule(pool: &SqlitePool) -> Result<(String, String), AppError> {
-    use crate::commands::settings::{
-        DEFAULT_BIGROCK_REMINDER_DAY, DEFAULT_BIGROCK_REMINDER_TIME, KEY_BIGROCK_REMINDER_DAY,
-        KEY_BIGROCK_REMINDER_TIME,
-    };
     let day = db::app_settings::get_setting(pool, KEY_BIGROCK_REMINDER_DAY)
         .await?
         .unwrap_or_else(|| DEFAULT_BIGROCK_REMINDER_DAY.to_string());
@@ -644,6 +681,22 @@ fn iso_week_key(now: &chrono::DateTime<Local>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 测试用 SecretStore 桩：该测试走「无默认 provider → 降级空建议」路径，
+    /// 不触达密钥读取，仅满足接缝签名（load 恒返回 None）。
+    struct TestSecretStore;
+
+    impl crate::services::secret_store::SecretStore for TestSecretStore {
+        fn save_secret(&self, _key: &str, _value: &str) -> Result<(), AppError> {
+            Ok(())
+        }
+        fn load_secret(&self, _key: &str) -> Result<Option<String>, AppError> {
+            Ok(None)
+        }
+        fn delete_secret(&self, _key: &str) -> Result<(), AppError> {
+            Ok(())
+        }
+    }
 
     #[test]
     fn default_times_passive_returns_none() {
@@ -922,7 +975,7 @@ mod tests {
         .await
         .expect("failed to create conversations table");
 
-        let result = run_work_loop_for_role(&pool, &conv_pool, &role, None).await;
+        let result = run_work_loop_for_role(&pool, &conv_pool, &role, None, &TestSecretStore).await;
         assert!(result.is_ok());
     }
 

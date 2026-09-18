@@ -1461,72 +1461,6 @@
     {
       "capability": "web-ok",
       "ctxInjected": true,
-      "module": "secret",
-      "name": "secret_store_delete",
-      "params": [
-        {
-          "camelName": "ctx",
-          "kind": "ctx-injected",
-          "name": "ctx",
-          "type": "&EngineCtx"
-        },
-        {
-          "camelName": "key",
-          "kind": "client",
-          "name": "key",
-          "type": "String"
-        }
-      ]
-    },
-    {
-      "capability": "web-ok",
-      "ctxInjected": true,
-      "module": "secret",
-      "name": "secret_store_load",
-      "params": [
-        {
-          "camelName": "ctx",
-          "kind": "ctx-injected",
-          "name": "ctx",
-          "type": "&EngineCtx"
-        },
-        {
-          "camelName": "key",
-          "kind": "client",
-          "name": "key",
-          "type": "String"
-        }
-      ]
-    },
-    {
-      "capability": "web-ok",
-      "ctxInjected": true,
-      "module": "secret",
-      "name": "secret_store_save",
-      "params": [
-        {
-          "camelName": "ctx",
-          "kind": "ctx-injected",
-          "name": "ctx",
-          "type": "&EngineCtx"
-        },
-        {
-          "camelName": "key",
-          "kind": "client",
-          "name": "key",
-          "type": "String"
-        },
-        {
-          "camelName": "value",
-          "kind": "client",
-          "name": "value",
-          "type": "String"
-        }
-      ]
-    },
-    {
-      "capability": "web-ok",
-      "ctxInjected": true,
       "module": "settings",
       "name": "settings_get_schedule",
       "params": [
@@ -2109,6 +2043,6 @@
       ]
     }
   ],
-  "count": 106,
+  "count": 103,
   "version": 1
 }

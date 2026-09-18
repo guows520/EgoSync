@@ -240,16 +240,6 @@ pub async fn chat_send_message(
         }
     }
 
-    // --- 诊断日志: 确认 onboarding_step 是否正确传入 ---
-    tracing::info!(
-        "[stage-b-diag] chat request: conv_id={:?} role_id={:?} onboarding_step={} effective={} content_len={}",
-        request.conversation_id,
-        request.role_id,
-        request.onboarding_step,
-        effective_onboarding_step,
-        request.content.len()
-    );
-
     let conversation = match &request.conversation_id {
         Some(id) => Conversation {
             id: id.clone(),

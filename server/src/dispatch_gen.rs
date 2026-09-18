@@ -85,9 +85,6 @@ pub const WEB_OK_COMMANDS: &[&str] = &[
     "role_update_skills",
     "scheduler_get_times",
     "scheduler_set_times",
-    "secret_store_delete",
-    "secret_store_load",
-    "secret_store_save",
     "settings_get_schedule",
     "settings_update_schedule",
     "skill_delete",
@@ -488,28 +485,6 @@ mod params {
     pub struct PSchedulerSetTimes {
         pub moderate: Vec<String>,
         pub proactive: Vec<String>,
-    }
-
-    /// `secret_store_delete` 的客户端参数（camelCase 解包，与 invoke 同构）。
-    #[derive(serde::Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    pub struct PSecretStoreDelete {
-        pub key: String,
-    }
-
-    /// `secret_store_load` 的客户端参数（camelCase 解包，与 invoke 同构）。
-    #[derive(serde::Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    pub struct PSecretStoreLoad {
-        pub key: String,
-    }
-
-    /// `secret_store_save` 的客户端参数（camelCase 解包，与 invoke 同构）。
-    #[derive(serde::Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    pub struct PSecretStoreSave {
-        pub key: String,
-        pub value: String,
     }
 
     /// `settings_update_schedule` 的客户端参数（camelCase 解包，与 invoke 同构）。
@@ -1270,31 +1245,6 @@ pub async fn dispatch(
             ctx,
             p.moderate,
             p.proactive
-        ).await?;
-        encode(result)
-        }
-        "secret_store_delete" => {
-        let p: params::PSecretStoreDelete = decode(params)?;
-        let result = egosync_engine::commands::secret::secret_store_delete(
-            ctx,
-            p.key
-        ).await?;
-        encode(result)
-        }
-        "secret_store_load" => {
-        let p: params::PSecretStoreLoad = decode(params)?;
-        let result = egosync_engine::commands::secret::secret_store_load(
-            ctx,
-            p.key
-        ).await?;
-        encode(result)
-        }
-        "secret_store_save" => {
-        let p: params::PSecretStoreSave = decode(params)?;
-        let result = egosync_engine::commands::secret::secret_store_save(
-            ctx,
-            p.key,
-            p.value
         ).await?;
         encode(result)
         }

@@ -44,7 +44,19 @@ async fn main() {
     }
 
     let host = std::env::var("EGOSYNC_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
-    let port = std::env::var("EGOSYNC_PORT").unwrap_or_else(|_| "8080".to_string());
+    let port = match std::env::var("EGOSYNC_PORT") {
+        Ok(v) if v.is_empty() => "8080".to_string(),
+        Ok(v) => v,
+        Err(_) => "8080".to_string(),
+    };
+    // 端口非法（非 u16）：明确报错退出，不 panic（评审修复 #9）
+    let port: u16 = match port.parse() {
+        Ok(p) => p,
+        Err(_) => {
+            eprintln!("EGOSYNC_PORT 非法（须为 0-65535 端口号）: {}", port);
+            std::process::exit(2);
+        }
+    };
     let addr = format!("{}:{}", host, port);
 
     let state = build_app_state(data_dir, env_token)

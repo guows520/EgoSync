@@ -6,6 +6,16 @@ use crate::error::AppError;
 
 const EMERGENCE_COOLDOWN_PREFIX: &str = "emergence_cooldown:";
 
+/// 保留键名单（Story 15.4 评审修复 #6）：这些键承载敏感凭据材料
+/// （如 server 单用户令牌哈希），任何宿主的设置读写命令命中即拒绝
+/// ——只经专用通道（认证模块）写入与校验，「只增不外发」。
+pub const RESERVED_SETTING_KEYS: &[&str] = &["server_token_hash"];
+
+/// 键是否为保留键。
+pub fn is_reserved_setting_key(key: &str) -> bool {
+    RESERVED_SETTING_KEYS.contains(&key)
+}
+
 pub async fn get_all_settings(
     pool: &SqlitePool,
 ) -> Result<Vec<(String, Option<String>)>, AppError> {

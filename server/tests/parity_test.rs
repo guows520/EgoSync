@@ -1,7 +1,7 @@
 //! Story 15.4 对等断言（「靠机制不靠纪律」的测试侧守门）：
 //!
 //! 1. 壳 lib.rs generate_handler 源码扫描集合 == commands.json 工件
-//!    web-ok ∪ desktop-only(12) ∪ perf-test 门控(2)（lib.rs:567-595
+//!    web-ok ∪ desktop-only(15) ∪ perf-test 门控(2)（lib.rs:567-595
 //!    源码扫描先例）；
 //! 2. 生成的 dispatch registry（WEB_OK_COMMANDS）与工件同源零漂移；
 //! 3. desktop-only / perf-test 门控命令不在 server 路由面（物理 404 输入）；
@@ -87,10 +87,11 @@ fn generate_handler_scan_matches_artifact_union_gated() {
             .map(|s| s.to_string())
             .collect();
 
-    // 名单完整性先钉死（desktop-only 12 / 门控 2 / 工件 106）
-    assert_eq!(desktop_only.len(), 12, "desktop-only 名单必须为 12 条");
+    // 名单完整性先钉死（desktop-only 15 / 门控 2 / 工件 103）
+    // （评审回环裁决 A：secret_store_save/load/delete 划归 desktop-only）
+    assert_eq!(desktop_only.len(), 15, "desktop-only 名单必须为 15 条");
     assert_eq!(perf_gated.len(), 2, "perf-test 门控名单必须为 2 条");
-    assert_eq!(artifact.len(), 106, "web-ok 命令必须为 106 条");
+    assert_eq!(artifact.len(), 103, "web-ok 命令必须为 103 条");
 
     let mut expected = artifact.clone();
     expected.extend(desktop_only);
@@ -98,7 +99,7 @@ fn generate_handler_scan_matches_artifact_union_gated() {
 
     assert_eq!(
         scanned, expected,
-        "generate_handler 注册面必须 == 工件 web-ok ∪ desktop-only ∪ 门控\n\
+        "generate_handler 注册面必须 == 工件 web-ok ∪ desktop-only(15) ∪ 门控\n\
          仅在壳侧: {:?}\n仅在期望面: {:?}",
         scanned.difference(&expected).collect::<Vec<_>>(),
         expected.difference(&scanned).collect::<Vec<_>>(),

@@ -11,7 +11,8 @@ use common::{login, Client, InProcessServer};
 use egosync_engine::error::AppError;
 use egosync_server::auth::SESSION_COOKIE;
 use egosync_server::sse::SSE_KEEPALIVE_SECS;
-use egosync_server::{bootstrap::build_test_state, security::CSP_POLICY, MAX_BODY_BYTES};
+use egosync_server::bootstrap::{build_app_state, build_test_state};
+use egosync_server::{security::CSP_POLICY, MAX_BODY_BYTES};
 use futures_util::StreamExt;
 use serde_json::{json, Value};
 use std::time::Duration;
@@ -129,12 +130,13 @@ async fn db_mode_first_visit_setup_then_unavailable() {
     assert_eq!(status["setupRequired"], true);
     assert_eq!(status["authenticated"], false);
 
-    // 空令牌 ⇒ 400（认证面自身语义）
+    // 空令牌 ⇒ 401（错误白名单冻结口径：非 200 仅 401/429/404/5xx，
+    // 认证失败一律 401 统一形状）
     let empty = json!({"token": ""});
     let res = client
         .post_json(&server.url("/api/setup"), Some(&empty), None, None)
         .await;
-    assert_eq!(res.status(), 400);
+    assert_eq!(res.status(), 401);
 
     // 首访 setup 成功
     let token = json!({"token": "my-strong-token"});
@@ -270,6 +272,10 @@ async fn desktop_only_and_unknown_commands_are_404() {
         "pick_import_file",
         "data_export",
         "data_import",
+        // 评审回环裁决 A：密钥原文命令划归 desktop-only，server 物理不路由
+        "secret_store_save",
+        "secret_store_load",
+        "secret_store_delete",
         // 2 条 perf-test 门控命令同不入 server 路由面
         "app_emit_test_stream",
         "app_seed_perf_data",
@@ -725,4 +731,239 @@ async fn llm_config_responses_never_leak_raw_keys() {
     assert!(text.contains("api_key_ref") || text.contains("apiKeyRef"), "应携带密钥引用");
 
     // （清理交由临时数据目录——随测试进程弃置）
+}
+
+// ── handler panic 兜底（CatchPanicLayer → 500，进程级 5xx 白名单内） ──
+
+#[tokio::test]
+async fn panic_in_handler_returns_500_without_details() {
+    // 经生产同款 layer 组装（CatchPaniLayer::custom(security::panic_response)
+    // ——与 build_router 叠放同一构造），触发 handler panic 断言 500 且
+    // 响应体不携带 panic 细节（防信息泄露）。
+    use axum::routing::get;
+    use tower_http::catch_panic::CatchPanicLayer;
+
+    async fn boom() -> &'static str {
+        panic!("boom-detail-must-not-leak");
+    }
+
+    let app = axum::Router::new()
+        .route("/boom", get(boom))
+        .layer(CatchPanicLayer::custom(
+            egosync_server::security::panic_response,
+        ));
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind panic test server");
+    let addr = listener.local_addr().expect("panic test addr");
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve panic test");
+    });
+
+    let res = reqwest::get(format!("http://{}/boom", addr))
+        .await
+        .expect("请求 panic 路由");
+    assert_eq!(res.status(), 500, "handler panic 必须 500（进程级 5xx）");
+    let body = res.text().await.expect("panic body");
+    assert!(
+        !body.contains("boom-detail-must-not-leak"),
+        "panic 细节不得泄露: {}",
+        body
+    );
+    handle.abort();
+}
+
+// ── opencode 缺失的服务降级（I/O 矩阵：chat 异步流式模型）──
+
+#[tokio::test]
+async fn chat_command_degrades_gracefully_without_opencode() {
+    let state = build_test_state(temp_data_dir("no-sidecar"), Some("t".into()))
+        .await
+        .expect("测试状态装配");
+    let server = InProcessServer::start(state.clone()).await;
+    let client = Client::new();
+    let session = login(&client, &server.url(""), "t").await.expect("登录");
+
+    // 先订阅 SSE（broadcast 无重放），再发送消息
+    let sse_res = client
+        .get(&server.url("/api/events"), Some(&session), None)
+        .await;
+    assert_eq!(sse_res.status(), 200);
+
+    // chat_send_message 是异步流式模型（与桌面 invoke 逐字节一致）：
+    // 命令同步返回 200 + user 消息；sidecar/LLM 失败发生在 run_stream
+    // 任务内，经 llm:stream 兜底 done 帧呈现——服务存活、错误在带内。
+    let res = client
+        .post_json(
+            &server.url("/api/cmd/chat_send_message"),
+            Some(&json!({"request": {"content": "hi"}})),
+            Some(&session),
+            None,
+        )
+        .await;
+    assert_eq!(res.status(), 200, "sidecar 缺失不致命，命令同步面正常");
+    let message: Value = res.json().await.expect("user 消息 body");
+    assert_eq!(message["role"], "user", "同步返回 user 消息（流式模型契约）");
+
+    // SSE 侧收到 message:saved + llm:stream 兜底 done 帧（降级呈现路径）
+    let mut stream = sse_res.bytes_stream();
+    let mut buf = Vec::new();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let mut saw_message_saved = false;
+    let mut saw_llm_done = false;
+    while std::time::Instant::now() < deadline && !(saw_message_saved && saw_llm_done) {
+        match tokio::time::timeout(Duration::from_secs(2), stream.next()).await {
+            Ok(Some(Ok(chunk))) => {
+                buf.extend_from_slice(&chunk);
+                let text = String::from_utf8_lossy(&buf);
+                if text.contains("event: message:saved") {
+                    saw_message_saved = true;
+                }
+                if text.contains("event: llm:stream") && text.contains("\"done\":true") {
+                    saw_llm_done = true;
+                }
+            }
+            Ok(Some(Err(_))) | Ok(None) => break,
+            Err(_) => continue,
+        }
+    }
+    assert!(saw_message_saved, "SSE 应收到 message:saved");
+    assert!(
+        saw_llm_done,
+        "SSE 应收到 llm:stream 兜底 done 帧（sidecar 缺失的带内降级）: {}",
+        String::from_utf8_lossy(&buf)
+    );
+}
+
+// ── 生产引导冒烟（评审修复 #13：build_app_state 此前零自动化）──
+
+#[tokio::test]
+async fn build_app_state_production_bootstrap_smoke() {
+    // 生产同款引导（非 build_test_state）：完整桌面序列——双池、
+    // AgentConfig 同步、custom tools 写盘、sidecar（PATH 无 opencode
+    // ⇒ 优雅降级）、delegate 监听、EventRouter、调度器。
+    let state = build_app_state(
+        temp_data_dir("prod-bootstrap"),
+        Some("prod-smoke-token".into()),
+    )
+    .await
+    .expect("生产引导必须成功");
+
+    let server = InProcessServer::start(state.clone()).await;
+    let client = Client::new();
+
+    // healthz deep：双池 SELECT 1 通过、opencode 降级（测试环境 PATH 无
+    // 二进制——桌面同款环境级降级）⇒ 503 degraded
+    let res = client.get(&server.url("/healthz?deep=1"), None, None).await;
+    assert_eq!(res.status(), 503, "deep 探针降级态");
+    let body: Value = res.json().await.expect("deep body");
+    assert_eq!(body["db"], true, "生产引导双池必须健康");
+    assert_eq!(body["opencode"], false, "无 opencode 二进制 ⇒ 降级位");
+
+    // login：env 令牌换 Cookie（生产引导后认证面全链）
+    let session = login(&client, &server.url(""), "prod-smoke-token")
+        .await
+        .expect("生产引导后 env 令牌登录");
+    assert!(session.starts_with("egosync_session="), "Cookie 形状");
+
+    // 收尾：取消 token（生产引导的后台任务收尾通道——调度器/
+    // watchdog/delegate 随取消退出，不留悬挂任务）
+    state.cancel.cancel();
+    // InProcessServer::drop 会 abort serve 任务
+}
+
+// ── setup 令牌强度下限（评审修复 #4）──
+
+#[tokio::test]
+async fn setup_rejects_short_token_with_401() {
+    let state = build_test_state(temp_data_dir("short-token"), None)
+        .await
+        .expect("测试状态装配");
+    let server = InProcessServer::start(state).await;
+    let client = Client::new();
+
+    // 首访态确认
+    let res = client.get(&server.url("/api/auth/status"), None, None).await;
+    let status: Value = res.json().await.expect("auth status body");
+    assert_eq!(status["setupRequired"], true);
+
+    // 短令牌（<8 字符 trim 后）⇒ 401 统一形状（白名单口径：认证失败）
+    // ——且不消费 setup_available（后续 setup 仍可用）
+    let short = json!({"token": "abc"});
+    let res = client
+        .post_json(&server.url("/api/setup"), Some(&short), None, None)
+        .await;
+    assert_eq!(res.status(), 401, "短令牌必须 401");
+    let err: Value = res.json().await.expect("401 body");
+    assert_eq!(err["error"], "unauthorized", "统一形状不泄露细节");
+
+    // 空白令牌（trim 后为空）同路径 401
+    let blank = json!({"token": "   "});
+    let res = client
+        .post_json(&server.url("/api/setup"), Some(&blank), None, None)
+        .await;
+    assert_eq!(res.status(), 401);
+
+    // 恰 8 字符（边界含）⇒ 放行（≥ 下限）
+    let ok = json!({"token": "12345678"});
+    let res = client
+        .post_json(&server.url("/api/setup"), Some(&ok), None, None)
+        .await;
+    assert_eq!(res.status(), 200, "恰 8 字符在下限之上应通过");
+}
+
+// ── setup 并发防护（评审修复 #3：锁内重检-写入-翻转）──
+
+#[tokio::test]
+async fn concurrent_setup_writes_exactly_once_no_overwrite() {
+    let state = build_test_state(temp_data_dir("setup-race"), None)
+        .await
+        .expect("测试状态装配");
+    let server = InProcessServer::start(state).await;
+    let client = Client::new();
+
+    // 两枚不同令牌并发双发：恰一个 200（先入锁者），另一个 404（锁内
+    // 重检发现已初始化）——后写不得覆盖前令牌
+    let a = json!({"token": "token-alpha-111"});
+    let b = json!({"token": "token-bravo-222"});
+    let url_a = server.url("/api/setup");
+    let url_b = server.url("/api/setup");
+    let (res_a, res_b) = tokio::join!(
+        client.post_json(&url_a, Some(&a), None, None),
+        client.post_json(&url_b, Some(&b), None, None),
+    );
+    let code_a = res_a.status();
+    let code_b = res_b.status();
+    let mut codes = [code_a, code_b];
+    codes.sort();
+    assert_eq!(
+        codes,
+        [reqwest::StatusCode::OK, reqwest::StatusCode::NOT_FOUND],
+        "并发双 setup 必须恰一个成功（实得 {} / {}）",
+        code_a,
+        code_b
+    );
+
+    // 胜者令牌可登录；败者令牌不得可用（未被写入——无覆盖）
+    let winner = if code_a == reqwest::StatusCode::OK {
+        "token-alpha-111"
+    } else {
+        "token-bravo-222"
+    };
+    let loser = if winner == "token-alpha-111" {
+        "token-bravo-222"
+    } else {
+        "token-alpha-111"
+    };
+    let ok = json!({"token": winner});
+    let res = client
+        .post_json(&server.url("/api/auth/login"), Some(&ok), None, None)
+        .await;
+    assert_eq!(res.status(), 200, "胜者令牌必须可登录");
+    let bad = json!({"token": loser});
+    let res = client
+        .post_json(&server.url("/api/auth/login"), Some(&bad), None, None)
+        .await;
+    assert_eq!(res.status(), 401, "败者令牌必须不可登录（未被覆盖写入）");
 }

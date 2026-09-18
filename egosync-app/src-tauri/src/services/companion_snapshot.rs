@@ -957,6 +957,10 @@ mod tests {
             include_str!("../../../../crates/egosync-engine/src/commands/notification.rs"),
             include_str!("../../../../crates/egosync-engine/src/commands/task_decomposition.rs"),
             include_str!("../../../../crates/egosync-engine/src/commands/data.rs"),
+            // data_import 为 desktop-only 留壳命令（15.4 名单），其
+            // data:imported 发射点在壳 data.rs——扫描面补回（评审修复
+            // #11：只扫引擎侧会漏掉该写信号发射点）
+            include_str!("../commands/data.rs"),
         ];
         const EVENTS_RS: &str =
             include_str!("../../../../crates/egosync-engine/src/events.rs");

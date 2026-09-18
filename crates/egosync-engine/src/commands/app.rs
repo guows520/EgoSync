@@ -60,10 +60,19 @@ pub async fn app_sidecar_status(
 }
 
 pub async fn app_get_setting(ctx: &EngineCtx, key: String) -> Result<Option<String>, AppError> {
+    // 保留键拒绝读（评审修复 #6：server_token_hash 等凭据材料只经
+    // 专用通道，防离线爆破读取面——双宿主同行为）
+    if app_settings::is_reserved_setting_key(&key) {
+        return Err(AppError::ValidationError(format!("保留键不可读取: {}", key)));
+    }
     app_settings::get_setting(&ctx.pool, &key).await
 }
 
 pub async fn app_set_setting(ctx: &EngineCtx, key: String, value: String) -> Result<(), AppError> {
+    // 保留键拒绝写（评审修复 #6：防库态凭据被命令覆写接管）
+    if app_settings::is_reserved_setting_key(&key) {
+        return Err(AppError::ValidationError(format!("保留键不可写入: {}", key)));
+    }
     app_settings::set_setting(&ctx.pool, &key, &value).await
 }
 
@@ -151,6 +160,118 @@ mod tests {
         assert_eq!(json["jsHeapUsedMb"], 45.5);
         assert_eq!(json["processUptimeSecs"], 120);
         assert_eq!(json["sidecarRssMb"], 80);
+    }
+
+    /// 评审修复 #6：保留键读写各拒绝一次（server_token_hash 经命令面
+    /// 不可读——防离线爆破；不可写——防库态凭据覆写接管）。
+    #[tokio::test]
+    async fn reserved_setting_key_read_and_write_are_rejected() {
+        use crate::commands::ctx::EngineCtx;
+        use crate::db::pool::{ConversationsPool, DbPool};
+        use crate::services::agent_config::AgentConfigService;
+        use crate::services::agent_bridge::AgentBridge;
+        use crate::services::delegate_bridge::DelegateBridge;
+        use crate::services::event_bus::EngineEvents;
+        use crate::services::event_router::EventRouter;
+        use crate::services::secret_store::SecretStore;
+        use crate::services::sidecar::SidecarManager;
+        use std::path::PathBuf;
+        use std::sync::Arc;
+
+        /// 测试桩：密钥存储（守卫在 SQL 之前，桩不被触达）
+        struct StubSecrets;
+        impl SecretStore for StubSecrets {
+            fn save_secret(&self, _: &str, _: &str) -> Result<(), crate::error::AppError> { Ok(()) }
+            fn load_secret(&self, _: &str) -> Result<Option<String>, crate::error::AppError> { Ok(None) }
+            fn delete_secret(&self, _: &str) -> Result<(), crate::error::AppError> { Ok(()) }
+        }
+        /// 测试桩：事件总线（同上）
+        struct StubBus;
+        impl EngineEvents for StubBus {
+            fn emit(&self, _: &str, _: serde_json::Value) -> Result<(), String> { Ok(()) }
+        }
+
+        let pool: DbPool = sqlx::sqlite::SqlitePoolOptions::new()
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        // app_settings 表由迁移建；此处建最小表（命令守卫在 SQL 之前）
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY NOT NULL,
+                value TEXT,
+                updated_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00Z'
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let secrets: Arc<StubSecrets> = Arc::new(StubSecrets);
+        let config = AgentConfigService::new(PathBuf::from("/tmp/test-opencode.json"));
+        let ctx = EngineCtx {
+            pool,
+            conv_pool: ConversationsPool(
+                sqlx::sqlite::SqlitePoolOptions::new()
+                    .connect("sqlite::memory:")
+                    .await
+                    .unwrap(),
+            ),
+            registry: Arc::new(crate::registry::ChatSessionRegistry::default()),
+            agent_config: config.clone(),
+            sidecar: Arc::new(tokio::sync::Mutex::new(SidecarManager::new(None, None))),
+            agent_bridge: AgentBridge::new(0),
+            event_router: Arc::new(EventRouter::new()),
+            delegate_bridge: DelegateBridge::new(
+                sqlx::sqlite::SqlitePoolOptions::new()
+                    .connect("sqlite::memory:")
+                    .await
+                    .unwrap(),
+                ConversationsPool(
+                    sqlx::sqlite::SqlitePoolOptions::new()
+                        .connect("sqlite::memory:")
+                        .await
+                        .unwrap(),
+                ),
+                "t".to_string(),
+                None,
+                config,
+                PathBuf::from("/tmp/test-skills"),
+                secrets.clone(),
+            ),
+            bus: Arc::new(StubBus),
+            secrets,
+            data_dir: PathBuf::from("/tmp"),
+            opencode_workspace: PathBuf::from("/tmp"),
+            skills_root: PathBuf::from("/tmp"),
+            home_dir: PathBuf::from("/tmp"),
+        };
+
+        // 读拒绝：ValidationError（200 单键 map——错误白名单口径）
+        let err = app_get_setting(&ctx, "server_token_hash".to_string())
+            .await
+            .expect_err("保留键读必须拒绝");
+        match err {
+            crate::error::AppError::ValidationError(msg) => {
+                assert!(msg.contains("保留键不可读取"), "文案对齐: {}", msg)
+            }
+            other => panic!("读拒绝必须 ValidationError，实得 {:?}", other),
+        }
+
+        // 写拒绝：ValidationError
+        let err = app_set_setting(
+            &ctx,
+            "server_token_hash".to_string(),
+            "attacker-chosen-hash".to_string(),
+        )
+        .await
+        .expect_err("保留键写必须拒绝");
+        match err {
+            crate::error::AppError::ValidationError(msg) => {
+                assert!(msg.contains("保留键不可写入"), "文案对齐: {}", msg)
+            }
+            other => panic!("写拒绝必须 ValidationError，实得 {:?}", other),
+        }
     }
 
     #[test]

@@ -7,11 +7,13 @@ on:
     paths:
       - server/**
       - crates/egosync-engine/**
+      - egosync-app/src-tauri/src/**
       - .github/workflows/server-ci.yml
   pull_request:
     paths:
       - server/**
       - crates/egosync-engine/**
+      - egosync-app/src-tauri/src/**
       - .github/workflows/server-ci.yml
 
 concurrency:
@@ -45,19 +47,44 @@ jobs:
         working-directory: server
         run: cargo test
 
+      # 评审修复 #14a：新鲜度步骤原先带 working-directory: server，git diff
+      # pathspec 会解析到 server/crates/...（不存在）→ exit 128，门禁从未
+      # 实际执行。现于仓库根执行：cargo 以 manifest-path 内联，git diff 用
+      # 完整路径（与本地验证命令同口径）。
       - name: Regenerate commands artifact（新鲜度零漂移）
-        working-directory: server
         run: |
-          cargo run --features gen --bin gen_commands
+          cargo run --manifest-path server/Cargo.toml --features gen --bin gen_commands
           git diff --exit-code crates/egosync-engine/commands.json
           git diff --exit-code server/src/dispatch_gen.rs
 
-      - name: No dev auth bypass（无免认证旁路）
+      # 评审修复 #14b：grep 限定源码目录（原扫 server/ 全目录会命中
+      # target/ 二进制——字符串常量邻接即匹配，且 `! grep` 把 exit 2
+      # 错误反转成通过）。rc 显式分支：0=命中⇒失败、1=干净⇒通过、
+      # 2=错误⇒失败（ci.yml:274-293 口径先例）。
+      - name: No dev auth bypass（无免认证旁路，源码目录限定）
         run: |
-          ! grep -rn 'EGOSYNC_DEV_NO_AUTH\|DEV_NO_AUTH' server/ egosync-app/src/ egosync-app/src-tauri/src/ crates/ || \
-            { echo "存在 dev 免认证旁路"; exit 1; }
+          set +e
+          grep -rn --exclude-dir=target 'EGOSYNC_DEV_NO_AUTH\|DEV_NO_AUTH' \
+            server/src server/tests server/Cargo.toml \
+            egosync-app/src egosync-app/src-tauri/src crates/
+          rc=$?
+          set -e
+          if [ "$rc" -eq 0 ]; then
+            echo "存在 dev 免认证旁路"; exit 1
+          elif [ "$rc" -ne 1 ]; then
+            echo "grep 执行错误 (rc=$rc)"; exit 1
+          fi
+          echo "无旁路确认：源码目录零命中"
 
       - name: Engine has no tauri references（宿主解耦守门）
         run: |
-          ! grep -rn 'tauri::' crates/egosync-engine/src/ || \
-            { echo "engine 源码出现 tauri:: 引用"; exit 1; }
+          set +e
+          grep -rn 'tauri::' crates/egosync-engine/src/
+          rc=$?
+          set -e
+          if [ "$rc" -eq 0 ]; then
+            echo "engine 源码出现 tauri:: 引用"; exit 1
+          elif [ "$rc" -ne 1 ]; then
+            echo "grep 执行错误 (rc=$rc)"; exit 1
+          fi
+          echo "engine 零 tauri:: 引用确认"

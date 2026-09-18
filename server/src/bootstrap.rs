@@ -76,7 +76,14 @@ pub async fn build_app_state(
                 egosync_engine::services::butler_config::default_butler_skills()
             });
         let skill_registry = if managed_skills_ready {
-            egosync_engine::db::skills::list_skills(&pool).await.unwrap_or_default()
+            // 失败降级留 warn（对齐桌面 lib.rs:135 诊断口径——静默吞错
+            // 会让 opencode 同步缺 Skill 注册而无从排查）
+            egosync_engine::db::skills::list_skills(&pool)
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::warn!("Failed to load Skill registry for opencode sync: {}", e);
+                    Vec::new()
+                })
         } else {
             Vec::new()
         };
@@ -256,7 +263,10 @@ pub async fn build_app_state(
         home_dir: dirs::home_dir().unwrap_or_else(|| data_dir.clone()),
     });
 
-    let auth = AuthState::new(pool, env_token).await;
+    // 库哈希读失败 ⇒ Err 拒启（评审修复 #2：绝不 fail-open 误挂 setup）
+    let auth = AuthState::new(pool, env_token)
+        .await
+        .map_err(|e| format!("认证态装配失败: {}", e))?;
 
     Ok(Arc::new(AppState {
         ctx,
@@ -315,7 +325,10 @@ pub async fn build_test_state(
         home_dir: data_dir.clone(),
     });
 
-    let auth = AuthState::new(pool, env_token).await;
+    // 同上：读失败 ⇒ Err（测试态与生产态同语义）
+    let auth = AuthState::new(pool, env_token)
+        .await
+        .map_err(|e| format!("认证态装配失败: {}", e))?;
 
     Ok(Arc::new(AppState {
         ctx,

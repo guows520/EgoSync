@@ -40,11 +40,18 @@ use crate::AppState;
 /// 会话 Cookie 名。
 pub const SESSION_COOKIE: &str = "egosync_session";
 /// 令牌哈希在 app_settings kv 的键（令牌本体哈希按架构数据边界表落点）。
-pub const TOKEN_HASH_SETTING_KEY: &str = "server_token_hash";
+///
+/// 单一事实源：engine `app_settings` 的保留键名单（评审修复 #6——
+/// app_get_setting/app_set_setting 命中保留键拒绝读/写，防离线爆破
+/// 与库态凭据覆写）。
+pub const TOKEN_HASH_SETTING_KEY: &str =
+    egosync_engine::db::app_settings::RESERVED_SETTING_KEYS[0];
 /// 限流窗口（I/O 矩阵：5 次/分钟/IP）。
 pub const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60);
 /// 窗口内上限。
 pub const RATE_LIMIT_MAX: usize = 5;
+/// setup 令牌最短长度（首访引导下限；env 令牌为运维自担，不校验）。
+pub const SETUP_TOKEN_MIN_LEN: usize = 8;
 
 /// 认证态：引导凭据形态 + setup 可用位 + 会话表 + 限流器。
 pub struct AuthState {
@@ -53,6 +60,9 @@ pub struct AuthState {
     /// `/api/setup` 是否可用（env 存在或库哈希已写入 ⇒ false）。
     /// 首访 setup 成功后置 false（随即 404）；两态切换须重启进程。
     pub setup_available: AtomicBool,
+    /// setup 串行化锁（check-then-write 原子化：锁内重检-写入-翻转，
+    /// 防并发双 setup 后写覆盖前令牌）。
+    pub setup_lock: tokio::sync::Mutex<()>,
     /// 会话表所在主库。
     pub pool: DbPool,
     /// 认证面限流器（`/api/auth/*` + `/api/setup`）。
@@ -61,18 +71,23 @@ pub struct AuthState {
 
 impl AuthState {
     /// 启动期装配：读 env + 查库内哈希，决定引导形态与 setup 可用位。
-    pub async fn new(pool: DbPool, env_token: Option<String>) -> Self {
+    ///
+    /// 库哈希读失败 ⇒ `Err`（沿 bootstrap 上抛拒启）——绝不把 DB 错误
+    /// 吞成「无哈希」误挂 /api/setup（fail-open：已初始化实例的凭据
+    /// 将可被覆写）。
+    pub async fn new(pool: DbPool, env_token: Option<String>) -> Result<Self, String> {
         let setup_available = if env_token.is_some() {
             false
         } else {
-            !db_has_token_hash(&pool).await
+            !db_has_token_hash(&pool).await?
         };
-        Self {
+        Ok(Self {
             env_token,
             setup_available: AtomicBool::new(setup_available),
+            setup_lock: tokio::sync::Mutex::new(()),
             pool,
             rate: RateLimiter::default(),
-        }
+        })
     }
 
     pub fn setup_available(&self) -> bool {
@@ -95,15 +110,27 @@ impl Default for RateLimiter {
 
 impl RateLimiter {
     /// 记录一次请求并判定是否放行（窗口外记录剔除；超限 ⇒ false）。
+    ///
+    /// 窗口清空后驱逐该 IP 条目——防扫描源 IP 使 HashMap 无限增长
+    /// （评审修复 #5：条目泄漏与键空间同阶）。
     fn check(&self, ip: IpAddr) -> bool {
         let now = Instant::now();
         let mut inner = self.inner.lock().expect("限流器锁中毒");
-        let window = inner.entry(ip).or_default();
+        let Some(window) = inner.get_mut(&ip) else {
+            inner.insert(ip, VecDeque::from([now]));
+            return true;
+        };
         while window
             .front()
             .is_some_and(|t| now.duration_since(*t) > RATE_LIMIT_WINDOW)
         {
             window.pop_front();
+        }
+        if window.is_empty() {
+            // 窗口已过期清空：驱逐条目（下次请求重新插入）
+            inner.remove(&ip);
+            inner.insert(ip, VecDeque::from([now]));
+            return true;
         }
         if window.len() >= RATE_LIMIT_MAX {
             return false;
@@ -151,7 +178,13 @@ pub async fn auth_status(State(state): State<Arc<AppState>>, req: Request) -> Re
 /// `POST /api/setup {token}`：首访初始化（仅库态首访可写）。
 ///
 /// env 态：路由不挂载（404）；已初始化：随即 404；成功后 setup_available
-/// 置 false。空令牌 → 400（认证面自身语义，业务白名单不辖此端点）。
+/// 置 false。空令牌 → 401 统一形状（错误白名单冻结口径：非 200 仅
+/// 401/429/404/5xx 四类，认证失败一律 401 不泄露存在性）。
+///
+/// 并发防护：`setup_lock` 串行化——锁内重检 setup_available 再写入再
+/// 翻转，并发双发只有首个成功（后到者 404，不覆盖已写入令牌）。
+/// 令牌下限：trim 后最短 8 字符（首访引导凭据强度下限；env 令牌为
+/// 运维自担，不在此校验）。
 pub async fn setup(State(state): State<Arc<AppState>>, body: Bytes) -> Response {
     if !state.auth.setup_available() {
         return (
@@ -162,15 +195,24 @@ pub async fn setup(State(state): State<Arc<AppState>>, body: Bytes) -> Response 
     }
 
     let token = match parse_token_body(&body) {
-        Some(t) if !t.is_empty() => t,
-        _ => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": "invalid token"})),
-            )
-                .into_response();
-        }
+        Some(t) => t.trim().to_string(),
+        _ => return unauthorized(),
     };
+    if token.len() < SETUP_TOKEN_MIN_LEN {
+        // 过短令牌视同认证失败（401 统一形状——白名单口径）
+        return unauthorized();
+    }
+
+    // 串行化：锁内重检-写入-翻转（check-then-write 原子化）
+    let _guard = state.auth.setup_lock.lock().await;
+    if !state.auth.setup_available() {
+        // 并发双发的后到者：已被首个请求初始化 ⇒ 404（不覆盖）
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "not found"})),
+        )
+            .into_response();
+    }
 
     let phc = match hash_token_argon2id(&token) {
         Ok(phc) => phc,
@@ -285,6 +327,9 @@ fn extract_session_token(req: &Request) -> Option<String> {
 
 /// 会话 Cookie 校验：SHA256 → auth_sessions 主键查找（跨重启/跨凭据形态
 /// 切换均有效——会话生命周期独立于引导凭据）。
+///
+/// 读路径零写放大（评审修复 #7：YAGNI 简化——无消费者的活跃度列
+/// 已随迁移删除，校验保持纯读）。
 async fn session_cookie_valid(state: &Arc<AppState>, session_token: Option<&str>) -> bool {
     let Some(session_token) = session_token else {
         return false;
@@ -316,12 +361,14 @@ fn parse_token_body(body: &Bytes) -> Option<String> {
 }
 
 /// 库内是否已有令牌哈希。
-async fn db_has_token_hash(pool: &DbPool) -> bool {
+///
+/// 读错误原样上抛（绝不吞成「无哈希」——那是 fail-open：已初始化实例
+/// 会误挂 /api/setup，凭据可被覆写）。
+async fn db_has_token_hash(pool: &DbPool) -> Result<bool, String> {
     app_settings::get_setting(pool, TOKEN_HASH_SETTING_KEY)
         .await
-        .ok()
-        .flatten()
-        .is_some()
+        .map(|v| v.is_some())
+        .map_err(|e| format!("读取令牌哈希失败（拒启——不 fail-open）: {}", e))
 }
 
 /// 常时比较令牌：双方 SHA256 摘要后 32 字节常时比对（长度不敏感——
@@ -365,4 +412,59 @@ fn sha256_hex(bytes: &[u8]) -> String {
 /// 供测试/校验复用的 AppError 形状探测（错误白名单对等测试消费）。
 pub fn app_error_to_response(err: AppError) -> Response {
     (StatusCode::OK, Json(err)).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 评审修复 #2 单测：库哈希读失败（如池已关闭）必须沿 `AuthState::new`
+    /// 上抛 `Err` 拒启——绝不吞成「无哈希」（fail-open 误挂 /api/setup，
+    /// 已初始化实例的凭据将可被覆写）。
+    #[tokio::test]
+    async fn db_read_failure_rejects_startup_not_fail_open() {
+        // 已关闭的池：任何查询都返回连接错误
+        let pool = DbPool::connect("sqlite::memory:")
+            .await
+            .expect("建池");
+        pool.close().await;
+
+        let err = match AuthState::new(pool, None).await {
+            Err(e) => e,
+            Ok(_) => panic!("读失败必须 Err（拒启）——不得 fail-open"),
+        };
+        assert!(
+            err.contains("读取令牌哈希失败"),
+            "错误文案必须指向令牌哈希读失败: {}",
+            err
+        );
+    }
+
+    /// 评审修复 #5 单测：限流器空窗口驱逐——过期窗口清空后条目被移除，
+    /// 扫描源 IP 不使 HashMap 无限增长。
+    #[test]
+    fn rate_limiter_evicts_empty_window_entries() {
+        use std::net::Ipv4Addr;
+        let limiter = RateLimiter::default();
+        let ip = IpAddr::from(Ipv4Addr::new(1, 2, 3, 4));
+        // 手工注入一条已过期记录（模拟一分钟前的请求）
+        {
+            let mut inner = limiter.inner.lock().unwrap();
+            let mut stale = VecDeque::new();
+            stale.push_back(Instant::now() - RATE_LIMIT_WINDOW - Duration::from_secs(1));
+            inner.insert(ip, stale);
+        }
+        // 新请求：过期记录剔除后窗口为空 ⇒ 驱逐旧条目重插 ⇒ 放行
+        assert!(limiter.check(ip), "过期后新请求应放行");
+        // 条目数不增长（驱逐+重插，非叠加）
+        {
+            let inner = limiter.inner.lock().unwrap();
+            assert_eq!(
+                inner.len(),
+                1,
+                "同 IP 条目应恰一个（驱逐后重插，不叠加）"
+            );
+            assert_eq!(inner[&ip].len(), 1, "窗口内应恰一条新记录");
+        }
+    }
 }

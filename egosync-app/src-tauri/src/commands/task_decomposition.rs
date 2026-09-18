@@ -1,38 +1,39 @@
-use tauri::{AppHandle, Emitter, State};
+//! Story 15.4：命令体已迁引擎（`egosync_engine::commands::task_decomposition`），
+//! 壳侧薄化为 wrapper；其 service 随迁引擎（services/mod.rs 回引）。
+use std::sync::Arc;
 
-use crate::db::pool::DbPool;
+use egosync_engine::commands::ctx::EngineCtx;
+use tauri::State;
+
 use crate::error::AppError;
 use crate::models::task_decomposition::{
     TaskDecompositionProposal, TaskDecompositionProposalWithRole,
 };
-use crate::services::task_decomposition;
 
 #[tauri::command]
 pub async fn task_decomposition_list_pending(
+    ctx: State<'_, Arc<EngineCtx>>,
     conversation_id: String,
-    pool: State<'_, DbPool>,
 ) -> Result<Vec<TaskDecompositionProposalWithRole>, AppError> {
-    task_decomposition::list_pending(&pool, &conversation_id).await
+    egosync_engine::commands::task_decomposition::task_decomposition_list_pending(
+        &ctx,
+        conversation_id,
+    )
+    .await
 }
 
 #[tauri::command]
 pub async fn task_decomposition_accept(
+    ctx: State<'_, Arc<EngineCtx>>,
     id: String,
-    pool: State<'_, DbPool>,
-    app: AppHandle,
 ) -> Result<TaskDecompositionProposal, AppError> {
-    let proposal = task_decomposition::accept(&pool, &id).await?;
-    let _ = app.emit("task:tool-action", serde_json::json!({ "action": "create" }));
-    Ok(proposal)
+    egosync_engine::commands::task_decomposition::task_decomposition_accept(&ctx, id).await
 }
 
 #[tauri::command]
 pub async fn task_decomposition_keep_single(
+    ctx: State<'_, Arc<EngineCtx>>,
     id: String,
-    pool: State<'_, DbPool>,
-    app: AppHandle,
 ) -> Result<TaskDecompositionProposal, AppError> {
-    let proposal = task_decomposition::keep_single(&pool, &id).await?;
-    let _ = app.emit("task:tool-action", serde_json::json!({ "action": "create" }));
-    Ok(proposal)
+    egosync_engine::commands::task_decomposition::task_decomposition_keep_single(&ctx, id).await
 }

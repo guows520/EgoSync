@@ -19,6 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use egosync_lib::commands::chat::{chat_send_message, ChatSessionRegistry};
+use egosync_engine::commands::ctx::EngineCtx;
 use egosync_lib::db::conversations as conversations_db;
 use egosync_lib::db::pool::{init_conversations_db, init_db, ConversationsPool, DbPool};
 use egosync_lib::models::chat::ChatRequest;
@@ -102,23 +103,48 @@ async fn setup() -> (TestApp, DbPool, ConversationsPool, HangingOpencode, tempfi
     app.manage(pool.clone());
     app.manage(conv_pool.clone());
     // Story 15.3：六组会话状态合并为单 Registry（Arc，与 lib.rs 单 manage 同构）
-    app.manage(Arc::new(ChatSessionRegistry::default()));
+    let registry = Arc::new(ChatSessionRegistry::default());
+    app.manage(registry.clone());
     // 命令签名 +State<TauriEventBus>（事件经注入总线发射）
-    app.manage(TauriEventBus::new(app.handle().clone()));
-    app.manage(AgentConfigService::new(dir.path().join("opencode.json")));
-    app.manage(Arc::new(Mutex::new(SidecarManager::new(None, None))));
-    app.manage(AgentBridge::new(opencode.port));
-    app.manage(Arc::new(EventRouter::new()));
+    let event_bus = TauriEventBus::new(app.handle().clone());
+    app.manage(event_bus.clone());
+    let agent_config = AgentConfigService::new(dir.path().join("opencode.json"));
+    app.manage(agent_config.clone());
+    let sidecar = Arc::new(Mutex::new(SidecarManager::new(None, None)));
+    app.manage(sidecar.clone());
+    let agent_bridge = AgentBridge::new(opencode.port);
+    app.manage(agent_bridge.clone());
+    let event_router = Arc::new(EventRouter::new());
+    app.manage(event_router.clone());
     // Story 15.3：DelegateBridge 迁引擎后接缝注入（总线/配置/Skill 根/密钥测试替身）
-    app.manage(DelegateBridge::new(
+    let delegate_bridge = DelegateBridge::new(
         pool.clone(),
         conv_pool.clone(),
         "test-token".into(),
         None,
-        AgentConfigService::new(dir.path().join("opencode.json")),
+        agent_config.clone(),
         dir.path().join("skills"),
         Arc::new(NoopSecretStore),
-    ));
+    );
+    app.manage(delegate_bridge.clone());
+    // Story 15.4：命令体迁引擎——EngineCtx 单容器装配（同一实例 Arc 克隆，
+    // 断言零改动，仅调用签名接线适配）
+    app.manage(Arc::new(EngineCtx {
+        pool: pool.clone(),
+        conv_pool: conv_pool.clone(),
+        registry: registry.clone(),
+        agent_config,
+        sidecar,
+        agent_bridge,
+        event_router,
+        delegate_bridge,
+        bus: Arc::new(event_bus),
+        secrets: Arc::new(NoopSecretStore),
+        data_dir: dir.path().to_path_buf(),
+        opencode_workspace: dir.path().join("opencode-workspace"),
+        skills_root: dir.path().join("skills"),
+        home_dir: dir.path().to_path_buf(),
+    }));
     (app, pool, conv_pool, opencode, dir)
 }
 
@@ -135,14 +161,10 @@ fn chat_request(conversation_id: &str, content: &str, workspace: &str) -> ChatRe
 }
 
 async fn send(app: &TestApp, request: ChatRequest) -> Result<Message, AppError> {
+    // Story 15.4：命令体迁引擎，经 EngineCtx 单容器取依赖（断言不变）
     chat_send_message(
         request,
-        app.state::<DbPool>(),
-        app.state::<ConversationsPool>(),
-        app.state::<Arc<ChatSessionRegistry>>(),
-        app.state::<AgentConfigService>(),
-        app.state::<TauriEventBus<tauri::test::MockRuntime>>(),
-        app.handle().clone(),
+        app.state::<Arc<EngineCtx>>(),
     )
     .await
 }
@@ -337,10 +359,7 @@ async fn chat_events_reach_listeners_and_busy_branch_emits_nothing() {
     let conv = chat_new_conversation(
         None,
         None,
-        app.state::<ConversationsPool>(),
-        app.state::<DbPool>(),
-        app.state::<TauriEventBus<tauri::test::MockRuntime>>(),
-        app.handle().clone(),
+        app.state::<Arc<EngineCtx>>(),
     )
     .await
     .expect("new conversation");
@@ -361,9 +380,7 @@ async fn chat_events_reach_listeners_and_busy_branch_emits_nothing() {
 
     chat_delete_conversation(
         conv.id.clone(),
-        app.state::<ConversationsPool>(),
-        app.state::<TauriEventBus<tauri::test::MockRuntime>>(),
-        app.handle().clone(),
+        app.state::<Arc<EngineCtx>>(),
     )
     .await
     .expect("delete conversation");

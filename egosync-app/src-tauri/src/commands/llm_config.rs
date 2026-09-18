@@ -1,102 +1,65 @@
+//! Story 15.4：命令体已迁引擎（`egosync_engine::commands::llm_config`），
+//! 壳侧薄化为 wrapper。
 use std::sync::Arc;
 
-use egosync_engine::services::secret_store::SecretStore;
+use egosync_engine::commands::ctx::EngineCtx;
 use tauri::State;
-use tokio::sync::Mutex;
 
-use crate::db::pool::DbPool;
 use crate::error::AppError;
 use crate::models::settings::{CreateLlmConfigInput, LlmConfig, NetworkLocation, UpdateLlmConfigInput};
-use crate::services::agent_config::AgentConfigService;
-use crate::services::llm_config as service;
-use crate::services::secret_store_keyring::KeyringSecretStore;
-use crate::services::sidecar::SidecarManager;
-
-async fn refresh_runtime(pool: &sqlx::SqlitePool, secrets: &dyn SecretStore, agent_config: &AgentConfigService, sidecar: &Arc<Mutex<SidecarManager>>) -> Result<(), AppError> {
-    let mut failures = Vec::new();
-    if let Err(e) = service::sync_default_to_opencode(pool, secrets, agent_config).await { failures.push(format!("同步 opencode 配置失败: {}", e)); }
-    let original = service::process_no_proxy_value();
-    match service::generate_no_proxy_value(pool, original.as_deref()).await {
-        Ok(value) => { let mut manager = sidecar.lock().await; if manager.update_env("NO_PROXY", value) { if let Err(e) = manager.restart().await { failures.push(format!("重启 sidecar 失败: {}", e)); } } }
-        Err(e) => failures.push(format!("生成 NO_PROXY 失败: {}", e)),
-    }
-    if failures.is_empty() { Ok(()) } else { Err(AppError::RuntimeRefreshError(failures.join("；"))) }
-}
 
 #[tauri::command]
-pub async fn llm_config_list(pool: State<'_, DbPool>) -> Result<Vec<LlmConfig>, AppError> {
-    service::list_configs(&pool).await
+pub async fn llm_config_list(ctx: State<'_, Arc<EngineCtx>>) -> Result<Vec<LlmConfig>, AppError> {
+    egosync_engine::commands::llm_config::llm_config_list(&ctx).await
 }
 
 #[tauri::command]
 pub async fn llm_config_create(
+    ctx: State<'_, Arc<EngineCtx>>,
     input: CreateLlmConfigInput,
-    pool: State<'_, DbPool>,
-    secrets: State<'_, KeyringSecretStore>,
-    agent_config: State<'_, AgentConfigService>,
-    sidecar: State<'_, Arc<Mutex<SidecarManager>>>,
 ) -> Result<LlmConfig, AppError> {
-    let config = service::create_config(&pool, secrets.inner(), input).await?;
-    refresh_runtime(&pool, secrets.inner(), &agent_config, &sidecar).await?;
-    Ok(config)
+    egosync_engine::commands::llm_config::llm_config_create(&ctx, input).await
 }
 
 #[tauri::command]
 pub async fn llm_config_update(
+    ctx: State<'_, Arc<EngineCtx>>,
     id: String,
     input: UpdateLlmConfigInput,
-    pool: State<'_, DbPool>,
-    secrets: State<'_, KeyringSecretStore>,
-    agent_config: State<'_, AgentConfigService>,
-    sidecar: State<'_, Arc<Mutex<SidecarManager>>>,
 ) -> Result<LlmConfig, AppError> {
-    let config = service::update_config(&pool, secrets.inner(), id, input).await?;
-    refresh_runtime(&pool, secrets.inner(), &agent_config, &sidecar).await?;
-    Ok(config)
+    egosync_engine::commands::llm_config::llm_config_update(&ctx, id, input).await
 }
 
 #[tauri::command]
 pub async fn llm_config_delete(
+    ctx: State<'_, Arc<EngineCtx>>,
     id: String,
-    pool: State<'_, DbPool>,
-    secrets: State<'_, KeyringSecretStore>,
-    agent_config: State<'_, AgentConfigService>,
-    sidecar: State<'_, Arc<Mutex<SidecarManager>>>,
 ) -> Result<(), AppError> {
-    service::delete_config(&pool, secrets.inner(), id).await?;
-    refresh_runtime(&pool, secrets.inner(), &agent_config, &sidecar).await?;
-    Ok(())
+    egosync_engine::commands::llm_config::llm_config_delete(&ctx, id).await
 }
 
 #[tauri::command]
 pub async fn llm_config_set_default(
+    ctx: State<'_, Arc<EngineCtx>>,
     id: String,
-    pool: State<'_, DbPool>,
-    secrets: State<'_, KeyringSecretStore>,
-    agent_config: State<'_, AgentConfigService>,
 ) -> Result<(), AppError> {
-    service::set_default(&pool, id).await?;
-    service::sync_default_to_opencode(&pool, secrets.inner(), &agent_config).await
-        .map_err(|e| AppError::RuntimeRefreshError(e.to_string()))?;
-    Ok(())
+    egosync_engine::commands::llm_config::llm_config_set_default(&ctx, id).await
 }
 
 #[tauri::command]
 pub async fn llm_config_test_connection(
+    ctx: State<'_, Arc<EngineCtx>>,
     id: String,
-    pool: State<'_, DbPool>,
-    secrets: State<'_, KeyringSecretStore>,
 ) -> Result<(), AppError> {
-    service::test_connection(&pool, secrets.inner(), id).await
+    egosync_engine::commands::llm_config::llm_config_test_connection(&ctx, id).await
 }
 
 #[tauri::command]
 pub async fn llm_config_list_models(
+    ctx: State<'_, Arc<EngineCtx>>,
     id: String,
-    pool: State<'_, DbPool>,
-    secrets: State<'_, KeyringSecretStore>,
 ) -> Result<Vec<String>, AppError> {
-    service::list_models(&pool, secrets.inner(), id).await
+    egosync_engine::commands::llm_config::llm_config_list_models(&ctx, id).await
 }
 
 #[tauri::command]
@@ -106,5 +69,11 @@ pub async fn llm_config_list_models_by_params(
     api_key: String,
     network_location: NetworkLocation,
 ) -> Result<Vec<String>, AppError> {
-    service::list_models_by_params(&provider, &base_url, &api_key, &network_location).await
+    egosync_engine::commands::llm_config::llm_config_list_models_by_params(
+        provider,
+        base_url,
+        api_key,
+        network_location,
+    )
+    .await
 }

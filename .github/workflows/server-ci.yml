@@ -1,0 +1,63 @@
+# Story 15.4 server crate CI：cargo test + 工件新鲜度 + 无旁路守门
+name: server-ci
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - server/**
+      - crates/egosync-engine/**
+      - .github/workflows/server-ci.yml
+  pull_request:
+    paths:
+      - server/**
+      - crates/egosync-engine/**
+      - .github/workflows/server-ci.yml
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  server-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            server
+            crates/egosync-engine
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsqlite3-dev
+
+      - name: Run server tests（I/O 矩阵 + 对等断言）
+        working-directory: server
+        run: cargo test
+
+      - name: Regenerate commands artifact（新鲜度零漂移）
+        working-directory: server
+        run: |
+          cargo run --features gen --bin gen_commands
+          git diff --exit-code crates/egosync-engine/commands.json
+          git diff --exit-code server/src/dispatch_gen.rs
+
+      - name: No dev auth bypass（无免认证旁路）
+        run: |
+          ! grep -rn 'EGOSYNC_DEV_NO_AUTH\|DEV_NO_AUTH' server/ egosync-app/src/ egosync-app/src-tauri/src/ crates/ || \
+            { echo "存在 dev 免认证旁路"; exit 1; }
+
+      - name: Engine has no tauri references（宿主解耦守门）
+        run: |
+          ! grep -rn 'tauri::' crates/egosync-engine/src/ || \
+            { echo "engine 源码出现 tauri:: 引用"; exit 1; }

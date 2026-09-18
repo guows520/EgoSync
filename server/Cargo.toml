@@ -1,0 +1,58 @@
+[package]
+name = "egosync-server"
+version = "0.1.0"
+edition = "2021"
+description = "EgoSync 云端自托管 server binary：web-ok 命令全量路由 + SSE 广播 + 单用户令牌认证（Epic 15/16 前置）"
+
+[lib]
+name = "egosync_server"
+path = "src/lib.rs"
+
+[dependencies]
+axum = { version = "0.8", features = ["json"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time", "net", "sync"] }
+egosync-engine = { path = "../crates/egosync-engine" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tower-http = { version = "0.6", features = ["catch-panic"] }
+argon2 = { version = "0.5", features = ["std"] }
+subtle = "2"
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
+dirs = "5"
+tokio-util = "0.7"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+
+[dev-dependencies]
+tempfile = "3"
+futures-util = "0.3"
+reqwest = { version = "0.12", features = ["json"] }
+http-body-util = "0.1"
+
+[features]
+default = []
+# gen_commands 生成器（Story 15.4 工件机械导出）：syn/quote 源码扫描为
+# 构建期专用依赖，运行时 server 不携带。
+gen = ["dep:syn", "dep:quote"]
+
+[dependencies.syn]
+version = "2"
+features = ["full", "parsing", "printing"]
+optional = true
+
+[dependencies.quote]
+version = "1"
+optional = true
+
+[[bin]]
+name = "gen_commands"
+path = "src/bin/gen_commands.rs"
+required-features = ["gen"]
+
+[[bin]]
+name = "egosync-server"
+path = "src/main.rs"

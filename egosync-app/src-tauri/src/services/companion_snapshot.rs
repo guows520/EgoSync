@@ -887,6 +887,58 @@ mod tests {
         out
     }
 
+    /// 从命令源码提取事件常量标识符（`*_EVENT` 词元——覆盖 `use` 裸名与
+    /// `crate::events::` 前缀两种引用形态），并经 engine events.rs 的
+    /// `pub const NAME: &str = "value"` 声明解析为事件名值。
+    /// Story 15.4：命令层整体迁引擎且全部经常量发射（零字面量），
+    /// 扫描目标随发射源迁至引擎命令文件，常量解析替代字面量提取。
+    fn extract_event_constant_values<'a>(src: &str, events_rs: &'a str) -> Vec<&'a str> {
+        // 常量名 → 值 表（engine events.rs 事实源）
+        let mut table: Vec<(&str, &str)> = Vec::new();
+        for line in events_rs.lines() {
+            let line = line.trim();
+            let Some(rest) = line.strip_prefix("pub const ") else {
+                continue;
+            };
+            let Some((name, rest)) = rest.split_once(':') else {
+                continue;
+            };
+            if !rest.contains("&str") {
+                continue;
+            }
+            let Some(open) = rest.find('"') else { continue };
+            let value = &rest[open + 1..];
+            let Some(close) = value.find('"') else { continue };
+            table.push((name.trim(), &value[..close]));
+        }
+
+        // 词元扫描：连续 [A-Z0-9_] 且以 _EVENT 结尾；命中即查表取值。
+        // （词元为瞬态缓冲，仅表值（借自 events_rs）出栈。）
+        let mut out: Vec<&'a str> = Vec::new();
+        let mut token = String::new();
+        let flush = |token: &mut String, out: &mut Vec<&'a str>| {
+            if token.ends_with("_EVENT") {
+                let Some((_, value)) = table.iter().find(|(name, _)| *name == token.as_str())
+                else {
+                    panic!("命令源码引用了 events.rs 未声明的事件常量: {}", token);
+                };
+                if !out.contains(value) {
+                    out.push(value);
+                }
+            }
+            token.clear();
+        };
+        for ch in src.chars() {
+            if ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '_' {
+                token.push(ch);
+            } else {
+                flush(&mut token, &mut out);
+            }
+        }
+        flush(&mut token, &mut out);
+        out
+    }
+
     #[test]
     fn write_signal_events_cover_command_layer_emitters() {
         // WHY: 命令层 emit 与引擎订阅清单是两处独立维护的字符串集合，
@@ -895,21 +947,31 @@ mod tests {
         // （评审 B16/P7）：命令文件中出现的每个事件名字面量必须被订阅
         // 或显式豁免。触发验证：在命令层新增 emit("xxx:yyy") 而不订阅，
         // 本测试即失败。
-        const COMMAND_SOURCES: &[&str] = &[
-            include_str!("../commands/role.rs"),
-            include_str!("../commands/task.rs"),
-            include_str!("../commands/chat.rs"),
-            include_str!("../commands/notification.rs"),
-            include_str!("../commands/task_decomposition.rs"),
-            include_str!("../commands/data.rs"),
+        // Story 15.4：命令体迁引擎（crate::commands/* 薄化为 wrapper），
+        // 扫描目标随发射源指向引擎命令文件；发射全经 engine events 常量，
+        // 提取器升级为常量解析（沿 15.2/15.3 钉子先例的机械化推广）。
+        const ENGINE_COMMAND_SOURCES: &[&str] = &[
+            include_str!("../../../../crates/egosync-engine/src/commands/role.rs"),
+            include_str!("../../../../crates/egosync-engine/src/commands/task.rs"),
+            include_str!("../../../../crates/egosync-engine/src/commands/chat.rs"),
+            include_str!("../../../../crates/egosync-engine/src/commands/notification.rs"),
+            include_str!("../../../../crates/egosync-engine/src/commands/task_decomposition.rs"),
+            include_str!("../../../../crates/egosync-engine/src/commands/data.rs"),
         ];
+        const EVENTS_RS: &str =
+            include_str!("../../../../crates/egosync-engine/src/events.rs");
         // 豁免：llm:stream 由 register_write_signal_listeners 特判订阅
         // （仅 done=true 转发），不走 WRITE_SIGNAL_EVENTS 清单。
         const EXEMPT: &[&str] = &["llm:stream"];
 
         let mut emitted: Vec<&str> = Vec::new();
-        for src in COMMAND_SOURCES {
+        for src in ENGINE_COMMAND_SOURCES {
             for name in extract_event_names(src) {
+                if !emitted.contains(&name) {
+                    emitted.push(name);
+                }
+            }
+            for name in extract_event_constant_values(src, EVENTS_RS) {
                 if !emitted.contains(&name) {
                     emitted.push(name);
                 }

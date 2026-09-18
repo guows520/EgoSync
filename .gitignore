@@ -60,6 +60,8 @@ crates/companion-proto/target/
 crates/egosync-engine/target/
 # relay-server 本地构建产物（独立 Cargo 项目，同上隔离）
 relay-server/target/
+# egosync-server 本地构建产物（Story 15.4，独立 Cargo 项目同上隔离）
+server/target/
 # noise-java 互验 harness 运行时产物（jar 与 class 文件）
 crates/companion-proto/interop/noise-java/lib/
 crates/companion-proto/interop/noise-java/classes/

@@ -1,0 +1,256 @@
+//! role 域命令体（Story 15.4 自壳 `commands/role.rs` 平移，业务逻辑零改动；
+//! State/AppHandle 取值改 `&EngineCtx`，emit 改总线+events 常量
+//! （15.4 收编：字面量事件名随命令体入 engine 常量化）；内联测试随迁）。
+
+use crate::commands::ctx::EngineCtx;
+use crate::db::pool::DbPool;
+use crate::db::roles;
+use crate::error::AppError;
+use crate::events::{
+    ROLE_ARCHIVED_EVENT, ROLE_CREATED_EVENT, ROLE_DELETED_EVENT, ROLE_RESTORED_EVENT,
+    ROLE_UPDATED_EVENT,
+};
+use crate::models::role::{
+    CreateRoleInput, Role, UpdateRoleInput, UpdateRoleProactivityInput, UpdateRoleSkillsInput,
+};
+use crate::services::agent_config::AgentConfigService;
+
+const MIN_ACTIVE_ROLE_ERROR: &str = "至少保留一个角色";
+
+/// Story 13.1：命令层补发写事件（快照引擎订阅触发 STATE_DELTA；payload
+/// 沿用域对象供前端自由消费——引擎只看事件名不看 payload）。
+/// Story 15.4：发射改经注入的 EngineEvents 总线 + engine events 常量
+/// （事件名值不变；强类型 payload 机械改写为 serde_json::to_value）。
+fn emit_role_event(bus: &dyn crate::services::event_bus::EngineEvents, event: &str, payload: &impl serde::Serialize) {
+    if let Err(e) = serde_json::to_value(payload)
+        .map_err(|e| e.to_string())
+        .and_then(|payload| bus.emit(event, payload))
+    {
+        tracing::warn!(event = event, error = %e, "role 写事件发射失败");
+    }
+}
+
+/// Best-effort sync to opencode.json — warn on failure, never block CRUD.
+fn sync_warn(result: Result<(), AppError>, action: &str) {
+    if let Err(e) = result {
+        tracing::warn!("opencode sync ({}) failed: {}", action, e);
+    }
+}
+
+async fn registry_for_sync(pool: &DbPool) -> Vec<crate::models::skill::SkillRegistryEntry> {
+    match crate::db::skills::list_skills(pool).await {
+        Ok(registry) => registry,
+        Err(e) => {
+            // P6: registry 加载失败会导致该角色已启用的自定义 Skill 无法注入 opencode 配置
+            //（虽 best-effort 不阻断 CRUD，但属配置不完整），升级为 error 级别便于排查。
+            tracing::error!(
+                "load skill registry for opencode sync failed: {}; 角色自定义 Skill 同步可能不完整",
+                e
+            );
+            Vec::new()
+        }
+    }
+}
+
+pub async fn role_create(ctx: &EngineCtx, input: CreateRoleInput) -> Result<Role, AppError> {
+    let (pool, agent_config): (&DbPool, &AgentConfigService) = (&ctx.pool, &ctx.agent_config);
+    validate_role_name(input.name.as_str())?;
+    let mut role = roles::create_role(pool, &input).await?;
+    let all_role_skill_ids = crate::db::skill_bindings::all_role_skill_ids(pool)
+        .await
+        .unwrap_or_default();
+    if !all_role_skill_ids.is_empty() {
+        let input = UpdateRoleSkillsInput {
+            find_skills: crate::services::role_config::skill_enabled(
+                &role.skills_config,
+                crate::services::role_config::FIND_SKILLS_KEY,
+            ),
+            skill_creator: crate::services::role_config::skill_enabled(
+                &role.skills_config,
+                crate::services::role_config::SKILL_CREATOR_KEY,
+            ),
+            enabled_skill_ids: Some(all_role_skill_ids),
+        };
+        role = roles::update_role_skills(pool, &role.id, &input).await?;
+    }
+    let registry = registry_for_sync(pool).await;
+    sync_warn(
+        crate::services::mcp_server::sync_role_agent_with_mcp(pool, agent_config, &role, &registry).await,
+        "create",
+    );
+    emit_role_event(&*ctx.bus, ROLE_CREATED_EVENT, &role);
+    Ok(role)
+}
+
+pub async fn role_list(ctx: &EngineCtx) -> Result<Vec<Role>, AppError> {
+    roles::list_active_roles(&ctx.pool).await
+}
+
+pub async fn role_list_archived(ctx: &EngineCtx) -> Result<Vec<Role>, AppError> {
+    roles::list_archived_roles(&ctx.pool).await
+}
+
+pub async fn role_update(
+    ctx: &EngineCtx,
+    id: String,
+    input: UpdateRoleInput,
+) -> Result<Role, AppError> {
+    if let Some(name) = input.name.as_deref() {
+        validate_role_name(name)?;
+    }
+
+    let role = roles::update_role(&ctx.pool, &id, &input).await?;
+    let registry = registry_for_sync(&ctx.pool).await;
+    sync_warn(
+        crate::services::mcp_server::sync_role_agent_with_mcp(&ctx.pool, &ctx.agent_config, &role, &registry).await,
+        "update",
+    );
+    emit_role_event(&*ctx.bus, ROLE_UPDATED_EVENT, &role);
+    Ok(role)
+}
+
+pub async fn role_update_skills(
+    ctx: &EngineCtx,
+    id: String,
+    input: UpdateRoleSkillsInput,
+) -> Result<Role, AppError> {
+    let role = roles::update_role_skills(&ctx.pool, &id, &input).await?;
+    let registry = registry_for_sync(&ctx.pool).await;
+    sync_warn(
+        crate::services::mcp_server::sync_role_agent_with_mcp(&ctx.pool, &ctx.agent_config, &role, &registry).await,
+        "update_skills",
+    );
+    emit_role_event(&*ctx.bus, ROLE_UPDATED_EVENT, &role);
+    Ok(role)
+}
+
+pub async fn role_update_proactivity(
+    ctx: &EngineCtx,
+    id: String,
+    input: UpdateRoleProactivityInput,
+) -> Result<Role, AppError> {
+    let role = roles::update_role_proactivity(&ctx.pool, &id, &input).await?;
+    let registry = registry_for_sync(&ctx.pool).await;
+    sync_warn(
+        crate::services::mcp_server::sync_role_agent_with_mcp(&ctx.pool, &ctx.agent_config, &role, &registry).await,
+        "update_proactivity",
+    );
+    emit_role_event(&*ctx.bus, ROLE_UPDATED_EVENT, &role);
+    Ok(role)
+}
+
+pub async fn role_archive(ctx: &EngineCtx, id: String) -> Result<Role, AppError> {
+    ensure_can_remove_active_role(&ctx.pool).await?;
+    let role = roles::archive_role(&ctx.pool, &id).await?;
+    sync_warn(ctx.agent_config.sync_role_archived(&role.id), "archive");
+    emit_role_event(&*ctx.bus, ROLE_ARCHIVED_EVENT, &role);
+    Ok(role)
+}
+
+pub async fn role_restore(ctx: &EngineCtx, id: String) -> Result<Role, AppError> {
+    let role = roles::restore_role(&ctx.pool, &id).await?;
+    let registry = registry_for_sync(&ctx.pool).await;
+    sync_warn(
+        crate::services::mcp_server::sync_role_agent_with_mcp(&ctx.pool, &ctx.agent_config, &role, &registry).await,
+        "restore",
+    );
+    emit_role_event(&*ctx.bus, ROLE_RESTORED_EVENT, &role);
+    Ok(role)
+}
+
+pub async fn role_delete(ctx: &EngineCtx, id: String) -> Result<(), AppError> {
+    let role = roles::get_role(&ctx.pool, &id).await?;
+    if role.status == "active" {
+        ensure_can_remove_active_role(&ctx.pool).await?;
+    }
+
+    roles::delete_role(&ctx.pool, &ctx.conv_pool, &id).await?;
+    sync_warn(ctx.agent_config.sync_role_deleted(&id), "delete");
+    emit_role_event(&*ctx.bus, ROLE_DELETED_EVENT, &role);
+    Ok(())
+}
+
+fn validate_role_name(name: &str) -> Result<(), AppError> {
+    if name.trim().is_empty() {
+        return Err(AppError::ValidationError("角色名称不能为空".to_string()));
+    }
+    Ok(())
+}
+
+async fn ensure_can_remove_active_role(pool: &DbPool) -> Result<(), AppError> {
+    let active_count = roles::count_active_roles(pool).await?;
+    if active_count <= 1 {
+        return Err(AppError::ValidationError(MIN_ACTIVE_ROLE_ERROR.to_string()));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    async fn setup_role_command_test_db(active_count: usize) -> DbPool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("failed to create test db");
+
+        sqlx::query(
+            "CREATE TABLE roles (
+                id TEXT PRIMARY KEY NOT NULL,
+                name TEXT NOT NULL,
+                icon TEXT NOT NULL DEFAULT 'target',
+                color TEXT NOT NULL DEFAULT '#4F46E5',
+                goal TEXT NOT NULL DEFAULT '',
+                personality_prompt TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'active',
+                energy INTEGER NOT NULL DEFAULT 100,
+                energy_updated_at TEXT,
+                skills_config TEXT NOT NULL DEFAULT '{}',
+                proactivity_level TEXT NOT NULL DEFAULT 'moderate',
+                archived_at TEXT,
+                created_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00Z',
+                updated_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00Z'
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("failed to create roles table");
+
+        for index in 0..active_count {
+            sqlx::query("INSERT INTO roles (id, name) VALUES (?1, ?2)")
+                .bind(format!("role-{}", index))
+                .bind(format!("角色 {}", index))
+                .execute(&pool)
+                .await
+                .expect("failed to insert active role");
+        }
+
+        pool
+    }
+
+    #[test]
+    fn validate_role_name_rejects_blank_name() {
+        let result = validate_role_name("  ");
+        assert!(
+            matches!(result, Err(AppError::ValidationError(message)) if message == "角色名称不能为空")
+        );
+    }
+
+    #[tokio::test]
+    async fn ensure_can_remove_active_role_rejects_last_active_role() {
+        let pool = setup_role_command_test_db(1).await;
+        let result = ensure_can_remove_active_role(&pool).await;
+        assert!(
+            matches!(result, Err(AppError::ValidationError(message)) if message == MIN_ACTIVE_ROLE_ERROR)
+        );
+    }
+
+    #[tokio::test]
+    async fn ensure_can_remove_active_role_allows_when_multiple_active_roles_exist() {
+        let pool = setup_role_command_test_db(2).await;
+        ensure_can_remove_active_role(&pool).await.unwrap();
+    }
+}

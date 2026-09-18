@@ -1,0 +1,2114 @@
+{
+  "commands": [
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "app",
+      "name": "app_complete_onboarding",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "app",
+      "name": "app_get_butler_skills",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "app",
+      "name": "app_get_setting",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "key",
+          "kind": "client",
+          "name": "key",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "app",
+      "name": "app_is_first_launch",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "app",
+      "name": "app_is_llm_configured",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "app",
+      "name": "app_performance_snapshot",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "app",
+      "name": "app_set_setting",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "key",
+          "kind": "client",
+          "name": "key",
+          "type": "String"
+        },
+        {
+          "camelName": "value",
+          "kind": "client",
+          "name": "value",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "app",
+      "name": "app_sidecar_status",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "app",
+      "name": "app_update_butler_skills",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "input",
+          "kind": "client",
+          "name": "input",
+          "type": "egosync_engine::models::role::UpdateRoleSkillsInput"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "briefing",
+      "name": "briefing_generate_now",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "briefing",
+      "name": "briefing_get_latest",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "chat",
+      "name": "chat_delete_conversation",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "conversationId",
+          "kind": "client",
+          "name": "conversation_id",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "chat",
+      "name": "chat_get_butler_conversation",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "chat",
+      "name": "chat_get_conversation",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "conversationId",
+          "kind": "client",
+          "name": "conversation_id",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "chat",
+      "name": "chat_get_history",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "conversationId",
+          "kind": "client",
+          "name": "conversation_id",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "chat",
+      "name": "chat_get_message_process_events",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "messageId",
+          "kind": "client",
+          "name": "message_id",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "chat",
+      "name": "chat_get_role_conversation",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "roleId",
+          "kind": "client",
+          "name": "role_id",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "chat",
+      "name": "chat_list_conversations",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "roleId",
+          "kind": "client",
+          "name": "role_id",
+          "type": "Option<String>"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "chat",
+      "name": "chat_new_conversation",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "oldConversationId",
+          "kind": "client",
+          "name": "old_conversation_id",
+          "type": "Option<String>"
+        },
+        {
+          "camelName": "roleId",
+          "kind": "client",
+          "name": "role_id",
+          "type": "Option<String>"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "chat",
+      "name": "chat_send_message",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "request",
+          "kind": "client",
+          "name": "request",
+          "type": "egosync_engine::models::chat::ChatRequest"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "chat",
+      "name": "chat_stop_streaming",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "conversationId",
+          "kind": "client",
+          "name": "conversation_id",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "dashboard",
+      "name": "dashboard_get_metrics",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "query",
+          "kind": "client",
+          "name": "query",
+          "type": "egosync_engine::models::dashboard::DashboardMetricsQuery"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "dashboard",
+      "name": "dashboard_get_status",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "data",
+      "name": "data_destroy",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "llm_config",
+      "name": "llm_config_create",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "input",
+          "kind": "client",
+          "name": "input",
+          "type": "egosync_engine::models::settings::CreateLlmConfigInput"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "llm_config",
+      "name": "llm_config_delete",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "id",
+          "kind": "client",
+          "name": "id",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "llm_config",
+      "name": "llm_config_list",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "llm_config",
+      "name": "llm_config_list_models",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "id",
+          "kind": "client",
+          "name": "id",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": false,
+      "module": "llm_config",
+      "name": "llm_config_list_models_by_params",
+      "params": [
+        {
+          "camelName": "provider",
+          "kind": "client",
+          "name": "provider",
+          "type": "String"
+        },
+        {
+          "camelName": "baseUrl",
+          "kind": "client",
+          "name": "base_url",
+          "type": "String"
+        },
+        {
+          "camelName": "apiKey",
+          "kind": "client",
+          "name": "api_key",
+          "type": "String"
+        },
+        {
+          "camelName": "networkLocation",
+          "kind": "client",
+          "name": "network_location",
+          "type": "egosync_engine::models::settings::NetworkLocation"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "llm_config",
+      "name": "llm_config_set_default",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "id",
+          "kind": "client",
+          "name": "id",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "llm_config",
+      "name": "llm_config_test_connection",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "id",
+          "kind": "client",
+          "name": "id",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "llm_config",
+      "name": "llm_config_update",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "id",
+          "kind": "client",
+          "name": "id",
+          "type": "String"
+        },
+        {
+          "camelName": "input",
+          "kind": "client",
+          "name": "input",
+          "type": "egosync_engine::models::settings::UpdateLlmConfigInput"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "mcp",
+      "name": "mcp_server_add_to_butler",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "serverId",
+          "kind": "client",
+          "name": "server_id",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "mcp",
+      "name": "mcp_server_add_to_role",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "roleId",
+          "kind": "client",
+          "name": "role_id",
+          "type": "String"
+        },
+        {
+          "camelName": "serverId",
+          "kind": "client",
+          "name": "server_id",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "mcp",
+      "name": "mcp_server_create",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "input",
+          "kind": "client",
+          "name": "input",
+          "type": "egosync_engine::models::mcp::CreateMcpServerInput"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "mcp",
+      "name": "mcp_server_delete",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "id",
+          "kind": "client",
+          "name": "id",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "mcp",
+      "name": "mcp_server_list",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "mcp",
+      "name": "mcp_server_list_available_for_butler",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "mcp",
+      "name": "mcp_server_list_available_for_role",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "roleId",
+          "kind": "client",
+          "name": "role_id",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "mcp",
+      "name": "mcp_server_list_for_butler",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "mcp",
+      "name": "mcp_server_list_for_role",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "roleId",
+          "kind": "client",
+          "name": "role_id",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "mcp",
+      "name": "mcp_server_refresh_butler_runtime",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "mcp",
+      "name": "mcp_server_remove_from_butler",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "serverId",
+          "kind": "client",
+          "name": "server_id",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "mcp",
+      "name": "mcp_server_remove_from_role",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "roleId",
+          "kind": "client",
+          "name": "role_id",
+          "type": "String"
+        },
+        {
+          "camelName": "serverId",
+          "kind": "client",
+          "name": "server_id",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "mcp",
+      "name": "mcp_server_test",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "id",
+          "kind": "client",
+          "name": "id",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "mcp",
+      "name": "mcp_server_update",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "id",
+          "kind": "client",
+          "name": "id",
+          "type": "String"
+        },
+        {
+          "camelName": "input",
+          "kind": "client",
+          "name": "input",
+          "type": "egosync_engine::models::mcp::UpdateMcpServerInput"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "memory",
+      "name": "memory_count",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "roleId",
+          "kind": "client",
+          "name": "role_id",
+          "type": "Option<String>"
+        },
+        {
+          "camelName": "includeRoleMemories",
+          "kind": "client",
+          "name": "include_role_memories",
+          "type": "Option<bool>"
+        },
+        {
+          "camelName": "category",
+          "kind": "client",
+          "name": "category",
+          "type": "Option<String>"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "memory",
+      "name": "memory_delete",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "memoryId",
+          "kind": "client",
+          "name": "memory_id",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "memory",
+      "name": "memory_get_source_messages",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "memoryId",
+          "kind": "client",
+          "name": "memory_id",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "memory",
+      "name": "memory_list",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "roleId",
+          "kind": "client",
+          "name": "role_id",
+          "type": "Option<String>"
+        },
+        {
+          "camelName": "category",
+          "kind": "client",
+          "name": "category",
+          "type": "Option<String>"
+        },
+        {
+          "camelName": "limit",
+          "kind": "client",
+          "name": "limit",
+          "type": "Option<i64>"
+        },
+        {
+          "camelName": "offset",
+          "kind": "client",
+          "name": "offset",
+          "type": "Option<i64>"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "memory",
+      "name": "memory_list_all",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "category",
+          "kind": "client",
+          "name": "category",
+          "type": "Option<String>"
+        },
+        {
+          "camelName": "limit",
+          "kind": "client",
+          "name": "limit",
+          "type": "Option<i64>"
+        },
+        {
+          "camelName": "offset",
+          "kind": "client",
+          "name": "offset",
+          "type": "Option<i64>"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "mission",
+      "name": "mission_get",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "mission",
+      "name": "mission_infer",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "mission",
+      "name": "mission_infer_eligibility",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "mission",
+      "name": "mission_update",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "content",
+          "kind": "client",
+          "name": "content",
+          "type": "Option<String>"
+        },
+        {
+          "camelName": "format",
+          "kind": "client",
+          "name": "format",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "notification",
+      "name": "notification_count_unread",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "notification",
+      "name": "notification_create",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "input",
+          "kind": "client",
+          "name": "input",
+          "type": "egosync_engine::models::notification::CreateNotificationInput"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "notification",
+      "name": "notification_list",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "notification",
+      "name": "notification_mark_read",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "id",
+          "kind": "client",
+          "name": "id",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "review",
+      "name": "review_generate_now",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "review",
+      "name": "review_get_bigrock_suggestions",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "review",
+      "name": "review_get_by_week",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "weekStart",
+          "kind": "client",
+          "name": "week_start",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "review",
+      "name": "review_get_latest",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "review",
+      "name": "review_plan_bigrocks",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "items",
+          "kind": "client",
+          "name": "items",
+          "type": "Vec<egosync_engine::commands::review::BigRockPlanItem>"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "role",
+      "name": "role_archive",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "id",
+          "kind": "client",
+          "name": "id",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "role",
+      "name": "role_create",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "input",
+          "kind": "client",
+          "name": "input",
+          "type": "egosync_engine::models::role::CreateRoleInput"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "role",
+      "name": "role_delete",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "id",
+          "kind": "client",
+          "name": "id",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "role",
+      "name": "role_list",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "role",
+      "name": "role_list_archived",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "role",
+      "name": "role_restore",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "id",
+          "kind": "client",
+          "name": "id",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "role",
+      "name": "role_update",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "id",
+          "kind": "client",
+          "name": "id",
+          "type": "String"
+        },
+        {
+          "camelName": "input",
+          "kind": "client",
+          "name": "input",
+          "type": "egosync_engine::models::role::UpdateRoleInput"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "role",
+      "name": "role_update_proactivity",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "id",
+          "kind": "client",
+          "name": "id",
+          "type": "String"
+        },
+        {
+          "camelName": "input",
+          "kind": "client",
+          "name": "input",
+          "type": "egosync_engine::models::role::UpdateRoleProactivityInput"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "role",
+      "name": "role_update_skills",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "id",
+          "kind": "client",
+          "name": "id",
+          "type": "String"
+        },
+        {
+          "camelName": "input",
+          "kind": "client",
+          "name": "input",
+          "type": "egosync_engine::models::role::UpdateRoleSkillsInput"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "scheduler",
+      "name": "scheduler_get_times",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "scheduler",
+      "name": "scheduler_set_times",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "moderate",
+          "kind": "client",
+          "name": "moderate",
+          "type": "Vec<String>"
+        },
+        {
+          "camelName": "proactive",
+          "kind": "client",
+          "name": "proactive",
+          "type": "Vec<String>"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "secret",
+      "name": "secret_store_delete",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "key",
+          "kind": "client",
+          "name": "key",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "secret",
+      "name": "secret_store_load",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "key",
+          "kind": "client",
+          "name": "key",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "secret",
+      "name": "secret_store_save",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "key",
+          "kind": "client",
+          "name": "key",
+          "type": "String"
+        },
+        {
+          "camelName": "value",
+          "kind": "client",
+          "name": "value",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "settings",
+      "name": "settings_get_schedule",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "settings",
+      "name": "settings_update_schedule",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "briefingTime",
+          "kind": "client",
+          "name": "briefing_time",
+          "type": "Option<String>"
+        },
+        {
+          "camelName": "reviewDay",
+          "kind": "client",
+          "name": "review_day",
+          "type": "Option<String>"
+        },
+        {
+          "camelName": "reviewTime",
+          "kind": "client",
+          "name": "review_time",
+          "type": "Option<String>"
+        },
+        {
+          "camelName": "bigrockReminderDay",
+          "kind": "client",
+          "name": "bigrock_reminder_day",
+          "type": "Option<String>"
+        },
+        {
+          "camelName": "bigrockReminderTime",
+          "kind": "client",
+          "name": "bigrock_reminder_time",
+          "type": "Option<String>"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "skill",
+      "name": "skill_delete",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "skillId",
+          "kind": "client",
+          "name": "skill_id",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "skill",
+      "name": "skill_discover_opencode",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "roleId",
+          "kind": "client",
+          "name": "role_id",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "skill",
+      "name": "skill_import_custom",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "input",
+          "kind": "client",
+          "name": "input",
+          "type": "egosync_engine::models::skill::ImportCustomSkillInput"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "skill",
+      "name": "skill_import_opencode",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "roleId",
+          "kind": "client",
+          "name": "role_id",
+          "type": "String"
+        },
+        {
+          "camelName": "input",
+          "kind": "client",
+          "name": "input",
+          "type": "egosync_engine::models::skill::ImportOpencodeSkillInput"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "skill",
+      "name": "skill_list_all_role_skills",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "skill",
+      "name": "skill_list_for_role",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "roleId",
+          "kind": "client",
+          "name": "role_id",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "skill",
+      "name": "skill_list_registry",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "skill",
+      "name": "skill_list_selectable_for_scope",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "roleId",
+          "kind": "client",
+          "name": "role_id",
+          "type": "Option<String>"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "skill",
+      "name": "skill_preview_custom",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "input",
+          "kind": "client",
+          "name": "input",
+          "type": "egosync_engine::models::skill::PreviewCustomSkillInput"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "skill",
+      "name": "skill_remove_from_role",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "skillId",
+          "kind": "client",
+          "name": "skill_id",
+          "type": "String"
+        },
+        {
+          "camelName": "roleId",
+          "kind": "client",
+          "name": "role_id",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "suggestion",
+      "name": "suggestion_confirm",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "id",
+          "kind": "client",
+          "name": "id",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "suggestion",
+      "name": "suggestion_list_pending",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "conversationId",
+          "kind": "client",
+          "name": "conversation_id",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "suggestion",
+      "name": "suggestion_reject",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "id",
+          "kind": "client",
+          "name": "id",
+          "type": "String"
+        },
+        {
+          "camelName": "reason",
+          "kind": "client",
+          "name": "reason",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "task",
+      "name": "task_check_protection_status",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "task",
+      "name": "task_check_q2_reminders",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "task",
+      "name": "task_create",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "input",
+          "kind": "client",
+          "name": "input",
+          "type": "egosync_engine::models::task::CreateTaskInput"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "task_decomposition",
+      "name": "task_decomposition_accept",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "id",
+          "kind": "client",
+          "name": "id",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "task_decomposition",
+      "name": "task_decomposition_keep_single",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "id",
+          "kind": "client",
+          "name": "id",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "task_decomposition",
+      "name": "task_decomposition_list_pending",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "conversationId",
+          "kind": "client",
+          "name": "conversation_id",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "task",
+      "name": "task_delete",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "id",
+          "kind": "client",
+          "name": "id",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "task",
+      "name": "task_list_all",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "quadrant",
+          "kind": "client",
+          "name": "quadrant",
+          "type": "Option<String>"
+        },
+        {
+          "camelName": "isBigRock",
+          "kind": "client",
+          "name": "is_big_rock",
+          "type": "Option<bool>"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "task",
+      "name": "task_list_butler",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "task",
+      "name": "task_list_by_role",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "roleId",
+          "kind": "client",
+          "name": "role_id",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "task",
+      "name": "task_reorder",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "taskIds",
+          "kind": "client",
+          "name": "task_ids",
+          "type": "Vec<String>"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "task",
+      "name": "task_toggle_complete",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "taskId",
+          "kind": "client",
+          "name": "task_id",
+          "type": "String"
+        },
+        {
+          "camelName": "isCompleted",
+          "kind": "client",
+          "name": "is_completed",
+          "type": "bool"
+        }
+      ]
+    },
+    {
+      "capability": "web-ok",
+      "ctxInjected": true,
+      "module": "task",
+      "name": "task_update",
+      "params": [
+        {
+          "camelName": "ctx",
+          "kind": "ctx-injected",
+          "name": "ctx",
+          "type": "&EngineCtx"
+        },
+        {
+          "camelName": "id",
+          "kind": "client",
+          "name": "id",
+          "type": "String"
+        },
+        {
+          "camelName": "input",
+          "kind": "client",
+          "name": "input",
+          "type": "egosync_engine::models::task::UpdateTaskInput"
+        }
+      ]
+    }
+  ],
+  "count": 106,
+  "version": 1
+}

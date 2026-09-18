@@ -16,6 +16,8 @@ pub mod event_router;
 pub mod llm_config;
 pub mod mcp_server;
 pub mod memory_query;
+// Story 15.4：随 chat / task_decomposition 命令体入 engine（密钥经 SecretStore 接缝注入）
+pub mod memory_pipeline;
 pub mod mission_inferrer;
 pub mod notification_service;
 pub mod q2_protection_reminder;
@@ -29,4 +31,6 @@ pub mod skill_registry;
 pub mod suggestion_generator;
 pub mod task_classifier;
 pub mod task_deadline_watch;
+// Story 15.4：随 task_decomposition 命令体入 engine（密钥经 SecretStore 接缝注入）
+pub mod task_decomposition;
 pub mod task_protection_watch;

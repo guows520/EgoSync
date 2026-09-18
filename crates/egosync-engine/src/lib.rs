@@ -9,8 +9,13 @@
 //!
 //! 事件名常量统一收编于 `events`（Story 15.2）。
 //!
+//! Story 15.4：`commands` 模块收编 web-ok 命令体（首参 `&EngineCtx`），
+//! `capabilities` 为 desktop-only / perf-test 门控名单事实源。
+//!
 //! 物理约束（CI 断言兜底）：本 crate 不得声明 tauri 与 keyring 依赖。
 
+pub mod capabilities;
+pub mod commands;
 pub mod db;
 pub mod error;
 pub mod events;

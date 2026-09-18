@@ -8,6 +8,7 @@ use crate::error::AppError;
 use crate::llm::traits::{ChatCompletionMessage, ChatOptions, LlmProvider, StreamEvent};
 use crate::models::chat::Message;
 use crate::models::memory::{ExtractedMemory, Memory};
+use crate::services::secret_store::SecretStore;
 use serde::Deserialize;
 use tokio::sync::mpsc;
 use tokio::time::{timeout, Duration};
@@ -17,12 +18,18 @@ const MAX_EXTRACTION_RESPONSE_BYTES: usize = 128 * 1024;
 const MIN_COMPLETE_USER_MESSAGES: usize = 3;
 const ALLOWED_CATEGORIES: &[&str] = &["preference", "task_status", "cognition_update", "fact"];
 
+/// Story 15.4：随 chat 命令体入 engine（原壳 `services/memory_pipeline.rs`
+/// 逐字节平移）；密钥读取改经注入的 SecretStore 接缝（原 KeyringSecretStore
+/// 即席构造由调用方传入同款实现，值不变）。
 pub async fn extract_for_conversation(
     main_pool: DbPool,
     conv_pool: ConversationsPool,
+    secrets: Arc<dyn SecretStore>,
     conversation_id: String,
 ) -> Result<usize, AppError> {
-    match extract_for_conversation_inner(&main_pool, &conv_pool, &conversation_id).await {
+    match extract_for_conversation_inner(&main_pool, &conv_pool, secrets.as_ref(), &conversation_id)
+        .await
+    {
         Ok(count) => Ok(count),
         Err(err) => {
             tracing::warn!(conversation_id, error = %err, "memory extraction skipped");
@@ -34,15 +41,13 @@ pub async fn extract_for_conversation(
 async fn extract_for_conversation_inner(
     main_pool: &DbPool,
     conv_pool: &ConversationsPool,
+    secrets: &dyn SecretStore,
     conversation_id: &str,
 ) -> Result<usize, AppError> {
     // Story 15.3：agent_engine 迁引擎后其 resolve_default_provider 回引断链，
     // 改经 llm_config 模块直引（同一函数，值不变）。
-    let provider = crate::services::llm_config::resolve_default_provider(
-        main_pool,
-        &crate::services::secret_store_keyring::KeyringSecretStore::new(),
-    )
-    .await?;
+    let provider =
+        crate::services::llm_config::resolve_default_provider(main_pool, secrets).await?;
     extract_for_conversation_with_provider(main_pool, conv_pool, conversation_id, provider).await
 }
 
@@ -1288,42 +1293,57 @@ mod tests {
     use crate::models::chat::Message;
     use sqlx::sqlite::SqlitePoolOptions;
 
+    /// 密钥接缝测试替身：provider 不可用路径不触真实密钥库
+    /// （无 LLM 配置 → resolve_default_provider 失败 → 管线吞错返回 0）。
+    struct NoopSecretStore;
+    impl crate::services::secret_store::SecretStore for NoopSecretStore {
+        fn save_secret(&self, _key: &str, _value: &str) -> Result<(), AppError> {
+            Ok(())
+        }
+        fn load_secret(&self, _key: &str) -> Result<Option<String>, AppError> {
+            Ok(None)
+        }
+        fn delete_secret(&self, _key: &str) -> Result<(), AppError> {
+            Ok(())
+        }
+    }
+
     async fn setup_main_pool() -> DbPool {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect("sqlite::memory:")
             .await
             .expect("create main db");
-        sqlx::raw_sql(include_str!("../../../../crates/egosync-engine/migrations/001_initial_schema.sql"))
+        sqlx::raw_sql(include_str!("../../migrations/001_initial_schema.sql"))
             .execute(&pool)
             .await
             .expect("create settings schema");
-        sqlx::raw_sql(include_str!("../../../../crates/egosync-engine/migrations/003_roles.sql"))
+        sqlx::raw_sql(include_str!("../../migrations/003_roles.sql"))
             .execute(&pool)
             .await
             .expect("create roles schema");
-        sqlx::raw_sql(include_str!("../../../../crates/egosync-engine/migrations/019_energy_updated_at.sql"))
+        sqlx::raw_sql(include_str!("../../migrations/019_energy_updated_at.sql"))
             .execute(&pool)
             .await
             .expect("add energy_updated_at column");
-        sqlx::raw_sql(include_str!("../../../../crates/egosync-engine/migrations/004_memories.sql"))
+        sqlx::raw_sql(include_str!("../../migrations/004_memories.sql"))
             .execute(&pool)
             .await
             .expect("create memories schema");
         sqlx::raw_sql(include_str!(
-            "../../../../crates/egosync-engine/migrations/005_memory_role_scoped_dedupe.sql"
+            "../../migrations/005_memory_role_scoped_dedupe.sql"
         ))
         .execute(&pool)
         .await
         .expect("migrate memory dedupe index");
         sqlx::raw_sql(include_str!(
-            "../../../../crates/egosync-engine/migrations/006_memory_single_owner_dedupe.sql"
+            "../../migrations/006_memory_single_owner_dedupe.sql"
         ))
         .execute(&pool)
         .await
         .expect("migrate memory single-owner dedupe index");
         sqlx::raw_sql(include_str!(
-            "../../../../crates/egosync-engine/migrations/007_forgotten_memory_sources.sql"
+            "../../migrations/007_forgotten_memory_sources.sql"
         ))
         .execute(&pool)
         .await
@@ -1335,7 +1355,7 @@ mod tests {
         let pool = sqlx::SqlitePool::connect("sqlite::memory:")
             .await
             .expect("create conversations db");
-        sqlx::raw_sql(include_str!("../../../../crates/egosync-engine/migrations/002_conversations.sql"))
+        sqlx::raw_sql(include_str!("../../migrations/002_conversations.sql"))
             .execute(&pool)
             .await
             .expect("create conversations schema");
@@ -2838,9 +2858,10 @@ mod tests {
             .unwrap();
         }
 
-        let count = extract_for_conversation(main_pool, conv_pool, conv.id)
-            .await
-            .expect("pipeline failures are swallowed");
+        let count =
+            extract_for_conversation(main_pool, conv_pool, Arc::new(NoopSecretStore), conv.id)
+                .await
+                .expect("pipeline failures are swallowed");
 
         assert_eq!(count, 0);
     }

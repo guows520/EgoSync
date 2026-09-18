@@ -1,13 +1,18 @@
+//! data 域命令（Story 15.4）：data_destroy 命令体已迁引擎，壳侧薄化为
+//! wrapper（伴侣运行时状态回收留壳——CompanionState 为桌面宿主状态）。
+//! data_export / pick_import_file / data_import 为 desktop-only 留壳不迁
+//! （rfd 对话框交互链；云端走 /api/export、/api/import HTTP 流）。
+use std::sync::Arc;
+
 use std::path::Path;
 
+use egosync_engine::commands::ctx::EngineCtx;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::db::pool::{ConversationsPool, DbPool};
 use crate::error::AppError;
-use crate::services::data_export::{
-    destroy_all_data, export_all, ExportFormat, ExportResult, ImportResult, import_all,
-};
-use crate::services::secret_store_keyring::KeyringSecretStore;
+use crate::events::DATA_IMPORTED_EVENT;
+use crate::services::data_export::{export_all, import_all, ExportFormat, ExportResult, ImportResult};
 
 #[tauri::command]
 pub async fn data_export(
@@ -67,17 +72,13 @@ pub async fn data_export(
 #[tauri::command]
 pub async fn data_destroy(
     app_handle: AppHandle,
-    pool: State<'_, DbPool>,
-    conv_pool: State<'_, ConversationsPool>,
-    secrets: State<'_, KeyringSecretStore>,
+    ctx: State<'_, Arc<EngineCtx>>,
 ) -> Result<(), AppError> {
-    let app_data_dir = app_handle
-        .path()
-        .app_data_dir()
-        .map_err(|e| AppError::ValidationError(format!("获取应用数据目录失败: {}", e)))?;
-
-    // Story 15.1 接缝一：keyring 密钥删除经注入的桌面侧 SecretStore
-    destroy_all_data(&pool, &conv_pool, secrets.inner(), &app_data_dir).await?;
+    let pool = ctx.pool.clone();
+    // Story 15.4：命令主体（destroy_all_data）迁引擎经 ctx 注入路径执行；
+    // 伴侣运行时状态回收留壳（CompanionState 为桌面宿主状态，顺序保持——
+    // 销毁完成后回收）。
+    egosync_engine::commands::data::data_destroy(&ctx).await?;
 
     // 销毁后回收手机伴侣运行时状态（keyring 不可用时 state 未管理，跳过）：
     // 终止会话、清 pending/配对窗口、注销 NSD、删除静态密钥
@@ -113,8 +114,10 @@ pub async fn data_import(
     let result = import_all(&pool, &conv_pool, Path::new(&file_path)).await?;
     // Story 13.1（评审决策①）：整库导入替换全量数据，必须触发快照重建
     // （STATE_DELTA 载荷本就是全量替换，事件只作触发信号）。
-    if let Err(e) = app_handle.emit("data:imported", &result) {
-        tracing::warn!(event = "data:imported", error = %e, "data 写事件发射失败");
+    // Story 15.4：事件名改引 engine 常量（值不变）。
+    if let Err(e) = app_handle.emit(DATA_IMPORTED_EVENT, &result) {
+        tracing::warn!(event = DATA_IMPORTED_EVENT, error = %e, "data 写事件发射失败");
     }
     Ok(result)
 }
+

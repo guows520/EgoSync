@@ -1,255 +1,115 @@
+//! Story 15.4：命令体已迁引擎（`egosync_engine::commands::mcp`），
+//! 壳侧薄化为 wrapper（内联 source-scan 测试随命令体迁引擎并机械适配）。
 use std::sync::Arc;
 
+use egosync_engine::commands::ctx::EngineCtx;
 use tauri::State;
-use tokio::sync::Mutex;
 
-// Story 15.3：六组状态合并为单 Registry（mcp_scope_lock + opencode_sessions 经其字段取用）
-use crate::commands::chat::{ChatSessionRegistry, OpencodeSessions};
-use crate::db::pool::DbPool;
 use crate::error::AppError;
 use crate::models::mcp::{CreateMcpServerInput, McpServer, UpdateMcpServerInput};
-use crate::services::agent_config::AgentConfigService;
-use crate::services::sidecar::SidecarManager;
 
 #[tauri::command]
-pub async fn mcp_server_list(pool: State<'_, DbPool>) -> Result<Vec<McpServer>, AppError> {
-    crate::services::mcp_server::list_servers(&pool).await
+pub async fn mcp_server_list(ctx: State<'_, Arc<EngineCtx>>) -> Result<Vec<McpServer>, AppError> {
+    egosync_engine::commands::mcp::mcp_server_list(&ctx).await
 }
 
 #[tauri::command]
 pub async fn mcp_server_list_for_role(
+    ctx: State<'_, Arc<EngineCtx>>,
     role_id: String,
-    pool: State<'_, DbPool>,
 ) -> Result<Vec<McpServer>, AppError> {
-    crate::services::mcp_server::list_servers_for_role(&pool, &role_id).await
+    egosync_engine::commands::mcp::mcp_server_list_for_role(&ctx, role_id).await
 }
 
 #[tauri::command]
 pub async fn mcp_server_list_available_for_role(
+    ctx: State<'_, Arc<EngineCtx>>,
     role_id: String,
-    pool: State<'_, DbPool>,
 ) -> Result<Vec<McpServer>, AppError> {
-    crate::services::mcp_server::list_available_servers_for_role(&pool, &role_id).await
+    egosync_engine::commands::mcp::mcp_server_list_available_for_role(&ctx, role_id).await
 }
 
 #[tauri::command]
 pub async fn mcp_server_create(
+    ctx: State<'_, Arc<EngineCtx>>,
     input: CreateMcpServerInput,
-    pool: State<'_, DbPool>,
-    agent_config: State<'_, AgentConfigService>,
-    registry: State<'_, Arc<ChatSessionRegistry>>,
-    sidecar: State<'_, Arc<Mutex<SidecarManager>>>,
 ) -> Result<McpServer, AppError> {
-    let _guard = registry.opencode_mcp_scope_lock.0.lock().await;
-    let server = crate::services::mcp_server::create_server(&pool, &agent_config, input).await?;
-    refresh_opencode_runtime_after_mcp_change(&sidecar, &registry.opencode_sessions).await;
-    Ok(server)
+    egosync_engine::commands::mcp::mcp_server_create(&ctx, input).await
 }
 
 #[tauri::command]
 pub async fn mcp_server_update(
+    ctx: State<'_, Arc<EngineCtx>>,
     id: String,
     input: UpdateMcpServerInput,
-    pool: State<'_, DbPool>,
-    agent_config: State<'_, AgentConfigService>,
-    registry: State<'_, Arc<ChatSessionRegistry>>,
-    sidecar: State<'_, Arc<Mutex<SidecarManager>>>,
 ) -> Result<McpServer, AppError> {
-    let _guard = registry.opencode_mcp_scope_lock.0.lock().await;
-    let server =
-        crate::services::mcp_server::update_server(&pool, &agent_config, &id, input).await?;
-    refresh_opencode_runtime_after_mcp_change(&sidecar, &registry.opencode_sessions).await;
-    Ok(server)
+    egosync_engine::commands::mcp::mcp_server_update(&ctx, id, input).await
 }
 
 #[tauri::command]
 pub async fn mcp_server_delete(
+    ctx: State<'_, Arc<EngineCtx>>,
     id: String,
-    pool: State<'_, DbPool>,
-    agent_config: State<'_, AgentConfigService>,
-    registry: State<'_, Arc<ChatSessionRegistry>>,
-    sidecar: State<'_, Arc<Mutex<SidecarManager>>>,
 ) -> Result<(), AppError> {
-    let _guard = registry.opencode_mcp_scope_lock.0.lock().await;
-    crate::services::mcp_server::delete_server(&pool, &agent_config, &id).await?;
-    refresh_opencode_runtime_after_mcp_change(&sidecar, &registry.opencode_sessions).await;
-    Ok(())
+    egosync_engine::commands::mcp::mcp_server_delete(&ctx, id).await
 }
 
 #[tauri::command]
-pub async fn mcp_server_test(
-    id: String,
-    pool: State<'_, DbPool>,
-    registry: State<'_, Arc<ChatSessionRegistry>>,
-    sidecar: State<'_, Arc<Mutex<SidecarManager>>>,
-) -> Result<(), AppError> {
-    let _guard = registry.opencode_mcp_scope_lock.0.lock().await;
-    crate::services::mcp_server::test_server(&pool, &id).await?;
-    refresh_opencode_runtime_after_mcp_change(&sidecar, &registry.opencode_sessions).await;
-    Ok(())
+pub async fn mcp_server_test(ctx: State<'_, Arc<EngineCtx>>, id: String) -> Result<(), AppError> {
+    egosync_engine::commands::mcp::mcp_server_test(&ctx, id).await
 }
 
 #[tauri::command]
 pub async fn mcp_server_list_for_butler(
-    pool: State<'_, DbPool>,
+    ctx: State<'_, Arc<EngineCtx>>,
 ) -> Result<Vec<McpServer>, AppError> {
-    crate::services::mcp_server::list_servers_for_butler(&pool).await
+    egosync_engine::commands::mcp::mcp_server_list_for_butler(&ctx).await
 }
 
 #[tauri::command]
 pub async fn mcp_server_list_available_for_butler(
-    pool: State<'_, DbPool>,
+    ctx: State<'_, Arc<EngineCtx>>,
 ) -> Result<Vec<McpServer>, AppError> {
-    crate::services::mcp_server::list_available_servers_for_butler(&pool).await
+    egosync_engine::commands::mcp::mcp_server_list_available_for_butler(&ctx).await
 }
 
 #[tauri::command]
 pub async fn mcp_server_add_to_role(
+    ctx: State<'_, Arc<EngineCtx>>,
     role_id: String,
     server_id: String,
-    pool: State<'_, DbPool>,
-    agent_config: State<'_, AgentConfigService>,
-    registry: State<'_, Arc<ChatSessionRegistry>>,
-    sidecar: State<'_, Arc<Mutex<SidecarManager>>>,
 ) -> Result<(), AppError> {
-    let _guard = registry.opencode_mcp_scope_lock.0.lock().await;
-    crate::services::mcp_server::add_to_role(&pool, &agent_config, &role_id, &server_id).await?;
-    refresh_opencode_runtime_after_mcp_change(&sidecar, &registry.opencode_sessions).await;
-    Ok(())
+    egosync_engine::commands::mcp::mcp_server_add_to_role(&ctx, role_id, server_id).await
 }
 
 #[tauri::command]
 pub async fn mcp_server_remove_from_role(
+    ctx: State<'_, Arc<EngineCtx>>,
     role_id: String,
     server_id: String,
-    pool: State<'_, DbPool>,
-    agent_config: State<'_, AgentConfigService>,
-    registry: State<'_, Arc<ChatSessionRegistry>>,
-    sidecar: State<'_, Arc<Mutex<SidecarManager>>>,
 ) -> Result<(), AppError> {
-    let _guard = registry.opencode_mcp_scope_lock.0.lock().await;
-    crate::services::mcp_server::remove_from_role(&pool, &agent_config, &role_id, &server_id)
-        .await?;
-    refresh_opencode_runtime_after_mcp_change(&sidecar, &registry.opencode_sessions).await;
-    Ok(())
+    egosync_engine::commands::mcp::mcp_server_remove_from_role(&ctx, role_id, server_id).await
 }
 
 #[tauri::command]
 pub async fn mcp_server_add_to_butler(
+    ctx: State<'_, Arc<EngineCtx>>,
     server_id: String,
-    pool: State<'_, DbPool>,
-    agent_config: State<'_, AgentConfigService>,
-    registry: State<'_, Arc<ChatSessionRegistry>>,
-    sidecar: State<'_, Arc<Mutex<SidecarManager>>>,
 ) -> Result<(), AppError> {
-    let _guard = registry.opencode_mcp_scope_lock.0.lock().await;
-    crate::services::mcp_server::add_to_butler(&pool, &agent_config, &server_id)
-        .await
-        .map_err(saved_butler_runtime_error)?;
-    refresh_opencode_runtime(&sidecar, &registry.opencode_sessions)
-        .await
-        .map_err(saved_butler_runtime_error)
+    egosync_engine::commands::mcp::mcp_server_add_to_butler(&ctx, server_id).await
 }
 
 #[tauri::command]
 pub async fn mcp_server_remove_from_butler(
+    ctx: State<'_, Arc<EngineCtx>>,
     server_id: String,
-    pool: State<'_, DbPool>,
-    agent_config: State<'_, AgentConfigService>,
-    registry: State<'_, Arc<ChatSessionRegistry>>,
-    sidecar: State<'_, Arc<Mutex<SidecarManager>>>,
 ) -> Result<(), AppError> {
-    let _guard = registry.opencode_mcp_scope_lock.0.lock().await;
-    crate::services::mcp_server::remove_from_butler(&pool, &agent_config, &server_id)
-        .await
-        .map_err(saved_butler_runtime_error)?;
-    refresh_opencode_runtime(&sidecar, &registry.opencode_sessions)
-        .await
-        .map_err(saved_butler_runtime_error)
+    egosync_engine::commands::mcp::mcp_server_remove_from_butler(&ctx, server_id).await
 }
 
 #[tauri::command]
 pub async fn mcp_server_refresh_butler_runtime(
-    pool: State<'_, DbPool>,
-    agent_config: State<'_, AgentConfigService>,
-    registry: State<'_, Arc<ChatSessionRegistry>>,
-    sidecar: State<'_, Arc<Mutex<SidecarManager>>>,
+    ctx: State<'_, Arc<EngineCtx>>,
 ) -> Result<(), AppError> {
-    let _guard = registry.opencode_mcp_scope_lock.0.lock().await;
-    crate::services::mcp_server::sync_butler_agent(&pool, &agent_config).await?;
-    refresh_opencode_runtime(&sidecar, &registry.opencode_sessions).await
-}
-
-fn saved_butler_runtime_error(error: AppError) -> AppError {
-    tracing::warn!("butler MCP binding saved but runtime refresh failed: {}", error);
-    AppError::ValidationError(format!("配置已保存，但 Agent Runtime 尚未刷新：{}", error))
-}
-
-pub(crate) async fn refresh_opencode_runtime(
-    sidecar: &Arc<Mutex<SidecarManager>>,
-    opencode_sessions: &OpencodeSessions,
-) -> Result<(), AppError> {
-    let mut manager = sidecar.lock().await;
-    manager.restart().await?;
-    opencode_sessions.0.lock().await.clear();
-    Ok(())
-}
-
-async fn refresh_opencode_runtime_after_mcp_change(
-    sidecar: &Arc<Mutex<SidecarManager>>,
-    opencode_sessions: &OpencodeSessions,
-) {
-    if let Err(e) = refresh_opencode_runtime(sidecar, opencode_sessions).await {
-        tracing::warn!("opencode runtime refresh after MCP change failed: {}", e);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn mutating_mcp_commands_refresh_opencode_runtime() {
-        let source = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/commands/mcp.rs"),
-        )
-        .expect("read mcp commands");
-
-        for command in [
-            "mcp_server_create",
-            "mcp_server_update",
-            "mcp_server_delete",
-            "mcp_server_test",
-            "mcp_server_add_to_role",
-            "mcp_server_remove_from_role",
-            "mcp_server_add_to_butler",
-            "mcp_server_remove_from_butler",
-        ] {
-            let start = source
-                .find(&format!("pub async fn {}", command))
-                .unwrap_or_else(|| panic!("missing command {}", command));
-            let rest = &source[start..];
-            let end = rest.find("\n#[tauri::command]").unwrap_or(rest.len());
-            let body = &rest[..end];
-
-            assert!(
-                body.contains("sidecar: State<'_, Arc<Mutex<SidecarManager>>>"),
-                "{} must receive sidecar state so runtime config can reload",
-                command
-            );
-            assert!(
-                body.contains("registry: State<'_, Arc<ChatSessionRegistry>>"),
-                "{} must receive the session registry so stale sessions are cleared after restart",
-                command
-            );
-            let refresh_call = if command.ends_with("_butler") {
-                "refresh_opencode_runtime(&sidecar, &registry.opencode_sessions)"
-            } else {
-                "refresh_opencode_runtime_after_mcp_change(&sidecar, &registry.opencode_sessions"
-            };
-            assert!(
-                body.contains(refresh_call),
-                "{} must refresh opencode runtime and clear stale session cache after MCP config changes",
-                command
-            );
-        }
-    }
+    egosync_engine::commands::mcp::mcp_server_refresh_butler_runtime(&ctx).await
 }

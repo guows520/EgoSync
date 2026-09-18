@@ -412,6 +412,38 @@ pub fn run() {
                 tauri::async_runtime::handle().inner().clone(),
             );
 
+            // ── Story 15.4：EngineCtx 单容器装配 ──
+            // 聚合既有 manage 的同一实例（Arc 克隆，非二次构造），web-ok 命令
+            // 体迁引擎后经此容器取依赖。既有 manage 全部保留——companion_dispatch、
+            // 集成测试与既有 State<T> 取用零改动。
+            let engine_ctx = Arc::new(egosync_engine::commands::ctx::EngineCtx {
+                pool: pool.clone(),
+                conv_pool: conv_pool.clone(),
+                registry: app
+                    .state::<Arc<commands::chat::ChatSessionRegistry>>()
+                    .inner()
+                    .clone(),
+                agent_config: app
+                    .state::<services::agent_config::AgentConfigService>()
+                    .inner()
+                    .clone(),
+                sidecar: sidecar_state.clone(),
+                agent_bridge: agent_bridge.clone(),
+                event_router: event_router.clone(),
+                delegate_bridge: delegate_bridge.clone(),
+                bus: Arc::new(
+                    app.state::<services::tauri_event_bus::TauriEventBus>()
+                        .inner()
+                        .clone(),
+                ),
+                secrets: Arc::new(services::secret_store_keyring::KeyringSecretStore::new()),
+                data_dir: app_data_dir.clone(),
+                opencode_workspace: opencode_workspace_dir.clone(),
+                skills_root: opencode_workspace_dir.join(".opencode").join("skills"),
+                home_dir: dirs::home_dir().unwrap_or_else(|| app_data_dir.clone()),
+            });
+            app.manage(engine_ctx);
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

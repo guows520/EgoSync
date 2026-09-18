@@ -1,23 +1,33 @@
+//! Story 15.4：命令体已迁引擎（`egosync_engine::commands::secret`），
+//! 壳侧薄化为 wrapper（经注入的 SecretStore 接缝，桌面注入 keyring 实现）。
+use std::sync::Arc;
+
+use egosync_engine::commands::ctx::EngineCtx;
+use tauri::State;
+
 use crate::error::AppError;
-use crate::services::secret_store;
 
 #[tauri::command]
-pub async fn secret_store_save(key: String, value: String) -> Result<(), AppError> {
-    tokio::task::spawn_blocking(move || secret_store::save_secret(&key, &value))
-        .await
-        .map_err(|e| AppError::KeyringError(format!("task join error: {}", e)))?
+pub async fn secret_store_save(
+    ctx: State<'_, Arc<EngineCtx>>,
+    key: String,
+    value: String,
+) -> Result<(), AppError> {
+    egosync_engine::commands::secret::secret_store_save(&ctx, key, value).await
 }
 
 #[tauri::command]
-pub async fn secret_store_load(key: String) -> Result<Option<String>, AppError> {
-    tokio::task::spawn_blocking(move || secret_store::load_secret(&key))
-        .await
-        .map_err(|e| AppError::KeyringError(format!("task join error: {}", e)))?
+pub async fn secret_store_load(
+    ctx: State<'_, Arc<EngineCtx>>,
+    key: String,
+) -> Result<Option<String>, AppError> {
+    egosync_engine::commands::secret::secret_store_load(&ctx, key).await
 }
 
 #[tauri::command]
-pub async fn secret_store_delete(key: String) -> Result<(), AppError> {
-    tokio::task::spawn_blocking(move || secret_store::delete_secret(&key))
-        .await
-        .map_err(|e| AppError::KeyringError(format!("task join error: {}", e)))?
+pub async fn secret_store_delete(
+    ctx: State<'_, Arc<EngineCtx>>,
+    key: String,
+) -> Result<(), AppError> {
+    egosync_engine::commands::secret::secret_store_delete(&ctx, key).await
 }

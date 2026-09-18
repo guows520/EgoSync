@@ -6,21 +6,22 @@
 // agent_engine 的三提取件经其顶部 use 回引。
 // Story 15.3：agent_engine 与 delegate_bridge 整体迁引擎（AppHandle → 四接缝注入），
 // 此处回引使 crate::services::{agent_engine, delegate_bridge} 路径语义不变（消费者零改动）。
+// Story 15.4：memory_pipeline / task_decomposition 命令体随迁引擎（密钥经
+// SecretStore 接缝），此处回引保持路径语义不变。
 pub use egosync_engine::services::{
     agent_bridge, agent_config, agent_engine, bigrock_protection, bigrock_reminder,
     briefing_generator, butler_config, dashboard_service, data_export, delegate_bridge,
-    energy_calculator, event_bus, event_router, llm_config, mcp_server, memory_query,
-    mission_inferrer, notification_service, q2_protection_reminder, review_generator, role_config,
-    role_context, scheduler, sidecar, skill_registry, suggestion_generator, task_classifier,
-    task_deadline_watch, task_protection_watch,
+    energy_calculator, event_bus, event_router, llm_config, mcp_server, memory_pipeline,
+    memory_query, mission_inferrer, notification_service, q2_protection_reminder,
+    review_generator, role_config, role_context, scheduler, sidecar, skill_registry,
+    suggestion_generator, task_classifier, task_deadline_watch, task_decomposition,
+    task_protection_watch,
 };
 
 pub mod companion_connection;
 pub mod companion_dispatch;
 pub mod companion_pairing;
 pub mod companion_snapshot;
-pub mod memory_pipeline;
 pub mod secret_store;
 pub mod secret_store_keyring;
 pub mod tauri_event_bus;
-pub mod task_decomposition;

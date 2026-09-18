@@ -55,6 +55,43 @@ pub const ROLE_DELEGATED_EVENT: &str = "role:delegated";
 /// `task:tool-action` — 任务工具动作（agent_engine 发射）
 pub const TASK_TOOL_ACTION_EVENT: &str = "task:tool-action";
 
+// ── Story 15.4：命令体入 engine 的字面量事件名收编（值与壳侧字面量逐一相同） ──
+// 15.3 裁决「留壳」的字面量随命令体迁移至此（engine 零字面量发射规则）；
+// data:imported 的发射点（data_import）虽留壳，常量亦入册供壳侧回引。
+
+/// `role:created` — 角色创建（role 命令层发射）
+pub const ROLE_CREATED_EVENT: &str = "role:created";
+
+/// `role:updated` — 角色更新（role 命令层发射，update/update_skills/update_proactivity 共用）
+pub const ROLE_UPDATED_EVENT: &str = "role:updated";
+
+/// `role:archived` — 角色归档（role 命令层发射）
+pub const ROLE_ARCHIVED_EVENT: &str = "role:archived";
+
+/// `role:restored` — 角色恢复（role 命令层发射）
+pub const ROLE_RESTORED_EVENT: &str = "role:restored";
+
+/// `role:deleted` — 角色删除（role 命令层发射）
+pub const ROLE_DELETED_EVENT: &str = "role:deleted";
+
+/// `task:created` — 任务创建（task 命令层发射）
+pub const TASK_CREATED_EVENT: &str = "task:created";
+
+/// `task:updated` — 任务更新（task 命令层发射，update/toggle_complete 共用）
+pub const TASK_UPDATED_EVENT: &str = "task:updated";
+
+/// `task:deleted` — 任务软删除（task 命令层发射，payload 裸 id）
+pub const TASK_DELETED_EVENT: &str = "task:deleted";
+
+/// `task:reordered` — 任务重排序（task 命令层发射）
+pub const TASK_REORDERED_EVENT: &str = "task:reordered";
+
+/// `notification:read` — 通知标记已读（notification 命令层发射）
+pub const NOTIFICATION_READ_EVENT: &str = "notification:read";
+
+/// `data:imported` — 整库导入完成（data_import 命令层发射；15.4 起发射点留壳、常量入册）
+pub const DATA_IMPORTED_EVENT: &str = "data:imported";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -82,5 +119,23 @@ mod tests {
         assert_eq!(ROLE_PROPOSED_EVENT, "role:proposed");
         assert_eq!(ROLE_DELEGATED_EVENT, "role:delegated");
         assert_eq!(TASK_TOOL_ACTION_EVENT, "task:tool-action");
+    }
+
+    /// Story 15.4：命令体迁移随收编的 11 个常量集中值钉（同款守卫）。
+    /// WHY: 壳侧 companion_snapshot 的 WRITE_SIGNAL_EVENTS 清单按字面量订阅
+    /// 这些事件——常量值漂移即「发射↔订阅」静默断链，值钉是唯一 CI 可捕获层。
+    #[test]
+    fn command_domain_event_constants_pin_values() {
+        assert_eq!(ROLE_CREATED_EVENT, "role:created");
+        assert_eq!(ROLE_UPDATED_EVENT, "role:updated");
+        assert_eq!(ROLE_ARCHIVED_EVENT, "role:archived");
+        assert_eq!(ROLE_RESTORED_EVENT, "role:restored");
+        assert_eq!(ROLE_DELETED_EVENT, "role:deleted");
+        assert_eq!(TASK_CREATED_EVENT, "task:created");
+        assert_eq!(TASK_UPDATED_EVENT, "task:updated");
+        assert_eq!(TASK_DELETED_EVENT, "task:deleted");
+        assert_eq!(TASK_REORDERED_EVENT, "task:reordered");
+        assert_eq!(NOTIFICATION_READ_EVENT, "notification:read");
+        assert_eq!(DATA_IMPORTED_EVENT, "data:imported");
     }
 }

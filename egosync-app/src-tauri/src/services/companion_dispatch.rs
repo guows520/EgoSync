@@ -502,14 +502,10 @@ impl CommandExecutor for AppHandleCommandExecutor {
                     selected_skill_id: None,
                 };
                 // Story 15.3：六组状态合并为单 Registry + 事件总线注入
+                // Story 15.4：命令体迁引擎，经 EngineCtx 单容器取依赖
                 let msg = crate::commands::chat::chat_send_message(
                     request,
-                    app.state::<DbPool>(),
-                    app.state::<ConversationsPool>(),
-                    app.state::<Arc<crate::commands::chat::ChatSessionRegistry>>(),
-                    app.state::<crate::services::agent_config::AgentConfigService>(),
-                    app.state::<crate::services::tauri_event_bus::TauriEventBus>(),
-                    app.clone(),
+                    app.state::<std::sync::Arc<egosync_engine::commands::ctx::EngineCtx>>(),
                 )
                 .await?;
                 // busy 守卫：返回的是 assistant 提示消息（本轮用户消息未落库）
@@ -537,7 +533,11 @@ impl CommandExecutor for AppHandleCommandExecutor {
                     conversation_id: String,
                 }
                 let p: ChatStopParams = parse_params(params)?;
-                crate::commands::chat::chat_stop_streaming(p.conversation_id, app.clone()).await?;
+                crate::commands::chat::chat_stop_streaming(
+                    p.conversation_id,
+                    app.state::<std::sync::Arc<egosync_engine::commands::ctx::EngineCtx>>(),
+                )
+                .await?;
                 Ok(serde_json::json!({}))
             }
             ProdAction::ConversationNew => {
@@ -550,10 +550,7 @@ impl CommandExecutor for AppHandleCommandExecutor {
                 let conv = crate::commands::chat::chat_new_conversation(
                     None,
                     p.role_id,
-                    app.state::<ConversationsPool>(),
-                    app.state::<DbPool>(),
-                    app.state::<crate::services::tauri_event_bus::TauriEventBus>(),
-                    app.clone(),
+                    app.state::<std::sync::Arc<egosync_engine::commands::ctx::EngineCtx>>(),
                 )
                 .await?;
                 to_json_value(&conv)
@@ -567,9 +564,7 @@ impl CommandExecutor for AppHandleCommandExecutor {
                 let p: ConversationDeleteParams = parse_params(params)?;
                 crate::commands::chat::chat_delete_conversation(
                     p.conversation_id,
-                    app.state::<ConversationsPool>(),
-                    app.state::<crate::services::tauri_event_bus::TauriEventBus>(),
-                    app.clone(),
+                    app.state::<std::sync::Arc<egosync_engine::commands::ctx::EngineCtx>>(),
                 )
                 .await?;
                 Ok(serde_json::json!({}))
@@ -583,10 +578,9 @@ impl CommandExecutor for AppHandleCommandExecutor {
                 }
                 let p: TaskToggleParams = parse_params(params)?;
                 let task = crate::commands::task::task_toggle_complete(
+                    app.state::<std::sync::Arc<egosync_engine::commands::ctx::EngineCtx>>(),
                     p.task_id,
                     p.is_completed,
-                    app.clone(),
-                    app.state::<DbPool>(),
                 )
                 .await?;
                 to_json_value(&task)
@@ -595,10 +589,8 @@ impl CommandExecutor for AppHandleCommandExecutor {
                 // params 镜像 CreateTaskInput 字段（camelCase）
                 let input: CreateTaskInput = parse_params(params)?;
                 let task = crate::commands::task::task_create(
+                    app.state::<std::sync::Arc<egosync_engine::commands::ctx::EngineCtx>>(),
                     input,
-                    app.clone(),
-                    app.state::<DbPool>(),
-                    app.state::<crate::services::secret_store_keyring::KeyringSecretStore>(),
                 )
                 .await?;
                 to_json_value(&task)
@@ -611,8 +603,8 @@ impl CommandExecutor for AppHandleCommandExecutor {
                 }
                 let p: SuggestionListParams = parse_params(params)?;
                 let suggestions = crate::commands::suggestion::suggestion_list_pending(
+                    app.state::<std::sync::Arc<egosync_engine::commands::ctx::EngineCtx>>(),
                     p.conversation_id,
-                    app.state::<DbPool>(),
                 )
                 .await?;
                 Ok(serde_json::json!({ "suggestions": suggestions }))

@@ -2,7 +2,7 @@
 title: '修复卓易通环境扫码取景黑屏'
 type: 'bugfix'
 created: '2026-05-28'
-status: 'in-review'
+status: 'done' # 2026-09-18 人工裁决：直接关闭审阅
 baseline_commit: '1c6147bf830bc224df657c2cdeeaeb8e0bf40809'
 context:
   - '{project-root}/_bmad-output/project-context.md'

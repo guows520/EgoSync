@@ -1,6 +1,6 @@
 # Story 2.4: 每个角色用符合身份的个性化语调回应
 
-Status: review
+Status: done # 2026-09-18 与 sprint-status 对齐
 
 ## Story
 

@@ -4,7 +4,7 @@ baseline_commit: e0484dcbb042eb56087da14243ae8ab21dadf7ca
 
 # Story 12.5: 中继首配——手机跨网扫码配对与桌面远程确认门
 
-Status: review
+Status: done # 2026-09-18 人工裁决：直接关闭审阅
 
 ## Story
 

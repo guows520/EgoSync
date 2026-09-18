@@ -1,6 +1,6 @@
 # Story 2.5: 管家从对话中持续识别角色需求并建议创建新角色
 
-Status: review
+Status: done # 2026-09-18 与 sprint-status 对齐
 
 ## Story
 

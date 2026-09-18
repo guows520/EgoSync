@@ -4,7 +4,7 @@ baseline_commit: 0a932fd + 工作区未提交（12.3 relay-server / 12.4 交付�
 
 # Story 13.1: 桌面快照引擎与状态主动推送
 
-Status: review
+Status: done # 2026-09-18 与 sprint-status 对齐
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 

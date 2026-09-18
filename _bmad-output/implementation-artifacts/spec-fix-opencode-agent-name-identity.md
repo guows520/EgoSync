@@ -2,7 +2,7 @@
 title: '修复 OpenCode 自定义 Agent 标识冲突'
 type: 'bugfix'
 created: '2026-07-15'
-status: 'in-review'
+status: 'done' # 2026-09-18 人工裁决：直接关闭审阅
 baseline_commit: '9b16c8800830e518cd040917d5bfa78ac3bac5b2'
 context:
   - '{project-root}/_bmad-output/project-context.md'

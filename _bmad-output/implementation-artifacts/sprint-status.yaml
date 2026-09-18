@@ -145,7 +145,7 @@ development_status:
   # ============================================================
   epic-8: in-progress
   8-1-github-actions-ci-build: done
-  8-2-e2e-test-core-journeys: in-progress
+  8-2-e2e-test-core-journeys: done
   8-3-wcag-accessibility-audit: done
   8-4-performance-benchmark: done
   8-5-release-auto-publish: done
@@ -216,7 +216,7 @@ development_status:
   # Epic 15: 引擎无头化与服务器形态 (Headless Engine & Server)
   epic-15: in-progress
   15-1-engine-crate-skeleton-and-pure-module-migration: done
-  15-2-event-bus-handle-seam-and-generic-service-migration: review
+  15-2-event-bus-handle-seam-and-generic-service-migration: done
   15-3-chat-domain-migration-and-chatsessionregistry: backlog
   15-4-server-binary-and-single-user-auth: backlog
   15-5-frontend-transport-and-parity-test-suite: backlog

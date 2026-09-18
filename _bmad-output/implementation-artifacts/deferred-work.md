@@ -366,3 +366,18 @@ All items resolved in the same session:
 - source_spec: `_bmad-output/implementation-artifacts/15-2-event-bus-handle-seam-and-generic-service-migration.md`
   summary: payload「逐字节一致」依赖 serde_json/preserve_order 特性在桌面图经 tauri-build→schemars 传递激活（非显式声明）；engine 独立依赖图无此特性，非桌面宿主（15.4 server）to_value 输出键序为字母序。
   evidence: 评审验证缺口层（预验证）：cargo tree -e features 实证两图差异；消费方（JS 与 serde_json::Value 解析）均键序不敏感，当前无行为破坏；15.5 传输对等测试若做字节级 payload 断言将被键序差异击穿。修法：engine Cargo.toml 显式声明 serde_json preserve_order（对齐桌面行为），或对等测试归一化键序后比对。
+- source_spec: `_bmad-output/implementation-artifacts/15-3-chat-domain-migration-and-chatsessionregistry.md`
+  summary: 默认 project_dir 解析（app_data_dir→opencode-workspace + home 兜底）迁壳后无任何测试观察其取值或副作用。
+  evidence: 15.3 评审验证缺口层（预验证）：特征测试恒传显式 working_directory 绕开该路径；可观察边界需活的 opencode sidecar（自动化环境均不提供）；基线期同零覆盖（原 engine 函数持 AppHandle 不可测）——非本故事造成的覆盖缩减，属平移后遗留。修法：15.4 server 闭包裁决时以路径接缝注入 + 注入值断言一并钉住。
+- source_spec: `_bmad-output/implementation-artifacts/15-3-chat-domain-migration-and-chatsessionregistry.md`
+  summary: role:proposed / role:delegated 在 WRITE_SIGNAL_EVENTS 清单内但无 contains 常量钉（task:tool-action 由 task_decomposition 壳侧字面量仍被 source-scan 覆盖）。
+  evidence: 15.3 评审盲扫层：扫描范围 COMMAND_SOURCES 仅六命令文件（companion_snapshot:894-900），agent_engine 自基线起就不在内——盲区先于本故事存在而非新增；15.3 补丁已从发射侧钉 role:proposed（engine 记录型 bus 测试），订阅侧钉仍缺。修法：companion_snapshot 契约测试追加两条 WRITE_SIGNAL_EVENTS.contains(&ROLE_PROPOSED_EVENT/ROLE_DELEGATED_EVENT)。
+- source_spec: `_bmad-output/implementation-artifacts/15-3-chat-domain-migration-and-chatsessionregistry.md`
+  summary: task:tool-action 存在双发射习语——engine agent_engine 经常量+bus 发射，壳 commands/task_decomposition.rs:25/:36 仍裸字面量 app.emit。
+  evidence: 15.3 评审盲扫层：task_decomposition 留壳为冻结 Never 裁决（壳侧非本域发射面留 15.5），WRITE_SIGNAL_EVENTS:751-752 注释明示该字面量是 source-scan 对此事件的锚点。修法：15.5 收编纯壳侧事件名时统一改引 TASK_TOOL_ACTION_EVENT 并迁移到 EngineEvents。
+- source_spec: `_bmad-output/implementation-artifacts/15-3-chat-domain-migration-and-chatsessionregistry.md`
+  summary: opencode-workspace 默认目录解析在壳内现存三份（chat.rs 每消息急切求值含 home 兜底 / lib.rs:81 无兜底 / skill.rs opencode_workspace_dir），仅 chat.rs 份保留兜底。
+  evidence: 15.3 评审盲扫层：15.3 把 engine 份迁为 chat.rs 份（逐字节等价、计数不变），lib.rs/skill.rs 份先于本故事存在；合并属顺手重构（冻结 Never 禁止）。修法：独立小重构统一为壳侧单源助手 + 三调用点复用。
+- source_spec: `_bmad-output/implementation-artifacts/15-3-chat-domain-migration-and-chatsessionregistry.md`
+  summary: llm:stream 高频发射路径双重序列化——engine 侧 to_value(强类型) 构造 Value 树后 TauriEventBus 经 app_handle.emit 再序列化一次，每 token 多一跳。
+  evidence: 15.3 评审盲扫层：to_value 改写为冻结 Always 明定（emit 机械改写类），EngineEvents::emit(Value) 签名由 15.2 冻结；桌面单 token payload 量级下额外开销可忽略。修法：15.4/15.5 演化接缝时改收 Serialize 或预序列化 payload，消去中间 Value 树。

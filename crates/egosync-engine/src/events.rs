@@ -32,6 +32,29 @@ pub const SKILL_REGISTRY_UPDATED_EVENT: &str = "skill-registry-updated";
 /// `llm:stream` — LLM 流式事件（agent_engine 发射；companion_dispatch/companion_snapshot 监听）
 pub const LLM_STREAM_EVENT: &str = "llm:stream";
 
+// ── Story 15.3：chat/agent_engine 域事件名收编（值与壳侧字面量逐一相同） ──
+
+/// `message:saved` — 用户消息落库后补发（chat 命令层发射，快照引擎触发 STATE_DELTA）
+pub const MESSAGE_SAVED_EVENT: &str = "message:saved";
+
+/// `conversation:created` — 会话创建（chat 命令层发射）
+pub const CONVERSATION_CREATED_EVENT: &str = "conversation:created";
+
+/// `conversation:deleted` — 会话删除（chat 命令层发射，payload 裸 id）
+pub const CONVERSATION_DELETED_EVENT: &str = "conversation:deleted";
+
+/// `conversation:title-updated` — 会话标题更新（chat 命令层 generate_title 发射）
+pub const CONVERSATION_TITLE_UPDATED_EVENT: &str = "conversation:title-updated";
+
+/// `role:proposed` — 涌现角色提议（agent_engine 三处发射，前端弹确认 modal）
+pub const ROLE_PROPOSED_EVENT: &str = "role:proposed";
+
+/// `role:delegated` — 管家委派角色（agent_engine 发射）
+pub const ROLE_DELEGATED_EVENT: &str = "role:delegated";
+
+/// `task:tool-action` — 任务工具动作（agent_engine 发射）
+pub const TASK_TOOL_ACTION_EVENT: &str = "task:tool-action";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -45,5 +68,19 @@ mod tests {
         assert_eq!(NOTIFICATION_NEW_EVENT, "notification:new");
         assert_eq!(SKILL_REGISTRY_UPDATED_EVENT, "skill-registry-updated");
         assert_eq!(LLM_STREAM_EVENT, "llm:stream");
+    }
+
+    /// Story 15.3：chat/agent_engine 域 7 个新常量集中值钉（同款守卫）。
+    /// WHY: 发射点改引常量后，字面量扫描（companion_snapshot 契约测试）
+    /// 对这些事件失明——值钉与 contains 钉子共同守住「发射↔订阅」契约。
+    #[test]
+    fn chat_domain_event_constants_pin_values() {
+        assert_eq!(MESSAGE_SAVED_EVENT, "message:saved");
+        assert_eq!(CONVERSATION_CREATED_EVENT, "conversation:created");
+        assert_eq!(CONVERSATION_DELETED_EVENT, "conversation:deleted");
+        assert_eq!(CONVERSATION_TITLE_UPDATED_EVENT, "conversation:title-updated");
+        assert_eq!(ROLE_PROPOSED_EVENT, "role:proposed");
+        assert_eq!(ROLE_DELEGATED_EVENT, "role:delegated");
+        assert_eq!(TASK_TOOL_ACTION_EVENT, "task:tool-action");
     }
 }

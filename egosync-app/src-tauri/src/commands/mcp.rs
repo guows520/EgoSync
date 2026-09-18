@@ -3,7 +3,8 @@ use std::sync::Arc;
 use tauri::State;
 use tokio::sync::Mutex;
 
-use crate::commands::chat::{OpencodeMcpScopeLock, OpencodeSessions};
+// Story 15.3：六组状态合并为单 Registry（mcp_scope_lock + opencode_sessions 经其字段取用）
+use crate::commands::chat::{ChatSessionRegistry, OpencodeSessions};
 use crate::db::pool::DbPool;
 use crate::error::AppError;
 use crate::models::mcp::{CreateMcpServerInput, McpServer, UpdateMcpServerInput};
@@ -36,13 +37,12 @@ pub async fn mcp_server_create(
     input: CreateMcpServerInput,
     pool: State<'_, DbPool>,
     agent_config: State<'_, AgentConfigService>,
-    mcp_scope_lock: State<'_, OpencodeMcpScopeLock>,
+    registry: State<'_, Arc<ChatSessionRegistry>>,
     sidecar: State<'_, Arc<Mutex<SidecarManager>>>,
-    opencode_sessions: State<'_, OpencodeSessions>,
 ) -> Result<McpServer, AppError> {
-    let _guard = mcp_scope_lock.0.lock().await;
+    let _guard = registry.opencode_mcp_scope_lock.0.lock().await;
     let server = crate::services::mcp_server::create_server(&pool, &agent_config, input).await?;
-    refresh_opencode_runtime_after_mcp_change(&sidecar, &opencode_sessions).await;
+    refresh_opencode_runtime_after_mcp_change(&sidecar, &registry.opencode_sessions).await;
     Ok(server)
 }
 
@@ -52,14 +52,13 @@ pub async fn mcp_server_update(
     input: UpdateMcpServerInput,
     pool: State<'_, DbPool>,
     agent_config: State<'_, AgentConfigService>,
-    mcp_scope_lock: State<'_, OpencodeMcpScopeLock>,
+    registry: State<'_, Arc<ChatSessionRegistry>>,
     sidecar: State<'_, Arc<Mutex<SidecarManager>>>,
-    opencode_sessions: State<'_, OpencodeSessions>,
 ) -> Result<McpServer, AppError> {
-    let _guard = mcp_scope_lock.0.lock().await;
+    let _guard = registry.opencode_mcp_scope_lock.0.lock().await;
     let server =
         crate::services::mcp_server::update_server(&pool, &agent_config, &id, input).await?;
-    refresh_opencode_runtime_after_mcp_change(&sidecar, &opencode_sessions).await;
+    refresh_opencode_runtime_after_mcp_change(&sidecar, &registry.opencode_sessions).await;
     Ok(server)
 }
 
@@ -68,13 +67,12 @@ pub async fn mcp_server_delete(
     id: String,
     pool: State<'_, DbPool>,
     agent_config: State<'_, AgentConfigService>,
-    mcp_scope_lock: State<'_, OpencodeMcpScopeLock>,
+    registry: State<'_, Arc<ChatSessionRegistry>>,
     sidecar: State<'_, Arc<Mutex<SidecarManager>>>,
-    opencode_sessions: State<'_, OpencodeSessions>,
 ) -> Result<(), AppError> {
-    let _guard = mcp_scope_lock.0.lock().await;
+    let _guard = registry.opencode_mcp_scope_lock.0.lock().await;
     crate::services::mcp_server::delete_server(&pool, &agent_config, &id).await?;
-    refresh_opencode_runtime_after_mcp_change(&sidecar, &opencode_sessions).await;
+    refresh_opencode_runtime_after_mcp_change(&sidecar, &registry.opencode_sessions).await;
     Ok(())
 }
 
@@ -82,13 +80,12 @@ pub async fn mcp_server_delete(
 pub async fn mcp_server_test(
     id: String,
     pool: State<'_, DbPool>,
-    mcp_scope_lock: State<'_, OpencodeMcpScopeLock>,
+    registry: State<'_, Arc<ChatSessionRegistry>>,
     sidecar: State<'_, Arc<Mutex<SidecarManager>>>,
-    opencode_sessions: State<'_, OpencodeSessions>,
 ) -> Result<(), AppError> {
-    let _guard = mcp_scope_lock.0.lock().await;
+    let _guard = registry.opencode_mcp_scope_lock.0.lock().await;
     crate::services::mcp_server::test_server(&pool, &id).await?;
-    refresh_opencode_runtime_after_mcp_change(&sidecar, &opencode_sessions).await;
+    refresh_opencode_runtime_after_mcp_change(&sidecar, &registry.opencode_sessions).await;
     Ok(())
 }
 
@@ -112,13 +109,12 @@ pub async fn mcp_server_add_to_role(
     server_id: String,
     pool: State<'_, DbPool>,
     agent_config: State<'_, AgentConfigService>,
-    mcp_scope_lock: State<'_, OpencodeMcpScopeLock>,
+    registry: State<'_, Arc<ChatSessionRegistry>>,
     sidecar: State<'_, Arc<Mutex<SidecarManager>>>,
-    opencode_sessions: State<'_, OpencodeSessions>,
 ) -> Result<(), AppError> {
-    let _guard = mcp_scope_lock.0.lock().await;
+    let _guard = registry.opencode_mcp_scope_lock.0.lock().await;
     crate::services::mcp_server::add_to_role(&pool, &agent_config, &role_id, &server_id).await?;
-    refresh_opencode_runtime_after_mcp_change(&sidecar, &opencode_sessions).await;
+    refresh_opencode_runtime_after_mcp_change(&sidecar, &registry.opencode_sessions).await;
     Ok(())
 }
 
@@ -128,14 +124,13 @@ pub async fn mcp_server_remove_from_role(
     server_id: String,
     pool: State<'_, DbPool>,
     agent_config: State<'_, AgentConfigService>,
-    mcp_scope_lock: State<'_, OpencodeMcpScopeLock>,
+    registry: State<'_, Arc<ChatSessionRegistry>>,
     sidecar: State<'_, Arc<Mutex<SidecarManager>>>,
-    opencode_sessions: State<'_, OpencodeSessions>,
 ) -> Result<(), AppError> {
-    let _guard = mcp_scope_lock.0.lock().await;
+    let _guard = registry.opencode_mcp_scope_lock.0.lock().await;
     crate::services::mcp_server::remove_from_role(&pool, &agent_config, &role_id, &server_id)
         .await?;
-    refresh_opencode_runtime_after_mcp_change(&sidecar, &opencode_sessions).await;
+    refresh_opencode_runtime_after_mcp_change(&sidecar, &registry.opencode_sessions).await;
     Ok(())
 }
 
@@ -144,15 +139,14 @@ pub async fn mcp_server_add_to_butler(
     server_id: String,
     pool: State<'_, DbPool>,
     agent_config: State<'_, AgentConfigService>,
-    mcp_scope_lock: State<'_, OpencodeMcpScopeLock>,
+    registry: State<'_, Arc<ChatSessionRegistry>>,
     sidecar: State<'_, Arc<Mutex<SidecarManager>>>,
-    opencode_sessions: State<'_, OpencodeSessions>,
 ) -> Result<(), AppError> {
-    let _guard = mcp_scope_lock.0.lock().await;
+    let _guard = registry.opencode_mcp_scope_lock.0.lock().await;
     crate::services::mcp_server::add_to_butler(&pool, &agent_config, &server_id)
         .await
         .map_err(saved_butler_runtime_error)?;
-    refresh_opencode_runtime(&sidecar, &opencode_sessions)
+    refresh_opencode_runtime(&sidecar, &registry.opencode_sessions)
         .await
         .map_err(saved_butler_runtime_error)
 }
@@ -162,15 +156,14 @@ pub async fn mcp_server_remove_from_butler(
     server_id: String,
     pool: State<'_, DbPool>,
     agent_config: State<'_, AgentConfigService>,
-    mcp_scope_lock: State<'_, OpencodeMcpScopeLock>,
+    registry: State<'_, Arc<ChatSessionRegistry>>,
     sidecar: State<'_, Arc<Mutex<SidecarManager>>>,
-    opencode_sessions: State<'_, OpencodeSessions>,
 ) -> Result<(), AppError> {
-    let _guard = mcp_scope_lock.0.lock().await;
+    let _guard = registry.opencode_mcp_scope_lock.0.lock().await;
     crate::services::mcp_server::remove_from_butler(&pool, &agent_config, &server_id)
         .await
         .map_err(saved_butler_runtime_error)?;
-    refresh_opencode_runtime(&sidecar, &opencode_sessions)
+    refresh_opencode_runtime(&sidecar, &registry.opencode_sessions)
         .await
         .map_err(saved_butler_runtime_error)
 }
@@ -179,13 +172,12 @@ pub async fn mcp_server_remove_from_butler(
 pub async fn mcp_server_refresh_butler_runtime(
     pool: State<'_, DbPool>,
     agent_config: State<'_, AgentConfigService>,
-    mcp_scope_lock: State<'_, OpencodeMcpScopeLock>,
+    registry: State<'_, Arc<ChatSessionRegistry>>,
     sidecar: State<'_, Arc<Mutex<SidecarManager>>>,
-    opencode_sessions: State<'_, OpencodeSessions>,
 ) -> Result<(), AppError> {
-    let _guard = mcp_scope_lock.0.lock().await;
+    let _guard = registry.opencode_mcp_scope_lock.0.lock().await;
     crate::services::mcp_server::sync_butler_agent(&pool, &agent_config).await?;
-    refresh_opencode_runtime(&sidecar, &opencode_sessions).await
+    refresh_opencode_runtime(&sidecar, &registry.opencode_sessions).await
 }
 
 fn saved_butler_runtime_error(error: AppError) -> AppError {
@@ -244,14 +236,14 @@ mod tests {
                 command
             );
             assert!(
-                body.contains("opencode_sessions: State<'_, OpencodeSessions>"),
-                "{} must receive opencode session cache state so stale sessions are cleared after restart",
+                body.contains("registry: State<'_, Arc<ChatSessionRegistry>>"),
+                "{} must receive the session registry so stale sessions are cleared after restart",
                 command
             );
             let refresh_call = if command.ends_with("_butler") {
-                "refresh_opencode_runtime(&sidecar, &opencode_sessions)"
+                "refresh_opencode_runtime(&sidecar, &registry.opencode_sessions)"
             } else {
-                "refresh_opencode_runtime_after_mcp_change(&sidecar, &opencode_sessions"
+                "refresh_opencode_runtime_after_mcp_change(&sidecar, &registry.opencode_sessions"
             };
             assert!(
                 body.contains(refresh_call),

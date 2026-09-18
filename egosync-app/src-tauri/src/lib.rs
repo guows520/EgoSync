@@ -70,25 +70,14 @@ pub fn run() {
             // Story 15.2 接缝二：注入桌面侧事件总线（转发 app_handle.emit），
             // engine 侧服务经 EngineEvents 发射，命令层可经 State 取用。
             app.manage(services::tauri_event_bus::TauriEventBus::new(app.handle().clone()));
-            app.manage(commands::chat::OpencodeMcpScopeLock::default());
-            app.manage(commands::chat::StreamingState::default());
-            app.manage(commands::chat::CancelTokens::default());
-            app.manage(commands::chat::OpencodeSessions::default());
-            app.manage(commands::chat::OnboardingConversations::default());
-            app.manage(commands::chat::MemoryExtractionState::default());
+            // Story 15.3：六组会话状态合并为单 ChatSessionRegistry（Arc 包装，
+            // spawn 的后台任务与 agent_engine 共享同一实例）
+            app.manage(Arc::new(commands::chat::ChatSessionRegistry::default()));
             let bridge_token = services::delegate_bridge::generate_bridge_token();
             let (delegate_listener, delegate_port) = tauri::async_runtime::block_on(async {
                 services::delegate_bridge::bind_random_listener().await
             })
             .map_err(|e| format!("委派桥接服务初始化失败: {}", e))?;
-            let delegate_bridge = services::delegate_bridge::DelegateBridge::new(
-                pool.clone(),
-                conv_pool.clone(),
-                bridge_token.clone(),
-                Some(app.handle().clone()),
-            );
-            app.manage(delegate_bridge.clone());
-
             let opencode_workspace_dir = app_data_dir.join("opencode-workspace");
 
             // ── 清理 legacy app-root opencode.json 中的 EgoSync 托管 MCP ──
@@ -175,6 +164,24 @@ pub fn run() {
                 }
             }
             app.manage(agent_config);
+            // Story 15.3：委派桥接迁引擎——AppHandle → 接缝注入
+            // （事件总线/Agent 配置/Skill 根目录/密钥；构造点随依赖后移）
+            let delegate_bridge = services::delegate_bridge::DelegateBridge::new(
+                pool.clone(),
+                conv_pool.clone(),
+                bridge_token.clone(),
+                Some(Arc::new(
+                    app.state::<services::tauri_event_bus::TauriEventBus>()
+                        .inner()
+                        .clone(),
+                )),
+                app.state::<services::agent_config::AgentConfigService>()
+                    .inner()
+                    .clone(),
+                opencode_workspace_dir.join(".opencode").join("skills"),
+                Arc::new(services::secret_store_keyring::KeyringSecretStore::new()),
+            );
+            app.manage(delegate_bridge.clone());
 
             // ── LLM provider sync: write default provider/model/apiKey into opencode.json ──
             // Must happen before sidecar start so opencode picks up the config on boot.
@@ -388,8 +395,12 @@ pub fn run() {
             // 注入；注入宿主 runtime Handle 派生任务（setup 同步上下文无
             // reactor，裸 tokio::spawn 会 panic）。KeyringSecretStore 为 unit
             // struct，即席构造零成本（与 agent_engine 调用点同款手法）。
+            // Story 15.3：与 manage 的 TauriEventBus 单实例统一（deferred-work），
+            // 不再独立构造第二实例。
             let scheduler_event_bus: Arc<dyn services::event_bus::EngineEvents> = Arc::new(
-                services::tauri_event_bus::TauriEventBus::new(app.handle().clone()),
+                app.state::<services::tauri_event_bus::TauriEventBus>()
+                    .inner()
+                    .clone(),
             );
             let scheduler_secret: Arc<dyn egosync_engine::services::secret_store::SecretStore> =
                 Arc::new(services::secret_store_keyring::KeyringSecretStore::new());

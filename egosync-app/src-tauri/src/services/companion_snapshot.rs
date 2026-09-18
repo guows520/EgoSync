@@ -942,5 +942,18 @@ mod tests {
         // 必须仍在订阅清单内，否则 STATE_DELTA 推送静默断链。
         assert!(WRITE_SIGNAL_EVENTS
             .contains(&crate::events::NOTIFICATION_NEW_EVENT));
+
+        // Story 15.3：chat.rs 的 message:saved / conversation:created /
+        // conversation:deleted / conversation:title-updated 字面量已改引
+        // engine 常量（同 15.2 补丁 1 先例），source-scan 对其失明——追加
+        // contains 钉子守住「发射↔订阅」契约，否则 STATE_DELTA 静默断链。
+        assert!(WRITE_SIGNAL_EVENTS
+            .contains(&crate::events::MESSAGE_SAVED_EVENT));
+        assert!(WRITE_SIGNAL_EVENTS
+            .contains(&crate::events::CONVERSATION_CREATED_EVENT));
+        assert!(WRITE_SIGNAL_EVENTS
+            .contains(&crate::events::CONVERSATION_DELETED_EVENT));
+        assert!(WRITE_SIGNAL_EVENTS
+            .contains(&crate::events::CONVERSATION_TITLE_UPDATED_EVENT));
     }
 }

@@ -8,7 +8,6 @@ use crate::error::AppError;
 use crate::llm::traits::{ChatCompletionMessage, ChatOptions, LlmProvider, StreamEvent};
 use crate::models::chat::Message;
 use crate::models::memory::{ExtractedMemory, Memory};
-use crate::services::agent_engine;
 use serde::Deserialize;
 use tokio::sync::mpsc;
 use tokio::time::{timeout, Duration};
@@ -37,7 +36,9 @@ async fn extract_for_conversation_inner(
     conv_pool: &ConversationsPool,
     conversation_id: &str,
 ) -> Result<usize, AppError> {
-    let provider = agent_engine::resolve_default_provider(
+    // Story 15.3：agent_engine 迁引擎后其 resolve_default_provider 回引断链，
+    // 改经 llm_config 模块直引（同一函数，值不变）。
+    let provider = crate::services::llm_config::resolve_default_provider(
         main_pool,
         &crate::services::secret_store_keyring::KeyringSecretStore::new(),
     )

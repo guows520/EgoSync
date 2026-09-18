@@ -1,8 +1,6 @@
-use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use tauri::{Emitter, Manager, State};
-use tokio::sync::Mutex;
+use tauri::{Manager, State};
 use tokio_util::sync::CancellationToken;
 
 use crate::db::conversations;
@@ -10,41 +8,28 @@ use crate::db::pool::{ConversationsPool, DbPool};
 use crate::error::AppError;
 use crate::models::chat::{ChatRequest, Conversation, Message, MessageProcessEvent, StreamPayload, STREAM_PHASE_DONE, TitleUpdatedPayload};
 use crate::services::agent_config::AgentConfigService;
-use crate::services::agent_engine;
+use crate::services::event_bus::EngineEvents;
+use crate::services::tauri_event_bus::TauriEventBus;
 
-#[derive(Default)]
-pub struct OpencodeMcpScopeLock(pub Arc<Mutex<()>>);
-
-#[derive(Default)]
-pub struct StreamingState(pub Arc<Mutex<HashSet<String>>>);
-
-#[derive(Default)]
-pub struct CancelTokens(pub Arc<Mutex<HashMap<String, CancellationToken>>>);
-
-#[derive(Default, Clone)]
-pub struct OpencodeSessionState {
-    pub active_session_id: String,
-    pub sessions_by_directory: HashMap<String, String>,
-}
-
-#[derive(Default)]
-pub struct OpencodeSessions(pub Arc<Mutex<HashMap<String, OpencodeSessionState>>>);
-
-/// Tracks which conversations are in onboarding mode.
-/// Key: conversation_id, Value: current onboarding step
-#[derive(Default)]
-pub struct OnboardingConversations(pub Arc<Mutex<HashMap<String, u8>>>);
-
-#[derive(Default, Clone)]
-pub struct MemoryExtractionState(pub Arc<Mutex<HashMap<String, CancellationToken>>>);
+// Story 15.3：六组会话状态类型已迁引擎 registry（逐字节平移，derive 保持），
+// 此处回引使 crate::commands::chat::{...} 路径语义不变（消费者零改动）。
+pub use egosync_engine::registry::{
+    CancelTokens, ChatSessionRegistry, MemoryExtractionState, OnboardingConversations,
+    OpencodeMcpScopeLock, OpencodeSessionState, OpencodeSessions, StreamingState,
+};
 
 const MEMORY_EXTRACTION_IDLE_SECONDS: u64 = 300;
 
 /// Story 13.1：命令层补发写事件（快照引擎订阅触发 STATE_DELTA；payload
 /// 沿用域对象/裸 id 供前端自由消费——引擎只看事件名不看 payload）。
 /// 失败 warn 不阻断（评审 B7：与 role/task 的 emit warn 模式对齐）。
-fn emit_chat_event(app_handle: &tauri::AppHandle, event: &str, payload: &impl serde::Serialize) {
-    if let Err(e) = app_handle.emit(event, payload) {
+/// Story 15.3：发射改经注入的 EngineEvents 总线 + engine events 常量
+/// （事件名值不变；强类型 payload 机械改写为 serde_json::to_value）。
+fn emit_chat_event(bus: &dyn EngineEvents, event: &str, payload: &impl serde::Serialize) {
+    if let Err(e) = serde_json::to_value(payload)
+        .map_err(|e| e.to_string())
+        .and_then(|payload| bus.emit(event, payload))
+    {
         tracing::warn!(event = event, error = %e, "chat 写事件发射失败");
     }
 }
@@ -53,42 +38,6 @@ fn sync_role_config_warn(result: Result<(), AppError>, action: &str) {
     if let Err(e) = result {
         tracing::warn!("opencode sync ({}) failed: {}", action, e);
     }
-}
-
-async fn replace_memory_extraction_token(
-    memory_state: &MemoryExtractionState,
-    conversation_id: &str,
-) -> CancellationToken {
-    let token = CancellationToken::new();
-    let mut tokens = memory_state.0.lock().await;
-    if let Some(old_token) = tokens.insert(conversation_id.to_string(), token.clone()) {
-        old_token.cancel();
-    }
-    token
-}
-
-async fn cancel_memory_extraction_token(
-    memory_state: &MemoryExtractionState,
-    conversation_id: &str,
-) -> Option<CancellationToken> {
-    let mut tokens = memory_state.0.lock().await;
-    let token = tokens.remove(conversation_id);
-    if let Some(token) = &token {
-        token.cancel();
-    }
-    token
-}
-
-async fn remove_memory_extraction_token_if_active(
-    memory_state: &MemoryExtractionState,
-    conversation_id: &str,
-    token: &CancellationToken,
-) {
-    let mut tokens = memory_state.0.lock().await;
-    if token.is_cancelled() {
-        return;
-    }
-    tokens.remove(conversation_id);
 }
 
 fn has_enough_complete_user_messages(messages: &[Message]) -> bool {
@@ -122,7 +71,7 @@ async fn should_schedule_memory_extraction(
 }
 
 fn spawn_memory_extraction_after_idle(
-    memory_state: MemoryExtractionState,
+    registry: Arc<ChatSessionRegistry>,
     main_pool: DbPool,
     conv_pool: ConversationsPool,
     conversation_id: String,
@@ -142,21 +91,28 @@ fn spawn_memory_extraction_after_idle(
             }
             _ = token.cancelled() => {}
         }
-        remove_memory_extraction_token_if_active(&memory_state, &conversation_id, &token).await;
+        // Story 15.3：token 族辅助已迁 Registry 方法。'static 任务持共享
+        // Arc——六组状态同一身份（评审补丁：不再按需伪造局部 Registry，
+        // 方法将来触及其余字段时不会静默错实例）。
+        registry
+            .remove_memory_extraction_token_if_active(&conversation_id, &token)
+            .await;
     });
 }
 
 async fn schedule_memory_extraction(
-    memory_state: MemoryExtractionState,
+    registry: &Arc<ChatSessionRegistry>,
     main_pool: DbPool,
     conv_pool: ConversationsPool,
     conversation_id: String,
 ) {
     match should_schedule_memory_extraction(&conv_pool, &conversation_id).await {
         Ok(true) => {
-            let token = replace_memory_extraction_token(&memory_state, &conversation_id).await;
+            let token = registry
+                .replace_memory_extraction_token(&conversation_id)
+                .await;
             spawn_memory_extraction_after_idle(
-                memory_state,
+                registry.clone(),
                 main_pool,
                 conv_pool,
                 conversation_id,
@@ -164,7 +120,9 @@ async fn schedule_memory_extraction(
             );
         }
         Ok(false) => {
-            cancel_memory_extraction_token(&memory_state, &conversation_id).await;
+            registry
+                .cancel_memory_extraction_token(&conversation_id)
+                .await;
         }
         Err(err) => {
             tracing::warn!(conversation_id, error = %err, "memory extraction schedule skipped");
@@ -173,12 +131,14 @@ async fn schedule_memory_extraction(
 }
 
 async fn trigger_memory_extraction_now(
-    memory_state: MemoryExtractionState,
+    registry: &ChatSessionRegistry,
     main_pool: DbPool,
     conv_pool: ConversationsPool,
     conversation_id: String,
 ) {
-    cancel_memory_extraction_token(&memory_state, &conversation_id).await;
+    registry
+        .cancel_memory_extraction_token(&conversation_id)
+        .await;
     match should_schedule_memory_extraction(&conv_pool, &conversation_id).await {
         Ok(true) => {
             tokio::spawn(async move {
@@ -219,14 +179,14 @@ async fn opencode_session_id_for_stop(
 }
 
 #[tauri::command]
-pub async fn chat_send_message(
+pub async fn chat_send_message<R: tauri::Runtime>(
     request: ChatRequest,
     main_pool: State<'_, DbPool>,
     conv_pool: State<'_, ConversationsPool>,
-    streaming_state: State<'_, StreamingState>,
-    onboarding_convs: State<'_, OnboardingConversations>,
+    registry: State<'_, Arc<ChatSessionRegistry>>,
     agent_config: State<'_, AgentConfigService>,
-    app_handle: tauri::AppHandle,
+    event_bus: State<'_, TauriEventBus<R>>,
+    app_handle: tauri::AppHandle<R>,
 ) -> Result<Message, AppError> {
     // Explicit Skill validation is a command-level gate: no conversation, lock,
     // runtime, session, or subscription side effect may happen before it succeeds.
@@ -249,7 +209,7 @@ pub async fn chat_send_message(
     let conv_id_for_lookup = request.conversation_id.clone().unwrap_or_default();
 
     {
-        let mut onb_map = onboarding_convs.0.lock().await;
+        let mut onb_map = registry.onboarding_conversations.0.lock().await;
         if request.onboarding_step > 0 {
             // Frontend explicitly says onboarding
             effective_onboarding_step = request.onboarding_step;
@@ -290,13 +250,10 @@ pub async fn chat_send_message(
 
     let conv_id = conversation.id.clone();
 
-    {
-        let memory_state = app_handle.state::<MemoryExtractionState>();
-        cancel_memory_extraction_token(&memory_state, &conv_id).await;
-    }
+    registry.cancel_memory_extraction_token(&conv_id).await;
 
     {
-        let mut streaming = streaming_state.0.lock().await;
+        let mut streaming = registry.streaming_state.0.lock().await;
         if streaming.contains(&conv_id) {
             let busy_msg = conversations::insert_message(
                 &conv_pool,
@@ -341,15 +298,18 @@ pub async fn chat_send_message(
     // Story 13.1（评审决策①）：用户消息落库后补发 message:saved（快照引擎
     // 触发 STATE_DELTA）。assistant 消息完成由既有 llm:stream（done=true）
     // 覆盖，无需重复 emit。
-    emit_chat_event(&app_handle, "message:saved", &user_msg);
+    emit_chat_event(
+        event_bus.inner(),
+        crate::events::MESSAGE_SAVED_EVENT,
+        &user_msg,
+    );
 
     let assistant_msg =
         conversations::insert_message(&conv_pool, &conv_id, "assistant", "", false).await?;
 
     let cancel_token = CancellationToken::new();
     {
-        let cancel_tokens = app_handle.state::<CancelTokens>();
-        let mut tokens = cancel_tokens.0.lock().await;
+        let mut tokens = registry.cancel_tokens.0.lock().await;
         tokens.insert(conv_id.clone(), cancel_token.clone());
     }
 
@@ -357,7 +317,6 @@ pub async fn chat_send_message(
     let conv_pool_for_memory = conv_pool.inner().clone();
     let main_pool_for_stream = main_pool.inner().clone();
     let main_pool_for_memory = main_pool.inner().clone();
-    let opencode_sessions_clone = app_handle.state::<OpencodeSessions>().inner().0.clone();
     let agent_bridge_clone = app_handle
         .state::<crate::services::agent_bridge::AgentBridge>()
         .inner()
@@ -370,8 +329,37 @@ pub async fn chat_send_message(
         .state::<crate::services::delegate_bridge::DelegateBridge>()
         .inner()
         .clone();
-    let streaming_state_clone = streaming_state.0.clone();
-    let memory_state_clone = app_handle.state::<MemoryExtractionState>().inner().clone();
+    let streaming_state_clone = registry.streaming_state.0.clone();
+    let registry_clone = registry.inner().clone();
+    let event_bus_clone = event_bus.inner().clone();
+    // Story 15.3：run_stream 宿主能力接缝注入（原 AppHandle 内部 try_state 取用）
+    let agent_config_clone = app_handle
+        .state::<AgentConfigService>()
+        .inner()
+        .clone();
+    let sidecar_clone = app_handle
+        .state::<Arc<tokio::sync::Mutex<crate::services::sidecar::SidecarManager>>>()
+        .inner()
+        .clone();
+    let secret_for_stream: Arc<dyn egosync_engine::services::secret_store::SecretStore> = Arc::new(
+        crate::services::secret_store_keyring::KeyringSecretStore::new(),
+    );
+    // Story 15.3：默认 project_dir 由壳解析（原 engine 内 app_data_dir 逻辑迁壳侧）
+    let project_dir_for_stream = app_handle
+        .path()
+        .app_data_dir()
+        .map(|dir| {
+            let workspace = dir.join("opencode-workspace");
+            let _ = std::fs::create_dir_all(&workspace);
+            workspace.to_string_lossy().to_string()
+        })
+        .unwrap_or_else(|_| {
+            dirs::home_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join(".egosync-workspace")
+                .to_string_lossy()
+                .to_string()
+        });
     let conv_id_clone = conv_id.clone();
     let assistant_id = assistant_msg.id.clone();
     let user_content = if is_onboarding_start {
@@ -379,8 +367,6 @@ pub async fn chat_send_message(
     } else {
         request.content.clone()
     };
-    let app_handle_clone = app_handle.clone();
-
     let onboarding_step = if effective_onboarding_step > 0 {
         Some(effective_onboarding_step)
     } else {
@@ -393,8 +379,9 @@ pub async fn chat_send_message(
     let selected_skill_for_stream = selected_skill;
 
     tokio::spawn(async move {
-        let result = agent_engine::run_stream(
-            app_handle_clone.clone(),
+        // Story 15.3：AppHandle → 接缝注入（总线/Registry/配置/sidecar/密钥/宿主路径）
+        let result = egosync_engine::services::agent_engine::run_stream(
+            Arc::new(event_bus_clone.clone()),
             conv_pool_for_stream,
             main_pool_for_stream,
             conv_id_clone.clone(),
@@ -404,10 +391,14 @@ pub async fn chat_send_message(
             onboarding_step,
             role_id_for_stream,
             user_message_id_for_stream,
-            opencode_sessions_clone,
+            registry_clone.clone(),
             agent_bridge_clone,
             event_router_clone,
             delegate_bridge_clone,
+            agent_config_clone.clone(),
+            sidecar_clone.clone(),
+            secret_for_stream.clone(),
+            project_dir_for_stream.clone(),
             working_directory_for_stream,
             selected_skill_for_stream,
         )
@@ -418,9 +409,7 @@ pub async fn chat_send_message(
             // 生产 bug 修复：run_stream 在 resolve_default_provider 或其他步骤 Err 时
             // 不会调用 emit_stream_done，前端 isInputLocked 永远保持 true（UI 卡死）。
             // 这里兜底发射 done 事件，让前端复位流式状态。
-            let _ = app_handle_clone.emit(
-                "llm:stream",
-                StreamPayload {
+            let _ = serde_json::to_value(StreamPayload {
                     conversation_id: conv_id_clone.clone(),
                     token: String::new(),
                     done: true,
@@ -430,21 +419,23 @@ pub async fn chat_send_message(
                     status_text: None,
                     tool_name: None,
                     process_event: None,
-                },
-            );
+                })
+                .map_err(|e| e.to_string())
+                .and_then(|payload| {
+                    event_bus_clone.emit(crate::events::LLM_STREAM_EVENT, payload)
+                });
         }
 
         let mut streaming = streaming_state_clone.lock().await;
         streaming.remove(&conv_id_clone);
         drop(streaming);
 
-        let cancel_tokens = app_handle_clone.state::<CancelTokens>();
-        let mut tokens = cancel_tokens.0.lock().await;
+        let mut tokens = registry_clone.cancel_tokens.0.lock().await;
         tokens.remove(&conv_id_clone);
         drop(tokens);
 
         schedule_memory_extraction(
-            memory_state_clone,
+            &registry_clone,
             main_pool_for_memory,
             conv_pool_for_memory,
             conv_id_clone,
@@ -559,13 +550,11 @@ pub async fn chat_stop_streaming(
     conversation_id: String,
     app_handle: tauri::AppHandle,
 ) -> Result<(), AppError> {
-    let cancel_tokens = app_handle.state::<CancelTokens>();
-    cancel_streaming_token(&cancel_tokens, &conversation_id).await;
+    let registry = app_handle.state::<Arc<ChatSessionRegistry>>();
+    cancel_streaming_token(&registry.cancel_tokens, &conversation_id).await;
 
-    let session_id = {
-        let opencode_sessions = app_handle.state::<OpencodeSessions>();
-        opencode_session_id_for_stop(&opencode_sessions, &conversation_id).await
-    };
+    let session_id =
+        opencode_session_id_for_stop(&registry.opencode_sessions, &conversation_id).await;
     if let Some(session_id) = session_id {
         let agent_bridge = app_handle.state::<crate::services::agent_bridge::AgentBridge>();
         if let Err(e) = agent_bridge.abort_session(&session_id).await {
@@ -582,49 +571,51 @@ pub async fn chat_stop_streaming(
 }
 
 #[tauri::command]
-pub async fn chat_delete_conversation(
+pub async fn chat_delete_conversation<R: tauri::Runtime>(
     conversation_id: String,
     conv_pool: State<'_, ConversationsPool>,
-    app_handle: tauri::AppHandle,
+    event_bus: State<'_, TauriEventBus<R>>,
+    app_handle: tauri::AppHandle<R>,
 ) -> Result<(), AppError> {
+    let registry = app_handle.state::<Arc<ChatSessionRegistry>>();
     // Clean up streaming state so orphan tasks don't write to a deleted conversation
-    let cancel_tokens = app_handle.state::<CancelTokens>();
-    cancel_streaming_token(&cancel_tokens, &conversation_id).await;
+    cancel_streaming_token(&registry.cancel_tokens, &conversation_id).await;
 
     {
-        let streaming_state = app_handle.state::<StreamingState>();
-        let mut streaming = streaming_state.0.lock().await;
+        let mut streaming = registry.streaming_state.0.lock().await;
         streaming.remove(&conversation_id);
     }
     {
-        let opencode_sessions = app_handle.state::<OpencodeSessions>();
-        let mut sessions = opencode_sessions.0.lock().await;
+        let mut sessions = registry.opencode_sessions.0.lock().await;
         sessions.remove(&conversation_id);
     }
     {
-        let onboarding = app_handle.state::<OnboardingConversations>();
-        let mut map = onboarding.0.lock().await;
+        let mut map = registry.onboarding_conversations.0.lock().await;
         map.remove(&conversation_id);
     }
-    {
-        let memory_state = app_handle.state::<MemoryExtractionState>();
-        cancel_memory_extraction_token(&memory_state, &conversation_id).await;
-    }
+    registry
+        .cancel_memory_extraction_token(&conversation_id)
+        .await;
 
     conversations::delete_conversation(&conv_pool, &conversation_id).await?;
     // Story 13.1（评审决策①）：会话删除须触发 STATE_DELTA，否则手机会话域
     // 保留已删会话。payload 裸 id（对象已删，无域对象可发）。
-    emit_chat_event(&app_handle, "conversation:deleted", &conversation_id);
+    emit_chat_event(
+        event_bus.inner(),
+        crate::events::CONVERSATION_DELETED_EVENT,
+        &conversation_id,
+    );
     Ok(())
 }
 
 #[tauri::command]
-pub async fn chat_new_conversation(
+pub async fn chat_new_conversation<R: tauri::Runtime>(
     old_conversation_id: Option<String>,
     role_id: Option<String>,
     conv_pool: State<'_, ConversationsPool>,
     main_pool: State<'_, DbPool>,
-    app_handle: tauri::AppHandle,
+    event_bus: State<'_, TauriEventBus<R>>,
+    app_handle: tauri::AppHandle<R>,
 ) -> Result<Conversation, AppError> {
     if let Some(old_id) = old_conversation_id {
         let messages = match conversations::list_messages(&conv_pool, &old_id).await {
@@ -633,7 +624,11 @@ pub async fn chat_new_conversation(
                 tracing::warn!(conversation_id = old_id, error = %err, "conversation handoff skipped");
                 // Story 13.1（评审决策①）：创建路径同样补发 conversation:created
                 let conv = conversations::create_conversation(&conv_pool, role_id.as_deref()).await?;
-                emit_chat_event(&app_handle, "conversation:created", &conv);
+                emit_chat_event(
+                    event_bus.inner(),
+                    crate::events::CONVERSATION_CREATED_EVENT,
+                    &conv,
+                );
                 return Ok(conv);
             }
         };
@@ -648,10 +643,10 @@ pub async fn chat_new_conversation(
             let conv_pool_clone = conv_pool.inner().clone();
             let main_pool_clone = main_pool.inner().clone();
             let title_old_id = old_id.clone();
-            let title_app_handle = app_handle.clone();
+            let title_bus = event_bus.inner().clone();
             tokio::spawn(async move {
                 if let Err(e) = generate_title(
-                    title_app_handle,
+                    title_bus,
                     conv_pool_clone,
                     main_pool_clone,
                     title_old_id,
@@ -664,9 +659,9 @@ pub async fn chat_new_conversation(
         }
 
         if should_extract_old_conversation {
-            let memory_state = app_handle.state::<MemoryExtractionState>().inner().clone();
+            let registry = app_handle.state::<Arc<ChatSessionRegistry>>();
             trigger_memory_extraction_now(
-                memory_state,
+                registry.inner(),
                 main_pool.inner().clone(),
                 conv_pool.inner().clone(),
                 old_id,
@@ -676,7 +671,11 @@ pub async fn chat_new_conversation(
     }
 
     let conv = conversations::create_conversation(&conv_pool, role_id.as_deref()).await?;
-    emit_chat_event(&app_handle, "conversation:created", &conv);
+    emit_chat_event(
+        event_bus.inner(),
+        crate::events::CONVERSATION_CREATED_EVENT,
+        &conv,
+    );
     Ok(conv)
 }
 
@@ -684,6 +683,7 @@ pub async fn chat_new_conversation(
 mod tests {
     use super::*;
     use sqlx::SqlitePool;
+    use std::collections::HashMap;
 
     async fn setup_conversation_pool() -> ConversationsPool {
         let pool = SqlitePool::connect("sqlite::memory:")
@@ -835,27 +835,8 @@ mod tests {
         assert_eq!(session_id.as_deref(), Some("session-b"));
     }
 
-    #[tokio::test]
-    async fn replace_memory_extraction_token_cancels_previous_token() {
-        let memory_state = MemoryExtractionState::default();
-        let first = replace_memory_extraction_token(&memory_state, "conv-1").await;
-        let second = replace_memory_extraction_token(&memory_state, "conv-1").await;
-
-        assert!(first.is_cancelled());
-        assert!(!second.is_cancelled());
-        assert_eq!(memory_state.0.lock().await.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn cancelled_memory_extraction_token_cannot_remove_new_token() {
-        let memory_state = MemoryExtractionState::default();
-        let first = replace_memory_extraction_token(&memory_state, "conv-1").await;
-        let _second = replace_memory_extraction_token(&memory_state, "conv-1").await;
-
-        remove_memory_extraction_token_if_active(&memory_state, "conv-1", &first).await;
-
-        assert_eq!(memory_state.0.lock().await.len(), 1);
-    }
+    // Story 15.3：token 族两测试随辅助函数迁入 engine registry.rs
+    // （评审补丁：删除壳侧重复件——两份拷贝锁语义漂移风险）。
 
     #[tokio::test]
     async fn maybe_enable_requested_meta_skill_updates_role_before_next_turn() {
@@ -974,14 +955,13 @@ mod tests {
     }
 }
 
-async fn generate_title(
-    app_handle: tauri::AppHandle,
+async fn generate_title<R: tauri::Runtime>(
+    bus: TauriEventBus<R>,
     conv_pool: ConversationsPool,
     main_pool: DbPool,
     conversation_id: String,
 ) -> Result<(), AppError> {
     use crate::llm::traits::{ChatCompletionMessage, ChatOptions, StreamEvent};
-    use tauri::Emitter;
     use tokio::sync::mpsc;
 
     let messages = conversations::list_messages(&conv_pool, &conversation_id).await?;
@@ -1018,7 +998,9 @@ async fn generate_title(
         },
     ];
 
-    let provider = agent_engine::resolve_default_provider(
+    // Story 15.3：agent_engine 迁引擎后其 resolve_default_provider 回引断链，
+    // 改经 llm_config 模块直引（同一函数，值不变）。
+    let provider = crate::services::llm_config::resolve_default_provider(
         &main_pool,
         &crate::services::secret_store_keyring::KeyringSecretStore::new(),
     )
@@ -1072,25 +1054,27 @@ async fn generate_title(
             })
             .unwrap_or_default();
         conversations::update_conversation_title(&conv_pool, &conversation_id, &fallback).await?;
-        let _ = app_handle.emit(
-            "conversation:title-updated",
-            TitleUpdatedPayload {
-                conversation_id,
-                title: fallback,
-            },
-        );
+        let _ = serde_json::to_value(TitleUpdatedPayload {
+            conversation_id,
+            title: fallback,
+        })
+        .map_err(|e| e.to_string())
+        .and_then(|payload| {
+            bus.emit(crate::events::CONVERSATION_TITLE_UPDATED_EVENT, payload)
+        });
         return Ok(());
     }
 
     conversations::update_conversation_title(&conv_pool, &conversation_id, &title).await?;
 
-    let _ = app_handle.emit(
-        "conversation:title-updated",
-        TitleUpdatedPayload {
-            conversation_id,
-            title,
-        },
-    );
+    let _ = serde_json::to_value(TitleUpdatedPayload {
+        conversation_id,
+        title,
+    })
+    .map_err(|e| e.to_string())
+    .and_then(|payload| {
+        bus.emit(crate::events::CONVERSATION_TITLE_UPDATED_EVENT, payload)
+    });
 
     Ok(())
 }

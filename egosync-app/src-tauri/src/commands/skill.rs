@@ -3,7 +3,8 @@ use std::sync::Arc;
 use tauri::{AppHandle, Manager, State};
 use tokio::sync::Mutex;
 
-use crate::commands::chat::OpencodeSessions;
+// Story 15.3：六组状态合并为单 Registry（opencode_sessions 经其字段取用）
+use crate::commands::chat::ChatSessionRegistry;
 use crate::db::pool::DbPool;
 use crate::error::AppError;
 use crate::models::skill::{
@@ -164,7 +165,7 @@ pub async fn skill_import_opencode(
     app: AppHandle,
     agent_config: State<'_, AgentConfigService>,
     sidecar: State<'_, Arc<Mutex<SidecarManager>>>,
-    opencode_sessions: State<'_, OpencodeSessions>,
+    session_registry: State<'_, Arc<ChatSessionRegistry>>,
 ) -> Result<ImportOpencodeSkillResult, AppError> {
     ensure_find_skills_enabled(&pool, &role_id).await?;
     let project_dir = opencode_workspace_dir(&app)?;
@@ -199,7 +200,7 @@ pub async fn skill_import_opencode(
         result.synced = false;
     }
     if result.synced {
-        match crate::commands::mcp::refresh_opencode_runtime(&sidecar, &opencode_sessions).await {
+        match crate::commands::mcp::refresh_opencode_runtime(&sidecar, &session_registry.opencode_sessions).await {
             Ok(()) => result.runtime_ready = true,
             Err(e) => result.runtime_error = Some(e.to_string()),
         }
@@ -214,7 +215,7 @@ pub async fn skill_import_custom(
     app: AppHandle,
     agent_config: State<'_, AgentConfigService>,
     sidecar: State<'_, Arc<Mutex<SidecarManager>>>,
-    opencode_sessions: State<'_, OpencodeSessions>,
+    session_registry: State<'_, Arc<ChatSessionRegistry>>,
 ) -> Result<ImportCustomSkillResult, AppError> {
     let app_data_dir = app
         .path()
@@ -245,7 +246,7 @@ pub async fn skill_import_custom(
     )
     .await;
     if synced {
-        match crate::commands::mcp::refresh_opencode_runtime(&sidecar, &opencode_sessions).await {
+        match crate::commands::mcp::refresh_opencode_runtime(&sidecar, &session_registry.opencode_sessions).await {
             Ok(()) => result.runtime_ready = true,
             Err(e) => result.runtime_error = Some(e.to_string()),
         }

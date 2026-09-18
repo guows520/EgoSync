@@ -1,11 +1,15 @@
 pub mod agent_bridge;
 pub mod agent_config;
+// Story 15.3：chat/agent_engine 域迁入（AppHandle → 四接缝注入）
+pub mod agent_engine;
 pub mod bigrock_protection;
 pub mod bigrock_reminder;
 pub mod briefing_generator;
 pub mod butler_config;
 pub mod dashboard_service;
 pub mod data_export;
+// Story 15.3：委派桥接迁入（AppHandle → 接缝注入）
+pub mod delegate_bridge;
 pub mod energy_calculator;
 pub mod event_bus;
 pub mod event_router;

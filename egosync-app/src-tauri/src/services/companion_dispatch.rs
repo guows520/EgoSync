@@ -501,13 +501,14 @@ impl CommandExecutor for AppHandleCommandExecutor {
                     onboarding_step: 0,
                     selected_skill_id: None,
                 };
+                // Story 15.3：六组状态合并为单 Registry + 事件总线注入
                 let msg = crate::commands::chat::chat_send_message(
                     request,
                     app.state::<DbPool>(),
                     app.state::<ConversationsPool>(),
-                    app.state::<crate::commands::chat::StreamingState>(),
-                    app.state::<crate::commands::chat::OnboardingConversations>(),
+                    app.state::<Arc<crate::commands::chat::ChatSessionRegistry>>(),
                     app.state::<crate::services::agent_config::AgentConfigService>(),
+                    app.state::<crate::services::tauri_event_bus::TauriEventBus>(),
                     app.clone(),
                 )
                 .await?;
@@ -551,6 +552,7 @@ impl CommandExecutor for AppHandleCommandExecutor {
                     p.role_id,
                     app.state::<ConversationsPool>(),
                     app.state::<DbPool>(),
+                    app.state::<crate::services::tauri_event_bus::TauriEventBus>(),
                     app.clone(),
                 )
                 .await?;
@@ -566,6 +568,7 @@ impl CommandExecutor for AppHandleCommandExecutor {
                 crate::commands::chat::chat_delete_conversation(
                     p.conversation_id,
                     app.state::<ConversationsPool>(),
+                    app.state::<crate::services::tauri_event_bus::TauriEventBus>(),
                     app.clone(),
                 )
                 .await?;

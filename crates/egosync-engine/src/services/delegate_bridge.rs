@@ -14,7 +14,9 @@ use crate::error::AppError;
 use crate::models::skill::{ImportCustomSkillInput, PreviewCustomSkillInput, SkillRoleScope, BUTLER_SCOPE_ID};
 use crate::models::task::{CreateTaskInput, TaskOwnerType};
 use crate::services::agent_config::AgentConfigService;
-use tauri::{AppHandle, Emitter, Manager};
+// Story 15.3：AppHandle → 接缝注入（事件总线/Agent 配置/Skill 根目录/密钥）
+use crate::services::event_bus::EngineEvents;
+use crate::services::secret_store::SecretStore;
 
 const DEFAULT_MAX_BODY_BYTES: usize = 16 * 1024;
 const SKILL_MAX_BODY_BYTES: usize = 128 * 1024;
@@ -36,7 +38,11 @@ pub struct DelegateBridge {
     delegation_limit: Arc<Semaphore>,
     connection_limit: Arc<Semaphore>,
     token: String,
-    app_handle: Option<AppHandle>,
+    // Story 15.3：接缝注入字段（原 AppHandle 单源派生）
+    event_bus: Option<Arc<dyn EngineEvents>>,
+    agent_config: AgentConfigService,
+    skills_root: std::path::PathBuf,
+    secret: Arc<dyn SecretStore>,
 }
 
 #[derive(Clone)]
@@ -115,7 +121,15 @@ struct HttpRequest {
 }
 
 impl DelegateBridge {
-    pub fn new(main_pool: DbPool, conv_pool: ConversationsPool, token: String, app_handle: Option<AppHandle>) -> Self {
+    pub fn new(
+        main_pool: DbPool,
+        conv_pool: ConversationsPool,
+        token: String,
+        event_bus: Option<Arc<dyn EngineEvents>>,
+        agent_config: AgentConfigService,
+        skills_root: std::path::PathBuf,
+        secret: Arc<dyn SecretStore>,
+    ) -> Self {
         Self {
             main_pool,
             conv_pool,
@@ -126,7 +140,10 @@ impl DelegateBridge {
             delegation_limit: Arc::new(Semaphore::new(MAX_CONCURRENT_DELEGATIONS)),
             connection_limit: Arc::new(Semaphore::new(MAX_CONCURRENT_CONNECTIONS)),
             token,
-            app_handle,
+            event_bus,
+            agent_config,
+            skills_root,
+            secret,
         }
     }
 
@@ -207,22 +224,17 @@ impl DelegateBridge {
             DelegateSessionContext::Butler { .. } => BUTLER_SCOPE_ID,
         };
 
-        let Some(app_handle) = self.app_handle.as_ref() else {
+        // Story 15.3：AppHandle 双取用点合一——事件总线缺位即运行时不可用
+        // （Agent 配置已为注入字段，不再有 state 缺失分支）
+        if self.event_bus.is_none() {
             return CreateSkillResponse {
                 status: "runtime_unavailable".to_string(),
                 message: "创建 Skill 失败：应用运行时不可用。".to_string(),
                 skill_id: None,
                 skill_name: None,
             };
-        };
-        let Some(agent_config) = app_handle.try_state::<AgentConfigService>() else {
-            return CreateSkillResponse {
-                status: "runtime_unavailable".to_string(),
-                message: "创建 Skill 失败：Agent 配置服务不可用。".to_string(),
-                skill_id: None,
-                skill_name: None,
-            };
-        };
+        }
+        let agent_config = &self.agent_config;
 
         let enabled = match &session {
             DelegateSessionContext::Role { role_id } => crate::db::roles::get_role(&self.main_pool, role_id)
@@ -286,16 +298,8 @@ impl DelegateBridge {
             _ => false,
         };
 
-        let app_data_dir = match app_handle.path().app_data_dir() {
-            Ok(path) => path,
-            Err(error) => return CreateSkillResponse {
-                status: "runtime_unavailable".to_string(),
-                message: format!("创建 Skill 失败：无法获取应用目录（{}）", error),
-                skill_id: None,
-                skill_name: None,
-            },
-        };
-        let skills_root = app_data_dir.join("opencode-workspace").join(".opencode").join("skills");
+        // Story 15.3：skills_root 由壳在构造期解析注入（app_data_dir 解析逻辑迁壳侧）
+        let skills_root = &self.skills_root;
         let (entry, newly_imported) = if let Some(duplicate) = preview.duplicate.as_ref() {
             if let Err(error) = crate::services::skill_registry::enable_skill_for_owner(
                 &self.main_pool,
@@ -406,9 +410,10 @@ impl DelegateBridge {
         }
 
         self.request_runtime_refresh().await;
-        if let Some(app_handle) = self.app_handle.as_ref() {
+        if let Some(bus) = self.event_bus.as_ref() {
             // Story 15.2：事件名改引 engine events 常量源（值不变）
-            let _ = app_handle.emit(
+            // Story 15.3：emit 机械改写（AppHandle::emit → EngineEvents 接缝）
+            let _ = bus.emit(
                 crate::events::SKILL_REGISTRY_UPDATED_EVENT,
                 serde_json::json!({ "ownerId": owner_id, "skillId": entry.id }),
             );
@@ -503,14 +508,14 @@ impl DelegateBridge {
                 );
                 let pool = self.main_pool.clone();
                 let task_id = task.id.clone();
-                let app_handle = self.app_handle.clone();
-                // Story 15.2：unit struct 即席构造零成本（接缝签名需 'static 移入闭包）
-                let secret = crate::services::secret_store_keyring::KeyringSecretStore::new();
-                tauri::async_runtime::spawn(async move {
+                let event_bus = self.event_bus.clone();
+                // Story 15.3：密钥经接缝注入（Arc clone 移入 'static 闭包）
+                let secret = self.secret.clone();
+                tokio::spawn(async move {
                     let classified = match crate::services::task_classifier::classify_and_persist(
                         &pool,
                         &task_id,
-                        &secret,
+                        secret.as_ref(),
                     )
                     .await
                     {
@@ -521,9 +526,12 @@ impl DelegateBridge {
                         }
                     };
                     if let Some(updated) = classified {
-                        if let Some(ref app) = app_handle {
+                        if let Some(ref bus) = event_bus {
                             // Story 15.2：事件名改引 engine events 常量源（值不变）
-                            let _ = app.emit(crate::events::TASK_CLASSIFIED_EVENT, &updated);
+                            // Story 15.3：emit 机械改写（事件名→常量 + 强类型→serde_json::to_value）
+                            let _ = serde_json::to_value(&updated)
+                                .map_err(|e| e.to_string())
+                                .and_then(|payload| bus.emit(crate::events::TASK_CLASSIFIED_EVENT, payload));
                         }
                     }
                 });
@@ -705,6 +713,7 @@ impl DelegateBridge {
                 &self.conv_pool,
                 &args,
                 source_conversation_id.as_deref(),
+                self.secret.clone(),
             ),
         )
         .await
@@ -1032,11 +1041,31 @@ fn json_response<T: Serialize>(status: u16, reason: &str, value: &T) -> String {
 mod tests {
     use super::*;
 
+    // Story 15.3：密钥接缝的测试替身——测试路径不触真实密钥库，
+    // 沿用 mission_inferrer / scheduler 测试模块各自持一份的既有先例（去重为后续故事）。
+    struct TestSecretStore;
+    impl crate::services::secret_store::SecretStore for TestSecretStore {
+        fn save_secret(&self, _key: &str, _value: &str) -> Result<(), AppError> { Ok(()) }
+        fn load_secret(&self, _key: &str) -> Result<Option<String>, AppError> { Ok(None) }
+        fn delete_secret(&self, _key: &str) -> Result<(), AppError> { Ok(()) }
+    }
+
     async fn test_bridge() -> (DelegateBridge, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
         let main = crate::db::pool::init_db(&dir.path().join("main.db")).await.unwrap();
         let conv = crate::db::pool::init_conversations_db(&dir.path().join("conv.db")).await.unwrap();
-        (DelegateBridge::new(main, conv, "token".into(), None), dir)
+        (
+            DelegateBridge::new(
+                main,
+                conv,
+                "token".into(),
+                None,
+                AgentConfigService::new(dir.path().join("opencode.json")),
+                dir.path().join("skills"),
+                std::sync::Arc::new(TestSecretStore),
+            ),
+            dir,
+        )
     }
 
     async fn test_role(bridge: &DelegateBridge, name: &str) -> String {

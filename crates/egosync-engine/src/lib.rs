@@ -16,4 +16,5 @@ pub mod error;
 pub mod events;
 pub mod llm;
 pub mod models;
+pub mod registry;
 pub mod services;

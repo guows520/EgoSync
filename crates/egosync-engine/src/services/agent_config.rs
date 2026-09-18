@@ -312,6 +312,7 @@ export default tool({
 
 /// Manages the `agent` section of `opencode.json`, synchronising EgoSync roles
 /// to opencode agent entries on every CRUD operation.
+#[derive(Clone)]
 pub struct AgentConfigService {
     config_path: PathBuf,
     runtime_refresh_pending: Arc<AtomicBool>,

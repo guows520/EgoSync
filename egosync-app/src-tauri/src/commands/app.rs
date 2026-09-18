@@ -5,7 +5,8 @@ use tauri::State;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
 
-use crate::commands::chat::OpencodeMcpScopeLock;
+// Story 15.3：六组状态合并为单 Registry（mcp_scope_lock 经其字段取用）
+use crate::commands::chat::ChatSessionRegistry;
 use crate::db::app_settings;
 use crate::db::pool::DbPool;
 use crate::db::settings;
@@ -46,9 +47,9 @@ pub async fn app_update_butler_skills(
     input: UpdateRoleSkillsInput,
     pool: State<'_, DbPool>,
     agent_config: State<'_, AgentConfigService>,
-    mcp_scope_lock: State<'_, OpencodeMcpScopeLock>,
+    registry: State<'_, Arc<ChatSessionRegistry>>,
 ) -> Result<ButlerSkillsConfig, AppError> {
-    let _guard = mcp_scope_lock.0.lock().await;
+    let _guard = registry.opencode_mcp_scope_lock.0.lock().await;
     let skills = crate::services::butler_config::set_butler_skills(&pool, &input).await?;
     let registry = crate::db::skills::list_skills(&pool).await?;
     let mcp_lines = crate::db::mcp_servers::butler_enabled_mcp_lines(&pool).await?;
@@ -174,7 +175,8 @@ pub async fn app_emit_test_stream(
 
     for token in &tokens {
         if let Err(e) = app_handle.emit(
-            "llm:stream",
+            // Story 15.3：发射源唯一化——字面量改引 engine 常量（payload 不变）
+            crate::events::LLM_STREAM_EVENT,
             StreamPayload {
                 conversation_id: conv_id.clone(),
                 token: token.clone(),
@@ -194,7 +196,7 @@ pub async fn app_emit_test_stream(
     }
     // 发射 done 信号
     if let Err(e) = app_handle.emit(
-        "llm:stream",
+        crate::events::LLM_STREAM_EVENT,
         StreamPayload {
             conversation_id: conv_id,
             token: String::new(),

@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use tauri::{Emitter, Manager};
 use tokio::sync::{mpsc, Mutex};
 use tokio::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
@@ -13,53 +12,41 @@ use crate::llm::traits::{
     ChatCompletionMessage, ChatOptions, LlmProvider, StreamEvent, ToolCall, ToolDefinition,
 };
 use crate::models::chat::{RoleProposedPayload, StreamPayload, STREAM_PHASE_ANSWERING, STREAM_PHASE_DONE, STREAM_PHASE_PROCESS, STREAM_PHASE_THINKING, STREAM_PHASE_TOOL};
-use crate::commands::chat::OpencodeSessionState;
+// Story 15.3：会话状态类型归位引擎 registry
+use crate::registry::ChatSessionRegistry;
+use crate::registry::OpencodeSessionState;
+// Story 15.3：事件名常量是唯一发射源；密钥/事件经接缝注入
+use crate::events::{LLM_STREAM_EVENT, ROLE_DELEGATED_EVENT, ROLE_PROPOSED_EVENT, TASK_TOOL_ACTION_EVENT};
+use crate::services::event_bus::EngineEvents;
+use crate::services::secret_store::SecretStore;
 use crate::models::role::CreateRoleInput;
 use crate::models::task::{CreateTaskInput, TaskOwnerType};
 use crate::models::task_decomposition::{
     CreateTaskDecompositionProposalInput, TaskDecompositionItem,
 };
-// Story 15.2：三提取件（resolve_default_provider / build_role_task_summary /
-// build_role_memory_summary）与 4 个共享 helper 已搬入 engine（role_context /
-// llm_config），此处回引使既有调用点文本零改动。
-pub use crate::services::llm_config::resolve_default_provider;
+// Story 15.2：三提取件（build_role_task_summary / build_role_memory_summary）
+// 与 4 个共享 helper 已搬入 engine（role_context / llm_config）。
+// Story 15.3：resolve_default_provider 回引断链——壳调用点（commands/chat.rs
+// /memory_pipeline.rs）已改经 llm_config 模块直引（同一函数，值不变）。
+use crate::services::llm_config::resolve_default_provider;
 use crate::services::role_context::{
     build_role_memory_summary, build_role_task_summary, format_memory_reference_line,
     format_task_context_line, select_task_context_items, truncate_chars,
     BUTLER_MEMORY_PER_ROLE, BUTLER_MEMORY_TOTAL_CHARS, TASK_CONTEXT_VISIBLE_LIMIT,
 };
-use crate::services::secret_store_keyring::KeyringSecretStore;
 
 const OPENCODE_FALLBACK_NOTICE: &str = "Agent 引擎暂时不可用，当前为基础对话模式。\n\n";
 const OPENCODE_TOOL_EXECUTION_TIMEOUT: Duration = Duration::from_secs(60);
 const OPENCODE_SKILL_LOAD_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// Resolve the opencode project directory to a stable path outside the dev
-/// project tree. Using `"."` previously caused opencode to write `.opencode/`
-/// session files into the tauri/vite source directory, triggering cargo-watch
-/// or vite HMR full-page reloads during active sessions.
-fn resolve_opencode_project_dir(app_handle: &tauri::AppHandle) -> String {
-    use tauri::Manager;
-    if let Ok(dir) = app_handle.path().app_data_dir() {
-        let workspace = dir.join("opencode-workspace");
-        let _ = std::fs::create_dir_all(&workspace);
-        workspace.to_string_lossy().to_string()
-    } else {
-        // Fallback: use user home to avoid polluting source tree
-        dirs::home_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join(".egosync-workspace")
-            .to_string_lossy()
-            .to_string()
-    }
-}
-
+/// Story 15.3：宿主路径接缝——默认 project_dir 由壳解析注入
+/// （原 app_data_dir 解析逻辑迁壳侧，engine 不再触宿主路径 API）。
 fn resolve_requested_working_directory(
-    app_handle: &tauri::AppHandle,
+    default_project_dir: &str,
     working_directory: Option<&str>,
 ) -> Result<String, AppError> {
     let Some(raw_dir) = working_directory.map(str::trim).filter(|dir| !dir.is_empty()) else {
-        return Ok(resolve_opencode_project_dir(app_handle));
+        return Ok(default_project_dir.to_string());
     };
     let path = std::path::PathBuf::from(raw_dir);
     if !path.is_dir() {
@@ -214,15 +201,14 @@ fn classify_bus_text_delta(
 }
 
 fn emit_stream_token(
-    app_handle: &tauri::AppHandle,
+    bus: &dyn EngineEvents,
     conversation_id: &str,
     message_id: Option<&str>,
     token: &str,
     thinking: bool,
 ) {
-    let _ = app_handle.emit(
-        "llm:stream",
-        StreamPayload {
+    // Story 15.3：emit 机械改写（事件名→常量 + 强类型→serde_json::to_value）
+    let _ = serde_json::to_value(StreamPayload {
             conversation_id: conversation_id.to_string(),
             token: token.to_string(),
             done: false,
@@ -236,8 +222,9 @@ fn emit_stream_token(
             },
             tool_name: None,
             process_event: None,
-        },
-    );
+        })
+    .map_err(|e| e.to_string())
+    .and_then(|payload| bus.emit(LLM_STREAM_EVENT, payload));
 }
 
 fn display_tool_name(tool_name: &str) -> String {
@@ -285,7 +272,7 @@ fn tool_status_text(tool_name: &str, status: &str) -> Option<String> {
 }
 
 fn emit_tool_status(
-    app_handle: &tauri::AppHandle,
+    bus: &dyn EngineEvents,
     conversation_id: &str,
     tool_name: &str,
     status: &str,
@@ -293,9 +280,8 @@ fn emit_tool_status(
     let Some(status_text) = tool_status_text(tool_name, status) else {
         return;
     };
-    let _ = app_handle.emit(
-        "llm:stream",
-        StreamPayload {
+    // Story 15.3：emit 机械改写（事件名→常量 + 强类型→serde_json::to_value）
+    let _ = serde_json::to_value(StreamPayload {
             conversation_id: conversation_id.to_string(),
             token: String::new(),
             done: false,
@@ -312,8 +298,9 @@ fn emit_tool_status(
                 }
             },
             process_event: None,
-        },
-    );
+        })
+    .map_err(|e| e.to_string())
+    .and_then(|payload| bus.emit(LLM_STREAM_EVENT, payload));
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -811,13 +798,12 @@ fn process_event_payload(
 }
 
 fn emit_process_event(
-    app_handle: &tauri::AppHandle,
+    bus: &dyn EngineEvents,
     conversation_id: &str,
     process_event: crate::models::chat::MessageProcessEvent,
 ) {
-    let _ = app_handle.emit(
-        "llm:stream",
-        StreamPayload {
+    // Story 15.3：emit 机械改写（事件名→常量 + 强类型→serde_json::to_value）
+    let _ = serde_json::to_value(StreamPayload {
             conversation_id: conversation_id.to_string(),
             token: String::new(),
             done: false,
@@ -827,12 +813,13 @@ fn emit_process_event(
             status_text: None,
             tool_name: process_event.tool_name.clone(),
             process_event: Some(process_event),
-        },
-    );
+        })
+    .map_err(|e| e.to_string())
+    .and_then(|payload| bus.emit(LLM_STREAM_EVENT, payload));
 }
 
 async fn persist_and_emit_process_event(
-    app_handle: &tauri::AppHandle,
+    bus: &dyn EngineEvents,
     conv_pool: &ConversationsPool,
     conversation_id: &str,
     message_id: &str,
@@ -841,7 +828,7 @@ async fn persist_and_emit_process_event(
     working_directory: Option<&str>,
 ) {
     emit_process_event(
-        app_handle,
+        bus,
         conversation_id,
         process_event_payload(conversation_id, message_id, opencode_session_id, candidate, working_directory),
     );
@@ -911,7 +898,7 @@ async fn flush_thinking_process_event(
 }
 
 async fn flush_narration_process_event(
-    app_handle: &tauri::AppHandle,
+    bus: &dyn EngineEvents,
     conv_pool: &ConversationsPool,
     conversation_id: &str,
     message_id: &str,
@@ -930,7 +917,7 @@ async fn flush_narration_process_event(
     text.clear();
     if let Some(candidate) = build_narration_process_event_candidate(&part_raw) {
         persist_and_emit_process_event(
-            app_handle,
+            bus,
             conv_pool,
             conversation_id,
             message_id,
@@ -945,13 +932,12 @@ async fn flush_narration_process_event(
 }
 
 fn emit_stream_done(
-    app_handle: &tauri::AppHandle,
+    bus: &dyn EngineEvents,
     conversation_id: &str,
     message_id: Option<&str>,
 ) {
-    let _ = app_handle.emit(
-        "llm:stream",
-        StreamPayload {
+    // Story 15.3：emit 机械改写（事件名→常量 + 强类型→serde_json::to_value）
+    let _ = serde_json::to_value(StreamPayload {
             conversation_id: conversation_id.to_string(),
             token: String::new(),
             done: true,
@@ -961,8 +947,9 @@ fn emit_stream_done(
             status_text: None,
             tool_name: None,
             process_event: None,
-        },
-    );
+        })
+    .map_err(|e| e.to_string())
+    .and_then(|payload| bus.emit(LLM_STREAM_EVENT, payload));
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1060,7 +1047,7 @@ fn disabled_meta_skill_message(
 }
 
 fn append_completed_tail(
-    app_handle: Option<&tauri::AppHandle>,
+    bus: Option<&dyn EngineEvents>,
     conversation_id: &str,
     message_id: Option<&str>,
     target: &mut String,
@@ -1073,9 +1060,9 @@ fn append_completed_tail(
 
     if target.trim().is_empty() {
         target.push_str(completed_text);
-        if let Some(app_handle) = app_handle {
+        if let Some(bus) = bus {
             emit_stream_token(
-                app_handle,
+                bus,
                 conversation_id,
                 message_id,
                 completed_text,
@@ -1088,14 +1075,14 @@ fn append_completed_tail(
     if completed_text.len() > target.len() && completed_text.starts_with(target.as_str()) {
         let delta = &completed_text[target.len()..];
         target.push_str(delta);
-        if let Some(app_handle) = app_handle {
-            emit_stream_token(app_handle, conversation_id, message_id, delta, thinking);
+        if let Some(bus) = bus {
+            emit_stream_token(bus, conversation_id, message_id, delta, thinking);
         }
     }
 }
 
 fn append_completed_followup_tail(
-    app_handle: Option<&tauri::AppHandle>,
+    bus: Option<&dyn EngineEvents>,
     conversation_id: &str,
     message_id: Option<&str>,
     target: &mut String,
@@ -1106,11 +1093,11 @@ fn append_completed_followup_tail(
         .strip_prefix(first_bubble_text)
         .map(str::trim_start)
         .unwrap_or(completed_text);
-    append_completed_tail(app_handle, conversation_id, message_id, target, tail, false);
+    append_completed_tail(bus, conversation_id, message_id, target, tail, false);
 }
 
 fn apply_completed_message_fallback(
-    app_handle: &tauri::AppHandle,
+    bus: &dyn EngineEvents,
     conversation_id: &str,
     message_id: Option<&str>,
     completed: Option<crate::models::agent::OpencodeCompletedMessage>,
@@ -1118,7 +1105,7 @@ fn apply_completed_message_fallback(
     thinking_target: &mut String,
 ) {
     apply_completed_followup_message_fallback(
-        Some(app_handle),
+        Some(bus),
         conversation_id,
         message_id,
         completed,
@@ -1129,7 +1116,7 @@ fn apply_completed_message_fallback(
 }
 
 fn apply_completed_followup_message_fallback(
-    app_handle: Option<&tauri::AppHandle>,
+    bus: Option<&dyn EngineEvents>,
     conversation_id: &str,
     message_id: Option<&str>,
     completed: Option<crate::models::agent::OpencodeCompletedMessage>,
@@ -1142,7 +1129,7 @@ fn apply_completed_followup_message_fallback(
     };
 
     append_completed_tail(
-        app_handle,
+        bus,
         conversation_id,
         None,
         thinking_target,
@@ -1152,7 +1139,7 @@ fn apply_completed_followup_message_fallback(
 
     if let Some(first_bubble_text) = first_bubble_text {
         append_completed_followup_tail(
-            app_handle,
+            bus,
             conversation_id,
             message_id,
             text_target,
@@ -1161,7 +1148,7 @@ fn apply_completed_followup_message_fallback(
         );
     } else {
         append_completed_tail(
-            app_handle,
+            bus,
             conversation_id,
             message_id,
             text_target,
@@ -1172,7 +1159,7 @@ fn apply_completed_followup_message_fallback(
 }
 
 fn ensure_non_empty_opencode_result(
-    app_handle: &tauri::AppHandle,
+    bus: &dyn EngineEvents,
     conversation_id: &str,
     message_id: Option<&str>,
     text: &mut String,
@@ -1181,7 +1168,7 @@ fn ensure_non_empty_opencode_result(
     if text.trim().is_empty() && thinking.trim().is_empty() {
         let fallback = "抱歉，这次没有生成可显示的回复，请再试一次。";
         text.push_str(fallback);
-        emit_stream_token(app_handle, conversation_id, message_id, fallback, false);
+        emit_stream_token(bus, conversation_id, message_id, fallback, false);
     }
 }
 
@@ -2249,7 +2236,7 @@ impl From<AppError> for OpencodeStreamAttemptError {
 }
 
 async fn try_run_opencode_stream(
-    app_handle: &tauri::AppHandle,
+    bus: &dyn EngineEvents,
     conv_pool: &ConversationsPool,
     main_pool: &DbPool,
     conversation_id: &str,
@@ -2259,10 +2246,15 @@ async fn try_run_opencode_stream(
     cancel_token: &CancellationToken,
     role_id: Option<&str>,
     working_directory: Option<&str>,
-    opencode_sessions: Arc<Mutex<std::collections::HashMap<String, OpencodeSessionState>>>,
+    registry: &ChatSessionRegistry,
     agent_bridge: crate::services::agent_bridge::AgentBridge,
     event_router: Arc<crate::services::event_router::EventRouter>,
     delegate_bridge: crate::services::delegate_bridge::DelegateBridge,
+    // Story 15.3：宿主能力接缝注入（原 AppHandle try_state 取用点）
+    agent_config: &crate::services::agent_config::AgentConfigService,
+    sidecar: &Arc<Mutex<crate::services::sidecar::SidecarManager>>,
+    secret: Arc<dyn SecretStore>,
+    project_dir: &str,
     already_retried_mcp_session: bool,
     already_retried_skill_load: bool,
     selected_skill: Option<&crate::models::skill::SelectableSkill>,
@@ -2307,27 +2299,20 @@ async fn try_run_opencode_stream(
         conversations::mark_message_complete(conv_pool, assistant_message_id)
             .await
             .ok();
-        emit_stream_token(app_handle, conversation_id, None, message, false);
-        emit_stream_done(app_handle, conversation_id, None);
+        emit_stream_token(bus, conversation_id, None, message, false);
+        emit_stream_done(bus, conversation_id, None);
         return Ok(());
     }
 
-    let config_refresh_requested = app_handle
-        .try_state::<crate::services::agent_config::AgentConfigService>()
-        .map(|state| state.take_runtime_refresh())
-        .unwrap_or(false);
+    let config_refresh_requested = agent_config.take_runtime_refresh();
     let delegate_refresh_requested = delegate_bridge.take_runtime_refresh().await;
     let runtime_refresh_requested = config_refresh_requested || delegate_refresh_requested;
     if runtime_refresh_requested {
         if let Err(error) =
-            refresh_opencode_runtime_for_mcp_retry(app_handle, &opencode_sessions).await
+            refresh_opencode_runtime_for_mcp_retry(sidecar, registry).await
         {
             if config_refresh_requested {
-                if let Some(agent_config) =
-                    app_handle.try_state::<crate::services::agent_config::AgentConfigService>()
-                {
-                    agent_config.request_runtime_refresh();
-                }
+                agent_config.request_runtime_refresh();
             }
             if delegate_refresh_requested {
                 delegate_bridge.request_runtime_refresh().await;
@@ -2335,15 +2320,11 @@ async fn try_run_opencode_stream(
             return Err(error.into());
         }
     }
-    let project_dir = resolve_requested_working_directory(app_handle, working_directory)?;
+    let project_dir = resolve_requested_working_directory(project_dir, working_directory)?;
     if runtime_refresh_requested {
         let agent = opencode_agent_key(role_id);
         if !agent_bridge.agent_exists(&agent, &project_dir).await? {
-            if let Some(agent_config) =
-                app_handle.try_state::<crate::services::agent_config::AgentConfigService>()
-            {
-                agent_config.request_runtime_refresh();
-            }
+            agent_config.request_runtime_refresh();
             return Err(AppError::SidecarError(format!(
                 "OpenCode runtime refresh completed but agent `{}` is unavailable",
                 agent
@@ -2354,22 +2335,19 @@ async fn try_run_opencode_stream(
     tracing::info!(elapsed_ms = stream_started_at.elapsed().as_millis() as u64, "[stream-stage] working directory resolved");
     let mcp_scope_key = crate::services::mcp_server::mcp_scope_key_for_role(main_pool, role_id).await?;
     tracing::info!(elapsed_ms = stream_started_at.elapsed().as_millis() as u64, "[stream-stage] MCP scope resolved");
-    let mcp_scope_lock = app_handle
-        .try_state::<crate::commands::chat::OpencodeMcpScopeLock>()
-        .map(|state| state.0.clone());
+    // Story 15.3：MCP 同步锁经注入 Registry 取用（锁粒度守恒不变量④）
+    let mcp_scope_lock = Some(registry.opencode_mcp_scope_lock.0.clone());
     let session_id = {
         let _mcp_scope_guard = match mcp_scope_lock.as_ref() {
             Some(lock) => Some(lock.lock().await),
             None => None,
         };
-        if let Some(agent_config) = app_handle.try_state::<crate::services::agent_config::AgentConfigService>() {
-            crate::services::mcp_server::sync_mcp_scope_for_role(main_pool, &agent_config, role_id)
-                .await?;
-        }
+        crate::services::mcp_server::sync_mcp_scope_for_role(main_pool, agent_config, role_id)
+            .await?;
         tracing::info!(elapsed_ms = stream_started_at.elapsed().as_millis() as u64, "[stream-stage] MCP scope synchronized");
         let session_cache_key = opencode_session_cache_key(&project_dir, &mcp_scope_key);
         let session_id = {
-            let sessions = opencode_sessions.lock().await;
+            let sessions = registry.opencode_sessions.0.lock().await;
             sessions
                 .get(conversation_id)
                 .and_then(|state| state.sessions_by_directory.get(&session_cache_key))
@@ -2377,7 +2355,7 @@ async fn try_run_opencode_stream(
         };
         match session_id {
             Some(id) => {
-                let mut sessions = opencode_sessions.lock().await;
+                let mut sessions = registry.opencode_sessions.0.lock().await;
                 if let Some(state) = sessions.get_mut(conversation_id) {
                     state.active_session_id = id.clone();
                 }
@@ -2386,7 +2364,7 @@ async fn try_run_opencode_stream(
             None => {
                 let agent = opencode_agent_key(role_id);
                 let session = agent_bridge.create_session(&agent, &project_dir).await?;
-                let mut sessions = opencode_sessions.lock().await;
+                let mut sessions = registry.opencode_sessions.0.lock().await;
                 remember_opencode_session_for_directory(
                     &mut sessions,
                     conversation_id,
@@ -2463,7 +2441,7 @@ async fn try_run_opencode_stream(
     if let Some(entry) = selected_skill {
         if !already_retried_mcp_session && !already_retried_skill_load {
             persist_and_emit_process_event(
-                app_handle,
+                bus,
                 conv_pool,
                 conversation_id,
                 assistant_message_id,
@@ -2581,7 +2559,7 @@ async fn try_run_opencode_stream(
                     conversations::mark_message_complete(conv_pool, assistant_message_id)
                     .await
                     .ok();
-                    emit_stream_done(app_handle, conversation_id, Some(assistant_message_id));
+                    emit_stream_done(bus, conversation_id, Some(assistant_message_id));
                 } else {
                     conversations::update_message_content(
                         conv_pool,
@@ -2594,7 +2572,7 @@ async fn try_run_opencode_stream(
                         conversations::update_message_thinking(conv_pool, assistant_message_id, &accumulated_thinking).await.ok();
                     }
                     conversations::mark_message_complete(conv_pool, assistant_message_id).await.ok();
-                    emit_stream_done(app_handle, conversation_id, None);
+                    emit_stream_done(bus, conversation_id, None);
                 }
                 return Ok(());
             }
@@ -2652,7 +2630,7 @@ async fn try_run_opencode_stream(
                                     first_thinking_logged = true;
                                     tracing::info!(elapsed_ms = stream_started_at.elapsed().as_millis() as u64, "[stream-stage] first thinking emitted");
                                 }
-                                emit_stream_token(app_handle, conversation_id, None, delta, true);
+                                emit_stream_token(bus, conversation_id, None, delta, true);
                                 continue;
                             }
                             BusTextDeltaKind::Text => {}
@@ -2673,7 +2651,7 @@ async fn try_run_opencode_stream(
                             entry.push_str(delta);
                         }
                         buffer_narration_delta(&mut pending_narration, &mut has_tool_process_event, delta);
-                        emit_stream_token(app_handle, conversation_id, emit_message_id.as_deref(), delta, false);
+                        emit_stream_token(bus, conversation_id, emit_message_id.as_deref(), delta, false);
                     }
                     "message.updated" => {
                         // Learn messageID → role so we can filter parts later.
@@ -2738,7 +2716,7 @@ async fn try_run_opencode_stream(
                                                 } else {
                                                     buffer_narration_delta(&mut pending_narration, &mut has_tool_process_event, &delta);
                                                 }
-                                                emit_stream_token(app_handle, conversation_id, emit_message_id.as_deref(), &delta, thinking);
+                                                emit_stream_token(bus, conversation_id, emit_message_id.as_deref(), &delta, thinking);
                                             } else if text != prev.as_str() {
                                                 *prev = text.to_string();
                                                 accum.clear();
@@ -2815,7 +2793,7 @@ async fn try_run_opencode_stream(
                                     let status_key = format!("{}:{}", part.id, candidate.status.as_deref().unwrap_or(""));
                                     if processed_tool_statuses.insert(status_key) {
                                         if let Some(summary) = flush_narration_process_event(
-                                            app_handle,
+                                            bus,
                                             conv_pool,
                                             conversation_id,
                                             assistant_message_id,
@@ -2849,14 +2827,14 @@ async fn try_run_opencode_stream(
                                             Some("running" | "completed")
                                         ) {
                                             emit_tool_status(
-                                                app_handle,
+                                                bus,
                                                 conversation_id,
                                                 &display_tool_name,
                                                 tool_status,
                                             );
                                         }
                                         persist_and_emit_process_event(
-                                            app_handle,
+                                            bus,
                                             conv_pool,
                                             conversation_id,
                                             assistant_message_id,
@@ -2875,7 +2853,7 @@ async fn try_run_opencode_stream(
                                         {
                                             first_bubble_text_at_split = Some(accumulated_text.clone());
                                             final_message_id = Some(assistant_message_id.to_string());
-                                            emit_stream_token(app_handle, conversation_id, Some(assistant_message_id), "", false);
+                                            emit_stream_token(bus, conversation_id, Some(assistant_message_id), "", false);
                                         }
                                     }
                                 }
@@ -2888,14 +2866,15 @@ async fn try_run_opencode_stream(
                                     if final_message_id.is_none() {
                                         first_bubble_text_at_split = Some(accumulated_text.clone());
                                         final_message_id = Some(assistant_message_id.to_string());
-                                        emit_stream_token(app_handle, conversation_id, Some(assistant_message_id), "", false);
+                                        emit_stream_token(bus, conversation_id, Some(assistant_message_id), "", false);
                                     }
                                 }
                                 if !claim_completed_tool_part(&mut processed_tool_parts, &part.id, part_raw) {
                                     continue;
                                 }
                                 if let Some(worker) = handle_tool_part(
-                                    app_handle,
+                                    bus,
+                                    secret.clone(),
                                     conv_pool,
                                     main_pool,
                                     conversation_id,
@@ -2922,7 +2901,7 @@ async fn try_run_opencode_stream(
                                 }
                                 pending_thinking.push_str(&delta);
                             }
-                            emit_stream_token(app_handle, conversation_id, emit_message_id.as_deref(), &delta, thinking);
+                            emit_stream_token(bus, conversation_id, emit_message_id.as_deref(), &delta, thinking);
                         } else if part.text != *prev {
                             // Non-monotonic update (replacement). Replay full text.
                             *prev = part.text.clone();
@@ -2958,7 +2937,7 @@ async fn try_run_opencode_stream(
                             accumulated_text.push_str(&friendly);
                         }
                         emit_stream_token(
-                            app_handle,
+                            bus,
                             conversation_id,
                             error_message_id,
                             &friendly,
@@ -2983,7 +2962,7 @@ async fn try_run_opencode_stream(
                             delegate_bridge.unregister_session(&session_id).await;
                         }
                         if accumulated_text.is_empty() && final_text.is_empty() {
-                            let mut sessions = opencode_sessions.lock().await;
+                            let mut sessions = registry.opencode_sessions.0.lock().await;
                             sessions.remove(conversation_id);
                             return Err(OpencodeStreamAttemptError::Fatal(e));
                         }
@@ -2994,7 +2973,7 @@ async fn try_run_opencode_stream(
                             accumulated_text.push_str(&friendly);
                         }
                         emit_stream_token(
-                            app_handle,
+                            bus,
                             conversation_id,
                             final_message_id.as_deref(),
                             &friendly,
@@ -3052,14 +3031,14 @@ async fn try_run_opencode_stream(
                     timed_out.retryable_skill_load,
                     already_retried_skill_load,
                 ) {
-                    opencode_sessions.lock().await.remove(conversation_id);
+                    registry.opencode_sessions.0.lock().await.remove(conversation_id);
                     return Err(OpencodeStreamAttemptError::SkillLoadTimeout {
                         tool_name: timed_out.tool_name,
                     });
                 }
                 let candidate = tool_execution_timeout_candidate(&timed_out.tool_name, timed_out.timeout);
                 persist_and_emit_process_event(
-                    app_handle,
+                    bus,
                     conv_pool,
                     conversation_id,
                     assistant_message_id,
@@ -3080,8 +3059,8 @@ async fn try_run_opencode_stream(
                     conversations::update_message_thinking(conv_pool, assistant_message_id, &accumulated_thinking).await.ok();
                 }
                 conversations::mark_message_complete(conv_pool, assistant_message_id).await.ok();
-                emit_stream_done(app_handle, conversation_id, final_message_id.as_deref());
-                opencode_sessions.lock().await.remove(conversation_id);
+                emit_stream_done(bus, conversation_id, final_message_id.as_deref());
+                registry.opencode_sessions.0.lock().await.remove(conversation_id);
                 return Ok(());
             }
             _ = async {
@@ -3131,7 +3110,7 @@ async fn try_run_opencode_stream(
             }
             Ok(Ok(Err(e))) => {
                 if accumulated_text.is_empty() && final_text.is_empty() {
-                    let mut sessions = opencode_sessions.lock().await;
+                    let mut sessions = registry.opencode_sessions.0.lock().await;
                     sessions.remove(conversation_id);
                     return Err(OpencodeStreamAttemptError::Fatal(e));
                 }
@@ -3146,7 +3125,7 @@ async fn try_run_opencode_stream(
                         accumulated_text.push_str(&friendly);
                     }
                     emit_stream_token(
-                        app_handle,
+                        bus,
                         conversation_id,
                         final_message_id.as_deref(),
                         &friendly,
@@ -3160,7 +3139,7 @@ async fn try_run_opencode_stream(
 
     if final_message_id.is_some() {
         apply_completed_followup_message_fallback(
-            Some(app_handle),
+            Some(bus),
             conversation_id,
             final_message_id.as_deref(),
             completed_response,
@@ -3169,7 +3148,7 @@ async fn try_run_opencode_stream(
             &mut accumulated_thinking,
         );
         ensure_non_empty_opencode_result(
-            app_handle,
+            bus,
             conversation_id,
             final_message_id.as_deref(),
             &mut final_text,
@@ -3177,7 +3156,7 @@ async fn try_run_opencode_stream(
         );
     } else {
         apply_completed_message_fallback(
-            app_handle,
+            bus,
             conversation_id,
             None,
             completed_response,
@@ -3185,7 +3164,7 @@ async fn try_run_opencode_stream(
             &mut accumulated_thinking,
         );
         ensure_non_empty_opencode_result(
-            app_handle,
+            bus,
             conversation_id,
             None,
             &mut accumulated_text,
@@ -3196,7 +3175,7 @@ async fn try_run_opencode_stream(
     if final_message_id.is_some() {
         if should_flush_final_narration(has_tool_process_event, &pending_narration) {
             flush_narration_process_event(
-                app_handle,
+                bus,
                 conv_pool,
                 conversation_id,
                 assistant_message_id,
@@ -3222,11 +3201,11 @@ async fn try_run_opencode_stream(
         conversations::mark_message_complete(conv_pool, assistant_message_id)
             .await
             .ok();
-        emit_stream_done(app_handle, conversation_id, Some(assistant_message_id));
+        emit_stream_done(bus, conversation_id, Some(assistant_message_id));
     } else {
         if should_flush_final_narration(has_tool_process_event, &pending_narration) {
             flush_narration_process_event(
-                app_handle,
+                bus,
                 conv_pool,
                 conversation_id,
                 assistant_message_id,
@@ -3253,31 +3232,27 @@ async fn try_run_opencode_stream(
         conversations::mark_message_complete(conv_pool, assistant_message_id)
             .await
             .ok();
-        emit_stream_done(app_handle, conversation_id, None);
+        emit_stream_done(bus, conversation_id, None);
     }
     let _ = completed;
     Ok(())
 }
 
 async fn refresh_opencode_runtime_for_mcp_retry(
-    app_handle: &tauri::AppHandle,
-    opencode_sessions: &Arc<Mutex<std::collections::HashMap<String, OpencodeSessionState>>>,
+    sidecar: &Arc<Mutex<crate::services::sidecar::SidecarManager>>,
+    registry: &ChatSessionRegistry,
 ) -> Result<(), AppError> {
-    let Some(sidecar) = app_handle
-        .try_state::<Arc<Mutex<crate::services::sidecar::SidecarManager>>>()
-        .map(|state| state.inner().clone())
-    else {
-        opencode_sessions.lock().await.clear();
-        return Ok(());
-    };
+    // Story 15.3：sidecar 经接缝注入（原 try_state 缺失时的无锁降级分支
+    // 随注入消失——注入方保证实例存在，锁粒度守恒不变量④）
     let mut manager = sidecar.lock().await;
     manager.restart().await?;
-    opencode_sessions.lock().await.clear();
+    registry.opencode_sessions.0.lock().await.clear();
     Ok(())
 }
 
 pub async fn run_stream(
-    app_handle: tauri::AppHandle,
+    // Story 15.3：AppHandle → 接缝注入（总线/Registry/配置/sidecar/密钥/宿主路径）
+    bus: Arc<dyn EngineEvents>,
     conv_pool: ConversationsPool,
     main_pool: DbPool,
     conversation_id: String,
@@ -3289,10 +3264,14 @@ pub async fn run_stream(
     // Story 2.3: 触发本轮的 user message id —— 用于在 delegate 执行后把 routing_metadata
     // 写回触发这一轮的那条 user message。仅 butler 委派路径使用，其他路径忽略。
     user_message_id: String,
-    opencode_sessions: Arc<Mutex<std::collections::HashMap<String, OpencodeSessionState>>>,
+    registry: Arc<ChatSessionRegistry>,
     agent_bridge: crate::services::agent_bridge::AgentBridge,
     event_router: Arc<crate::services::event_router::EventRouter>,
     delegate_bridge: crate::services::delegate_bridge::DelegateBridge,
+    agent_config: crate::services::agent_config::AgentConfigService,
+    sidecar: Arc<Mutex<crate::services::sidecar::SidecarManager>>,
+    secret: Arc<dyn SecretStore>,
+    project_dir: String,
     working_directory: Option<String>,
     // Story 10.1: 用户显式指定并已授权解析的 Skill，None 走普通消息路径（AC-6）
     selected_skill: Option<crate::models::skill::SelectableSkill>,
@@ -3307,7 +3286,7 @@ pub async fn run_stream(
     if !skip_opencode {
         loop {
             let result = try_run_opencode_stream(
-                &app_handle,
+                &*bus,
                 &conv_pool,
                 &main_pool,
                 &conversation_id,
@@ -3317,10 +3296,14 @@ pub async fn run_stream(
                 &cancel_token,
                 role_id.as_deref(),
                 working_directory.as_deref(),
-                opencode_sessions.clone(),
+                &registry,
                 agent_bridge.clone(),
                 event_router.clone(),
                 delegate_bridge.clone(),
+                &agent_config,
+                &sidecar,
+                secret.clone(),
+                &project_dir,
                 already_retried_mcp_session,
                 already_retried_skill_load,
                 selected_skill.as_ref(),
@@ -3335,7 +3318,7 @@ pub async fn run_stream(
                         conversation_id,
                         "MCP session invalid during opencode tool call; refreshing runtime and retrying once"
                     );
-                    if let Err(e) = refresh_opencode_runtime_for_mcp_retry(&app_handle, &opencode_sessions).await {
+                    if let Err(e) = refresh_opencode_runtime_for_mcp_retry(&sidecar, &registry).await {
                         tracing::warn!(
                             conversation_id,
                             error = %e,
@@ -3365,7 +3348,7 @@ pub async fn run_stream(
                         timeout_seconds = OPENCODE_SKILL_LOAD_TIMEOUT.as_secs(),
                         "opencode skill load stalled; refreshing runtime and retrying once"
                     );
-                    if let Err(e) = refresh_opencode_runtime_for_mcp_retry(&app_handle, &opencode_sessions).await {
+                    if let Err(e) = refresh_opencode_runtime_for_mcp_retry(&sidecar, &registry).await {
                         tracing::warn!(conversation_id, tool_name = %tool_name, error = %e, "opencode runtime refresh after skill load timeout failed");
                         break;
                     }
@@ -3391,8 +3374,8 @@ pub async fn run_stream(
                         )
                         .await?;
                         conversations::mark_message_complete(&conv_pool, &assistant_message_id).await?;
-                        emit_stream_token(&app_handle, &conversation_id, Some(&assistant_message_id), &friendly, false);
-                        emit_stream_done(&app_handle, &conversation_id, Some(&assistant_message_id));
+                        emit_stream_token(&*bus, &conversation_id, Some(&assistant_message_id), &friendly, false);
+                        emit_stream_done(&*bus, &conversation_id, Some(&assistant_message_id));
                         return Ok(());
                     }
                     tracing::warn!(
@@ -3418,7 +3401,7 @@ pub async fn run_stream(
         }
     };
     let provider =
-        resolve_default_provider(&main_pool, &KeyringSecretStore::new()).await?;
+        resolve_default_provider(&main_pool, secret.as_ref()).await?;
 
     let chat_options = match (onboarding_step, role_id.as_deref()) {
         // onboarding：原有 create_role 工具（分阶段开启），与本 story 互斥
@@ -3452,7 +3435,7 @@ pub async fn run_stream(
     let mut accumulated = prefix.to_string();
     if !is_onboarding {
         emit_stream_token(
-            &app_handle,
+            &*bus,
             &conversation_id,
             None,
             OPENCODE_FALLBACK_NOTICE,
@@ -3479,7 +3462,7 @@ pub async fn run_stream(
             _ = tokio::time::sleep(EMIT_INTERVAL) => {
                 if !pending.is_empty() {
                     let batch = std::mem::take(&mut pending);
-                    emit_stream_token(&app_handle, &conversation_id, None, &batch, false);
+                    emit_stream_token(&*bus, &conversation_id, None, &batch, false);
                     last_emit = Instant::now();
                 }
                 continue;
@@ -3500,7 +3483,7 @@ pub async fn run_stream(
                 }
                 pending_thinking.push_str(&token);
                 accumulated_thinking.push_str(&token);
-                emit_stream_token(&app_handle, &conversation_id, None, &token, true);
+                emit_stream_token(&*bus, &conversation_id, None, &token, true);
             }
             Some(StreamEvent::Token(token)) => {
                 flush_thinking_process_event(
@@ -3524,7 +3507,7 @@ pub async fn run_stream(
 
                 if last_emit.elapsed() >= EMIT_INTERVAL {
                     let batch = std::mem::take(&mut pending);
-                    emit_stream_token(&app_handle, &conversation_id, None, &batch, false);
+                    emit_stream_token(&*bus, &conversation_id, None, &batch, false);
                     last_emit = Instant::now();
                 }
             }
@@ -3545,7 +3528,7 @@ pub async fn run_stream(
                     tc.id,
                     tc.arguments
                 );
-                emit_tool_status(&app_handle, &conversation_id, &tc.name, "running");
+                emit_tool_status(&*bus, &conversation_id, &tc.name, "running");
                 tool_calls_received.push(tc);
             }
             Some(StreamEvent::Done) => {
@@ -3569,7 +3552,7 @@ pub async fn run_stream(
                 );
                 if !pending.is_empty() {
                     let batch = std::mem::take(&mut pending);
-                    emit_stream_token(&app_handle, &conversation_id, None, &batch, false);
+                    emit_stream_token(&*bus, &conversation_id, None, &batch, false);
                 }
 
                 // Handle tool calls if any
@@ -3595,7 +3578,8 @@ pub async fn run_stream(
                     let mut precomputed_tool_results: Option<Vec<String>> = None;
                     if only_create_role_tool {
                         let tool_results = execute_tool_calls(
-                            &app_handle,
+                            &*bus,
+                            secret.clone(),
                             &main_pool,
                             &conv_pool,
                             &conversation_id,
@@ -3604,7 +3588,7 @@ pub async fn run_stream(
                         )
                         .await;
                         for tc in &tool_calls_received {
-                            emit_tool_status(&app_handle, &conversation_id, &tc.name, "completed");
+                            emit_tool_status(&*bus, &conversation_id, &tc.name, "completed");
                         }
                         let proposal_emitted = tool_results
                             .first()
@@ -3631,7 +3615,7 @@ pub async fn run_stream(
                             conversations::mark_message_complete(&conv_pool, &assistant_message_id)
                                 .await
                                 .ok();
-                            emit_stream_done(&app_handle, &conversation_id, None);
+                            emit_stream_done(&*bus, &conversation_id, None);
                             break;
                         }
 
@@ -3645,13 +3629,14 @@ pub async fn run_stream(
                     }
 
                     let final_message_id = assistant_message_id.clone();
-                    emit_stream_token(&app_handle, &conversation_id, Some(&final_message_id), "", false);
+                    emit_stream_token(&*bus, &conversation_id, Some(&final_message_id), "", false);
 
                     let tool_results = match precomputed_tool_results {
                         Some(results) => results,
                         None => {
                             let results = execute_tool_calls(
-                                &app_handle,
+                                &*bus,
+                                secret.clone(),
                                 &main_pool,
                                 &conv_pool,
                                 &conversation_id,
@@ -3661,7 +3646,7 @@ pub async fn run_stream(
                             .await;
                             for tc in &tool_calls_received {
                                 emit_tool_status(
-                                    &app_handle,
+                                    &*bus,
                                     &conversation_id,
                                     &tc.name,
                                     "completed",
@@ -3709,7 +3694,7 @@ pub async fn run_stream(
                             StreamEvent::Token(token) => {
                                 final_accumulated.push_str(&token);
                                 emit_stream_token(
-                                    &app_handle,
+                                    &*bus,
                                     &conversation_id,
                                     Some(&final_message_id),
                                     &token,
@@ -3750,7 +3735,7 @@ pub async fn run_stream(
                     conversations::mark_message_complete(&conv_pool, &final_message_id)
                         .await
                         .ok();
-                    emit_stream_done(&app_handle, &conversation_id, Some(&final_message_id));
+                    emit_stream_done(&*bus, &conversation_id, Some(&final_message_id));
                     break;
                 } else if onboarding_step.is_some() && looks_like_fake_role_creation(&accumulated) {
                     // ========== 方案 A 兜底：模型伪装了"角色创建成功"但实际没发 tool_calls ==========
@@ -3794,8 +3779,8 @@ pub async fn run_stream(
                             normalized_icon,
                             normalized_color,
                         );
-                        let _ = app_handle.emit(
-                            "role:proposed",
+                        // Story 15.3：emit 机械改写（事件名→常量 + 强类型→serde_json::to_value）
+                        let _ = serde_json::to_value(
                             RoleProposedPayload {
                                 conversation_id: conversation_id.clone(),
                                 name: input.name.clone(),
@@ -3803,7 +3788,9 @@ pub async fn run_stream(
                                 color: normalized_color,
                                 goal: input.goal.clone(),
                             },
-                        );
+                        )
+                        .map_err(|e| e.to_string())
+                        .and_then(|payload| bus.emit(ROLE_PROPOSED_EVENT, payload));
                     } else {
                         tracing::warn!("[fallback] 二次提取未得到有效角色，跳过提议");
                     }
@@ -3831,7 +3818,7 @@ pub async fn run_stream(
                     .await
                     .ok();
 
-                emit_stream_done(&app_handle, &conversation_id, None);
+                emit_stream_done(&*bus, &conversation_id, None);
                 break;
             }
             Some(StreamEvent::Error(err_msg)) => {
@@ -3857,8 +3844,8 @@ pub async fn run_stream(
                     .await
                     .ok();
 
-                emit_stream_token(&app_handle, &conversation_id, None, &friendly, false);
-                emit_stream_done(&app_handle, &conversation_id, None);
+                emit_stream_token(&*bus, &conversation_id, None, &friendly, false);
+                emit_stream_done(&*bus, &conversation_id, None);
                 break;
             }
             None => {
@@ -3874,7 +3861,7 @@ pub async fn run_stream(
                 .await;
                 if !pending.is_empty() {
                     let batch = std::mem::take(&mut pending);
-                    emit_stream_token(&app_handle, &conversation_id, None, &batch, false);
+                    emit_stream_token(&*bus, &conversation_id, None, &batch, false);
                 }
 
                 conversations::update_message_content(
@@ -3897,7 +3884,7 @@ pub async fn run_stream(
                     .await
                     .ok();
 
-                emit_stream_done(&app_handle, &conversation_id, None);
+                emit_stream_done(&*bus, &conversation_id, None);
                 break;
             }
         }
@@ -4019,8 +4006,9 @@ fn non_json_tool_output_preview(output: &str) -> String {
 ///   "state": { "status": "completed", "output": "{\"action\":...}", "input": {...} } }
 /// ```
 /// We only act on status=completed parts where output contains our action JSON.
-async fn handle_tool_part<R: tauri::Runtime>(
-    app_handle: &tauri::AppHandle<R>,
+async fn handle_tool_part(
+    bus: &dyn EngineEvents,
+    secret: Arc<dyn SecretStore>,
     conv_pool: &ConversationsPool,
     main_pool: &DbPool,
     conversation_id: &str,
@@ -4114,17 +4102,16 @@ async fn handle_tool_part<R: tauri::Runtime>(
                 icon,
                 color
             );
-
-            let _ = app_handle.emit(
-                "role:proposed",
-                RoleProposedPayload {
-                    conversation_id: conversation_id.to_string(),
-                    name: name.to_string(),
-                    icon,
-                    color,
-                    goal,
-                },
-            );
+            // Story 15.3：emit 机械改写（事件名→常量 + 强类型→serde_json::to_value）
+            let _ = serde_json::to_value(RoleProposedPayload {
+                conversation_id: conversation_id.to_string(),
+                name: name.to_string(),
+                icon,
+                color,
+                goal,
+            })
+            .map_err(|e| e.to_string())
+            .and_then(|payload| bus.emit(ROLE_PROPOSED_EVENT, payload));
         }
         "delegate_to_role" => {
             let role_id = result_json
@@ -4150,6 +4137,7 @@ async fn handle_tool_part<R: tauri::Runtime>(
                     &main_pool,
                     &butler_user_message_id,
                     &result_json,
+                    secret,
                 )
                 .await;
             });
@@ -4159,8 +4147,9 @@ async fn handle_tool_part<R: tauri::Runtime>(
                 task_summary
             );
 
-            let _ = app_handle.emit(
-                "role:delegated",
+            // Story 15.3：emit 机械改写（事件名→常量；json! 已是 Value）
+            let _ = bus.emit(
+                ROLE_DELEGATED_EVENT,
                 serde_json::json!({
                     "roleId": role_id,
                     "taskSummary": task_summary,
@@ -4185,8 +4174,9 @@ async fn handle_tool_part<R: tauri::Runtime>(
                 message
             );
             if status == "ok" {
-                let _ = app_handle.emit(
-                    "task:tool-action",
+                // Story 15.3：emit 机械改写（事件名→常量；json! 已是 Value）
+                let _ = bus.emit(
+                    TASK_TOOL_ACTION_EVENT,
                     serde_json::json!({
                         "action": action,
                         "message": message,
@@ -4228,6 +4218,7 @@ async fn handle_delegate_tool_result(
     main_pool: &DbPool,
     butler_user_message_id: &str,
     result_json: &serde_json::Value,
+    secret: Arc<dyn SecretStore>,
 ) -> Option<DelegationRecord> {
     let role_id = result_json
         .get("target_role_id")
@@ -4266,6 +4257,7 @@ async fn handle_delegate_tool_result(
         conv_pool,
         &args,
         source_conversation_id.as_deref(),
+        secret,
     )
     .await;
     append_delegation_metadata(conv_pool, butler_user_message_id, &record).await;
@@ -4319,7 +4311,8 @@ async fn existing_delegations(
 
 /// Execute tool calls and return result strings for each
 async fn execute_tool_calls(
-    app_handle: &tauri::AppHandle,
+    bus: &dyn EngineEvents,
+    secret: Arc<dyn SecretStore>,
     main_pool: &DbPool,
     conv_pool: &ConversationsPool,
     conversation_id: &str,
@@ -4341,7 +4334,7 @@ async fn execute_tool_calls(
         );
         let result = match tc.name.as_str() {
             "create_role" => {
-                execute_create_role(app_handle, main_pool, conversation_id, &tc.arguments).await
+                execute_create_role(bus, main_pool, conversation_id, &tc.arguments).await
             }
             "delegate_to_role" => {
                 // Story 2.3 AC-2: 单轮内多个 delegate_to_role 串行执行（V1）
@@ -4350,6 +4343,7 @@ async fn execute_tool_calls(
                     conv_pool,
                     &tc.arguments,
                     Some(conversation_id),
+                    secret.clone(),
                 )
                 .await;
                 delegations.push(record);
@@ -4513,7 +4507,7 @@ async fn persist_delegated_task_process_events(
     }
 }
 
-async fn execute_delegated_task_calls(main_pool: &DbPool, role_id: &str, calls: &[ToolCall]) -> Vec<DelegatedTaskOutcome> {
+async fn execute_delegated_task_calls(main_pool: &DbPool, role_id: &str, calls: &[ToolCall], secret: Arc<dyn SecretStore>) -> Vec<DelegatedTaskOutcome> {
     #[derive(serde::Deserialize)]
     struct Args { title: String, #[serde(default)] deadline: Option<String> }
     let mut seen = HashMap::<(String, String), usize>::new();
@@ -4545,8 +4539,10 @@ async fn execute_delegated_task_calls(main_pool: &DbPool, role_id: &str, calls: 
             Ok(task) => {
                 let pool = main_pool.clone();
                 let task_id = task.id.clone();
+                // Story 15.3：密钥经接缝注入（Arc clone 移入 'static 闭包）
+                let secret = secret.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = crate::services::task_classifier::classify_and_persist(&pool, &task_id, &KeyringSecretStore::new()).await {
+                    if let Err(e) = crate::services::task_classifier::classify_and_persist(&pool, &task_id, secret.as_ref()).await {
                         tracing::warn!("[delegate] 任务自动分类失败，保留默认 Q2: task_id={} error={}", task_id, e);
                     }
                 });
@@ -4564,6 +4560,7 @@ async fn propose_or_execute_delegated_task_calls(
     source_conversation_id: Option<&str>,
     task_summary: &str,
     calls: &[ToolCall],
+    secret: Arc<dyn SecretStore>,
 ) -> Vec<DelegatedTaskOutcome> {
     #[derive(serde::Deserialize)]
     struct Args {
@@ -4573,7 +4570,7 @@ async fn propose_or_execute_delegated_task_calls(
     }
 
     if calls.len() < 2 {
-        return execute_delegated_task_calls(main_pool, role_id, calls).await;
+        return execute_delegated_task_calls(main_pool, role_id, calls, secret).await;
     }
 
     let mut seen = HashMap::<(String, String), String>::new();
@@ -4660,7 +4657,7 @@ async fn propose_or_execute_delegated_task_calls(
     }
 
     if normalized.len() < 2 {
-        return execute_delegated_task_calls(main_pool, role_id, calls).await;
+        return execute_delegated_task_calls(main_pool, role_id, calls, secret).await;
     }
 
     let Some(source_conversation_id) = source_conversation_id else {
@@ -4762,6 +4759,7 @@ async fn run_delegated_role_provider(
     source_conversation_id: Option<&str>,
     task_summary: &str,
     mut messages: Vec<ChatCompletionMessage>,
+    secret: Arc<dyn SecretStore>,
 ) -> DelegatedRoleRun {
     let first = collect_local_stream(provider, messages.clone(), ChatOptions {
         disable_thinking: true,
@@ -4779,6 +4777,7 @@ async fn run_delegated_role_provider(
         source_conversation_id,
         task_summary,
         &first.tool_calls,
+        secret,
     )
     .await;
     messages.push(ChatCompletionMessage { role: "assistant".to_string(), content: first.text, reasoning_content: None, tool_calls: Some(first.tool_calls.clone()), tool_call_id: None });
@@ -4803,8 +4802,9 @@ pub async fn execute_delegate_to_role(
     main_pool: &DbPool,
     conv_pool: &ConversationsPool,
     arguments: &str,
+    secret: Arc<dyn SecretStore>,
 ) -> (String, DelegationRecord) {
-    execute_delegate_to_role_with_source(main_pool, conv_pool, arguments, None).await
+    execute_delegate_to_role_with_source(main_pool, conv_pool, arguments, None, secret).await
 }
 
 pub(crate) async fn execute_delegate_to_role_with_source(
@@ -4812,6 +4812,8 @@ pub(crate) async fn execute_delegate_to_role_with_source(
     conv_pool: &ConversationsPool,
     arguments: &str,
     source_conversation_id: Option<&str>,
+    // Story 15.3：密钥经接缝注入（原 KeyringSecretStore 直构 ×3 → 参数）
+    secret: Arc<dyn SecretStore>,
 ) -> (String, DelegationRecord) {
     #[derive(serde::Deserialize)]
     struct DelegateArgs {
@@ -4929,7 +4931,7 @@ pub(crate) async fn execute_delegate_to_role_with_source(
         );
     }
 
-    let provider = match resolve_default_provider(main_pool, &KeyringSecretStore::new()).await {
+    let provider = match resolve_default_provider(main_pool, secret.as_ref()).await {
         Ok(p) => p,
         Err(e) => {
             tracing::error!("[delegate] 获取 provider 失败: {}", e);
@@ -5004,6 +5006,7 @@ pub(crate) async fn execute_delegate_to_role_with_source(
         source_conversation_id,
         &args.task_summary,
         role_messages,
+        secret,
     )
     .await;
     let role_reply = run.reply;
@@ -5051,7 +5054,7 @@ pub(crate) async fn execute_delegate_to_role_with_source(
 }
 
 async fn execute_create_role(
-    app_handle: &tauri::AppHandle,
+    bus: &dyn EngineEvents,
     _main_pool: &DbPool,
     conversation_id: &str,
     arguments: &str,
@@ -5101,16 +5104,18 @@ async fn execute_create_role(
     );
 
     // 不写库，仅向前端发提议事件；前端弹窗由用户确认后再调 roleService.create()
-    match app_handle.emit(
-        "role:proposed",
-        RoleProposedPayload {
-            conversation_id: conversation_id.to_string(),
-            name: args.name.clone(),
-            icon: normalized_icon,
-            color: normalized_color,
-            goal: args.goal.clone(),
-        },
-    ) {
+    // Story 15.3：emit 机械改写（事件名→常量 + 强类型→serde_json::to_value）
+    // Err 分支保留 warn 语义（原发射错误 → String，格式化行为不变）
+    match serde_json::to_value(RoleProposedPayload {
+        conversation_id: conversation_id.to_string(),
+        name: args.name.clone(),
+        icon: normalized_icon,
+        color: normalized_color,
+        goal: args.goal.clone(),
+    })
+    .map_err(|e| e.to_string())
+    .and_then(|payload| bus.emit(ROLE_PROPOSED_EVENT, payload))
+    {
         Ok(()) => {
             tracing::info!(
                 "[propose] role_proposed_emitted: conv={} name={}",
@@ -5344,7 +5349,67 @@ mod tests {
 
     use super::*;
     use crate::services::role_context::format_memory_reference_label;
+    use crate::services::secret_store::SecretStore as _SecretStoreTrait;
     use std::collections::VecDeque;
+
+    // Story 15.3：密钥接缝的测试替身——委派链走空配置降级路径，不触真实密钥库。
+    // 沿用 mission_inferrer / scheduler 测试模块各自持一份的既有先例（去重为后续故事）。
+    struct TestSecretStore;
+    impl crate::services::secret_store::SecretStore for TestSecretStore {
+        fn save_secret(&self, _key: &str, _value: &str) -> Result<(), AppError> { Ok(()) }
+        fn load_secret(&self, _key: &str) -> Result<Option<String>, AppError> { Ok(None) }
+        fn delete_secret(&self, _key: &str) -> Result<(), AppError> { Ok(()) }
+    }
+
+    fn test_secret() -> Arc<dyn crate::services::secret_store::SecretStore> {
+        Arc::new(TestSecretStore)
+    }
+
+    // 评审补丁（验证缺口层）：发射执行级验证的总线替身——捕获 (事件名, payload)。
+    // WHY：9 处 emit 平移改经 bus+常量后，值钉/contains 钉/source-scan 均为
+    // 静态断言，发射丢失或错接将以全绿出厂；记录型替身让「真的发了什么」可断言。
+    struct RecordingBus {
+        events: std::sync::Mutex<Vec<(String, serde_json::Value)>>,
+    }
+    impl crate::services::event_bus::EngineEvents for RecordingBus {
+        fn emit(&self, event: &str, payload: serde_json::Value) -> Result<(), String> {
+            self.events
+                .lock()
+                .expect("recording bus lock")
+                .push((event.to_string(), payload));
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn create_role_tool_emits_role_proposed_via_bus() {
+        // WHY: create_role 工具是 role:proposed 的生产发射点（前端确认弹窗
+        // 依赖该事件）——平移后须证明事件经 EngineEvents 接缝真实发出且
+        // payload 携带归一化后的提议字段，否则弹窗静默失效而测试全绿。
+        let pool = setup_test_main_pool().await;
+        let bus = RecordingBus {
+            events: std::sync::Mutex::new(Vec::new()),
+        };
+
+        let result = execute_create_role(
+            &bus,
+            &pool,
+            "conv-role-test",
+            r##"{"name":"书虫","icon":"book-open","color":"#8B5CF6","goal":"每月读完一本书"}"##,
+        )
+        .await;
+
+        assert_eq!(result, "role_proposal_emitted:书虫");
+        let events = bus.events.lock().expect("events lock");
+        assert_eq!(events.len(), 1, "恰一次发射（不写库、仅提议）");
+        assert_eq!(events[0].0, crate::events::ROLE_PROPOSED_EVENT);
+        // 前端契约 camelCase（RoleProposedPayload serde rename_all）
+        assert_eq!(events[0].1["conversationId"], "conv-role-test");
+        assert_eq!(events[0].1["name"], "书虫");
+        assert_eq!(events[0].1["icon"], "book-open");
+        assert_eq!(events[0].1["color"], "#8B5CF6");
+        assert_eq!(events[0].1["goal"], "每月读完一本书");
+    }
 
     struct ScriptedDelegateProvider {
         rounds: Mutex<VecDeque<Vec<StreamEvent>>>,
@@ -5424,6 +5489,7 @@ mod tests {
             Some("conv-butler"),
             "准备产品评审",
             &calls,
+            test_secret(),
         )
         .await;
         assert_eq!(results[0].status, "proposed");
@@ -5449,7 +5515,7 @@ mod tests {
     #[tokio::test]
     async fn delegated_creation_failure_is_diagnostic_and_never_reports_created() {
         let pool = setup_test_main_pool().await;
-        let results = execute_delegated_task_calls(&pool, "", &[task_call("1", "准备评审", None), task_call("2", "准备评审", None)]).await;
+        let results = execute_delegated_task_calls(&pool, "", &[task_call("1", "准备评审", None), task_call("2", "准备评审", None)], test_secret()).await;
         assert_eq!(results[0].status, "error");
         assert!(results[0].error.as_deref().unwrap().contains("创建失败"));
         assert_eq!(results[1].status, "duplicate_skipped", "相同失败调用不得再次写库");
@@ -5476,6 +5542,7 @@ mod tests {
             Some("conv-butler"),
             "准备产品评审",
             messages,
+            test_secret(),
         )
         .await;
 
@@ -5499,6 +5566,7 @@ mod tests {
             Some("conv-butler"),
             "咨询产品评审",
             messages,
+            test_secret(),
         )
         .await;
 
@@ -5524,6 +5592,7 @@ mod tests {
             Some("conv-butler"),
             "准备产品评审",
             messages,
+            test_secret(),
         )
         .await;
         let summary = delegated_task_authority_summary(&run.outcomes);
@@ -6512,24 +6581,24 @@ mod tests {
         .await
         .expect("failed to create roles table");
 
-        sqlx::raw_sql(include_str!("../../../../crates/egosync-engine/migrations/004_memories.sql"))
+        sqlx::raw_sql(include_str!("../../migrations/004_memories.sql"))
             .execute(&pool)
             .await
             .expect("failed to create memories table");
         sqlx::raw_sql(include_str!(
-            "../../../../crates/egosync-engine/migrations/005_memory_role_scoped_dedupe.sql"
+            "../../migrations/005_memory_role_scoped_dedupe.sql"
         ))
         .execute(&pool)
         .await
         .expect("failed to migrate memory dedupe index");
         sqlx::raw_sql(include_str!(
-            "../../../../crates/egosync-engine/migrations/006_memory_single_owner_dedupe.sql"
+            "../../migrations/006_memory_single_owner_dedupe.sql"
         ))
         .execute(&pool)
         .await
         .expect("failed to migrate memory single-owner dedupe");
         sqlx::raw_sql(include_str!(
-            "../../../../crates/egosync-engine/migrations/007_forgotten_memory_sources.sql"
+            "../../migrations/007_forgotten_memory_sources.sql"
         ))
         .execute(&pool)
         .await
@@ -6545,41 +6614,41 @@ mod tests {
         .execute(&pool)
         .await
         .expect("failed to create app_settings table");
-        sqlx::raw_sql(include_str!("../../../../crates/egosync-engine/migrations/008_skills_registry.sql"))
+        sqlx::raw_sql(include_str!("../../migrations/008_skills_registry.sql"))
             .execute(&pool)
             .await
             .expect("failed to create skills table");
-        sqlx::raw_sql(include_str!("../../../../crates/egosync-engine/migrations/009_skill_role_bindings.sql"))
+        sqlx::raw_sql(include_str!("../../migrations/009_skill_role_bindings.sql"))
             .execute(&pool)
             .await
             .expect("failed to create skill role bindings table");
-        sqlx::raw_sql(include_str!("../../../../crates/egosync-engine/migrations/011_mcp_servers.sql"))
+        sqlx::raw_sql(include_str!("../../migrations/011_mcp_servers.sql"))
             .execute(&pool)
             .await
             .expect("failed to create MCP servers table");
-        sqlx::raw_sql(include_str!("../../../../crates/egosync-engine/migrations/012_mcp_server_standard_types.sql"))
+        sqlx::raw_sql(include_str!("../../migrations/012_mcp_server_standard_types.sql"))
             .execute(&pool)
             .await
             .expect("failed to apply MCP server standard types migration");
-        sqlx::raw_sql(include_str!("../../../../crates/egosync-engine/migrations/013_tasks.sql"))
+        sqlx::raw_sql(include_str!("../../migrations/013_tasks.sql"))
             .execute(&pool)
             .await
             .expect("failed to create tasks table");
         // Story 3.3: 任务自动分类元数据，agent_engine 测试自建 schema 也需同步。
-        sqlx::raw_sql(include_str!("../../../../crates/egosync-engine/migrations/014_task_classification_metadata.sql"))
+        sqlx::raw_sql(include_str!("../../migrations/014_task_classification_metadata.sql"))
             .execute(&pool)
             .await
             .expect("failed to apply task classification metadata migration");
-        sqlx::raw_sql(include_str!("../../../../crates/egosync-engine/migrations/015_task_owner_scope.sql"))
+        sqlx::raw_sql(include_str!("../../migrations/015_task_owner_scope.sql"))
             .execute(&pool)
             .await
             .expect("failed to apply task owner scope migration");
-        sqlx::raw_sql(include_str!("../../../../crates/egosync-engine/migrations/020_mission.sql"))
+        sqlx::raw_sql(include_str!("../../migrations/020_mission.sql"))
             .execute(&pool)
             .await
             .expect("failed to create mission table");
         sqlx::raw_sql(include_str!(
-            "../../../../crates/egosync-engine/migrations/027_task_decomposition_proposals.sql"
+            "../../migrations/027_task_decomposition_proposals.sql"
         ))
         .execute(&pool)
         .await
@@ -6593,7 +6662,7 @@ mod tests {
             .await
             .expect("failed to create test conv db");
 
-        let schema = include_str!("../../../../crates/egosync-engine/migrations/002_conversations.sql");
+        let schema = include_str!("../../migrations/002_conversations.sql");
         sqlx::raw_sql(schema)
             .execute(&pool)
             .await
@@ -7923,7 +7992,7 @@ mod tests {
         })
         .to_string();
 
-        let (text, record) = execute_delegate_to_role(&main_pool, &conv_pool, &args).await;
+        let (text, record) = execute_delegate_to_role(&main_pool, &conv_pool, &args, test_secret()).await;
 
         assert_eq!(record.status, "role_not_found");
         assert_eq!(record.target_role_id, "ghost-role-id");
@@ -7968,7 +8037,7 @@ mod tests {
         })
         .to_string();
 
-        let (_text, record) = execute_delegate_to_role(&main_pool, &conv_pool, &args).await;
+        let (_text, record) = execute_delegate_to_role(&main_pool, &conv_pool, &args, test_secret()).await;
         assert_eq!(
             record.status, "role_not_found",
             "已归档角色等同于『不可用』，必须走同一兜底分支"
@@ -7987,7 +8056,7 @@ mod tests {
         let main_pool = setup_test_main_pool().await;
         let conv_pool = setup_test_conv_pool().await;
 
-        let (text, record) = execute_delegate_to_role(&main_pool, &conv_pool, "not-json").await;
+        let (text, record) = execute_delegate_to_role(&main_pool, &conv_pool, "not-json", test_secret()).await;
         assert_eq!(record.status, "parse_error");
         assert!(text.contains("参数解析失败"));
     }
@@ -8264,6 +8333,7 @@ mod tests {
                     &main_pool,
                     &butler_user_msg.id,
                     &result_json,
+                    test_secret(),
                 )
                 .await;
             }
@@ -8335,6 +8405,7 @@ mod tests {
             &main_pool,
             &butler_user_msg.id,
             &serde_json::from_str(&tool_output).unwrap(),
+            test_secret(),
         )
         .await;
 
@@ -8415,7 +8486,7 @@ mod tests {
                 "target_role_id": role_id,
                 "task_summary": task_summary,
             });
-            handle_delegate_tool_result(&conv_pool, &main_pool, &butler_user_msg.id, &result).await;
+            handle_delegate_tool_result(&conv_pool, &main_pool, &butler_user_msg.id, &result, test_secret()).await;
         }
 
         let messages = crate::db::conversations::list_messages(&conv_pool, &butler_conv.id)

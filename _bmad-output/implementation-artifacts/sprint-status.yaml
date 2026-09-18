@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-21
-last_updated: 2026-09-18T13:05:00+08:00
+last_updated: 2026-09-18T19:28:00+08:00
 project: "探索 (EgoSync)"
 project_key: NOKEY
 tracking_system: file-system
@@ -217,7 +217,7 @@ development_status:
   epic-15: in-progress
   15-1-engine-crate-skeleton-and-pure-module-migration: done
   15-2-event-bus-handle-seam-and-generic-service-migration: done
-  15-3-chat-domain-migration-and-chatsessionregistry: backlog
+  15-3-chat-domain-migration-and-chatsessionregistry: review
   15-4-server-binary-and-single-user-auth: backlog
   15-5-frontend-transport-and-parity-test-suite: backlog
   epic-15-retrospective: optional

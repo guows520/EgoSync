@@ -2,7 +2,7 @@
 title: 'server binary 与单用户认证（Story 15.4）'
 type: 'feature'
 created: '2026-09-18'
-status: 'in-review'
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 1
 baseline_commit: 'cf147d1'

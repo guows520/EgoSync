@@ -15,8 +15,8 @@ vi.mock('../services/taskService', () => ({
   },
 }));
 
-vi.mock('./useTauriEvent', () => ({
-  useTauriEvent: vi.fn(),
+vi.mock('./useEngineEvent', () => ({
+  useEngineEvent: vi.fn(),
 }));
 
 const crossRoleTask: CrossRoleTask = {

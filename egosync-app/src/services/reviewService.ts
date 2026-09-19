@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '@/transport';
 import type { WeeklyReview, BigRockPlanItem, RoleBigRockSuggestions } from '../types/review';
 import type { Task } from '../types/task';
 

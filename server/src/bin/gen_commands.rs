@@ -7,6 +7,10 @@
 //! 1. `crates/egosync-engine/commands.json` —— 构建期工件（CI 新鲜度断言）；
 //! 2. `server/src/dispatch_gen.rs` —— 生成的 dispatch registry（路由层入册）。
 //!
+//! Story 15.5：工件顶层追加 `replayWhitelist`（engine capabilities
+//! `RECONNECT_REPLAY_COMMANDS` 单源导出，确定性排序）——前端
+//! capabilities.ts 同源再生成的输入之一。
+//!
 //! 命令判定规则（纯类型结构、零人肉清单）：
 //! `pub async fn` 且每个参数均为按值客户端参数或单个 `ctx: &EngineCtx`——
 //! 持有其他引用参数（`&DbPool` / `&Arc<...>` / `&dyn ...`）者为内部辅助
@@ -394,6 +398,14 @@ fn write_commands_json(commands: &[Command]) {
     let mut ordered = serde_json::Map::new();
     ordered.insert("version".to_string(), serde_json::json!(1));
     ordered.insert("count".to_string(), serde_json::json!(body.len()));
+    // Story 15.5：重连补齐重放白名单（engine capabilities 单源常量导出，
+    // 确定性排序）——前端 capabilities.ts 由本工件再生成（禁手写双清单）。
+    let mut replay: Vec<&str> = egosync_engine::capabilities::RECONNECT_REPLAY_COMMANDS.to_vec();
+    replay.sort_unstable();
+    ordered.insert(
+        "replayWhitelist".to_string(),
+        serde_json::json!(replay),
+    );
     ordered.insert(
         "commands".to_string(),
         serde_json::to_value(&body).expect("命令清单序列化失败"),

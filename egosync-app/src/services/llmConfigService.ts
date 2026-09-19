@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '@/transport';
 import type { LlmConfig, CreateLlmConfigInput, UpdateLlmConfigInput, NetworkLocation } from '../types/settings';
 
 export const llmConfigService = {

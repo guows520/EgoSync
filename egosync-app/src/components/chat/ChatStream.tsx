@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback, Fragment } from 'react';
 import { FolderOpen, Home } from 'lucide-react';
 import { chatService } from '../../services/chatService';
 import { skillService } from '../../services/skillService';
-import { useTauriEvent } from '../../hooks/useTauriEvent';
+import { useEngineEvent } from '../../hooks/useEngineEvent';
 import { ChatBubble, ExecutionTrace } from './ChatBubble';
 import { ChatInput } from './ChatInput';
 import { ChatHeader } from './ChatHeader';
@@ -1009,7 +1009,7 @@ export function ChatStream({
     }
   }, [conversation, finishThinkingTimer, onStreamDone, resetStreamProcessEvents, startThinkingTimer, updateStreamProcessEvents, updateThinkingTrace]);
 
-  useTauriEvent<StreamPayload>('llm:stream', handleStreamEvent, [conversation?.id]);
+  useEngineEvent<StreamPayload>('llm:stream', handleStreamEvent, [conversation?.id]);
 
   const handleTitleUpdated = useCallback((payload: TitleUpdatedPayload) => {
     setConversations(prev =>
@@ -1017,7 +1017,7 @@ export function ChatStream({
     );
   }, []);
 
-  useTauriEvent<TitleUpdatedPayload>('conversation:title-updated', handleTitleUpdated, []);
+  useEngineEvent<TitleUpdatedPayload>('conversation:title-updated', handleTitleUpdated, []);
 
   const handleDeleteConversation = async (convId: string) => {
     if (isStreaming) return;
@@ -1122,7 +1122,7 @@ export function ChatStream({
     void reloadAvailableSkills();
   }, [reloadAvailableSkills]);
 
-  useTauriEvent<SkillScopeUpdatedPayload>('skill-scope-updated', (payload) => {
+  useEngineEvent<SkillScopeUpdatedPayload>('skill-scope-updated', (payload) => {
     const matchesScope = payload.scopeKind === 'all' || (roleId
       ? payload.scopeKind === 'role' && payload.ownerId === roleId
       : payload.scopeKind === 'butler');

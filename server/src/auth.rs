@@ -424,8 +424,16 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 /// 供测试/校验复用的 AppError 形状探测（错误白名单对等测试消费）。
+///
+/// Story 15.5：与生产 `cmd_handler` Err 分支同款——200 + 单键 map body +
+/// 判别头 `X-Egosync-App-Error: 1`（HTTP 通道错误信号）。
 pub fn app_error_to_response(err: AppError) -> Response {
-    (StatusCode::OK, Json(err)).into_response()
+    (
+        StatusCode::OK,
+        [(crate::routes::APP_ERROR_HEADER, crate::routes::APP_ERROR_HEADER_VALUE)],
+        Json(err),
+    )
+        .into_response()
 }
 
 #[cfg(test)]

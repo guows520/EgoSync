@@ -13,7 +13,9 @@ axum = { version = "0.8", features = ["json"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time", "net", "sync"] }
 egosync-engine = { path = "../crates/egosync-engine" }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# preserve_order（Story 15.5）：与 engine 同款启用——server body 经 dispatch
+# 的 Value 往返，键序须与桌面 invoke 直接序列化一致（对等测试逐命令钉死）。
+serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }
 tracing = "0.1"

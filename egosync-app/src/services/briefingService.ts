@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '@/transport';
 import type { Briefing } from '../types/briefing';
 
 export async function getLatest(): Promise<Briefing | null> {

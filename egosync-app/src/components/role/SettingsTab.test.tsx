@@ -12,8 +12,8 @@ const tauriEventHandlers = vi.hoisted(() => ({
   skillRegistryUpdated: undefined as ((payload: { ownerId: string }) => void) | undefined,
 }));
 
-vi.mock('../../hooks/useTauriEvent', () => ({
-  useTauriEvent: vi.fn((eventName: string, handler: (payload: { ownerId: string }) => void) => {
+vi.mock('../../hooks/useEngineEvent', () => ({
+  useEngineEvent: vi.fn((eventName: string, handler: (payload: { ownerId: string }) => void) => {
     if (eventName === 'skill-registry-updated') tauriEventHandlers.skillRegistryUpdated = handler;
   }),
 }));

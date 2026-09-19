@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Smartphone, Trash2, Loader2, Check, AlertCircle, ShieldCheck, QrCode } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { companionService } from '../../services/companionService';
-import { useTauriEvent } from '../../hooks/useTauriEvent';
+import { useEngineEvent } from '../../hooks/useEngineEvent';
 import type { CompanionStatus, PairedDevice, QrPayload } from '../../types/companion';
 
 /** 与后端 PAIRING_WINDOW_TIMEOUT_SECS（300s）对齐的二维码有效期。 */
@@ -93,7 +93,7 @@ export function CompanionPairingSection() {
       });
   }, []);
 
-  useTauriEvent<{ deviceId: string }>('companion:paired', () => {
+  useEngineEvent<{ deviceId: string }>('companion:paired', () => {
     // T-S6（SPEC qr-semantics §2）：首配/换绑确认均触发本事件——当前码 nonce
     // 已消费，继续显示为可扫与「二维码单次有效」文案矛盾（Finding 5 核心）。
     setQrPayload(null);
@@ -103,11 +103,11 @@ export function CompanionPairingSection() {
     refresh();
   }, [refresh]);
 
-  useTauriEvent<{ deviceId: string }>('companion:connected', () => {
+  useEngineEvent<{ deviceId: string }>('companion:connected', () => {
     refresh();
   }, [refresh]);
 
-  useTauriEvent<{ deviceId: string }>('companion:disconnected', () => {
+  useEngineEvent<{ deviceId: string }>('companion:disconnected', () => {
     refresh();
   }, [refresh]);
 

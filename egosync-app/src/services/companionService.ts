@@ -1,7 +1,7 @@
 // 手机伴侣 service（Story 12.2）——封装全部 invoke，组件不直接调用 invoke。
 // QR 图渲染封闭在本 service 内（npm qrcode，后端只产出 payload）。
 
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '@/transport';
 import QRCode from 'qrcode';
 import type { CompanionStatus, PairedDevice, QrPayload } from '../types/companion';
 

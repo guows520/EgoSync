@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '@/transport';
 import type { AllTasksFilter, CreateTaskInput, CrossRoleTask, Task, UpdateTaskInput } from '../types/task';
 
 export const taskService = {

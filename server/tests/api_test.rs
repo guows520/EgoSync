@@ -371,6 +371,15 @@ async fn all_app_error_variants_map_to_200_single_key_json() {
         let response = egosync_server::auth::app_error_to_response(err);
         let (parts, body) = response.into_parts();
         assert_eq!(parts.status, 200, "{} 必须映射 200", name);
+        // Story 15.5：AppError 响应必须携带判别头（HTTP 通道错误信号——
+        // 前端 HttpTransport 据此把 200 body 解析值转为 reject）
+        assert_eq!(
+            parts.headers.get(egosync_server::routes::APP_ERROR_HEADER)
+                .and_then(|v| v.to_str().ok()),
+            Some(egosync_server::routes::APP_ERROR_HEADER_VALUE),
+            "{} 必须携带 X-Egosync-App-Error 判别头",
+            name
+        );
         let bytes = axum::body::to_bytes(body, usize::MAX)
             .await
             .expect("body 读取");
@@ -401,6 +410,14 @@ async fn real_command_errors_return_200_with_variant_shape() {
         )
         .await;
     assert_eq!(res.status(), 200, "业务错误一律 200");
+    // Story 15.5：真实错误路径必须携带判别头（生产 cmd_handler Err 分支）
+    assert_eq!(
+        res.headers()
+            .get(egosync_server::routes::APP_ERROR_HEADER)
+            .and_then(|v| v.to_str().ok()),
+        Some(egosync_server::routes::APP_ERROR_HEADER_VALUE),
+        "AppError 响应必须携带判别头"
+    );
     let body: Value = res.json().await.expect("错误 body");
     assert!(
         body.get("NotFound").is_some() || body.get("DbError").is_some(),
@@ -418,6 +435,13 @@ async fn real_command_errors_return_200_with_variant_shape() {
         )
         .await;
     assert_eq!(res.status(), 200);
+    assert_eq!(
+        res.headers()
+            .get(egosync_server::routes::APP_ERROR_HEADER)
+            .and_then(|v| v.to_str().ok()),
+        Some(egosync_server::routes::APP_ERROR_HEADER_VALUE),
+        "参数反序列化错误必须携带判别头"
+    );
     let body: Value = res.json().await.expect("错误 body");
     assert!(
         body.get("ValidationError").is_some(),
@@ -425,16 +449,35 @@ async fn real_command_errors_return_200_with_variant_shape() {
         body
     );
 
-    // 非 JSON body ⇒ 200 + ValidationError（错误白名单口径）
+    // 非 JSON body ⇒ 200 + ValidationError + 判别头（错误白名单口径）
     let res = client
         .post_bytes(&server.url("/api/cmd/role_list"), b"not json".to_vec(), Some(&session))
         .await;
     assert_eq!(res.status(), 200);
+    assert_eq!(
+        res.headers()
+            .get(egosync_server::routes::APP_ERROR_HEADER)
+            .and_then(|v| v.to_str().ok()),
+        Some(egosync_server::routes::APP_ERROR_HEADER_VALUE),
+        "非 JSON body 错误必须携带判别头"
+    );
     let body: Value = res.json().await.expect("错误 body");
     assert!(
         body.get("ValidationError").is_some(),
         "非 JSON body 必须 ValidationError: {}",
         body
+    );
+
+    // 成功路径对照：零参命令 200 且不带判别头（判别信号的正反两面——
+    // 前端 HttpTransport 只对带头响应走 reject 通道）
+    let res = client
+        .post_json(&server.url("/api/cmd/role_list"), Some(&json!({})), Some(&session), None)
+        .await;
+    assert_eq!(res.status(), 200);
+    assert!(
+        !res.headers()
+            .contains_key(egosync_server::routes::APP_ERROR_HEADER),
+        "成功响应不得携带判别头（免误判）"
     );
 }
 

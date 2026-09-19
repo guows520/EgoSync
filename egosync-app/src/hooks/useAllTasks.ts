@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { taskService } from '../services/taskService';
 import type { AllTasksFilter, CreateTaskInput, CrossRoleTask, Task, UpdateTaskInput } from '../types/task';
-import { useTauriEvent } from './useTauriEvent';
+import { useEngineEvent } from './useEngineEvent';
 
 const TASK_LOAD_ERROR = '任务暂时加载失败，请稍后再试';
 const TASK_CLASSIFIED_EVENT = 'task:classified';
@@ -33,7 +33,7 @@ export function useAllTasks(filter: AllTasksFilter = {}) {
   const [reloadKey, setReloadKey] = useState(0);
   const [classifyingIds, setClassifyingIds] = useState<Set<string>>(() => new Set());
 
-  useTauriEvent<Task>(
+  useEngineEvent<Task>(
     TASK_CLASSIFIED_EVENT,
     classified => {
       const crossRoleTask = toCrossRoleTask(classified);
@@ -53,7 +53,7 @@ export function useAllTasks(filter: AllTasksFilter = {}) {
   );
 
   // 监听任务操作工具事件（complete_task / delete_task），刷新任务列表
-  useTauriEvent<{ action: string }>(
+  useEngineEvent<{ action: string }>(
     TASK_TOOL_ACTION_EVENT,
     () => {
       setReloadKey(key => key + 1);

@@ -2,7 +2,7 @@ import { act, render, waitFor, screen, fireEvent, within } from '@testing-librar
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { ChatStream } from './ChatStream';
 import { chatService } from '../../services/chatService';
-import { useTauriEvent } from '../../hooks/useTauriEvent';
+import { useEngineEvent } from '../../hooks/useEngineEvent';
 import type { ChatMessage, StreamPayload } from '../../types/chat';
 import type { Role } from '../../types/role';
 import type { SelectableSkill, SkillScopeUpdatedPayload } from '../../types/skill';
@@ -23,8 +23,8 @@ vi.mock('../../services/chatService', () => ({
   },
 }));
 
-vi.mock('../../hooks/useTauriEvent', () => ({
-  useTauriEvent: vi.fn(),
+vi.mock('../../hooks/useEngineEvent', () => ({
+  useEngineEvent: vi.fn(),
 }));
 
 vi.mock('../../services/skillService', () => ({
@@ -83,7 +83,7 @@ type StreamHandler = (payload: StreamPayload) => void;
 
 function captureStreamHandler() {
   let handler: StreamHandler | undefined;
-  vi.mocked(useTauriEvent).mockImplementation((event, cb) => {
+  vi.mocked(useEngineEvent).mockImplementation((event, cb) => {
     if (event === 'llm:stream') {
       handler = cb as StreamHandler;
     }
@@ -2283,7 +2283,7 @@ describe('ChatStream Skill 选择 (Story 10.1)', () => {
     fireEvent.keyDown(input, { key: 'Enter' });
     expect(screen.getByText('find-skills')).toBeInTheDocument();
 
-    const listener = vi.mocked(useTauriEvent).mock.calls.find(call => call[0] === 'skill-scope-updated')?.[1] as ((payload: SkillScopeUpdatedPayload) => void) | undefined;
+    const listener = vi.mocked(useEngineEvent).mock.calls.find(call => call[0] === 'skill-scope-updated')?.[1] as ((payload: SkillScopeUpdatedPayload) => void) | undefined;
     act(() => listener?.({ scopeKind: 'butler', ownerId: null }));
     await waitFor(() => expect(screen.queryByText('find-skills')).not.toBeInTheDocument());
   });
@@ -2295,7 +2295,7 @@ describe('ChatStream Skill 选择 (Story 10.1)', () => {
     render(<ChatStream role={baseRole} />);
     await waitFor(() => expect(skillService.listSelectableForScope).toHaveBeenCalledTimes(1));
 
-    const listener = vi.mocked(useTauriEvent).mock.calls.find(call => call[0] === 'skill-scope-updated')?.[1] as ((payload: SkillScopeUpdatedPayload) => void) | undefined;
+    const listener = vi.mocked(useEngineEvent).mock.calls.find(call => call[0] === 'skill-scope-updated')?.[1] as ((payload: SkillScopeUpdatedPayload) => void) | undefined;
     act(() => listener?.({ scopeKind: 'all', ownerId: null }));
     await waitFor(() => expect(skillService.listSelectableForScope).toHaveBeenCalledTimes(2));
   });
@@ -2316,7 +2316,7 @@ describe('ChatStream Skill 选择 (Story 10.1)', () => {
     fireEvent.keyDown(input, { key: 'Enter' });
     expect(screen.getByText('find-skills')).toBeInTheDocument();
 
-    const listener = vi.mocked(useTauriEvent).mock.calls.find(call => call[0] === 'skill-scope-updated')?.[1] as ((payload: SkillScopeUpdatedPayload) => void) | undefined;
+    const listener = vi.mocked(useEngineEvent).mock.calls.find(call => call[0] === 'skill-scope-updated')?.[1] as ((payload: SkillScopeUpdatedPayload) => void) | undefined;
     act(() => listener?.({ scopeKind: 'butler', ownerId: null }));
     expect(await screen.findByText('加载可用 Skill 失败，请切换页面或稍后重试')).toBeInTheDocument();
     expect(screen.getByText('find-skills')).toBeInTheDocument();
@@ -2328,7 +2328,7 @@ describe('ChatStream Skill 选择 (Story 10.1)', () => {
     render(<ChatStream role={baseRole} />);
     await waitFor(() => expect(skillService.listSelectableForScope).toHaveBeenCalledTimes(1));
 
-    const listener = vi.mocked(useTauriEvent).mock.calls.find(call => call[0] === 'skill-scope-updated')?.[1] as ((payload: SkillScopeUpdatedPayload) => void) | undefined;
+    const listener = vi.mocked(useEngineEvent).mock.calls.find(call => call[0] === 'skill-scope-updated')?.[1] as ((payload: SkillScopeUpdatedPayload) => void) | undefined;
     expect(listener).toBeDefined();
     act(() => listener?.({ scopeKind: 'role', ownerId: 'role-2' }));
     expect(skillService.listSelectableForScope).toHaveBeenCalledTimes(1);

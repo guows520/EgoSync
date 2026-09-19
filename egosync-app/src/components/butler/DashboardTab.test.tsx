@@ -3,7 +3,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { DashboardTab } from './DashboardTab';
 import type { DashboardStatus } from '../../types/dashboard';
 
-vi.mock('@tauri-apps/api/core', () => ({
+vi.mock('@/transport', () => ({
   invoke: vi.fn(),
 }));
 
@@ -12,7 +12,7 @@ vi.mock('../../lib/roleIcons', () => ({
   normalizeColorHex: (c: string) => c || '#4F46E5',
 }));
 
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '@/transport';
 
 const mockInvoke = invoke as ReturnType<typeof vi.fn>;
 

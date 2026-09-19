@@ -2,11 +2,11 @@ import { renderHook, act, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { useSuggestions } from './useSuggestions';
 
-vi.mock('@tauri-apps/api/core', () => ({
+vi.mock('@/transport', () => ({
   invoke: vi.fn(),
 }));
 
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '@/transport';
 
 const mockInvoke = invoke as ReturnType<typeof vi.fn>;
 

@@ -41,6 +41,50 @@ pub const DESKTOP_ONLY_COMMANDS: &[&str] = &[
 /// 常规 generate_handler 源码扫描含 cfg 门控条目，对等断言单独并入。
 pub const PERF_TEST_GATED_COMMANDS: &[&str] = &["app_emit_test_stream", "app_seed_perf_data"];
 
+/// 重连补齐重放白名单（31 条，Story 15.5）：SSE 断连恢复后由前端
+/// transport 层以 `{}` 逐条重放的只读 query——用于服务端状态补偿
+/// （16.2 消费 `transport:reconnected` 结果集刷新视图）。
+///
+/// 收录规则（人工冻结 + 机械不变量钉死，见 [`tests`]）：
+/// - 只收只读 query——写入类 command 永不重放（防副作用重放）；
+/// - 全部客户端参数可缺省（Option 或无客户端参数）——`{}` 可重放；
+/// - ⊆ web-ok（Tauri 分支恒 Online 永不触发重放，白名单仅 HTTP 分支消费）。
+/// 本常量是重连白名单的唯一事实源：gen_commands 将其导出为 commands.json
+/// 顶层 `replayWhitelist` 字段，前端 capabilities.ts 由工件再生成（禁手写双清单）。
+pub const RECONNECT_REPLAY_COMMANDS: &[&str] = &[
+    "app_get_butler_skills",
+    "app_is_first_launch",
+    "app_is_llm_configured",
+    "app_performance_snapshot",
+    "app_sidecar_status",
+    "briefing_get_latest",
+    "chat_get_butler_conversation",
+    "chat_list_conversations",
+    "dashboard_get_status",
+    "llm_config_list",
+    "mcp_server_list",
+    "mcp_server_list_available_for_butler",
+    "mcp_server_list_for_butler",
+    "memory_count",
+    "memory_list",
+    "memory_list_all",
+    "mission_get",
+    "notification_count_unread",
+    "notification_list",
+    "review_get_bigrock_suggestions",
+    "review_get_latest",
+    "role_list",
+    "role_list_archived",
+    "scheduler_get_times",
+    "settings_get_schedule",
+    "skill_list_all_role_skills",
+    "skill_list_registry",
+    "skill_list_selectable_for_scope",
+    "task_check_protection_status",
+    "task_list_all",
+    "task_list_butler",
+];
+
 /// 查询某命令是否 desktop-only。
 pub fn is_desktop_only(command: &str) -> bool {
     DESKTOP_ONLY_COMMANDS.contains(&command)
@@ -180,6 +224,56 @@ mod tests {
     fn secret_store_commands_are_desktop_only() {
         for name in ["secret_store_save", "secret_store_load", "secret_store_delete"] {
             assert!(is_desktop_only(name), "{} 必须为 desktop-only（裁决 A）", name);
+        }
+    }
+
+    /// Story 15.5：重连重放白名单机械不变量——⊆ web-ok ∧ `{}` 可重放
+    /// （全部客户端参数 Option 或无客户端参数）。名单本体值钉 + 数量钉：
+    /// 任何漂移（新增命令/改名/名单变更而未同步本测试）在此先红。
+    #[test]
+    fn reconnect_replay_whitelist_pins_members() {
+        assert_eq!(
+            RECONNECT_REPLAY_COMMANDS.len(),
+            31,
+            "重连重放白名单必须恰 31 条"
+        );
+        for name in RECONNECT_REPLAY_COMMANDS {
+            assert!(
+                is_web_command(name),
+                "重放白名单成员 {} 必须 ⊆ web-ok",
+                name
+            );
+        }
+    }
+
+    /// 重放白名单 `{}` 可重放不变量：逐条比对 commands.json 工件的参数
+    /// schema——每条客户端参数必须为 Option（或无客户端参数）。
+    /// （写入类排除靠人工冻结的名单本体；参数可缺省是可机械验证的半边。）
+    #[test]
+    fn reconnect_replay_whitelist_params_all_optional() {
+        let artifact: serde_json::Value =
+            serde_json::from_str(include_str!("../commands.json"))
+                .expect("commands.json 工件解析失败（生成物损坏？重跑 gen_commands）");
+        let commands = artifact["commands"]
+            .as_array()
+            .expect("commands.json 工件缺 commands 数组");
+        for entry in commands {
+            let name = entry["name"].as_str().expect("命令名");
+            if !RECONNECT_REPLAY_COMMANDS.contains(&name) {
+                continue;
+            }
+            for param in entry["params"].as_array().expect("参数数组") {
+                if param["kind"].as_str() == Some("client") {
+                    let ty = param["type"].as_str().expect("参数类型");
+                    assert!(
+                        ty.starts_with("Option<"),
+                        "重放白名单成员 {} 的客户端参数 {} 必须 Option（{{}} 可重放），实得 {}",
+                        name,
+                        param["name"].as_str().unwrap_or("?"),
+                        ty
+                    );
+                }
+            }
         }
     }
 }

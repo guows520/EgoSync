@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { taskService } from '../services/taskService';
 import type { CreateTaskInput, Task, UpdateTaskInput } from '../types/task';
-import { useTauriEvent } from './useTauriEvent';
+import { useEngineEvent } from './useEngineEvent';
 
 const TASK_LOAD_ERROR = '任务暂时加载失败，请稍后再试';
 
@@ -30,7 +30,7 @@ export function useTasks(scope: TaskScope | null) {
   const [classifyingIds, setClassifyingIds] = useState<Set<string>>(() => new Set());
 
   // 监听后端推送的分类完成事件：用最新任务替换卡片并清除「分类中」标记。
-  useTauriEvent<Task>(
+  useEngineEvent<Task>(
     TASK_CLASSIFIED_EVENT,
     classified => {
       if (!scope) return;
@@ -49,7 +49,7 @@ export function useTasks(scope: TaskScope | null) {
   );
 
   // 监听任务操作工具事件（complete_task / delete_task），刷新任务列表
-  useTauriEvent<{ action: string }>(
+  useEngineEvent<{ action: string }>(
     TASK_TOOL_ACTION_EVENT,
     () => {
       setReloadKey(key => key + 1);

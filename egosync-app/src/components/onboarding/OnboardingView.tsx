@@ -3,7 +3,7 @@ import { Home, Play } from 'lucide-react';
 import { chatService } from '../../services/chatService';
 import { appService } from '../../services/appService';
 import { roleService } from '../../services/roleService';
-import { useTauriEvent } from '../../hooks/useTauriEvent';
+import { useEngineEvent } from '../../hooks/useEngineEvent';
 import { ChatBubble } from '../chat/ChatBubble';
 import { RoleConfirmModal, type RoleProposal } from './RoleConfirmModal';
 import type { ChatMessage, StreamPayload } from '../../types/chat';
@@ -46,7 +46,7 @@ export function OnboardingView({ onComplete, onOpenSettings }: OnboardingViewPro
   }, [messages, streamContent, thinkingContent]);
 
   // Listen for LLM stream events
-  useTauriEvent<StreamPayload>('llm:stream', useCallback((payload: StreamPayload) => {
+  useEngineEvent<StreamPayload>('llm:stream', useCallback((payload: StreamPayload) => {
     if (conversationId && payload.conversationId !== conversationId) return;
 
     if (payload.phase === 'tool' && payload.statusText) {
@@ -93,7 +93,7 @@ export function OnboardingView({ onComplete, onOpenSettings }: OnboardingViewPro
 
   // Listen for role:proposed event from backend tool execution
   // 后端 LLM 调用 create_role 工具时只发提议，不写库；前端展示 modal 让用户确认/编辑
-  useTauriEvent<RoleProposedPayload>('role:proposed', useCallback((payload: RoleProposedPayload) => {
+  useEngineEvent<RoleProposedPayload>('role:proposed', useCallback((payload: RoleProposedPayload) => {
     if (proposalHandledRef.current) return; // 一次 onboarding 只处理一次
     console.info('收到角色提议:', payload.name, payload.icon, payload.color);
     setProposal({

@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import App from './App'
 import { appService } from './services/appService'
 import { roleService } from './services/roleService'
-import { useTauriEvent } from './hooks/useTauriEvent'
+import { useEngineEvent } from './hooks/useEngineEvent'
 import type { Role } from './types/role'
 
 vi.mock('./services/appService', () => ({
@@ -25,8 +25,8 @@ vi.mock('./services/roleService', () => ({
   },
 }))
 
-vi.mock('./hooks/useTauriEvent', () => ({
-  useTauriEvent: vi.fn(),
+vi.mock('./hooks/useEngineEvent', () => ({
+  useEngineEvent: vi.fn(),
 }))
 
 vi.mock('./components/layout/Sidebar', () => ({
@@ -126,7 +126,7 @@ function mockNormalLaunch() {
   vi.mocked(roleService.list).mockResolvedValue([createdRole])
   vi.mocked(roleService.listArchived).mockResolvedValue([])
   vi.mocked(roleService.create).mockResolvedValue(createdRole)
-  vi.mocked(useTauriEvent).mockImplementation((eventName, handler) => {
+  vi.mocked(useEngineEvent).mockImplementation((eventName, handler) => {
     if (eventName === 'role:proposed') {
       roleProposedHandler = handler as (payload: RoleProposedPayload) => void
     }

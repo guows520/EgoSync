@@ -12,7 +12,10 @@ path = "src/lib.rs"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# preserve_order（Story 15.5）：Value::Object 保插入序（IndexMap）——消除
+# Value 往返键序漂移，使 HTTP body（dispatch 经 Value）与桌面 invoke 直接
+# 序列化在字节层一致；cargo 特性统一使双宿主行为一致。
+serde_json = { version = "1", features = ["preserve_order"] }
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 async-trait = "0.1"

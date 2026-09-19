@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { notificationService } from '../services/notificationService';
-import { useTauriEvent } from './useTauriEvent';
+import { useEngineEvent } from './useEngineEvent';
 import type { NotificationNewPayload, NotificationWithRole } from '../types/notification';
 
 const NOTIFICATION_LOAD_ERROR = '通知加载失败，请稍后再试';
@@ -36,7 +36,7 @@ export function useNotifications() {
     };
   }, []);
 
-  useTauriEvent<NotificationNewPayload>(
+  useEngineEvent<NotificationNewPayload>(
     'notification:new',
     useCallback((payload: NotificationNewPayload) => {
       setNotifications(prev => {

@@ -60,6 +60,14 @@ jobs:
         working-directory: egosync-app
         run: npm ci
 
+      # Story 15.5：TS 生成物新鲜度门禁——capabilities.ts/events.ts 由
+      # commands.json 工件 + events.rs/capabilities.rs 同源生成，漂移即红
+      #（引擎侧增删命令/事件而未再生 TS 生成物；Rust 侧门禁在 server-ci）。
+      # regen+diff 同 shell 行——pathspec 按 cwd 解析（server-ci 评审修复
+      # #14a 先例：拆行会使 git diff 从仓库根解析到不存在的路径）。
+      - name: Regenerate TS transport artifacts（新鲜度零漂移）
+        run: cd egosync-app && npm run gen:transport && git diff --exit-code -- src/transport/capabilities.ts src/transport/events.ts
+
       - name: Run frontend tests
         working-directory: egosync-app
         run: npm run test:frontend

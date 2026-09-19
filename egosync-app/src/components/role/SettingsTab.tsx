@@ -9,7 +9,7 @@ import type { ProactivityLevel, Role, RoleSkillsConfig } from '../../types/role'
 import type { McpServer } from '../../types/mcp';
 import type { OpencodeSkillCandidate, SkillImportPreview, SkillRegistryEntry } from '../../types/skill';
 import { ProactivityToggle } from './ProactivityToggle';
-import { useTauriEvent } from '../../hooks/useTauriEvent';
+import { useEngineEvent } from '../../hooks/useEngineEvent';
 
 interface SettingsTabProps {
   role: Role;
@@ -165,7 +165,7 @@ export function SettingsTab({
     setSkills(parseSkillsConfig(role.skillsConfig));
   }, [role.skillsConfig]);
 
-  useTauriEvent<{ ownerId: string }>('skill-registry-updated', (payload) => {
+  useEngineEvent<{ ownerId: string }>('skill-registry-updated', (payload) => {
     if (payload.ownerId !== role.id) return;
     void skillService.listForRole(role.id)
       .then(setRegistrySkills)

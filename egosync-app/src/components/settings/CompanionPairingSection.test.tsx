@@ -23,8 +23,8 @@ vi.mock('../../services/companionService', () => ({
 
 // 事件钩子替身：记录 handler 供测试模拟后端事件（companion:paired 等）
 const eventHandlers = new Map<string, (payload: unknown) => void>();
-vi.mock('../../hooks/useTauriEvent', () => ({
-  useTauriEvent: (eventName: string, handler: (payload: unknown) => void) => {
+vi.mock('../../hooks/useEngineEvent', () => ({
+  useEngineEvent: (eventName: string, handler: (payload: unknown) => void) => {
     eventHandlers.set(eventName, handler);
   },
 }));

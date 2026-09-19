@@ -3,11 +3,11 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { useBigRockPlanning } from './useBigRockPlanning';
 import type { Role } from '../types/role';
 
-vi.mock('@tauri-apps/api/core', () => ({
+vi.mock('@/transport', () => ({
   invoke: vi.fn(),
 }));
 
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '@/transport';
 
 const mockInvoke = invoke as ReturnType<typeof vi.fn>;
 

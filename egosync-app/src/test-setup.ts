@@ -1,5 +1,10 @@
 import '@testing-library/jest-dom'
 
+// Story 15.5：全局 `__TAURI_INTERNALS__` 桩——测试环境默认 Tauri 分支的
+// 机制基础（isTauriHost() 据此探测，getTransport() 懒单例选中
+// TauriTransport，invoke/listen 行为与迁移前直连 @tauri-apps/api 一致）。
+// 需要浏览器分支的测试（src/transport/*）自行构造 HttpTransport 并经
+// vi.stubGlobal 注入假 fetch/EventSource，不依赖本桩。
 ;(window as any).__TAURI_INTERNALS__ = {
   invoke: (cmd: string) => {
     if (cmd === 'chat_get_butler_conversation') {

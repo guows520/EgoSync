@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { isTauriHost } from '@/transport';
 import { cn } from './lib/utils';
 import { Sidebar } from './components/layout/Sidebar';
 import { TitleBar } from './components/layout/TitleBar';
@@ -15,7 +16,7 @@ import type { RoleProposal } from './components/onboarding/RoleConfirmModal';
 import { NotificationPanel } from './components/notifications/NotificationPanel';
 import { appService } from './services/appService';
 import { roleService } from './services/roleService';
-import { useTauriEvent } from './hooks/useTauriEvent';
+import { useEngineEvent } from './hooks/useEngineEvent';
 import { useNotifications } from './hooks/useNotifications';
 import { normalizeColorHex } from './lib/roleIcons';
 import { playNotificationSound } from './lib/notificationSound';
@@ -68,7 +69,7 @@ export default function App() {
   }, [markAsRead]);
 
   // Story 4.5: 敲门通知到达时，若用户开启声音设置则播放提示音（默认关闭）
-  useTauriEvent<NotificationNewPayload>(
+  useEngineEvent<NotificationNewPayload>(
     'notification:new',
     useCallback((payload: NotificationNewPayload) => {
       if (payload.level !== 'knock') return;
@@ -86,7 +87,7 @@ export default function App() {
 
   // Story 4.6: Q2 保护提醒事件到达时，递增 refreshTrigger 触发管家对话刷新
   const [butlerChatRefreshTrigger, setButlerChatRefreshTrigger] = useState(0);
-  useTauriEvent<Q2ReminderPayload>(
+  useEngineEvent<Q2ReminderPayload>(
     'q2:reminder',
     useCallback((_payload: Q2ReminderPayload) => {
       setButlerChatRefreshTrigger(t => t + 1);
@@ -95,7 +96,7 @@ export default function App() {
   );
 
   // Story 6.1: 晨间简报生成事件到达时，递增 refreshTrigger 触发管家对话刷新
-  useTauriEvent<BriefingGeneratedPayload>(
+  useEngineEvent<BriefingGeneratedPayload>(
     'briefing:generated',
     useCallback((_payload: BriefingGeneratedPayload) => {
       setButlerChatRefreshTrigger(t => t + 1);
@@ -104,7 +105,7 @@ export default function App() {
   );
 
   // Story 6.3: 大石头规划提醒事件到达时，打开 WeeklyReviewModal 规划阶段
-  useTauriEvent<BigrockReminderPayload>(
+  useEngineEvent<BigrockReminderPayload>(
     'bigrock:reminder',
     useCallback((_payload: BigrockReminderPayload) => {
       setReviewInitialPhase('plan');
@@ -115,7 +116,7 @@ export default function App() {
   );
 
   // Story 6.6: 大石头保护提醒事件到达时，递增 refreshTrigger 触发管家对话刷新
-  useTauriEvent<{ taskId: string; taskTitle: string; message: string; notificationId: string }>(
+  useEngineEvent<{ taskId: string; taskTitle: string; message: string; notificationId: string }>(
     'bigrock:protection',
     useCallback((_payload) => {
       setButlerChatRefreshTrigger(t => t + 1);
@@ -124,7 +125,7 @@ export default function App() {
   );
 
   // Story 6.4: 周复盘生成事件到达时，递增 refreshTrigger 触发管家对话刷新
-  useTauriEvent<ReviewGeneratedPayload>(
+  useEngineEvent<ReviewGeneratedPayload>(
     'review:generated',
     useCallback((_payload: ReviewGeneratedPayload) => {
       setButlerChatRefreshTrigger(t => t + 1);
@@ -154,7 +155,7 @@ export default function App() {
     return { active, archived };
   }, [refreshArchivedRoles, refreshRoles]);
 
-  useTauriEvent<{ ownerId: string; skillId: string }>(
+  useEngineEvent<{ ownerId: string; skillId: string }>(
     'skill-registry-updated',
     useCallback(() => {
       void refreshRoles().catch(error => {
@@ -173,7 +174,7 @@ export default function App() {
     color: string | null;
     goal: string | null;
   }
-  useTauriEvent<RoleProposedPayload>('role:proposed', useCallback((payload: RoleProposedPayload) => {
+  useEngineEvent<RoleProposedPayload>('role:proposed', useCallback((payload: RoleProposedPayload) => {
     if (currentView === 'onboard') return; // OnboardingView 自己处理
     console.info('[App] 收到管家角色提议:', payload.name);
     setButlerProposal({
@@ -237,7 +238,10 @@ export default function App() {
       splash.classList.add('hidden');
       setTimeout(() => splash.remove(), 400);
     }
-    getCurrentWindow().show().catch(() => {});
+    // 浏览器宿主：无窗口 API（getCurrentWindow 会抛错），show() 仅 Tauri 分支执行
+    if (isTauriHost()) {
+      getCurrentWindow().show().catch(() => {});
+    }
   }, [isLoadingRoles]);
 
   const handleOnboardingComplete = () => {

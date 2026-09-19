@@ -17,6 +17,12 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     host: host || false,
+    // Story 15.5（架构 [M]）：浏览器宿主本地开发通道——前端 fetch/EventSource
+    // 走相对路径 /api/*，dev 期代理到自托管 server（`cargo run`，默认 8080）。
+    // 生产期由 server 内嵌 dist 同源服务（16.1）；单一构建产物双宿主复用。
+    proxy: {
+      '/api': 'http://localhost:8080',
+    },
     hmr: host
       ? {
           protocol: 'ws',

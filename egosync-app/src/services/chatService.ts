@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '@/transport';
 import type { Conversation, ChatMessage, ChatRequest, MessageProcessEvent } from '../types/chat';
 
 export const chatService = {

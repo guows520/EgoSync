@@ -18,10 +18,14 @@ import { HttpTransport } from './http';
 const SAMPLE_EVENT = ENGINE_EVENT_NAMES[0]!;
 
 class FakeEventSource {
+  /** 与 WHATWG EventSource.CLOSED 对齐（致命关闭判定用）。 */
+  static readonly CLOSED = 2;
   static instances: FakeEventSource[] = [];
   listeners = new Map<string, Array<(ev: { data: string }) => void>>();
   onopen: (() => void) | null = null;
   onerror: (() => void) | null = null;
+  /** 默认 OPEN（1）：既有用例的 onerror 均为非致命（原生重连语义）。 */
+  readyState = 1;
   constructor(public url: string) {
     FakeEventSource.instances.push(this);
   }
@@ -276,6 +280,75 @@ describe('HttpTransport', () => {
     listener({ data: JSON.stringify({ n: 2 }) });
     expect(handler).toHaveBeenCalledTimes(1);
     expect(source.listeners.get(SAMPLE_EVENT)).toHaveLength(0);
+  });
+
+  it('invoke：响应体读取中断（text() reject）⇒ HttpTransportError(0, null)（网络失败同形状——评审 G3）', async () => {
+    vi.stubGlobal('fetch', () =>
+      Promise.resolve({
+        status: 200,
+        headers: { get: () => null },
+        text: () => Promise.reject(new TypeError('network error')),
+      } as unknown as Response)
+    );
+    const transport = new HttpTransport();
+    await expect(transport.invoke(WEB_OK_COMMANDS[0]!)).rejects.toMatchObject({
+      name: 'HttpTransportError',
+      status: 0,
+      body: null,
+    });
+  });
+
+  it('状态订阅者抛错被隔离：其余订阅者照常收状态、恢复重放照常触发（评审 G8）', async () => {
+    const transport = new HttpTransport();
+    const good = vi.fn();
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      transport.onConnectionStateChange(() => {
+        throw new Error('buggy subscriber');
+      });
+      transport.onConnectionStateChange(good);
+      transport.on(SAMPLE_EVENT, () => {});
+      const source = FakeEventSource.instances[0]!;
+      source.onopen!();
+      expect(good).toHaveBeenCalledWith('online');
+      source.onerror!();
+      source.onopen!(); // 恢复：坏订阅者不得断掉恢复链
+      expect(good).toHaveBeenCalledWith('online');
+      await vi.waitFor(() => {
+        expect(fetchCalls.length).toBe(REPLAY_WHITELIST.length);
+      });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('致命关闭（非 200，浏览器不原生重连）⇒ 退避后重建连接，恢复链（状态回 online + 重放）复活（评审 G2）', async () => {
+    vi.useFakeTimers();
+    try {
+      const transport = new HttpTransport();
+      const states: string[] = [];
+      transport.onConnectionStateChange(state => states.push(state));
+      transport.on(SAMPLE_EVENT, () => {});
+      const source = FakeEventSource.instances[0]!;
+      source.onopen!();
+      source.readyState = 2; // CLOSED：WHATWG 对非 200 的永久关闭
+      source.onerror!();
+      expect(states).toEqual(['connecting', 'online', 'reconnecting']);
+      expect(FakeEventSource.instances).toHaveLength(1); // 未即时重建（退避）
+      vi.advanceTimersByTime(4999);
+      expect(FakeEventSource.instances).toHaveLength(1); // 退避期内不重建
+      vi.advanceTimersByTime(1);
+      expect(FakeEventSource.instances).toHaveLength(2); // 退避到期重建
+      const rebuilt = FakeEventSource.instances[1]!;
+      rebuilt.onopen!();
+      expect(states).toEqual(['connecting', 'online', 'reconnecting', 'online']);
+      // 恢复重放照常触发（致命关闭后 onopen-after-error 路径复活——纯微任务链）
+      const reconnected = waitForReconnected(transport);
+      await reconnected;
+      expect(fetchCalls.length).toBe(REPLAY_WHITELIST.length);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

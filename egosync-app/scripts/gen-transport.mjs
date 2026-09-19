@@ -69,14 +69,16 @@ export function parseConstList(source, constName) {
 /** 读 commands.json 工件：web-ok 命令名 + replayWhitelist。 */
 export function readCommandsArtifact(jsonPath = COMMANDS_JSON) {
   const doc = JSON.parse(readFileSync(jsonPath, 'utf8'));
-  const commands = doc.commands.map((c) => c.name);
-  const replayWhitelist = doc.replayWhitelist;
-  if (!Array.isArray(commands) || commands.length === 0) {
+  // 守卫先于 map（评审 G9）：doc.commands 键缺失时不得裸抛 TypeError
+  if (!Array.isArray(doc.commands) || doc.commands.length === 0) {
     throw new Error('commands.json 工件缺 commands 数组（生成物损坏？重跑 gen_commands）');
   }
-  if (!Array.isArray(replayWhitelist) || replayWhitelist.length === 0) {
+  const commands = doc.commands.map((c) => c.name);
+  // 字段缺失报错；空数组合法（未来白名单清空的正当终态，不误报「缺字段」）
+  if (!Array.isArray(doc.replayWhitelist)) {
     throw new Error('commands.json 工件缺 replayWhitelist 字段（旧工件？重跑 gen_commands）');
   }
+  const replayWhitelist = doc.replayWhitelist;
   return { commands, replayWhitelist };
 }
 

@@ -3,7 +3,22 @@ import App from './App'
 import { appService } from './services/appService'
 import { roleService } from './services/roleService'
 import { useEngineEvent } from './hooks/useEngineEvent'
+import { __resetTransportForTests } from './transport'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import type { Role } from './types/role'
+
+// Story 15.5 评审 G5：窗口 API 桩——真实 getCurrentWindow 在 jsdom 不可用；
+// App.show()/TitleBar 窗口控制在 Tauri 分支测试经此桩穿行
+vi.mock('@tauri-apps/api/window', () => ({
+  getCurrentWindow: vi.fn(() => ({
+    show: vi.fn().mockResolvedValue(undefined),
+    isMaximized: vi.fn().mockResolvedValue(false),
+    onResized: vi.fn().mockResolvedValue(() => {}),
+    minimize: vi.fn().mockResolvedValue(undefined),
+    toggleMaximize: vi.fn().mockResolvedValue(undefined),
+    close: vi.fn().mockResolvedValue(undefined),
+  })),
+}))
 
 vi.mock('./services/appService', () => ({
   appService: {
@@ -159,6 +174,21 @@ describe('App', () => {
   it('renders without crashing', () => {
     const { container } = render(<App />)
     expect(container).toBeTruthy()
+  })
+
+  it('浏览器宿主：窗口 API 零调用（show() 门控跳过——评审 G5）', async () => {
+    const internals = (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__
+    delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__
+    try {
+      render(<App />)
+      await waitFor(() => expect(roleService.list).toHaveBeenCalledTimes(1))
+      await act(async () => { await Promise.resolve() })
+      // App 的 show() 门控与 TitleBar 浏览器分支都不触达 getCurrentWindow
+      expect(vi.mocked(getCurrentWindow)).not.toHaveBeenCalled()
+    } finally {
+      ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = internals
+      __resetTransportForTests()
+    }
   })
 
   it('refreshes global roles when the Skill registry changes', async () => {

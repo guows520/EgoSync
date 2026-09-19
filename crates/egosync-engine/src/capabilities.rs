@@ -230,12 +230,51 @@ mod tests {
     /// Story 15.5：重连重放白名单机械不变量——⊆ web-ok ∧ `{}` 可重放
     /// （全部客户端参数 Option 或无客户端参数）。名单本体值钉 + 数量钉：
     /// 任何漂移（新增命令/改名/名单变更而未同步本测试）在此先红。
+    /// （评审 G7：值钉补全——与 events.test.ts 27 事件全量值钉同款纪律，
+    /// 换成员不再只靠 CI 工件新鲜度门禁兜底。）
     #[test]
     fn reconnect_replay_whitelist_pins_members() {
         assert_eq!(
             RECONNECT_REPLAY_COMMANDS.len(),
             31,
             "重连重放白名单必须恰 31 条"
+        );
+        let expected: [&str; 31] = [
+            "app_get_butler_skills",
+            "app_is_first_launch",
+            "app_is_llm_configured",
+            "app_performance_snapshot",
+            "app_sidecar_status",
+            "briefing_get_latest",
+            "chat_get_butler_conversation",
+            "chat_list_conversations",
+            "dashboard_get_status",
+            "llm_config_list",
+            "mcp_server_list",
+            "mcp_server_list_available_for_butler",
+            "mcp_server_list_for_butler",
+            "memory_count",
+            "memory_list",
+            "memory_list_all",
+            "mission_get",
+            "notification_count_unread",
+            "notification_list",
+            "review_get_bigrock_suggestions",
+            "review_get_latest",
+            "role_list",
+            "role_list_archived",
+            "scheduler_get_times",
+            "settings_get_schedule",
+            "skill_list_all_role_skills",
+            "skill_list_registry",
+            "skill_list_selectable_for_scope",
+            "task_check_protection_status",
+            "task_list_all",
+            "task_list_butler",
+        ];
+        assert_eq!(
+            RECONNECT_REPLAY_COMMANDS, &expected[..],
+            "重连重放白名单成员值钉（与常量本体逐位比对）"
         );
         for name in RECONNECT_REPLAY_COMMANDS {
             assert!(

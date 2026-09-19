@@ -63,6 +63,12 @@ export interface Transport {
   readonly capabilities: TransportCapabilities;
   /** 连接状态订阅：订阅即回调当前状态，此后每次迁移回调；返回取消函数。 */
   onConnectionStateChange(handler: (state: ConnectionState) => void): UnlistenFn;
-  /** 前端本地事件发射（skill-scope-updated / transport:reconnected 等）。 */
-  emitFrontendEvent(event: string, payload?: unknown): void;
+  /**
+   * 前端本地事件发射（skill-scope-updated / transport:reconnected 等）。
+   *
+   * 返回 Promise（基线同形：旧 `emit(...)` 直返 Promise，调用方
+   * `await + catch` 兜底可达）——Tauri 分支透传 event 插件 emit 的
+   * rejection；浏览器分支进程内总线无失败面、恒 resolve。
+   */
+  emitFrontendEvent(event: string, payload?: unknown): Promise<void>;
 }

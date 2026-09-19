@@ -9,8 +9,9 @@
 //   给全部同名 handler，data JSON 解析 payload 同构）；FRONTEND_LOCAL_EVENTS
 //   走进程内总线不进 EventSource；
 // - 连接状态机：connecting → online → reconnecting → online（初始
-//   connecting，首 onopen 前的 onerror 保持 connecting）；EventSource 原生
-//   自动重连（浏览器管退避，应用层只管状态呈现）；
+//   connecting，首 onopen 前的 onerror 保持 connecting）；网络级断连由
+//   EventSource 原生自动重连兜底（浏览器管退避），致命关闭（非 200 等，
+//   浏览器不重连）由应用层定时重建（FATAL_CLOSE_REBUILD_MS）；
 // - onopen-after-error 触发白名单重放（`{}` 逐条、结果含错误也入集、并发
 //   防护只重放一次）并经 `transport:reconnected` 前端本地事件交付结果集；
 // - getAuthStatus()：首次成功请求后缓存（login 5 次/分/IP 限流预算保护
@@ -27,6 +28,9 @@ import type { ConnectionState, Transport, UnlistenFn } from './types';
 
 /** AppError 响应判别头（与 server routes.rs 常量同源约定）。 */
 const APP_ERROR_HEADER = 'x-egosync-app-error';
+
+/** EventSource 致命关闭（非 200 等）后的重建退避间隔（浏览器不原生重连）。 */
+const FATAL_CLOSE_REBUILD_MS = 5000;
 
 type StateHandler = (state: ConnectionState) => void;
 type EventHandler = (payload: unknown) => void;
@@ -45,6 +49,8 @@ export class HttpTransport implements Transport {
   private state: ConnectionState = 'connecting';
   /** 重放并发防护：重放进行中时后续 onopen 不再触发（连续恢复只重放一次）。 */
   private replaying = false;
+  /** 致命关闭后的重建定时器（防叠加：同一时刻至多一个待触发的重建）。 */
+  private rebuildTimer: ReturnType<typeof setTimeout> | null = null;
   /** `/api/auth/status` 结果缓存（限流预算保护）。 */
   private authStatusCache: unknown | undefined;
 
@@ -57,21 +63,29 @@ export class HttpTransport implements Transport {
       body,
     }).then(
       (res) =>
-        res.text().then((text) => {
-          const parsed = parseJsonOrText(text);
-          if (res.status === 200) {
-            if (res.headers.get(APP_ERROR_HEADER) != null) {
-              // 业务错误：200 + 判别头 ⇒ reject body 解析值（AppError 单键
-              // map，与 Tauri invoke rejection 载荷同构）
-              return Promise.reject(parsed) as Promise<T>;
+        // text() 的 onRejected 只捕「响应体读取中断」（连接中途重置）——
+        // 原始流错误不得逃出 HttpTransportError 契约（评审 G3）；业务
+        // 错误（onFulfilled 内的 reject）经同一 then 的 onRejected 不受影响
+        res.text().then(
+          (text) => {
+            const parsed = parseJsonOrText(text);
+            if (res.status === 200) {
+              if (res.headers.get(APP_ERROR_HEADER) != null) {
+                // 业务错误：200 + 判别头 ⇒ reject body 解析值（AppError 单键
+                // map，与 Tauri invoke rejection 载荷同构）
+                return Promise.reject(parsed) as Promise<T>;
+              }
+              return parsed as T;
             }
-            return parsed as T;
-          }
-          // 401 / 429 / 404 / 5xx 等传输层错误（仅 HTTP 侧存在）
-          return Promise.reject(
-            new HttpTransportError(res.status, parsed)
-          ) as Promise<T>;
-        }),
+            // 401 / 429 / 404 / 5xx 等传输层错误（仅 HTTP 侧存在）
+            return Promise.reject(
+              new HttpTransportError(res.status, parsed)
+            ) as Promise<T>;
+          },
+          () =>
+            // 响应体读取中断：与网络失败同形状（status 0 + body null）
+            Promise.reject(new HttpTransportError(0, null)) as Promise<T>
+        ),
       () =>
         // 网络失败（fetch reject）：status 0 + body null
         Promise.reject(new HttpTransportError(0, null)) as Promise<T>
@@ -103,17 +117,26 @@ export class HttpTransport implements Transport {
   }
 
   onConnectionStateChange(handler: (state: ConnectionState) => void): UnlistenFn {
-    // 订阅即回调当前状态（初始 connecting / 恢复后 online）
-    handler(this.state);
+    // 订阅即回调当前状态（初始 connecting / 恢复后 online）——与 setState
+    // 扇出同款隔离（评审 G8）：坏订阅者不得炸掉订阅流程本身
+    try {
+      handler(this.state);
+    } catch (e) {
+      console.error('传输状态订阅者抛错（已隔离）:', e);
+    }
     this.stateHandlers.add(handler);
     return () => {
       this.stateHandlers.delete(handler);
     };
   }
 
-  /** 前端本地事件：浏览器分支进程内消化（不进传输契约）。 */
-  emitFrontendEvent(event: string, payload?: unknown): void {
+  /**
+   * 前端本地事件：浏览器分支进程内消化（不进传输契约）。
+   * 进程内同步总线无失败面 ⇒ 恒 resolve 的 Promise（接口与 Tauri 分支同形）。
+   */
+  emitFrontendEvent(event: string, payload?: unknown): Promise<void> {
     emitFrontendLocalEvent(event, payload);
+    return Promise.resolve();
   }
 
   /**
@@ -153,17 +176,42 @@ export class HttpTransport implements Transport {
       if (this.state === 'online') {
         this.setState('reconnecting');
       }
-      // 首次连接期的 onerror 保持 connecting（状态机冻结语义）；
-      // EventSource 原生自动重连（浏览器管退避）
+      // 致命关闭（HTTP 错误等）：浏览器对非 200 不做原生重连（WHATWG
+      // 语义=永久关闭）——应用层定时重建，否则事件与恢复重放永不复活
+      // （评审 G2）；首连期非致命 onerror 保持 connecting（冻结语义）
+      if ((source as EventSource).readyState === EventSource.CLOSED) {
+        this.eventSource = null;
+        this.scheduleRebuild();
+      }
     };
     this.eventSource = source;
+    // 重建场景（致命关闭后）：既有桥接重挂到新连接——桥接闭包按
+    // handlers 集合扇出、与具体源无关；不重挂则事件投递随旧连接死掉
+    for (const [event, bridge] of this.bridges) {
+      source.addEventListener(event, bridge);
+    }
+  }
+
+  /** 致命关闭后的重建退避：单一定时器防叠加，到期重建 SSE 连接。 */
+  private scheduleRebuild(): void {
+    if (this.rebuildTimer) return;
+    this.rebuildTimer = setTimeout(() => {
+      this.rebuildTimer = null;
+      this.ensureEventSource();
+    }, FATAL_CLOSE_REBUILD_MS);
   }
 
   private setState(next: ConnectionState): void {
     if (this.state === next) return;
     this.state = next;
+    // 单个订阅者抛错不得中断其余订阅者与状态机推进（评审 G8：
+    // onopen 内 setState 先于恢复重放——坏订阅者曾断掉整条恢复链）
     for (const handler of this.stateHandlers) {
-      handler(next);
+      try {
+        handler(next);
+      } catch (e) {
+        console.error('传输状态订阅者抛错（已隔离）:', e);
+      }
     }
   }
 

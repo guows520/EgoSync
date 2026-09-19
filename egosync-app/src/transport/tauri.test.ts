@@ -104,11 +104,19 @@ describe('TauriTransport', () => {
     expect(states).toEqual(['online']);
   });
 
-  it('emitFrontendEvent 走 @tauri-apps/api/event emit 透传', () => {
+  it('emitFrontendEvent 走 @tauri-apps/api/event emit 透传', async () => {
     const payload = { roleId: 'r1', skillId: 's1' };
     const transport = new TauriTransport();
-    transport.emitFrontendEvent('skill-scope-updated', payload);
+    await transport.emitFrontendEvent('skill-scope-updated', payload);
     expect(eventEmit).toHaveBeenCalledWith('skill-scope-updated', payload);
+  });
+
+  it('emitFrontendEvent 直返 emit 的 Promise：rejection 透传给调用方 catch（基线语义——评审 G1）', async () => {
+    eventEmit.mockRejectedValueOnce(new Error('event plugin unavailable'));
+    const transport = new TauriTransport();
+    await expect(
+      transport.emitFrontendEvent('skill-scope-updated', { roleId: 'r1' })
+    ).rejects.toThrow('event plugin unavailable');
   });
 });
 

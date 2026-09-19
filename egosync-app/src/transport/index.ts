@@ -38,10 +38,11 @@ export function invoke<T>(command: string, args?: Record<string, unknown>): Prom
 
 /**
  * 前端本地事件发射（skill-scope-updated 等）：按宿主路由——Tauri 走
- * event 插件 emit 原样，浏览器走进程内总线（不进 SSE 契约）。
+ * event 插件 emit 原样（rejection 透传给调用方 catch），浏览器走进程内
+ * 总线（不进 SSE 契约、恒 resolve）。
  */
-export function emitFrontendEvent(event: string, payload?: unknown): void {
-  getTransport().emitFrontendEvent(event, payload);
+export function emitFrontendEvent(event: string, payload?: unknown): Promise<void> {
+  return getTransport().emitFrontendEvent(event, payload);
 }
 
 /**

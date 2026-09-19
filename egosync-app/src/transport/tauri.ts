@@ -59,8 +59,12 @@ export class TauriTransport implements Transport {
     return () => {};
   }
 
-  /** 前端本地事件：桌面走 event 插件 emit 原样（ChatStream listen 同源）。 */
-  emitFrontendEvent(event: string, payload?: unknown): void {
-    void tauriEmit(event, payload);
+  /**
+   * 前端本地事件：桌面走 event 插件 emit 原样（ChatStream listen 同源）。
+   * 直返 emit 的 Promise——与基线 `emit('skill-scope-updated', payload)`
+   * 同形，调用方 catch 兜底可达（评审 G1：void 丢弃曾令兜底成死代码）。
+   */
+  emitFrontendEvent(event: string, payload?: unknown): Promise<void> {
+    return tauriEmit(event, payload);
   }
 }

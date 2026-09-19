@@ -405,3 +405,24 @@ All items resolved in the same session:
 - source_spec: `_bmad-output/implementation-artifacts/15-4-server-binary-and-single-user-auth.md`
   summary: CSP 之外的安全响应头缺失（X-Content-Type-Options: nosniff、frame-ancestors/X-Frame-Options、Referrer-Policy）。
   evidence: 15.4 二轮评审（盲13）：server 今日 API-only、无页面可被框架嵌入（点击劫持不可达）；CSP 内容由架构⑧冻结。16.1 Web UI 页面落地时统一补齐整套响应头。
+- source_spec: `_bmad-output/implementation-artifacts/15-5-frontend-transport-and-parity-test-suite.md`
+  summary: capabilities 生成物（isDesktopOnly/isWebCommand/TRANSPORT_CAPABILITIES）尚无生产消费者——浏览器宿主的 desktop-only 入口（配对/数据导入导出/选目录等）未按 capability 隐入口，点击会 404。
+  evidence: 15.5 评审盲扫 #2：门控 UI 从未存在于任何宿主（非 15.5 造成），浏览器宿主 16.1 才对用户可达；epic 16.1 AC「Tauri 专属入口不出现（capabilities 驱动显隐）」承接。验证方式：16.1 落地后浏览器分支遍历 desktop-only 入口断言不渲染。
+- source_spec: `_bmad-output/implementation-artifacts/15-5-frontend-transport-and-parity-test-suite.md`
+  summary: getAuthStatus 成功结果进程期缓存永不失效——pre-login 调用会把 authenticated:false 钉死整个进程期，且失败路径不缓存、并发首调无单飞。
+  evidence: 15.5 评审 #3/#26/#31（边界猎手+验证缺口）：/api/auth/status 恒 200（auth.rs 亲证）、失败重试方向正确；16.1 登录页/setup 向导接线时需补缓存失效（登录成功后强刷）与消费侧退避。
+- source_spec: `_bmad-output/implementation-artifacts/15-5-frontend-transport-and-parity-test-suite.md`
+  summary: 「桌面 invoke 字节 == HTTP body 字节」的真实双宿主比对无自动化证据——现有对等为 fixture 双 mock 对称 + 间接链（同 engine/preserve_order/canonical 往返）。
+  evidence: 15.5 评审盲扫 #5：e2e 3 个通过 spec 已穿真 invoke（部分经验证据）；完整证据需 16.1 web e2e 落地后对同一 command 双宿主实发请求逐字节比对。
+- source_spec: `_bmad-output/implementation-artifacts/15-5-frontend-transport-and-parity-test-suite.md`
+  summary: transport:reconnected 结果集错误侧为 HttpTransportError 实例（成功侧为纯 JSON 对象），16.2 消费方将拿到混合形状。
+  evidence: 15.5 评审盲扫 #14：http.ts replayAfterReconnect 将 catch 值原样入集（AppError map 或 Error 实例）；建议 16.2 动工前统一序列化信封（如 {__error:true,status,body}）并在协议注释钉死。
+- source_spec: `_bmad-output/implementation-artifacts/15-5-frontend-transport-and-parity-test-suite.md`
+  summary: HTTP/SSE URL 前缀契约串（/api/cmd、/api/events、/api/auth/status）TS 与 server 路由双写无耦合门禁——判别头已有 source-scan 耦合测试（15.5 补丁轮 G6），URL 前缀没有。
+  evidence: 15.5 评审验证缺口 #3：真耦合验证=浏览器 transport 对真 server=16.1 web e2e 领地（15.5 Never 条款排除本故事做 web e2e）；16.1 落地时以集成测试钉死。
+- source_spec: `_bmad-output/implementation-artifacts/15-5-frontend-transport-and-parity-test-suite.md`
+  summary: e2e 6/9 spec 基线即红且 CI 全量禁用——发生在这 6 个红 spec 内部的回归与既有失败不可区分，「通过集只增未减」不构成全覆盖证明。
+  evidence: 15.5 评审验证缺口附 1：失败归因链在 15.5 spec Implementation Notes（四轮 runs）；修复依赖 e2e 平台缺陷独立工作项（tauri-driver 端口泄漏、历史库 migration 32 checksum——后者建议 15.6 前必修）。附带复议建议：连接状态机「首连失败永停 connecting」语义在 16.2 连接徽章动工前复议（评审 #16 驳回项的随行记录）。
+- source_spec: `_bmad-output/implementation-artifacts/15-5-frontend-transport-and-parity-test-suite.md`
+  summary: npm run test:all 不含 server crate 测试（须独立 cd server && cargo test），本地 test:all 全绿不等于 server 侧绿。
+  evidence: 15.5 评审盲扫 #10：15.5 规格明言不改 test:all 构成，server-ci 工作流在 CI 兜底；后续 chore 可加聚合脚本（test:repo）或把 server cargo 并入 test:all。

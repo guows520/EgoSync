@@ -2,7 +2,7 @@
 title: '前端双传输与对等测试套件（Story 15.5）'
 type: 'feature'
 created: '2026-09-19'
-status: 'in-review'
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 0
 baseline_commit: '1cfc1636ea92da87aa69f20fdb360a3c8fb4893a'
@@ -119,11 +119,57 @@ context:
   2. **Run 2（清库对照实验，15.2 范式：移走历史数据目录）**：**3/9 通过**（task-management 5/5、llm-streaming 3/3、performance 4/4）——较 15.2/15.3 基线（2/9：llm-streaming+task-management）通过集只增未减。正向执行级证据：应用经 15.5 传输层接线后正常启动渲染；任务 CRUD 全程穿行 service→`@/transport`→TauriTransport→engine；llm:stream 流式 UI 契约（输入框保持可用、发送复位）穿行 useEngineEvent→TauriTransport.on。
   3. **Run 3（复跑，未清残留 driver）**：9/9 会话创建超时——tauri-driver.log 8 次 `can not listen to address: 127.0.0.1:4444`/`FATAL ... 4445`：上一 run 泄漏的 driver 占用 4444 端口，后续每个 spec 重试各自再 spawn driver 全部撞端口。归因为 15.2/15.3 已在案的 driver 泄漏/抖动环境级缺陷（「e2e 平台修复（driver 泄漏）仍应作为独立工作项跟踪」原句）；与本故事无关（应用本体零报错）。
   4. **Run 4（终局复核：pkill driver + 清库）**：3/9 与 Run 2 完全一致。6 个失败 spec（accessibility 6 axe 检查、briefing-review 2、butler-conversation 1「分身管家标题」、cold-start-onboarding 1「首次启动应显示 Onboarding 视图」、conflict-arbitration 1、role-crud 4「保存更改/归档/恢复/删除」）逐项归因：全部为 15.2/15.3 基线既败组合（陈旧选择器文案漂移、beforeSession 擦错目录致 spec 间库态串扰、axe 在 wry 环境的既有失败、右键菜单交互漂移），无一件可归因 15.5 改动（本故事前端改动仅 import 行/事件 hook 名/宿主门控，全部经 vitest 701 用例钉死）。实验后已恢复原历史数据目录。
+- **评审补丁轮（2026-09-19，第一轮 review 后）**：9 组补丁（G1 emit Promise 恢复基线签名 / G2 EventSource 致命关闭退避重建+桥接重挂 / G3 text() 中断包 HttpTransportError / G4 useEngineEvent 生命周期测试 5 例 / G5 TitleBar 浏览器退化+App show 门控测试 / G6 判别头 source-scan 耦合测试 / G7 engine 白名单 31 条全量值钉 / G8 状态订阅者隔离（订阅即回调+扇出双点）/ G9 gen-transport 守卫先于 map+空白名单合法化）。补丁后全量重跑验证：`npm run test:all` 全绿（vitest 51 文件/713 用例=701+12 新增；壳 41+1+1；engine 818）；`npm run build` tsc 零错误+构建成功；`cd server && cargo test` 全绿（5+24+2+5+4=40）；双侧工件 regen 零漂移；桌面冒烟 release 重建（4m52s）后独立 HOME 全新库启动 40s 存活零 panic（双池迁移全绿、delegate bridge 监听，sidecar/keyring 降级 warn 为既有环境项不变）。补丁期被测试套件拦下的自误一处：G3 首版 `.catch` 误包 AppError 业务 rejection（parity 118 用例变红）——改 `then` 第二参数只捕 text() 自身拒绝后全绿（对等门禁有效性的现场证据）。7 组 defer 入 deferred-work.md；驳回项理由逐条在 Review Triage Log。
+- **评审补丁轮 e2e 归因记录（2026-09-19，15.2 裁决 A 口径，基线对照实验收口）**：补丁后 release 二进制（22:08 构建）共五轮 e2e 尝试，全部失败于会话/IPC 层，归因链如下——① 全套件首跑 9/9「4444 无法连接」：本 shell PATH 缺 `~/.cargo/bin`（tauri-driver not found，日志直证），非应用问题；② 补 PATH 后 9/9：1 spec 死于 IPC Origin 缺陷、8 spec 会话创建超时——tauri-driver.log 含 GTK 初始化 panic + 端口占用 15 处（泄漏连锁）；③ 单独 3 spec：同样全会话超时；④ 根因修正：shell 无 DISPLAY/XAUTHORITY（X99 残留 Xvfb 拒绝未授权连接，日志「Authorization required」直证）——`xvfb-run -a` 包装后会话创建全部成功，但 3/3 死于 `IPC app_complete_onboarding failed: Origin header is not a valid URL`（before-all 种子步骤）；⑤ **决定性基线对照实验**：`git worktree` 出基线提交 1cfc1636（早于一切 15.5 改动）构建二进制，同条件（xvfb-run + dev 的 DISPLAY/XAUTHORITY 双条件）跑同一 spec——**基线二进制死于逐字相同的 Origin 错误**。结论：IPC Origin 缺陷为环境级（wry/tao IPC 层对 WebDriver executeAsync 调用的 Origin 校验失败，15.4 已在案「按日漂移」项当日发作），与 15.5 改动无因果——失败路径为 `browser.executeAsync → __TAURI_INTERNALS__.invoke` 原生桥（零前端代码参与），本故事 Rust 改动全部 cfg(test) 不进 release 二进制，基线==补丁后二进制同败双证。dev 子代理当日 Run 2/4 的 3/9 通过证明传输层接线在真实桌面路径可用（task CRUD/llm:stream/perf 三个 spec 穿行 service→transport→engine）；当日 e2e 平台缺陷（driver 泄漏、DISPLAY 授权漂移、IPC Origin）建议随 15.2 先例作独立工作项跟踪（deferred-work G15 条目在案）。
 - **实现裁量记录**：① Transport 接口含 4 核心成员 + `emitFrontendEvent`（spec tauri.ts 任务本身要求传输层实现它，模块级再导出委托 `getTransport()`）——与 spec 字面「Transport 接口（invoke/on/capabilities/onConnectionStateChange）」并存无冲突；② mock useTauriEvent 的测试文件实测 5 个（spec 写 4——useAllTasks.test.tsx 是 hook 测试也在 mock 之列，机械计数为准），5 个全部迁移；③ commands.json 因 preserve_order 全面改键序（插入序 vs 旧字母序）致大 diff（851+/818-），确定性与再生成幂等已由校验和零漂移证明；④ e2e 环境级缺陷（历史库 migration 32 checksum、driver 端口泄漏）建议按 15.2 先例作独立工作项跟踪，其中 032 修改违反「已应用迁移不可变」sqlx 约定值得在 15.6 前修（恢复 last_seen_at 或提供修复迁移）。
 
 ## Spec Change Log
 
 ## Review Triage Log
+
+### 第一轮（2026-09-19，三层并行评审：盲审猎手 16 条 / 边界猎手 10 条 / 验证缺口 3 主 2 附）
+
+**逐条裁决**（发现 → 判定 + 证据）：
+
+1. [盲审] `emitFrontendEvent` 用 `void` 丢弃 emit Promise —— **high**：亲证基线 `notifyScopeUpdated` 返回 `Promise<void>`（`emit(...)` 直返），调用方 SettingsTab.tsx:97-103 / ButlerSettingsContent.tsx:91 的 `await + catch + setError 兜底`沦为死代码、emit rejection 变 unhandled rejection；违反冻结 AC「函数签名零变化」。
+2. [盲审] capabilities 生成物零生产消费者、浏览器 desktop-only 入口未门控 —— **low**：真（浏览器分支点配对/数据导出会 404），但 capability 门控 UI 从未存在于任何宿主（先于本故事的缺口、非本故事造成），浏览器宿主 16.1 才对用户可达（Never 条款：静态服务/登录页归 16.1），epic 16.1 AC 明确承接 → defer。
+3. [盲审] getAuthStatus 不在 Transport 接口 + 失败路径不缓存 —— **low**：接口位置系规格任务文本裁定（冻结 AC 四成员接口；auth 仅 HTTP 侧概念）；失败不缓存实为正确语义（网络故障应重试、`/api/auth/status` 恒 200——auth.rs 亲证）；真实关切=16.1 登录接线需要缓存失效策略 → defer（16.1）。
+4. [盲审] 判别头常量 TS/Rust 双写无耦合门禁 —— **medium**：真（双侧各写字面量，server 改名后双侧测试照绿、集成静默断裂）；本故事自建的契约串应有机械门禁（source-scan 先例：events.rs 正则解析进测试）→ patch。
+5. [盲审] 对等套件双通道皆 mock、真实双宿主字节对等无自动化证据 —— **low**：真（fixture 对称证明的是映射对称而非真实载荷）；间接证据链在（同 engine + preserve_order 属性测试 + canonical 往返 + e2e 3 spec 穿真 invoke），强化需 16.1 web e2e → defer。
+6. [盲审] 重连补齐只覆盖查询不覆盖事件 —— **low，驳回（意图排除）**：冻结 AC「重放白名单 31 条只读 query」即人批的恢复协议（查询重放=断连窗口状态补偿的设计选择），事件回放协议不在批准意图内；16.2 消费语义可复议。
+7. [盲审] 重放风暴无节流 —— **low，驳回（规则 82）**：单用户 31 条只读 POST、EventSource 原生退避管频率；节流=守卫未演示状态。
+8. [盲审] engine 白名单测试「值钉」名不副实 —— **low**：真（只钉 len==31 + ⊆ web-ok，换成员本地不红、仅 CI 新鲜度门禁兜底）；events.test.ts 27 事件全量值钉先例在 → patch。
+9. [盲审] `vi.mock('@/transport', () => ({ invoke }))` 部分 mock 范式脆弱 —— **low，驳回（规则 82）**：701 用例全绿无实际破坏；共享 mock 工厂重构超出直接修正。
+10. [盲审] test:all 不含 server crate —— **low**：真（本地跑不到 server 对等套件），但规格 Code Map 明言「不改 test:all 构成」且 server-ci 工作流 CI 兜底；聚合属 chore → defer。
+11. [盲审] 测试以 process.cwd() 锚定仓库根 —— **low，驳回（规则 82）**：日常使用（egosync-app 下 npm run test / CI）不受影响；向上搜索助手=robustness 增强超出直接修正。
+12. [盲审] command_parity_test `tempdir().keep()` 每次泄漏临时目录 —— **low，驳回（规则 82）**：每 run 一目录的有意调试成本；清理逻辑=守卫。
+13. [盲审] gen-transport 守卫死代码 + 空白名单误报「缺字段」+ d.mts 无漂移检查 —— **low**：守卫顺序 bug 亲证为真（`doc.commands.map` 先于 `Array.isArray` 守卫执行，键缺失时 raw TypeError）→ patch；d.mts 漂移部分驳回（规则 82：小文件人肉同步成本可接受）。
+14. [盲审] 413/5xx 未钉形状 + 重放结果集混 Error 实例 —— **low**：413/5xx 与 404 走同一非 200 分支（形状已冻结、同路径不同状态码，该半驳回）；Error 实例混入 `transport:reconnected` 结果集=16.2 消费形状问题 → defer（16.2 信封）。
+15. [盲审] commands.json 键序翻转产生机械噪声、语义变更被淹没 —— **false**：插入序=struct 字段序，确定性且 regen 幂等（校验和零漂移亲证）；未来该工件 diff 只含语义变更，翻转是一次性成本已吸收。
+16. [盲审] 首连失败永停 connecting、消费方无法区分「正在连」与「离线重试」 —— **low，驳回（规则 86）**：四态状态机与「首 onopen 前 onerror 保持 connecting」为规格冻结语义，修复=改本故事规格；16.2 复议建议随行记录不改路由。
+17. [边界] `res.text()` 中途 reject 裸漏违反 HttpTransportError 契约 —— **medium**：亲证裸 then 链（http.ts:58-78），body 读取中断时原始流错误逃出契约；冻结矩阵「网络失败 ⇒ HttpTransportError{status:0,body:null}」覆盖 mid-body reset → patch。
+18. [边界] /api/events 非 200 → EventSource 致命关闭永不恢复 —— **medium**：亲证 onerror 无 readyState CLOSED 分支（http.ts:152-158）；WHATWG 对非 200=永久关闭、原生自动重连不适用 ⇒ 冻结 AC「onopen-after-error 触发重放」在致命关闭路径永不触发 → patch。
+19. [边界] 状态订阅者抛错中断扇出与恢复重放 —— **low**：亲证 setState 裸循环（http.ts:165-167），onopen 内 setState 先于 replayAfterReconnect，一个坏订阅者断全部状态通知与恢复 → patch。
+20. [边界] getAuthStatus 并发首调重复请求 —— **low，驳回（规则 82）**：无现存消费者（16.1 才接线）、burst 可忽略；单飞字段=守卫未演示状态。
+21. [边界] emit Promise 丢弃（unhandled rejection）—— 同 #1（同根因）。
+22. [边界] gen 脚本 commands 键缺失时 raw TypeError —— 同 #13 守卫部分（同根因）。
+23. [边界] 主张核查：services 签名零变化不实（notifyScopeUpdated 返回 void）—— 同 #1（同根因，高置信 claim）。
+24. [边界] 主张核查：TauriTransport 零行为变化被 emit 违反 —— 同 #1（同根因，高置信 claim）。
+25. [边界] 主张核查：SSE 恢复协议在致命关闭路径失效 —— 同 #18（同根因）。
+26. [边界] 主张核查：auth status 失败不缓存重打限流 —— **low**：主张属实（仅成功缓存，与任务文本「首次请求后缓存」有措辞偏差），但失败重试是正确方向、429 自放大需消费者存在（16.1 侧退避更对位）→ 并入 #3 defer。
+27. [验证缺口] useEngineEvent 零真实观测（22 消费点的测试全部 mock 该 hook）—— **high**（预验证采纳）：删 deps 或清理函数不会红任何测试，核心「桌面行为零变化」保证无测试钉 → patch。
+28. [验证缺口] TitleBar/App 浏览器退化分支零验证（vitest 全程 Tauri 桩）—— **medium**（预验证采纳）：浏览器分支渲染与 show() 门控无任何断言 → patch。
+29. [验证缺口] HTTP/SSE 契约串（URL 前缀）双写无耦合测试 —— **low**：真；但真耦合验证=浏览器 transport 对真 server=16.1 web e2e 领地（Never 条款排除本故事做 web e2e）→ defer；判别头部分由 #4 patch 覆盖。
+30. [验证缺口·附] e2e 红区盲区：基线即红的 6 spec 内的回归不可见 —— **low**：真（e2e CI 禁用 + 基线红）；登记风险册 → defer。
+31. [验证缺口·附] getAuthStatus 缓存永不失效（pre-login false 钉死整个进程期）—— **low**：真，16.1 登录流必须处理 → 并入 #3 defer。
+
+**分组与路由**（同根因归组、组内最高判定定级；无 intent_gap/bad_spec ⇒ 无 loopback，review_loop_iteration 维持 0）：
+
+- **patch × 9 组**：G1（#1/#21/#23/#24 emit Promise，high）／G2（#18/#25 致命关闭不恢复，medium）／G3（#17 text() 裸漏，medium）／G4（#27 hook 无测试，high）／G5（#28 浏览器退化无测试，medium）／G6（#4 判别头耦合门禁，medium）／G7（#8 白名单值钉，low）／G8（#19 状态扇出容错，low）／G9（#13/#22 gen 守卫，low）。
+- **defer × 7 组**：G10（#2 capability UI 门控 → 16.1）／G11（#3/#26/#31 auth 缓存失效 → 16.1）／G12（#5 真实双宿主字节证据 → 16.1 web e2e）／G13（#14 重放错误信封 → 16.2）／G14（#29 URL 契约耦合 → 16.1 web e2e）／G15（#30 e2e 红区盲 → 风险册）／G16（#10 test:all 聚合 → chore）。
+- **驳回**：#6（意图排除）／#7 #9 #11 #12 #20（规则 82）／#13-d.mts 部分（规则 82）／#15（false：regen 幂等亲证）／#16（规则 86）。
+
+**处置记录**：实施子代理非后台代理、不可续用（规程允许：cannot be continued ⇒ 本人应用补丁）。9 组补丁由会话本人应用后全量重跑 Verification 命令；7 组 defer 追加至 deferred-work.md。
 
 ## Design Notes
 

@@ -381,3 +381,27 @@ All items resolved in the same session:
 - source_spec: `_bmad-output/implementation-artifacts/15-3-chat-domain-migration-and-chatsessionregistry.md`
   summary: llm:stream 高频发射路径双重序列化——engine 侧 to_value(强类型) 构造 Value 树后 TauriEventBus 经 app_handle.emit 再序列化一次，每 token 多一跳。
   evidence: 15.3 评审盲扫层：to_value 改写为冻结 Always 明定（emit 机械改写类），EngineEvents::emit(Value) 签名由 15.2 冻结；桌面单 token payload 量级下额外开销可忽略。修法：15.4/15.5 演化接缝时改收 Serialize 或预序列化 payload，消去中间 Value 树。
+- source_spec: `_bmad-output/implementation-artifacts/15-4-server-binary-and-single-user-auth.md`
+  summary: 会话生命周期管理缺失——无 logout 端点、无吊销/过期机制，失窃 Cookie 永久有效且 auth_sessions 只增不删。
+  evidence: 15.4 评审（B3/E3）：架构 API 表认证面仅 env/setup/login 三件，logout 未入任何故事；auth_sessions 建表后无删除路径。16.1 Web UI 或 17.x 会话安全故事补齐（logout + TTL + 清扫）。
+- source_spec: `_bmad-output/implementation-artifacts/15-4-server-binary-and-single-user-auth.md`
+  summary: TLS 反代兼容三件套——Cookie Secure 旗标、is_same_origin 的 X-Forwarded-Proto/Port 感知（否则 443 vs 80 全量 403）、IPv6 字面量 Host 拆分。
+  evidence: 15.4 评审（B4/B11）：is_same_origin 以 Origin 缺省 443 对 Host 缺省 80 比对，Caddy TLS 后所有浏览器 POST 会被 403 断（代码注释已挂 17.1 复核标记）；TLS 本体在 17.1 冻结排除面内，届时一并定稿。
+- source_spec: `_bmad-output/implementation-artifacts/15-4-server-binary-and-single-user-auth.md`
+  summary: 首访 setup 公网抢占窗口——0.0.0.0 先于初始化暴露时最快请求者夺得凭据；并发 setup 已加锁但网络竞态固有。
+  evidence: 15.4 评审（B8/E1）：架构决策 #5 首访设计固有属性；缓解=默认 127.0.0.1 绑定+EGOSYNC_TOKEN 预设；16.1 首访 UX 定稿时评估 setup nonce 打印 stdout 方案。
+- source_spec: `_bmad-output/implementation-artifacts/15-4-server-binary-and-single-user-auth.md`
+  summary: data_destroy 服务端无确认暴露——单条认证 POST 即毁双库+密钥+文件，命令契约无确认参数（桌面确认在 UI 层）。
+  evidence: 15.4 评审回环人工裁决③A：暂缓至 17.3 数据生命周期故事统一加固（加确认参数破坏双通道参数形状对等，当时裁决不做）；16.1 Web UI 须复刻确认弹窗。风险：手写原始请求+有效会话可无确认清库。
+- source_spec: `_bmad-output/implementation-artifacts/15-4-server-binary-and-single-user-auth.md`
+  summary: 桌面生产 EngineCtx 接线缺自动化验证——唯一自动化引用是 busy-mutex 自建 ctx，语义接线错（路径指错等）不 panic、现有验证面全绿。
+  evidence: 15.4 评审（V7）：e2e 套件因既有环境缺陷停用（基线对照证据链在 spec Implementation Notes），生产接线回归只能靠人工；15.5 前端对等测试落地时把桌面接线纳入回归面。
+- source_spec: `_bmad-output/implementation-artifacts/15-4-server-binary-and-single-user-auth.md`
+  summary: AGENTS.md/project-context.md 地图未含 server/ 栈与命令（cd server && cargo test、server-ci 工作流、commands.json 工件）。
+  evidence: 15.4 评审（B14 部分）：agent-context 文件按评审规程 defer；15.5 消费 commands.json 前应先更新两文档的地图与命令清单。
+- source_spec: `_bmad-output/implementation-artifacts/15-4-server-binary-and-single-user-auth.md`
+  summary: engine services/delegate_bridge.rs:165/185 尚存两处 [stage-b-diag] 诊断日志（规则 13 违规，15.2 迁移遗留）。
+  evidence: 15.4 修复轮范围内外发现：chat.rs 同款残留已删（该文件在本故事迁移面内），delegate_bridge.rs 不在 15.4 改动面且冻结 Never 列表明文「不动 delegate_bridge 既有结构」——两行 tracing::info! 删除留给后续卫生提交（连同 agent_engine 若有同款）。
+- source_spec: `_bmad-output/implementation-artifacts/15-4-server-binary-and-single-user-auth.md`
+  summary: CSP 之外的安全响应头缺失（X-Content-Type-Options: nosniff、frame-ancestors/X-Frame-Options、Referrer-Policy）。
+  evidence: 15.4 二轮评审（盲13）：server 今日 API-only、无页面可被框架嵌入（点击劫持不可达）；CSP 内容由架构⑧冻结。16.1 Web UI 页面落地时统一补齐整套响应头。

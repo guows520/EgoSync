@@ -18,6 +18,7 @@ pub mod auth;
 pub mod bootstrap;
 pub mod dispatch_gen;
 pub mod healthz;
+pub mod idle_timeout;
 pub mod routes;
 pub mod secret_store;
 pub mod security;

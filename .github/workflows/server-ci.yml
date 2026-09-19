@@ -18,7 +18,9 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # 二轮评审修复 #11：仅 PR 内取消在跑运行——main 分支 push 的门禁结论
+  # 静默丢失（被同分支后续 push 取消）曾可能放过未验证提交
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   server-test:

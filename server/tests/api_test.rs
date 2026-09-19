@@ -3,7 +3,9 @@
 //! 覆盖：healthz 两级 / env 态与库态 / 优先级切换 + Cookie 跨重启 /
 //! 401 形状 / desktop-only 与未知命令 404 / 错误白名单 13 variant /
 //! camelCase 参数 / 限流 429 / 跨源 403 / CSP 全响应 / body 50MB 超限 413 /
-//! SSE 事件与滞后断开 / 密钥零泄漏 / SecretStore 文件优先 env 兜底。
+//! SSE 事件与滞后断开 / 密钥零泄漏。
+//!（SecretStore 文件优先/env 兜底等四断言在 tests/secret_store_test.rs。）
+
 
 mod common;
 
@@ -296,6 +298,37 @@ async fn desktop_only_and_unknown_commands_are_404() {
 
 // ── 错误白名单（架构 ②：13 variant 一律 200 + 原样单键 map）──
 
+/// 从 error.rs 源码机械统计 AppError variant 声明数（二轮评审修复 #10：
+/// 手写清单与源码脱钩——新增 variant 不自动进覆盖）。
+///
+/// 扫描口径：`pub enum AppError {` 与首个列 0 `}` 之间的块内，形如
+/// `Identifier(`（大驼峰后紧跟括号）的行即 variant 声明——`#[error]`
+/// 属性行与 `///` 文档行不匹配。**格式变化导致定位失败 ⇒ panic**
+/// （宁可响亮失败，不静默跳过）。
+fn count_app_error_variants_in_source() -> usize {
+    let src = include_str!("../../crates/egosync-engine/src/error.rs");
+    let start = src
+        .find("pub enum AppError {")
+        .expect("error.rs 未找到 'pub enum AppError {'（格式变化？——panic 而非静默跳过）");
+    let rest = &src[start + "pub enum AppError {".len()..];
+    let end = rest
+        .find("\n}")
+        .expect("error.rs AppError 枚举块未闭合（格式变化？）");
+    rest[..end]
+        .lines()
+        .filter(|line| {
+            let t = line.trim();
+            let ident: String = t
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            !ident.is_empty()
+                && ident.chars().next().unwrap().is_ascii_uppercase()
+                && t[ident.len()..].starts_with('(')
+        })
+        .count()
+}
+
 #[tokio::test]
 async fn all_app_error_variants_map_to_200_single_key_json() {
     // 错误白名单的对等覆盖：对 13 个现役 variant 逐一构造实例，经与
@@ -323,7 +356,16 @@ async fn all_app_error_variants_map_to_200_single_key_json() {
         ("ConnectionError", AppError::ConnectionError("x".into())),
         ("ProtocolError", AppError::ProtocolError("x".into())),
     ];
-    assert_eq!(variants.len(), 13, "现役 AppError variant 数（error.rs 为准）");
+    // 二轮评审修复 #10：手写清单长度必须等于源码 variant 声明数——
+    // error.rs 新增 variant 而清单未跟 ⇒ 此处先红（可读第一现场）
+    let source_count = count_app_error_variants_in_source();
+    assert_eq!(
+        variants.len(),
+        source_count,
+        "手写 variant 清单({})与 error.rs 源码声明数({})不一致——新增 variant 必须同步本清单",
+        variants.len(),
+        source_count
+    );
 
     for (name, err) in variants {
         let response = egosync_server::auth::app_error_to_response(err);
@@ -712,7 +754,6 @@ async fn llm_config_responses_never_leak_raw_keys() {
     .await
     .expect("服务层配置植入");
 
-
     // 列表响应不含原始密钥；含 api_key_ref
     let res = client
         .post_json(
@@ -853,13 +894,25 @@ async fn build_app_state_production_bootstrap_smoke() {
     let server = InProcessServer::start(state.clone()).await;
     let client = Client::new();
 
-    // healthz deep：双池 SELECT 1 通过、opencode 降级（测试环境 PATH 无
-    // 二进制——桌面同款环境级降级）⇒ 503 degraded
+    // healthz deep：双池 SELECT 1 必过；opencode 位按环境推导（二轮评审
+    // 修复 #15：装有 opencode 的机器上「无二进制 ⇒ 503」断言会假红，
+    // 健康分支也永不被断言——期望值随 PATH 实际状态取两侧）
+    let opencode_available = std::process::Command::new("which")
+        .arg("opencode")
+        .output()
+        .map(|o| o.status.success() && !String::from_utf8_lossy(&o.stdout).trim().is_empty())
+        .unwrap_or(false);
     let res = client.get(&server.url("/healthz?deep=1"), None, None).await;
-    assert_eq!(res.status(), 503, "deep 探针降级态");
+    let status = res.status();
     let body: Value = res.json().await.expect("deep body");
     assert_eq!(body["db"], true, "生产引导双池必须健康");
-    assert_eq!(body["opencode"], false, "无 opencode 二进制 ⇒ 降级位");
+    if opencode_available {
+        assert_eq!(status, 200, "PATH 有 opencode ⇒ deep 探针健康态");
+        assert_eq!(body["opencode"], true, "opencode 可用 ⇒ 健康位");
+    } else {
+        assert_eq!(status, 503, "PATH 无 opencode ⇒ deep 探针降级态");
+        assert_eq!(body["opencode"], false, "无 opencode 二进制 ⇒ 降级位");
+    }
 
     // login：env 令牌换 Cookie（生产引导后认证面全链）
     let session = login(&client, &server.url(""), "prod-smoke-token")
@@ -966,4 +1019,91 @@ async fn concurrent_setup_writes_exactly_once_no_overwrite() {
         .post_json(&server.url("/api/auth/login"), Some(&bad), None, None)
         .await;
     assert_eq!(res.status(), 401, "败者令牌必须不可登录（未被覆盖写入）");
+}
+
+// ── 跨源判定边界（二轮评审修复 #1）──
+
+#[tokio::test]
+async fn origin_without_host_header_is_rejected() {
+    // Origin 存在而 Host 缺失 ⇒ 403：旧 `(Some, Some)` 匹配式在该形态下
+    // 整体跳过检查放行——跨源拒绝冻结语义被旁路。
+    // HTTP/1.1 客户端（reqwest）必发 Host——用裸 TCP 手工构造无 Host
+    // 请求（HTTP/1.0 形态合法无 Host 头）。
+    let state = build_test_state(temp_data_dir("no-host"), None)
+        .await
+        .expect("测试状态装配");
+    let server = InProcessServer::start(state).await;
+
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut stream = tokio::net::TcpStream::connect(server.addr)
+        .await
+        .expect("裸 TCP 连接");
+    // 无 Host 头；Origin 指向第三方站点
+    stream
+        .write_all(b"GET /healthz HTTP/1.0\r\nOrigin: http://evil.example\r\n\r\n")
+        .await
+        .expect("写手工请求");
+    let mut raw = String::new();
+    // 读到响应头结束即止（无 body 长度依赖）
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let mut buf = [0u8; 512];
+            let n = stream.read(&mut buf).await.expect("读响应");
+            raw.push_str(&String::from_utf8_lossy(&buf[..n]));
+            if raw.contains("\r\n\r\n") || n == 0 {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("响应不超时");
+    // 状态行版本与请求对齐（HTTP/1.0 请求得 HTTP/1.0 响应）——只断言码
+    let status_line = raw.lines().next().unwrap_or("");
+    assert!(
+        status_line.contains(" 403 "),
+        "Origin 无 Host 必须被拒（403），实得响应行: {:?}",
+        status_line
+    );
+    assert!(
+        !raw.contains("Access-Control-Allow"),
+        "拒绝响应不得携带 CORS 放行头"
+    );
+}
+
+// ── deep 参数归一（二轮评审修复 #8）──
+
+#[tokio::test]
+async fn deep_true_alias_triggers_deep_probe() {
+    // `?deep=true`（监控方常见写法）曾静默拿到浅探针假 200——归一后
+    // 必须走深探针（按环境 503 降级或 200 健康，flags 与状态码一致）
+    let state = build_test_state(temp_data_dir("deep-true"), None)
+        .await
+        .expect("测试状态装配");
+    let server = InProcessServer::start(state).await;
+    let client = Client::new();
+
+    // 期望按环境推导（装有 opencode 的机器 ⇒ 200 健康）——
+    // 断言核心是「走的是深探针」而非浅探针假 200
+    let opencode_available = std::process::Command::new("which")
+        .arg("opencode")
+        .output()
+        .map(|o| o.status.success() && !String::from_utf8_lossy(&o.stdout).trim().is_empty())
+        .unwrap_or(false);
+    let res = client.get(&server.url("/healthz?deep=true"), None, None).await;
+    let status = res.status();
+    let body: Value = res.json().await.expect("deep body");
+    assert_eq!(body["db"], true, "深探针必须报告 db 位");
+    if opencode_available {
+        assert_eq!(status, 200, "PATH 有 opencode ⇒ deep=true 走深探针（200）");
+        assert_eq!(body["status"], "ok", "健康状态字段");
+    } else {
+        assert_eq!(status, 503, "PATH 无 opencode ⇒ deep=true 仍走深探针（503）");
+        assert_eq!(body["status"], "degraded", "深探针状态字段");
+        assert_eq!(body["opencode"], false, "深探针必须报告 opencode 位");
+    }
+    // 浅探针对照：不带参数 ⇒ 200 单字段（deep=true 的对照面）
+    let res = client.get(&server.url("/healthz"), None, None).await;
+    assert_eq!(res.status(), 200, "无参数浅探针恒 200");
+    let shallow: Value = res.json().await.expect("shallow body");
+    assert_eq!(shallow["status"], "ok", "浅探针无 flags");
 }

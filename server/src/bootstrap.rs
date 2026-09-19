@@ -48,6 +48,14 @@ pub async fn build_app_state(
         .await
         .map_err(|e| format!("对话数据库初始化失败: {}", e))?;
 
+    // ── 认证态先行（二轮评审修复 #3）──
+    // AuthState 只依赖 pool + env_token；装配失败（库哈希读错误 ⇒ 拒启，
+    // 一轮修复 #2）时排在任何子资源启动**之前**——sidecar 子进程与
+    // 后台任务（下方 spawn 族）零泄漏。
+    let auth = AuthState::new(pool.clone(), env_token)
+        .await
+        .map_err(|e| format!("认证态装配失败: {}", e))?;
+
     // ── 接缝注入：事件总线（SSE 广播）+ 密钥（secrets.json + env 兜底）──
     let bus = Arc::new(SseEventBus::new());
     let events_tx: broadcast::Sender<SseEvent> = bus.sender().clone();
@@ -260,14 +268,20 @@ pub async fn build_app_state(
         data_dir: data_dir.clone(),
         opencode_workspace: opencode_workspace_dir.clone(),
         skills_root: opencode_workspace_dir.join(".opencode").join("skills"),
-        home_dir: dirs::home_dir().unwrap_or_else(|| data_dir.clone()),
+        home_dir: dirs::home_dir().unwrap_or_else(|| {
+            // 二轮评审修复 #4：兜底分支保留但补 warn（平移等价偏差——
+            // 旧壳为显式 ValidationError，命令级错误→构造期可观测的语义差
+            // 由父代理在 Design Notes 登记）
+            tracing::warn!(
+                "无法获取用户主目录（HOME-less 环境？），Skill 发现根目录兜底为数据目录: {}",
+                data_dir.display()
+            );
+            data_dir.clone()
+        }),
     });
 
-    // 库哈希读失败 ⇒ Err 拒启（评审修复 #2：绝不 fail-open 误挂 setup）
-    let auth = AuthState::new(pool, env_token)
-        .await
-        .map_err(|e| format!("认证态装配失败: {}", e))?;
-
+    // auth 已在池创建后先行装配（函数头部，二轮评审修复 #3）——
+    // 装配失败时下方 sidecar/spawn 族尚未启动，零子资源泄漏。
     Ok(Arc::new(AppState {
         ctx,
         auth,

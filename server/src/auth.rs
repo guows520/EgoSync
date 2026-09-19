@@ -141,13 +141,19 @@ impl RateLimiter {
 }
 
 /// 限流中间件：`/api/auth/*` 与 `/api/setup` 按 IP 5 次/分钟（超 ⇒ 429）。
+///
+/// 连接信息载体为 [`crate::idle_timeout::RemoteAddr`]（自定义 Listener 的
+/// `Connected` 实现需本地类型——见其文档）。
 pub async fn rate_limit(
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    ConnectInfo(addr): ConnectInfo<crate::idle_timeout::RemoteAddr>,
     State(state): State<Arc<AppState>>,
     req: Request,
     next: Next,
 ) -> Response {
-    if !state.auth.rate.check(addr.ip()) {
+    if !state.auth.rate.check(addr.0.ip()) {
+        // 二轮评审修复 #6：限流拒绝对运维可见（不含任何用户输入——
+        // 冻结只禁密钥/载荷入日志，不禁事件）
+        tracing::warn!(ip = %addr.0.ip(), "认证面限流拒绝（5 次/分钟/IP）");
         return (
             StatusCode::TOO_MANY_REQUESTS,
             Json(json!({"error": "rate limit exceeded"})),
@@ -247,7 +253,11 @@ pub async fn setup(State(state): State<Arc<AppState>>, body: Bytes) -> Response 
 /// 统一 401（不泄露存在性）：env 态常时比对（SHA256 摘要常时比较，长度
 /// 不敏感）；库态 Argon2id 校验。成功 ⇒ Set-Cookie（httpOnly SameSite=
 /// Strict）。body 反序列化失败同样 401。
-pub async fn login(State(state): State<Arc<AppState>>, body: Bytes) -> Response {
+pub async fn login(
+    ConnectInfo(addr): ConnectInfo<crate::idle_timeout::RemoteAddr>,
+    State(state): State<Arc<AppState>>,
+    body: Bytes,
+) -> Response {
     let Some(token) = parse_token_body(&body) else {
         return unauthorized();
     };
@@ -263,6 +273,10 @@ pub async fn login(State(state): State<Arc<AppState>>, body: Bytes) -> Response 
     };
 
     if !verified {
+        // 二轮评审修复 #6：失败登录对运维可见（公网单用户服务器的爆破
+        // 尝试）——只记来源 IP，不含令牌或任何用户输入（冻结只禁密钥/
+        // 载荷入日志，不禁事件）
+        tracing::warn!(ip = %addr.0.ip(), "登录失败（令牌不匹配）");
         return unauthorized();
     }
 

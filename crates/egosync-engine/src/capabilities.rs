@@ -51,6 +51,15 @@ pub fn is_perf_test_gated(command: &str) -> bool {
     PERF_TEST_GATED_COMMANDS.contains(&command)
 }
 
+/// 查询某命令是否 web-ok（双宿主可用）。
+///
+/// 二轮评审修复 #9：经 [`capability_of`] 发源（== `Some(Web)`）——
+/// 与 server `dispatch_gen::WEB_OK_COMMANDS`（同一 commands.json 工件）
+/// 语义一致。
+pub fn is_web_command(command: &str) -> bool {
+    matches!(capability_of(command), Some(Capability::Web))
+}
+
 /// 命令能力类别。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Capability {
@@ -62,15 +71,42 @@ pub enum Capability {
     PerfTestGated,
 }
 
-/// 查询某命令能力类别；未知命令返回 `None`。
+/// web-ok 名单（commands.json 工件编译期嵌入 + 首用解析一次）——
+/// web-ok 的机械事实源与 server `dispatch_gen::WEB_OK_COMMANDS` 同源。
+static WEB_OK_COMMANDS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+
+fn web_ok_commands() -> &'static [String] {
+    WEB_OK_COMMANDS.get_or_init(|| {
+        let artifact: serde_json::Value =
+            serde_json::from_str(include_str!("../commands.json"))
+                .expect("commands.json 工件解析失败（生成物损坏？重跑 gen_commands）");
+        artifact["commands"]
+            .as_array()
+            .expect("commands.json 工件缺 commands 数组")
+            .iter()
+            .map(|c| {
+                c["name"]
+                    .as_str()
+                    .expect("工件条目缺 name（生成物损坏？）")
+                    .to_string()
+            })
+            .collect()
+    })
+}
+
+/// 查询某命令能力类别；未在任何名单/工件的未知命令返回 `None`。
 ///
-/// 注意：web-ok 的判定以 commands.json 工件为准（机械导出），本函数
-/// 只覆盖 desktop-only / 门控名单——`Some(Capability::Web)` 不在此发源。
+/// 二轮评审修复 #9：`Some(Capability::Web)` 在此发源（经工件名单）——
+/// 旧版从不发源 Web，15.5 若按 `capability_of==Web` 门控会拒掉全部
+/// web-ok 命令（分裂脑）。三分名单互斥：工件（103）/ desktop-only
+/// （15）/ 门控（2），由对等断言钉死与 generate_handler 扫描一致。
 pub fn capability_of(command: &str) -> Option<Capability> {
     if is_desktop_only(command) {
         Some(Capability::DesktopOnly)
     } else if is_perf_test_gated(command) {
         Some(Capability::PerfTestGated)
+    } else if web_ok_commands().iter().any(|n| n == command) {
+        Some(Capability::Web)
     } else {
         None
     }
@@ -114,13 +150,28 @@ mod tests {
         assert!(is_perf_test_gated("app_seed_perf_data"));
     }
 
-    /// web-ok 命令不在任何门控名单（返回 None —— 能力类别由工件发源）。
+    /// 值钉（二轮评审修复 #9）：三类名单各发源正确、未知命令 None——
+    /// 15.5 按 `capability_of==Web` 门控依赖此语义（旧版从不发源 Web）。
     #[test]
-    fn web_ok_commands_are_not_gated() {
-        assert_eq!(capability_of("task_create"), None);
-        assert_eq!(capability_of("chat_send_message"), None);
+    fn capability_of_pins_all_variants() {
+        // web-ok 名字 → Some(Web)（自工件发源）
+        assert_eq!(capability_of("task_create"), Some(Capability::Web));
+        assert_eq!(capability_of("chat_send_message"), Some(Capability::Web));
+        assert!(is_web_command("task_create"));
         assert!(!is_desktop_only("chat_send_message"));
         assert!(!is_perf_test_gated("memory_list"));
+        // desktop-only → Some(DesktopOnly)
+        assert_eq!(capability_of("data_export"), Some(Capability::DesktopOnly));
+        assert!(!is_web_command("data_export"));
+        // 门控 → Some(PerfTestGated)
+        assert_eq!(
+            capability_of("app_emit_test_stream"),
+            Some(Capability::PerfTestGated)
+        );
+        assert!(!is_web_command("app_emit_test_stream"));
+        // 未知 → None（不在任何名单/工件）
+        assert_eq!(capability_of("no_such_command_xyz"), None);
+        assert!(!is_web_command("no_such_command_xyz"));
     }
 
     /// 评审回环裁决 A 钉子：secret_store_* 三命令划归 desktop-only，

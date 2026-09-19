@@ -133,6 +133,7 @@ fn main() {
                     syn::Type::Path(_) => {
                         let rendered = render_type(
                             pat_type.ty.as_ref(),
+                            &fn_name,
                             module.as_str(),
                             &use_map,
                             &local_types,
@@ -261,9 +262,12 @@ fn collect_local_type_names(file: &syn::File) -> HashSet<String> {
 
 /// 渲染类型为字符串：use-map 命中的标识符替换为全限定路径；本地类型加
 /// 模块前缀；其余（std prelude / 原始类型）原样。
-/// 返回 None 表示该类型形态不可作为客户端参数（trait object 等）。
+/// 返回 None 表示该类型形态不可作为客户端参数（trait object 等）——
+/// 泛型内层命中时**panic**（带命令名与类型原文，二轮评审修复 #12：
+/// 生成器宁可响亮失败，不静默产出 `Vec<>` 假类型）。
 fn render_type(
     ty: &syn::Type,
+    command: &str,
     module: &str,
     use_map: &HashMap<String, String>,
     local_types: &HashSet<String>,
@@ -297,8 +301,14 @@ fn render_type(
                     .iter()
                     .map(|arg| match arg {
                         syn::GenericArgument::Type(inner_ty) => {
-                            render_type(inner_ty, module, use_map, local_types)
-                                .unwrap_or_default()
+                            // 二轮评审修复 #12：泛型内层不可解析 ⇒ panic
+                            //（带命令名与类型原文）——不静默产出 `Vec<>`
+                            render_type(inner_ty, command, module, use_map, local_types)
+                                .unwrap_or_else(|| panic!(
+                                    "命令 {} 泛型内层类型无法机械解析: {}",
+                                    command,
+                                    quote::ToTokens::to_token_stream(inner_ty)
+                                ))
                         }
                         other => panic!("不支持的泛型参数形态"),
                     })

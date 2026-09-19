@@ -2,12 +2,16 @@
 //!
 //! [`InProcessServer`]：真实 TCP 监听 + axum serve（ConnectInfo 供限流按
 //! 直连 IP 计数），状态由调用方注入（生产路由 [`build_router`] 复用——
-//! 测试面即生产面）。
+//! 测试面即生产面）。**serve 栈与 main.rs 生产栈同款**：IdleTimeoutListener
+//! + RemoteAddr 连接信息（120s 空闲阈值在测试时限内不触发——测试不感知，
+//! 但中间件/提取器签名与生产完全一致）。
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use egosync_server::AppState;
+use egosync_server::idle_timeout::{IdleTimeoutListener, RemoteAddr, IDLE_TIMEOUT_SECS};
 use tokio::net::TcpListener;
 
 /// 进程内 server：随机端口 + 全量路由。
@@ -25,8 +29,10 @@ impl InProcessServer {
             .await
             .expect("bind test server");
         let addr = listener.local_addr().expect("test server addr");
+        // 生产同款：空闲超时监听器（120s 阈值远超测试时长——不干扰）
+        let listener = IdleTimeoutListener::new(listener, Duration::from_secs(IDLE_TIMEOUT_SECS));
         let handle = tokio::spawn(async move {
-            axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
+            axum::serve(listener, app.into_make_service_with_connect_info::<RemoteAddr>())
                 .await
                 .expect("test server serve");
         });
@@ -45,10 +51,9 @@ impl Drop for InProcessServer {
     }
 }
 
-/// HTTP 客户端便捷封装（手动 Cookie 管理——精确断言 Cookie 形状）。
+/// HTTP 客户端便捷封装（会话经参数显式传递——精确断言 Cookie 形状）。
 pub struct Client {
     inner: reqwest::Client,
-    cookie: Option<String>,
 }
 
 impl Client {
@@ -57,25 +62,7 @@ impl Client {
             inner: reqwest::Client::builder()
                 .build()
                 .expect("build test client"),
-            cookie: None,
         }
-    }
-
-    /// 记住 Set-Cookie 中的会话值（裸 token，供 Cookie 头发送）。
-    pub fn capture_session_cookie(&mut self, res: &reqwest::Response) -> Option<String> {
-        let set_cookie = res.headers().get(reqwest::header::SET_COOKIE)?.to_str().ok()?;
-        let value = set_cookie
-            .split(';')
-            .next()?
-            .trim()
-            .to_string();
-        self.cookie = Some(value.clone());
-        Some(value)
-    }
-
-    /// 已捕获的会话 Cookie 头值（如 `egosync_session=...`）。
-    pub fn session(&self) -> Option<&str> {
-        self.cookie.as_deref()
     }
 
     /// GET（带可选会话 Cookie 与可选 Origin）。

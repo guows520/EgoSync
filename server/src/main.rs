@@ -8,6 +8,11 @@
 //! - `EGOSYNC_PORT`（默认 `8080`）；
 //! - `RUST_LOG`（默认 info）。
 //!
+//! 连接边界（F11，二轮评审修复 #2）：**空闲超时 120s（双向静默才断开，
+//! [`IDLE_TIMEOUT_SECS`]）+ 响应超时禁用**（chat 分钟级挂起是正常态）。
+//! SSE 的 30s KeepAlive 心跳是写活动——健康 SSE 连接永不触发空闲断开；
+//! 优雅停机与 8s 兜底语义不受影响（poll_shutdown 透传不走超时判定）。
+//!
 //! 优雅退出（relay-server 同款双信号）：Ctrl-C / SIGTERM → 取消全局
 //! token（watchdog / delegate 监听 / 调度器随取消收尾）+ sidecar stop。
 
@@ -15,6 +20,7 @@ use std::time::Duration;
 
 use egosync_server::bootstrap::build_app_state;
 use egosync_server::build_router;
+use egosync_server::idle_timeout::{IdleTimeoutListener, IDLE_TIMEOUT_SECS};
 
 /// 优雅退出兜底上限（秒）：给 SSE 长连接与在途请求留收尾窗口。
 const SHUTDOWN_DEADLINE_SECS: u64 = 8;
@@ -67,14 +73,19 @@ async fn main() {
         });
     let app = build_router(state.clone());
 
-    let listener = tokio::net::TcpListener::bind(&addr)
-        .await
-        .unwrap_or_else(|e| panic!("监听 {addr} 失败: {e}"));
-    tracing::info!(addr = %addr, "egosync-server listening");
+    let listener = tokio::net::TcpListener::bind(&addr).await.unwrap_or_else(|e| {
+        // 二轮评审修复 #7：监听失败不 panic——明确报错 + 退出
+        //（与 EGOSYNC_PORT/EGOSYNC_DATA_DIR 同款启动期错误处理）
+        eprintln!("监听 {} 失败: {}", addr, e);
+        std::process::exit(1);
+    });
+    // F11 空闲超时：双向静默 > IDLE_TIMEOUT_SECS 断开（见模块文档）
+    let listener = IdleTimeoutListener::new(listener, Duration::from_secs(IDLE_TIMEOUT_SECS));
+    tracing::info!(addr = %addr, idle_timeout_secs = IDLE_TIMEOUT_SECS, "egosync-server listening");
 
     let serve = axum::serve(
         listener,
-        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        app.into_make_service_with_connect_info::<egosync_server::idle_timeout::RemoteAddr>(),
     )
     .with_graceful_shutdown(async move {
         shutdown_signal().await;

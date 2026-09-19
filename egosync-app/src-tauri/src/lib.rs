@@ -440,7 +440,16 @@ pub fn run() {
                 data_dir: app_data_dir.clone(),
                 opencode_workspace: opencode_workspace_dir.clone(),
                 skills_root: opencode_workspace_dir.join(".opencode").join("skills"),
-                home_dir: dirs::home_dir().unwrap_or_else(|| app_data_dir.clone()),
+                home_dir: dirs::home_dir().unwrap_or_else(|| {
+                    // 二轮评审修复 #4：兜底分支保留但补 warn（与 server
+                    // bootstrap 同款——旧壳为显式 ValidationError，语义差由
+                    // Design Notes 登记裁决）
+                    tracing::warn!(
+                        "无法获取用户主目录（HOME-less 环境？），Skill 发现根目录兜底为数据目录: {}",
+                        app_data_dir.display()
+                    );
+                    app_data_dir.clone()
+                }),
             });
             app.manage(engine_ctx);
 

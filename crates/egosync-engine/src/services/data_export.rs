@@ -764,6 +764,10 @@ const MAIN_DB_TABLES: &[&str] = &[
     "weekly_reviews",
     "llm_configs",
     "app_settings",
+    // 二轮评审修复 #5：auth_sessions 随销毁失效——不在清单时旧 Cookie
+    // 在 data_destroy 后仍过校验（「全部销毁」假诺言）；桌面 data_import
+    // 同清单清空会话无害（导入即换会话，单用户语义）。
+    "auth_sessions",
     "mcp_servers",
     "role_mcp_server_bindings",
     "butler_mcp_servers",

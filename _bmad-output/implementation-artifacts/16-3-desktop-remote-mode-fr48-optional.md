@@ -94,7 +94,7 @@ context:
 **回环增补任务（review loop 1 —— T1 bad_spec 根因 + T5 待裁决项）：**
 
 - [ ] **[T1] 远程 setup 流（冻结矩阵第 5 行）** — `src/components/auth/` 新远程 setup 视图（或 SetupView 参数化）：远端 `setupRequired` 时桌面远程**不得**复用浏览器 SetupView（相对路径 fetch 在 webview 源下不可达远端）；走绝对 URL 直连 `POST {base}/api/setup {token}`（未初始化实例无令牌可验——此调用无 Bearer）→ 成功后令牌即主令牌：写 keyring（remote_mode_save_config mode=remote）→ updateRemoteToken → getAuthStatus 重验 → ready；**setup 态含「切回本地」逃生口**（矩阵行第三列「可中途切回本地」）。配套 vitest：setup 提交链（绝对 URL、成功落 keyring、重验进 ready、失败如实呈现、逃生口可切）
-- [ ] **[T5·待人工裁决] Bearer 通道滥用防护** — 冻结块对新增 Bearer 通道的暴力破解防护无措辞（登录面有 5/min/IP，/api/cmd/* 与 /api/events/ticket 的 Bearer 失败无任何限流）：裁决后落定——若补：require_auth 的 Bearer 失败按 IP 计数限流（仅计失败，成功不限；阈值/窗口沿用登录面口径）+ server 测试；若不补：本条连同裁决理由记入 Design Notes 封档
+- [ ] **[T5·已裁决 2026-09-21] Bearer 通道滥用防护（人工裁决：补）** — `require_auth` 的 Bearer 失败按 IP 计数限流：**仅计验证失败**（成功访问不计数、不限流），阈值/窗口沿用登录面口径（5 次/分钟/IP，滑动窗口，超限 429 统一形状）；计数器独立于 auth 路由限流器（AppState 新增实例）；`/api/cmd/*` 与 `/api/events/ticket` 均覆盖。server 测试：连续错误 Bearer 第 6 次 429、成功访问不计数、窗口滑动恢复
 
 **Acceptance Criteria:**
 
@@ -136,6 +136,7 @@ server：auth.rs（Bearer 叠加）、sse.rs（SseTicketStore + ticket_handler�
 ### 2026-09-21 · review loop 1（step-04 评审回环）
 
 - **触发**：三层评审 22 项发现（见 Review Triage Log）。T1（bad_spec）——冻结矩阵第 5 行「远端未初始化→走 setup 向导（浏览器等价）/可中途切回本地」未落成任务，实现渲染了不可用的相对路径 SetupView 且 setup 态无逃生口；T5（intent_gap）——冻结块对 Bearer 通道滥用防护无措辞，限流对等无唯一读法，回退后人工裁决。
+- **T5 人工裁决（2026-09-21）**：补上限流——require_auth 的 Bearer 失败按 IP 计数（仅计失败，成功不计数；5 次/分钟/IP 滑动窗口，超限 429），覆盖 /api/cmd/* 与 /api/events/ticket。裁决已转正为任务（见 Tasks 回环增补）。
 - **修订**：Tasks 增补「远程 setup 流」任务（T1 根因闭合）；并入 10 项 patch 级修订条款（T2 读侧统一裁决 / T3 切回 rethrow / T4 appMode 单源 / T7 命令 async 化 / T8 守卫测试删 or_else / T10 401 桩 / T11 退避档位 / T12 命令校验单测 / T18 远程 builder 补 DWM setup / T22 门控测试补例）；全部任务复位待重推导。
 - **已避开的坏状态**：远程桌面遇未初始化实例的死胡同界面（提交必失败且无逃生口）；remote 缺 URL 的砖死会话（两层裁决分歧）；切回失败按钮永久禁用+错误不可见；守卫测试空洞化（删守卫不红）；Windows 远程态无边框黑边回归；模式双源漂移。
 - **KEEP（重推导必须保留的既有验证面）**：原实现 commit `aeee913`（git 历史）为重推导参照——模式预读/双 builder/Exit 守卫、Bearer+一次性票据+CORS 白名单设计、http.ts 远程通道（世代号防竞态/单次重试防环/退避 governor）、main.tsx 异步引导（splash 兜底仅 Tauri 宿主）、RemoteModeSection 诚实代价流、desktop_remote_test.rs 12 例与全部前端测试结构——该实现经 build / vitest 857 / server 61 / src-tauri 95 / engine 822 / test:web 3 specs 全绿验证，重推导应在其设计上落实修订条款而非另起炉灶。
@@ -179,7 +180,7 @@ server：auth.rs（Bearer 叠加）、sse.rs（SseTicketStore + ticket_handler�
 
 ## Design Notes
 
-- **认证裁决**：远程桌面 Bearer 头（fetch）+ SSE 一次性票据（EventSource 无法带自定义头；票据 30s TTL、单次使用，防令牌入 URL/日志）+ CORS 白名单三件叠加，cookie 会话不动（SameSite=Strict 无法跨 tauri 源携带，不走 CORS+cookie 弱化路线）
+- **认证裁决**：远程桌面 Bearer 头（fetch）+ SSE 一次性票据（EventSource 无法带自定义头；票据 30s TTL、单次使用，防令牌入 URL/日志）+ CORS 白名单三件叠加，cookie 会话不动（SameSite=Strict 无法跨 tauri 源携带，不走 CORS+cookie 弱化路线）；**Bearer 失败面限流（人工裁决 2026-09-21）：仅计失败、5 次/分钟/IP 滑动窗口、超限 429——与登录面防盗器对等**
 - **模式文件在 DB 外**：app_settings 表在 egosync.db 内而引擎启动要先读模式——鸡生蛋；desktop-mode.json 为最小事实源，损坏回退 local（数据在本地、fail-safe 到有数据的一侧）
 - **重启式切换复用面**：条件装配（启动恢复 AC 要求的机制）+ Exit 清理 + `AppHandle::restart()`；实现需验证 restart 路径是否触发 RunEvent::Exit——无论触发与否，restart 命令内先显式 cancel+sidecar.stop（幂等，8.6 保证）
 - **前端模式进程恒定** → 无 context/provider/热换：模块级 `getDesktopMode()` 即可；测试默认 boot=local（test-setup 桩不变）

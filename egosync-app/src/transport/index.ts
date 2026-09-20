@@ -9,9 +9,15 @@
 
 import { HttpTransport } from './http';
 import { TauriTransport } from './tauri';
-import type { Transport } from './types';
+import type { AuthStatus, Transport } from './types';
 
-export type { ConnectionState, Transport, TransportCapabilities, UnlistenFn } from './types';
+export type {
+  AuthStatus,
+  ConnectionState,
+  Transport,
+  TransportCapabilities,
+  UnlistenFn,
+} from './types';
 export { HttpTransportError } from './types';
 export { FRONTEND_LOCAL_EVENTS, isFrontendLocalEvent } from './localEvents';
 export { TRANSPORT_CAPABILITIES, isDesktopOnly, isWebCommand } from './capabilities';
@@ -29,6 +35,30 @@ export function getTransport(): Transport {
     instance = isTauriHost() ? new TauriTransport() : new HttpTransport();
   }
   return instance;
+}
+
+/**
+ * 认证态发现（Story 16.1）：浏览器宿主经 HttpTransport 缓存通道
+ * （限流预算保护——见 http.ts getAuthStatus）；Tauri 宿主直通值
+ * （本地引擎无认证面；AuthGate 在此之前已直通，本分支为防御性兜底）。
+ */
+export async function getAuthStatus(): Promise<AuthStatus> {
+  const transport = getTransport();
+  if (transport instanceof HttpTransport) {
+    return transport.getAuthStatus();
+  }
+  return { setupRequired: false, authenticated: true };
+}
+
+/**
+ * 认证态缓存失效（Story 16.1）：登录/setup 成功与登出后调用（15-5 G11
+ * 遗嘱）。Tauri 宿主无缓存（直通值恒定）——no-op。
+ */
+export function invalidateAuthStatusCache(): void {
+  const transport = getTransport();
+  if (transport instanceof HttpTransport) {
+    transport.invalidateAuthStatusCache();
+  }
 }
 
 /** 模块级 invoke 再导出（services 层唯一入口，签名与 @tauri-apps/api/core 同形）。 */

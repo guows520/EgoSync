@@ -1,5 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
-import { Home, Plus, Moon, Sun, Settings as SettingsIcon, Pencil, Archive, Trash2, Bell } from 'lucide-react';
+import { Home, Plus, Moon, Sun, Settings as SettingsIcon, Pencil, Archive, Trash2, Bell, LogOut } from 'lucide-react';
+import { emitFrontendEvent, HttpTransportError, isTauriHost } from '@/transport';
+import { authService } from '../../services/authService';
 import { cn } from '../../lib/utils';
 import { RoleSidebarIcon } from './RoleSidebarIcon';
 
@@ -14,6 +16,38 @@ export function Sidebar({ roles, currentView, onViewChange, isSettingsOpen, onOp
   const [confirmError, setConfirmError] = useState('');
   const [isConfirming, setIsConfirming] = useState(false);
   const roleListRef = useRef<HTMLDivElement>(null);
+
+  // Story 16.1：web-only 登出（桌面宿主无认证面——isTauriHost 探测，
+  // 与 TitleBar 浏览器退化同款宿主分支；desktop-only 入口门控走
+  // capabilities，登出无对应命令、纯浏览器 REST 语义）。
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [logoutError, setLogoutError] = useState('');
+  const handleLogout = async () => {
+    if (isLoggingOut) return;
+    setIsLoggingOut(true);
+    setLogoutError('');
+    let localLogout = true;
+    try {
+      await authService.logout();
+    } catch (e) {
+      if (e instanceof HttpTransportError && e.status === 429) {
+        // 429（认证面限流，实测可达）：服务端会话行与 Cookie 均存活——
+        // 本地登出会造成「刷新静默复登」违反登出 AC；提示稍后重试，
+        // 等限流窗口（60s）过后再点即真实登出
+        localLogout = false;
+        setLogoutError('登出请求过于频繁，请稍后再试');
+      }
+      // 其余失败（网络不可达等）继续本地登出：服务端会话行 30 天内仍
+      // 有效——TTL 清扫归 17.x；本地回登录页优先，不把用户锁死在失效界面上
+    } finally {
+      setIsLoggingOut(false);
+      if (localLogout) {
+        // 登出 ⇒ 缓存失效（15-5 G11）⇒ auth:unauthorized ⇒ AuthGate 回登录页
+        //（App 卸载即内存态清空 + SSE 无订阅即关）
+        void emitFrontendEvent('auth:unauthorized');
+      }
+    }
+  };
 
   const handleContextMenu = (e: React.MouseEvent, roleId: string) => {
     e.preventDefault();
@@ -105,6 +139,28 @@ export function Sidebar({ roles, currentView, onViewChange, isSettingsOpen, onOp
         <button onClick={onToggleTheme} title={theme === 'light' ? '切换深色' : '切换浅色'} aria-label={theme === 'light' ? '切换深色模式' : '切换浅色模式'} className="w-11 h-11 rounded-xl flex items-center justify-center text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 hover:text-slate-700 dark:hover:text-slate-200 transition-colors">
           {theme === 'light' ? <Moon size={20} /> : <Sun size={20} />}
         </button>
+        {/* Story 16.1：web-only 登出入口——浏览器宿主下经 REST logout 清会话
+            与 Cookie 后回登录页；桌面宿主不渲染（本地引擎无认证面）。 */}
+        {!isTauriHost() && (
+          <button
+            onClick={handleLogout}
+            disabled={isLoggingOut}
+            title="登出"
+            aria-label="登出"
+            className="w-11 h-11 rounded-xl flex items-center justify-center text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 hover:text-slate-700 dark:hover:text-slate-200 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <LogOut size={20} />
+          </button>
+        )}
+        {/* 登出 429 提示（限流窗口内重试前的如实反馈；成功登出时随组件卸载消失） */}
+        {!isTauriHost() && logoutError && (
+          <div
+            role="alert"
+            className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[200] px-4 py-2 rounded-lg bg-slate-800/95 dark:bg-slate-700/95 text-white text-[13px] shadow-lg"
+          >
+            {logoutError}
+          </div>
+        )}
         <button onClick={onOpenSettings} title="设置" aria-label="设置" className={cn("w-11 h-11 rounded-xl flex items-center justify-center transition-colors", isSettingsOpen ? "bg-indigo-600 text-white shadow-lg shadow-indigo-200 dark:shadow-indigo-900/50" : "text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 hover:text-slate-700 dark:hover:text-slate-200")}>
           <SettingsIcon size={22} />
         </button>

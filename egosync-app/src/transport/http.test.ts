@@ -26,6 +26,8 @@ class FakeEventSource {
   onerror: (() => void) | null = null;
   /** 默认 OPEN（1）：既有用例的 onerror 均为非致命（原生重连语义）。 */
   readyState = 1;
+  /** Story 16.1：close() 调用标记（无订阅即关断言）。 */
+  closed = false;
   constructor(public url: string) {
     FakeEventSource.instances.push(this);
   }
@@ -38,7 +40,9 @@ class FakeEventSource {
     const list = this.listeners.get(name) ?? [];
     this.listeners.set(name, list.filter((l) => l !== listener));
   }
-  close() {}
+  close() {
+    this.closed = true;
+  }
 }
 
 /** 假 fetch Response（transport 只消费 status / headers.get / text）。 */
@@ -253,6 +257,106 @@ describe('HttpTransport', () => {
     const authCalls = fetchCalls.filter((c) => c.url === '/api/auth/status');
     expect(authCalls).toHaveLength(1);
     expect(authCalls[0]!.init.credentials).toBe('same-origin');
+  });
+
+  // ── Story 16.1：401 全局拦截 / 认证态类型化与缓存失效 / 无订阅即关 ──
+
+  it('invoke 401：reject HttpTransportError(401) 且发射 auth:unauthorized 前端本地事件', async () => {
+    vi.unstubAllGlobals();
+    vi.stubGlobal('EventSource', FakeEventSource);
+    const unauthorized: unknown[] = [];
+    vi.stubGlobal('fetch', (url: string, init: RequestInit) => {
+      fetchCalls.push({ url, init });
+      return Promise.resolve(jsonResponse(401, { error: 'unauthorized' }));
+    });
+    const transport = new HttpTransport();
+    const unlisten = transport.on('auth:unauthorized', (payload) => unauthorized.push(payload));
+
+    const command = WEB_OK_COMMANDS[0]!;
+    await expect(transport.invoke(command)).rejects.toMatchObject({ status: 401 });
+    // 前端本地事件同步发射（AuthGate 全局拦截的信号源；不建 EventSource）
+    expect(unauthorized).toHaveLength(1);
+    expect(FakeEventSource.instances).toHaveLength(0);
+    unlisten();
+  });
+
+  it('getAuthStatus 类型化 {setupRequired, authenticated}；invalidateAuthStatusCache 后重新请求', async () => {
+    let setupRequired = true;
+    vi.unstubAllGlobals();
+    vi.stubGlobal('EventSource', FakeEventSource);
+    vi.stubGlobal('fetch', (url: string) => {
+      fetchCalls.push({ url, init: {} });
+      return Promise.resolve(jsonResponse(200, { setupRequired, authenticated: false }));
+    });
+    const transport = new HttpTransport();
+
+    const first = await transport.getAuthStatus();
+    // 类型化断言：形状即协议（setupRequired/authenticated 布尔字段）
+    expect(first).toEqual({ setupRequired: true, authenticated: false });
+
+    // 缓存命中：失效前零额外请求
+    await transport.getAuthStatus();
+    expect(fetchCalls.filter((c) => c.url === '/api/auth/status')).toHaveLength(1);
+
+    // 失效（登录/setup 成功与登出路径）→ 下次调用真实重发
+    transport.invalidateAuthStatusCache();
+    setupRequired = false;
+    const second = await transport.getAuthStatus();
+    expect(second).toEqual({ setupRequired: false, authenticated: false });
+    expect(fetchCalls.filter((c) => c.url === '/api/auth/status')).toHaveLength(2);
+  });
+
+  it('无订阅即关：全部事件订阅撤空 → 关闭 EventSource + 取消重建定时器；再订阅懒重建', () => {
+    vi.useFakeTimers();
+    try {
+      vi.unstubAllGlobals();
+      vi.stubGlobal('EventSource', FakeEventSource);
+      vi.stubGlobal('fetch', (url: string, init: RequestInit) => {
+        fetchCalls.push({ url, init });
+        return Promise.resolve(jsonResponse(200, { ok: true }));
+      });
+      const transport = new HttpTransport();
+
+      const unlisten = transport.on(SAMPLE_EVENT, () => {});
+      const source = FakeEventSource.instances[0]!;
+      expect(source.closed).toBe(false);
+
+      // 致命关闭（readyState=CLOSED）：eventSource 置空 + 5s 重建定时器入队
+      source.readyState = FakeEventSource.CLOSED;
+      source.onerror!();
+
+      // 最后一个订阅撤空 → 无订阅即关：丢弃已死连接引用 + 取消重建定时器
+      unlisten();
+      expect(transport['eventSource']).toBeNull();
+
+      // 重建定时器已取消：退避期满不再新建连接（无 401 重建循环）
+      vi.advanceTimersByTime(10_000);
+      expect(FakeEventSource.instances).toHaveLength(1);
+
+      // 再订阅：懒重建新连接；撤空后该连接被显式 close
+      const unlisten2 = transport.on(SAMPLE_EVENT, () => {});
+      expect(FakeEventSource.instances).toHaveLength(2);
+      unlisten2();
+      expect(FakeEventSource.instances[1]!.closed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('无订阅即关：仅部分事件撤订阅（其余仍在）不关闭连接', () => {
+    const transport = new HttpTransport();
+    const unlistenFirst = transport.on(SAMPLE_EVENT, () => {});
+    const unlistenSecond = transport.on(ENGINE_EVENT_NAMES[1]!, () => {});
+    const source = FakeEventSource.instances[0]!;
+
+    // 撤掉其一：另一事件仍在订阅 → 连接保持
+    unlistenFirst();
+    expect(source.closed).toBe(false);
+    expect(transport['eventSource']).toBe(source);
+
+    // 全部撤空 → 关闭
+    unlistenSecond();
+    expect(source.closed).toBe(true);
   });
 
   it('FRONTEND_LOCAL_EVENTS：进程内消化，不建 EventSource、不进传输契约', () => {

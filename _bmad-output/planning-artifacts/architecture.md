@@ -2504,7 +2504,7 @@ EgoSync/
 | 2 | 事件解耦 | `EngineEvents` trait：`emit(event: &str, payload: serde_json::Value)`；桌面实现=TauriEventBus（转发 app_handle.emit），服务端实现=SseEventBus（tokio broadcast 扇出）；**events.rs 事件名常量是唯一发射源**（现状事件名为 Rust/TS 两侧散落字面量，各 ≥9/≥8 处——收编为常量后禁止再出现字面量发射）；TS 侧事件名与 payload 类型构建期从 events.rs 生成 | AppHandle 耦合收敛到单一接缝；payload 定为 Value 是刻意的——泛型方法使 trait 不可对象安全（非显而易见的坑，落死）；发射源唯一化使"事件形状一致"测试可枚举全集 |
 | 3 | 任务派生 | 三个随 service 迁入 engine 的 lib.rs setup 同步启动入口（spawn_scheduler / 两个 spawn_hourly_watch）改为接收宿主注入的 `tokio::runtime::Handle`；service 层任务体内的 `tauri::async_runtime::spawn` → `tokio::spawn`（任务体内已有 runtime 上下文，安全）；register_stream_mirror 所在的 companion_dispatch 留桌面壳，其 spawn 不变 | **tauri setup 闭包在主线程事件循环中同步执行、无 runtime 上下文**（tauri 2.11.5 源码证实；本项目 companion_dispatch.rs 注释即记录"裸 tokio::spawn 在此会 panic 'there is no reactor running'——v0.1.6-alpha.1 启动即退出的根因"）；tauri::async_runtime 经全局单例可从任意线程调用，裸 tokio::spawn 不能——替换非"无行为变更的同义改写"，需第四条接缝 |
 | 4 | API 面 | 单一 `POST /api/cmd/{command_name}`（camelCase 参数体、返回值原样 JSON）+ `GET /api/events`（SSE）+ 认证/setup/export/healthz 少量辅助端点；**注册表条目携带参数 schema**（Tauri command 签名经过程宏导出 JSON Schema，HTTP handler 据此驱动反序列化——`State<'_, T>` 注入参数与客户端参数的区分由 schema 标注，禁止 B 侧人肉阅读 120 个签名） | 与 Tauri command 一一对应靠"同一注册表"而非手工路由表：command 清单从 lib.rs generate_handler 抽出为共享清单，桌面注册与 server 路由同源生成；注册表以**构建期 JSON 工件**（commands.json：名字+参数 schema+capability）同时供 vitest 与 server 测试消费——对等测试用例由工件**全量生成**（禁止抽样与手抄清单） |
-| 5 | 认证 | 单用户令牌：`EGOSYNC_TOKEN` env 预置或首访 `/api/setup` 设置；服务端只存 Argon2id 哈希；登录换 httpOnly SameSite=Strict 会话 Cookie；SSE 用 Cookie；**env/setup 优先级冻结**：env 存在 ⇒ /api/setup 拒绝（库内哈希忽略）、login 仅常时比对 env；env 不存在 ⇒ 以库内 Argon2id 哈希为准；两态切换须重启进程，已发 Cookie 不随切换失效 | 无注册体系（FR-46）；EventSource 不能带 Authorization 头（平台约束）倒逼 Cookie；常时比较 + 认证失败统一 401 不泄露信息；优先级落死消除"任一通过即可"的 fail-open 读法；**passkey 取舍登记**：PRD FR-46"令牌/passkey"为或然措辞，本章裁决 V1 仅令牌，WebAuthn 延后 V2 |
+| 5 | 认证 | 单用户令牌：`EGOSYNC_TOKEN` env 预置或首访 `/api/setup` 设置；服务端只存 Argon2id 哈希；登录换 httpOnly SameSite=Strict 会话 Cookie；SSE 用 Cookie；**16.1 落地补全**：登录 Cookie 加 `Max-Age=2592000`（30 天持久，用户裁决 B 方案——关浏览器重开免重登）；`POST /api/auth/logout` 幂等删会话行 + 过期 Cookie；**env/setup 优先级冻结**：env 存在 ⇒ /api/setup 拒绝（库内哈希忽略）、login 仅常时比对 env；env 不存在 ⇒ 以库内 Argon2id 哈希为准；两态切换须重启进程，已发 Cookie 不随切换失效 | 无注册体系（FR-46）；EventSource 不能带 Authorization 头（平台约束）倒逼 Cookie；常时比较 + 认证失败统一 401 不泄露信息；优先级落死消除"任一通过即可"的 fail-open 读法；**passkey 取舍登记**：PRD FR-46"令牌/passkey"为或然措辞，本章裁决 V1 仅令牌，WebAuthn 延后 V2 |
 | 6 | 命令能力门控 | command 清单带 capability 标记（desktop-only：4 个 rfd 对话框类 command + 7 个 companion_* command（云端实例无桌面伴侣连接语义，裁决 C）+ **data_export/data_import 两个 command（桌面版落点=用户经 rfd 选取的目录/文件，属桌面交互链；云端的导出/导入走 /api/export、/api/import 专用 HTTP 流端点，复用 data_export service 的纯逻辑——同名能力双落点，注册表内 command 与 HTTP 端点各自登记）**；web-ok：其余）；server 物理排除 desktop-only，UI 按 capability 门控入口 | `chat_pick_working_directory` 等在无头容器无意义且 rfd 会失败——从注册表源头排除，而非运行时报错 |
 | 7 | 触发去重持久化 | FR-47 硬化：调度器内存去重 map（last_triggered_map / last_briefing_trigger_date / last_review_trigger_week，代码验证三处均为循环内局部变量）升级为 egosync.db 持久化（`scheduler_triggers` 小表）；**大石头保护除外**——其现状已是 DB 持久化（bigrock_protection.rs 读表内 last_reminded_at，代码验证），本决策对它是"替换入统一表"而非新增，含数据迁移 | 7×24 常驻 + 升级重启场景下，同分钟重启会重复触发晨间简报（现状内存 map 丢失）——桌面低频重启未暴露，云端必须补 |
 | 8 | 时区语义 | 容器 TZ 环境变量（compose 文档化 `TZ=Asia/Shanghai` 示例）+ 镜像装 tzdata；scheduler 的 chrono::Local 语义零改动 | 比给 DB 加用户时区配置更无聊；Local 在 Linux 读 TZ env，行为可预期 |
@@ -2555,6 +2555,7 @@ EgoSync/
 | `/api/cmd/{command}` | POST | 参数体 camelCase（与 invoke args 同构），返回值原样 JSON | `invoke()` |
 | `/api/events` | GET (SSE) | 事件名=SSE event 字段，data=payload JSON（与 emit 同构） | `listen()` / Tauri Event |
 | `/api/auth/status`、`/api/auth/login` | GET/POST | 初始化状态 / 令牌换会话 Cookie | 无对应（云端新增） |
+| `/api/auth/logout` | POST | 删会话行 + 过期 Cookie（幂等 200；16.1 落地） | 无对应（云端新增） |
 | `/api/setup` | POST | 首次初始化设置令牌（仅在无凭据时挂载） | 无对应 |
 | `/api/export`、`/api/import` | POST | 复用 data_export 全量导出/导入（下载/上传流） | data_* command 的文件落点改为 HTTP 流 |
 | `/healthz` | GET | 存活探针（无认证、无数据） | 无 |
@@ -2565,7 +2566,7 @@ EgoSync/
 - 慢客户端：broadcast 滞后即断开该连接（EventSource 自动重连 + UI 经 command 全量补齐状态）——对齐伴侣"重连即快照、不做历史回放"哲学
 - 限流（收敛到认证面）：`/api/auth/*` 与 `/api/setup` 按 IP 5 次/分钟；业务端点 V1 不限流（自托管单用户，无滥用多租户面）
 - TLS：server 进程只讲 HTTP；compose 内置 Caddy 服务（自动 HTTPS，域名自备）或文档化对接用户既有反代；Caddy 对 `text/event-stream` 响应默认即逐写刷新（该类型下 flush_interval 被官方忽略），Caddyfile 仍显式配 `flush_interval -1` 作冗余保险
-- 静态资源：server 内嵌 web dist（axum 静态服务 + SPA 回退 index.html）；Caddy 只做 TLS 终结与代理
+- 静态资源：server 承载 web dist（axum 静态服务 + SPA 回退 index.html；16.1 落地细节：目录经 env `EGOSYNC_STATIC_DIR` 注入、缺省回退 `../egosync-app/dist`、皆缺则 API-only 警告运行；`/api/*` 未知路径在 fallback 守卫为 JSON 404 不落 SPA 面；index.html 显式路由直出并统一 `Cache-Control: no-cache`——hash 资产可长缓存，index 引用新鲜度是重部署白屏的防线）；Caddy 只做 TLS 终结与代理
 - **错误语义冻结（F4）**：全部 AppError variant 一律 `200 + 原样 serde JSON`（单键 map 形状 `{"DbError": "..."}`，14 个 variant 不逐个分类——与 invoke 错误通道同构）；非 200 白名单仅四类传输层错误：401（认证失败）、429（限流）、404（路由/命令不存在）、5xx（进程级故障：panic/启动失败）；对等测试含**错误路径黄金用例**（每 variant 断言双通道解包所得错误对象逐字节同构）
 - **请求边界（F11）**：请求体上限 50MB 写进注册表契约（axum DefaultBodyLimit 默认 2MB 会掐断大附件——与 Tauri invoke 无限制的差异显式登记）；业务端点禁用响应超时（chat_send_message 分钟级挂起是正常态），仅保留 idle 超时；Caddyfile 样例同时含 `request_body max_size=50MB` 且不设 write timeout（与 server 侧上限对齐，防代理层第二道暗限）
 
@@ -2648,7 +2649,7 @@ volumes: { egosync-data: {} }
 |------|------|
 | 令牌暴力破解 | Argon2id 哈希存储、常时比较、认证/setup 端点 IP 限流 5/min、失败统一 401 不泄露用户存在性 |
 | 中间人窃听 | TLS 强制（Caddy 自动 HTTPS 或用户既有反代）；healthz 之外全端点拒绝明文部署——文档明示 |
-| XSS 窃取会话/数据 | httpOnly Cookie（JS 不可读）；CSP：`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'`（React 内联样式）；`connect-src 'self'`；无第三方 CDN |
+| XSS 窃取会话/数据 | httpOnly Cookie（JS 不可读）；CSP（16.1 落地实文）：`default-src 'self'; script-src 'self' 'sha256-…'`（hash-source 放行 index.html 内联防 FOUC 主题脚本，byte 对 byte 契约测试守门）；`style-src 'self' 'unsafe-inline' https://fonts.googleapis.com` + `font-src 'self' https://fonts.gstatic.com`（与桌面 tauri csp:null 同链放行 Google Fonts——视觉零分叉，仅此两第三方域）；`connect-src 'self'`；另加 `X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer` 全响应下发 |
 | CSRF | Cookie SameSite=Strict + 全同源架构（静态/API/SSE 同域）；无跨源请求面 |
 | 浏览器侧数据残留 | V1 明确策略：业务数据仅内存态（React state），不写 localStorage/IndexedDB；刷新=从服务端重取（FR-45"刷新恢复"由服务端持久化兜底）；登出清 Cookie |
 | 密钥泄露至浏览器 | ④的结构性保证 + API 响应形状测试（断言无 key 字段） |
@@ -2755,7 +2756,7 @@ REMOTE_OFFLINE ──指数退避重连（1s→30s 封顶+抖动，伴侣同范�
 
 - command 参数/返回：camelCase JSON（与 Tauri invoke 惯例同构，serde rename_all 不变）
 - SSE：`event: {事件名}` + `data: {payload JSON}`；心跳为注释行（30s）
-- 环境变量：`EGOSYNC_` 前缀大写（EGOSYNC_TOKEN、EGOSYNC_OPENCODE_PATH、EGOSYNC_SECRET_{KEY}、EGOSYNC_DATA_DIR）
+- 环境变量：`EGOSYNC_` 前缀大写（EGOSYNC_TOKEN、EGOSYNC_OPENCODE_PATH、EGOSYNC_SECRET_{KEY}、EGOSYNC_DATA_DIR、EGOSYNC_STATIC_DIR（16.1：静态目录注入，缺省回退 `../egosync-app/dist`，皆缺则 API-only 警告运行））
 - 事件名继续域前缀冒号风格（llm:stream、notification:new 等）；云端不新增事件名——服务端只是承载，不是事件源
 
 ### Communication Patterns

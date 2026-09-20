@@ -72,6 +72,14 @@ jobs:
         working-directory: egosync-app
         run: npm run test:frontend
 
+      # Story 16.1 评审修复：产物侧 CSP 契约门禁强制执行——vitest 先于
+      # tauri build 运行，checkout 后 dist 缺失（gitignore），csp.contract
+      # 产物断言静默跳过 ⇒ CI 从未真正执行过；本步先 build 再单跑该测试
+      # （dist/index.html 内联脚本与源 byte 对 byte + hash 钉死进门禁）。
+      - name: Dist-side CSP contract gate (build then test)
+        working-directory: egosync-app
+        run: npm run build && npx vitest run src/security/csp.contract.test.ts
+
       - name: Run Rust tests
         working-directory: egosync-app/src-tauri
         run: cargo test

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Plus, X, Download, Trash2, Loader2, Check, AlertCircle, Clock, Bell, Upload } from 'lucide-react';
+import { isDesktopOnly, isTauriHost } from '@/transport';
 import { cn } from '../../lib/utils';
 import { Modal } from '../layout/Modal';
 import { llmConfigService } from '../../services/llmConfigService';
@@ -572,7 +573,14 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
           <button onClick={() => { setTab('mcp'); setIsEditing(false); setIsEditingMcp(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'mcp' ? "bg-white dark:bg-slate-900 text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-700/50")}>MCP Server</button>
           <button onClick={() => { setTab('scheduler'); setIsEditing(false); setIsEditingMcp(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'scheduler' ? "bg-white dark:bg-slate-900 text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-700/50")}>调度时间</button>
           <button onClick={() => { setTab('data'); setIsEditing(false); setIsEditingMcp(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'data' ? "bg-white dark:bg-slate-900 text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-700/50")}>数据与隐私</button>
-          <button onClick={() => { setTab('companion'); setIsEditing(false); setIsEditingMcp(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'companion' ? "bg-white dark:bg-slate-900 text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-700/50")}>手机伴侣</button>
+          {/* Story 16.1：desktop-only 入口门控——手机伴侣配对面（QR/已配对
+              设备）全部依赖 companion_* 命令（挂载即调 companion_get_status）。
+              isDesktopOnly(cmd) 驱动：侧栏入口与 tab 内容双重门控（光藏按钮
+              不够——tab 值残留时内容也不得挂载即调）；命令毕业为 web-ok 时
+              入口自动在浏览器出现（不按宿主硬编码入口清单）。 */}
+          {(!isDesktopOnly('companion_get_status') || isTauriHost()) && (
+            <button onClick={() => { setTab('companion'); setIsEditing(false); setIsEditingMcp(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'companion' ? "bg-white dark:bg-slate-900 text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-700/50")}>手机伴侣</button>
+          )}
         </div>
         <div className="flex-1 p-10 overflow-y-auto">
           <div className="flex justify-between items-center mb-8">
@@ -968,6 +976,11 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
 
           {tab === 'data' && (
             <div className="space-y-8">
+              {/* Story 16.1：desktop-only 入口门控——导出依赖 data_export
+                  （本机文件写入），isDesktopOnly(cmd) 驱动整区隐藏；
+                  「数据与隐私」tab 本体保留（data_destroy 是 web-ok——
+                  销毁区在下方保留）。 */}
+              {(!isDesktopOnly('data_export') || isTauriHost()) && (
               <div>
                 <h4 className="text-[15px] font-medium text-slate-800 dark:text-slate-100 mb-2">导出数据</h4>
                 <p className="text-[13px] text-slate-500 dark:text-slate-400 mb-4">将所有角色的记忆、任务和对话记录导出为标准格式。选择需要的格式后点击确认，系统会弹出文件夹选择对话框。</p>
@@ -1056,7 +1069,12 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
                   </div>
                 )}
               </div>
+              )}
 
+              {/* Story 16.1：desktop-only 入口门控——导入依赖 pick_import_file
+                  （本机文件选择对话框）+ data_import，isDesktopOnly(cmd)
+                  驱动整区隐藏。 */}
+              {(!isDesktopOnly('pick_import_file') || isTauriHost()) && (
               <div>
                 <h4 className="text-[15px] font-medium text-slate-800 dark:text-slate-100 mb-2">导入数据</h4>
                 <p className="text-[13px] text-slate-500 dark:text-slate-400 mb-4">导入 存档文件（.db 或 .json）恢复数据。导入前会自动备份当前数据。</p>
@@ -1119,7 +1137,9 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
                   </div>
                 )}
               </div>
+              )}
 
+              {/* 危险区域（data_destroy 为 web-ok 命令——浏览器保留销毁入口） */}
               <div className="pt-6 border-t border-slate-200 dark:border-slate-700">
                 <h4 className="text-[15px] font-medium text-red-600 mb-2 flex items-center gap-2">危险区域</h4>
                 <p className="text-[13px] text-slate-500 dark:text-slate-400 mb-4">永久销毁本地数据库中的所有数据。此操作不可逆！</p>
@@ -1178,7 +1198,10 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
             </div>
           )}
 
-          {tab === 'companion' && (
+          {/* Story 16.1：tab 级门控（防挂载即调）——tab 值残留 'companion' 时
+              浏览器宿主也不得挂载 CompanionPairingSection（挂载即调
+              companion_get_status/paired_device_list）。 */}
+          {tab === 'companion' && (!isDesktopOnly('companion_get_status') || isTauriHost()) && (
             <CompanionPairingSection />
           )}
         </div>

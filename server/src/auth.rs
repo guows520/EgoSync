@@ -252,7 +252,9 @@ pub async fn setup(State(state): State<Arc<AppState>>, body: Bytes) -> Response 
 ///
 /// 统一 401（不泄露存在性）：env 态常时比对（SHA256 摘要常时比较，长度
 /// 不敏感）；库态 Argon2id 校验。成功 ⇒ Set-Cookie（httpOnly SameSite=
-/// Strict）。body 反序列化失败同样 401。
+/// Strict + Max-Age=2592000——30 天持久会话，boss 2026-09-20 裁决；关闭
+/// 浏览器不再登出是该裁决接受的体验取舍，TTL 清扫/多端吊销归 17.x）。
+/// body 反序列化失败同样 401。
 pub async fn login(
     ConnectInfo(addr): ConnectInfo<crate::idle_timeout::RemoteAddr>,
     State(state): State<Arc<AppState>>,
@@ -299,14 +301,57 @@ pub async fn login(
     }
 
     tracing::info!("单用户会话建立");
+    // Max-Age=2592000（30 天持久会话）：boss 2026-09-20 裁决——auth_sessions
+    // 行本就落库跨重启有效，30 天内重开浏览器仍保持登录。
     let cookie = format!(
-        "{}={}; Path=/; HttpOnly; SameSite=Strict",
+        "{}={}; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000",
         SESSION_COOKIE, session_token
     );
     let mut response = (StatusCode::OK, Json(json!({"ok": true}))).into_response();
     response.headers_mut().insert(
         header::SET_COOKIE,
         HeaderValue::from_str(&cookie).expect("会话 Cookie 头构造失败"),
+    );
+    response
+}
+
+/// `POST /api/auth/logout`（Story 16.1）：登出——删会话行 + 过期 Cookie。
+///
+/// - **幂等 200**：无有效会话（无 Cookie / 伪造 / 已删）同样 200——绝不
+///   挂 require_auth（过期会话登出若 401 会联动「被踢回登录页」误判路径）；
+/// - 携带有效会话 ⇒ 删 `auth_sessions` 当前行（伪造/未知值 DELETE 匹配
+///   0 行，结果同幂等）；
+/// - Set-Cookie `egosync_session=; Max-Age=0` 同属性（Path/HttpOnly/
+///   SameSite=Strict）过期——浏览器立即丢弃；
+/// - 会话行删除失败（DB 故障）：仍 200 + 过期 Cookie（客户端态已清，
+///   孤儿行不可达——无 Cookie 值即不可劫持；tracing::error 运维可见；
+///   TTL 清扫归 17.x）。
+pub async fn logout(State(state): State<Arc<AppState>>, req: Request) -> Response {
+    let session_token = extract_session_token(&req);
+    if let Some(token) = session_token.as_deref() {
+        let token_hash = sha256_hex(token.as_bytes());
+        match sqlx::query("DELETE FROM auth_sessions WHERE token_hash = ?1")
+            .bind(&token_hash)
+            .execute(&state.auth.pool)
+            .await
+        {
+            Ok(result) if result.rows_affected() > 0 => {
+                tracing::info!("登出：会话行已删除");
+            }
+            Ok(_) => {} // 无匹配行（无会话/已登出/伪造值）——幂等静默
+            Err(e) => {
+                tracing::error!("登出：会话行删除失败（孤儿行不可达，TTL 清扫归 17.x）: {}", e);
+            }
+        }
+    }
+    let cookie = format!(
+        "{}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0",
+        SESSION_COOKIE
+    );
+    let mut response = (StatusCode::OK, Json(json!({"ok": true}))).into_response();
+    response.headers_mut().insert(
+        header::SET_COOKIE,
+        HeaderValue::from_str(&cookie).expect("登出 Cookie 头构造失败"),
     );
     response
 }

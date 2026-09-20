@@ -1,5 +1,6 @@
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { __resetTransportForTests } from '@/transport';
 import { SettingsTab } from './SettingsTab';
 import { roleService } from '../../services/roleService';
 import { skillService } from '../../services/skillService';
@@ -235,6 +236,25 @@ describe('SettingsTab role CRUD actions', () => {
     expect(await screen.findByRole('button', { name: '选择skill文件夹' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '导入自定义 Skill' })).not.toBeInTheDocument();
     expect(screen.queryByLabelText('导入自定义 Skill', { selector: 'input' })).not.toBeInTheDocument();
+  });
+
+  // Story 16.1：浏览器分支（删桩-恢复-重置三件套）——desktop-only 入口
+  //（skill_pick_custom_directory，isDesktopOnly 驱动）不渲染。
+  it('浏览器分支：skill 文件夹入口不渲染（isDesktopOnly 门控）', async () => {
+    const tauriInternals = (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+    delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+    try {
+      render(<SettingsTab role={baseRole} activeRoleCount={2} />);
+
+      // 设置区块照常渲染（skills 区默认展开）
+      expect(await screen.findByText('自定义 Skill')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: '选择skill文件夹' })).not.toBeInTheDocument();
+      // 服务零调用（入口不可达）
+      expect(skillService.pickCustomDirectory).not.toHaveBeenCalled();
+    } finally {
+      (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = tauriInternals;
+      __resetTransportForTests();
+    }
   });
 
   it('选择skill文件夹时通过原生命令读取 SKILL.md 并展示预览', async () => {

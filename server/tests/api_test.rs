@@ -107,6 +107,12 @@ async fn env_mode_setup_is_404_and_login_compares_env_only() {
     assert!(set_cookie.contains("HttpOnly"), "httpOnly 必须下发: {}", set_cookie);
     assert!(set_cookie.contains("SameSite=Strict"), "SameSite=Strict 必须下发: {}", set_cookie);
     assert!(set_cookie.starts_with(SESSION_COOKIE), "Cookie 名必须为 {}: {}", SESSION_COOKIE, set_cookie);
+    // 16.1（boss 2026-09-20 裁决）：30 天持久会话——Max-Age=2592000 必须下发
+    assert!(
+        set_cookie.contains("Max-Age=2592000"),
+        "30 天持久 Cookie（Max-Age=2592000）必须下发: {}",
+        set_cookie
+    );
 
     // 畸形 body ⇒ 同样 401（不泄露）
     let res = client

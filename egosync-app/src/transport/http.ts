@@ -4,10 +4,14 @@
 //   egosync_session Cookie、Content-Type JSON、空参⇒`{}`）；
 //   200+判别头 `X-Egosync-App-Error: 1` ⇒ reject body 解析值（与 Tauri
 //   invoke rejection 载荷同构）；200 ⇒ resolve body；401/429/404/网络 ⇒
-//   reject HttpTransportError{status,body}（401 不触发任何跳转——全局拦截归 16.1）；
+//   reject HttpTransportError{status,body}——其中 401 额外经前端本地事件
+//   发射 `auth:unauthorized`（Story 16.1 全局拦截：AuthGate 回登录页，
+//   不白屏；rejection 照旧交付调用方 catch 路径）；
 // - 事件：单条 EventSource `/api/events` 多路复用（按帧 `event:` 字段分发
 //   给全部同名 handler，data JSON 解析 payload 同构）；FRONTEND_LOCAL_EVENTS
-//   走进程内总线不进 EventSource；
+//   走进程内总线不进 EventSource；**无订阅即关**（Story 16.1）——全部事件
+//   订阅撤空即关闭 EventSource 并取消重建定时器（登出/401 后 App 卸载
+//   触发，防未认证 401 重建循环；再订阅时懒重建）；
 // - 连接状态机：connecting → online → reconnecting → online（初始
 //   connecting，首 onopen 前的 onerror 保持 connecting）；网络级断连由
 //   EventSource 原生自动重连兜底（浏览器管退避），致命关闭（非 200 等，
@@ -15,7 +19,9 @@
 // - onopen-after-error 触发白名单重放（`{}` 逐条、结果含错误也入集、并发
 //   防护只重放一次）并经 `transport:reconnected` 前端本地事件交付结果集；
 // - getAuthStatus()：首次成功请求后缓存（login 5 次/分/IP 限流预算保护
-//   ——15.4 Design Notes 遗嘱）。
+//   ——15.4 Design Notes 遗嘱）；登录/setup 成功与登出后经
+//   invalidateAuthStatusCache() 失效（15-5 G11 遗嘱——否则 pre-login 的
+//   authenticated:false 钉死整个进程期）。
 
 import { TRANSPORT_CAPABILITIES } from './capabilities';
 import {
@@ -24,7 +30,7 @@ import {
   subscribeFrontendLocalEvent,
 } from './localEvents';
 import { HttpTransportError } from './types';
-import type { ConnectionState, Transport, UnlistenFn } from './types';
+import type { AuthStatus, ConnectionState, Transport, UnlistenFn } from './types';
 
 /** AppError 响应判别头（与 server routes.rs 常量同源约定）。 */
 const APP_ERROR_HEADER = 'x-egosync-app-error';
@@ -52,7 +58,7 @@ export class HttpTransport implements Transport {
   /** 致命关闭后的重建定时器（防叠加：同一时刻至多一个待触发的重建）。 */
   private rebuildTimer: ReturnType<typeof setTimeout> | null = null;
   /** `/api/auth/status` 结果缓存（限流预算保护）。 */
-  private authStatusCache: unknown | undefined;
+  private authStatusCache: AuthStatus | undefined;
 
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
     const body = JSON.stringify(args ?? {});
@@ -78,6 +84,12 @@ export class HttpTransport implements Transport {
               return parsed as T;
             }
             // 401 / 429 / 404 / 5xx 等传输层错误（仅 HTTP 侧存在）
+            if (res.status === 401) {
+              // Story 16.1：会话失效全局信号——AuthGate 收到后回登录页
+              //（内存态随 App 卸载清空）。rejection 照旧交付（调用方 catch
+              // 路径行为不变）；登录面自身的 401 走 REST 直连不经此处。
+              emitFrontendLocalEvent('auth:unauthorized');
+            }
             return Promise.reject(
               new HttpTransportError(res.status, parsed)
             ) as Promise<T>;
@@ -113,6 +125,13 @@ export class HttpTransport implements Transport {
         this.handlers.delete(event);
         this.removeBridge(event);
       }
+      // Story 16.1：无订阅即关——全部事件订阅撤空 ⇒ 关闭 EventSource 并
+      // 取消重建定时器。登出/401 后 AuthGate 卸载 App 触发本路径（App 顶层
+      // 的 useEngineEvent 卸载即撤订阅）；再订阅时 ensureEventSource 懒重建。
+      // 不关则会形成未认证 401 的 5s 重建循环（SSE 致命关闭→定时重建→再 401）。
+      if (this.handlers.size === 0) {
+        this.teardownEventSource();
+      }
     };
   }
 
@@ -143,10 +162,12 @@ export class HttpTransport implements Transport {
    * 认证态发现（`GET /api/auth/status`）：首次成功请求后缓存。
    *
    * `/api/auth/*` 与 setup 共享 5 次/分/IP 限流——轮询该端点会烧穿 login
-   * 预算（15-4 Design Notes 遗嘱），故进程内只请求一次。登录页/setup 向导
-   * 的消费接线归 16.1。
+   * 预算（15-4 Design Notes 遗嘱），故进程内只请求一次；AuthGate（16.1）
+   * 为消费者。缓存失效见 [`invalidateAuthStatusCache`]（15-5 G11 遗嘱：
+   * 登录/setup 成功与登出后必须失效，否则 pre-login 的
+   * authenticated:false 钉死整个进程期）。
    */
-  async getAuthStatus(): Promise<unknown> {
+  async getAuthStatus(): Promise<AuthStatus> {
     if (this.authStatusCache !== undefined) {
       return this.authStatusCache;
     }
@@ -155,11 +176,35 @@ export class HttpTransport implements Transport {
       const parsed = parseJsonOrText(await res.text());
       throw new HttpTransportError(res.status, parsed);
     }
-    this.authStatusCache = parseJsonOrText(await res.text());
+    this.authStatusCache = parseJsonOrText(await res.text()) as AuthStatus;
     return this.authStatusCache;
   }
 
+  /** 认证态缓存失效（登录/setup 成功与登出后调用）。 */
+  invalidateAuthStatusCache(): void {
+    this.authStatusCache = undefined;
+  }
+
   // ── 内部：EventSource 生命周期与状态机 ──
+
+  /**
+   * 关闭 SSE 连接并取消重建定时器（Story 16.1：无订阅即关）。
+   *
+   * - 登出/401 后 App 卸载 ⇒ 最后一个事件订阅撤空 ⇒ 本方法执行：
+   *   EventSource 关闭 + 重建定时器取消（防 401 重建循环）；
+   * - 状态回 connecting（诚实呈现：下次订阅时懒重建、onopen 后回 online）。
+   */
+  private teardownEventSource(): void {
+    if (this.rebuildTimer) {
+      clearTimeout(this.rebuildTimer);
+      this.rebuildTimer = null;
+    }
+    if (this.eventSource) {
+      this.eventSource.close();
+      this.eventSource = null;
+    }
+    this.setState('connecting');
+  }
 
   private ensureEventSource(): void {
     if (this.eventSource) return;

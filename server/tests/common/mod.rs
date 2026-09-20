@@ -22,9 +22,20 @@ pub struct InProcessServer {
 }
 
 impl InProcessServer {
-    /// 以给定状态拉起 server（随机端口）。
+    /// 以给定状态拉起 server（随机端口；API-only——无静态面）。
     pub async fn start(state: Arc<AppState>) -> Self {
-        let app = egosync_server::build_router(state.clone());
+        Self::start_with_static(state, None).await
+    }
+
+    /// 以给定状态与静态目录拉起 server（随机端口；`Some` ⇒ 静态面挂载）。
+    ///
+    /// 16.1 静态测试经 fixture dist 目录注入；默认 [`Self::start`] 不挂
+    /// 静态面（不读工作区真实 `../egosync-app/dist`——测试面与构建产物解耦）。
+    pub async fn start_with_static(
+        state: Arc<AppState>,
+        static_dir: Option<std::path::PathBuf>,
+    ) -> Self {
+        let app = egosync_server::build_router(state.clone(), static_dir);
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind test server");

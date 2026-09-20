@@ -387,11 +387,19 @@ describe('GlobalSettingsModal', () => {
     it('数据 Tab 同时显示导出区域和危险区域', async () => {
       render(<GlobalSettingsModal onClose={vi.fn()} />);
 
+      // Story 16.1 桌面分支零回归：companion / 导出 / 导入 / 销毁 全量可见
+      //（isDesktopOnly 门控在桌面宿主下恒放行——浏览器分支的隐藏断言
+      // 见 GlobalSettingsModal.browser.test.tsx）
+      expect(screen.getByRole('button', { name: '手机伴侣' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: '数据与隐私' })).toBeInTheDocument();
+
       fireEvent.click(screen.getByRole('button', { name: '数据与隐私' }));
 
       expect(await screen.findByText('导出数据')).toBeInTheDocument();
+      expect(screen.getByText('导入数据')).toBeInTheDocument();
       expect(screen.getByText('危险区域')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /导出存档/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /导入存档/ })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /销毁所有数据/ })).toBeInTheDocument();
     });
 

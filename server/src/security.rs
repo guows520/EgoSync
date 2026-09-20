@@ -1,8 +1,21 @@
-//! 安全中间件（Story 15.4）：CSP 全响应下发 + 跨源显式拒绝 + panic 兜底。
+//! 安全中间件（Story 15.4，16.1 补齐响应头）：CSP + 安全响应头全响应
+//! 下发 + 跨源显式拒绝 + panic 兜底。
 //!
-//! - CSP（架构 ⑧）：`default-src 'self'; script-src 'self'; style-src 'self'
-//!   'unsafe-inline'; connect-src 'self'`——全响应下发（含 healthz / 401 /
-//!   404；静态资源归 16.1）。
+//! - CSP（架构 ⑧ 冻结内容 + 16.1 两项裁量放行）：`default-src 'self';
+//!   script-src 'self' 'sha256-…'; style-src 'self' 'unsafe-inline'
+//!   https://fonts.googleapis.com; font-src 'self'
+//!   https://fonts.gstatic.com; connect-src 'self'`——全响应下发（含
+//!   healthz / 401 / 404 / 静态 HTML）。两项放行：① `script-src` 追加
+//!   hash-source 放行 index.html 的内联防 FOUC 主题脚本（禁止整体放开
+//!   unsafe-inline；hash 与构建产物 byte 对 byte 钉死——前端 security
+//!   契约源码扫描测试守门）；② 字体源放行——index.html 外链 Google
+//!   Fonts（Inter/JetBrains Mono/Noto Sans SC），桌面宿主 tauri
+//!   csp:null 正常加载，不放行则 web 端字体回退系统字体，产生宿主门控
+//!   项之外的视觉分叉（违反「差异仅限宿主门控」AC）。实测 dist 产物
+//!   无其他 inline script。
+//! - 安全响应头（15-4 遗留补齐，16.1）：`X-Content-Type-Options: nosniff`
+//!   （MIME 嗅探防护）、`X-Frame-Options: DENY`（frame 嵌入防护）、
+//!   `Referrer-Policy: no-referrer`（引用泄露防护）——全响应叠加。
 //! - 跨源（架构 ⑧）：`Origin` 头与宿主不同源 ⇒ 403 显式拒绝，不下发任何
 //!   CORS 放行头。无 Origin 头的请求（curl / 服务间调用）放行。
 //! - panic 兜底：命令 handler panic 经 CatchPanicLayer → 500（进程级 5xx
@@ -14,16 +27,34 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Json, Response};
 use serde_json::json;
 
-/// CSP 头值（架构 ⑧ 冻结内容）。
-pub const CSP_POLICY: &str =
-    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'";
+/// CSP 头值（架构 ⑧ 冻结内容 + 16.1 两项裁量放行：脚本 hash-source 与字体源）。
+///
+/// script hash 值为 `egosync-app/dist/index.html` 内联防 FOUC 脚本的 SHA256
+/// base64（脚本本体 byte 对 byte——vite 构建原样保留 index.html 内联
+/// 脚本；编辑该脚本须同步重算本值，前端 security 契约源码扫描测试守门）。
+/// 字体源与桌面宿主（tauri csp:null 加载同链）对齐——视觉零分叉。
+pub const CSP_POLICY: &str = "default-src 'self'; script-src 'self' \
+    'sha256-t7EoxfYkO3wNL2nCWqo4+0sb9alMtMK3TJiFg8kQUkQ='; style-src 'self' \
+    'unsafe-inline' https://fonts.googleapis.com; \
+    font-src 'self' https://fonts.gstatic.com; connect-src 'self'";
 
-/// 全响应下发 CSP 头。
-pub async fn csp_headers(req: Request, next: Next) -> Response {
+/// 全响应下发 CSP + 安全响应头（nosniff / X-Frame-Options / Referrer-Policy）。
+pub async fn security_headers(req: Request, next: Next) -> Response {
     let mut res = next.run(req).await;
-    res.headers_mut().insert(
+    let headers = res.headers_mut();
+    headers.insert(
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_static(CSP_POLICY),
+    );
+    // 15-4 遗留安全头补齐（16.1）：nosniff / frame 嵌入防护 / 引用泄露防护
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    headers.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
     );
     res
 }

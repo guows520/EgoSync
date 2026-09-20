@@ -1,5 +1,6 @@
 import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { __resetTransportForTests } from '@/transport';
 import { ButlerSettingsContent } from './ButlerSettingsContent';
 import { appService } from '../../services/appService';
 import { scheduleService } from '../../services/scheduleService';
@@ -214,6 +215,27 @@ describe('ButlerSettingsContent', () => {
         enabledSkillIds: [],
       });
     });
+  });
+
+  // Story 16.1：浏览器分支（删桩-恢复-重置三件套）——desktop-only 入口
+  //（skill_pick_custom_directory，isDesktopOnly 驱动）不渲染。
+  it('浏览器分支：skill 文件夹入口不渲染（isDesktopOnly 门控）', async () => {
+    const tauriInternals = (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+    delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+    try {
+      vi.mocked(skillService.listAllRoleSkills).mockResolvedValue([customSkill]);
+
+      render(<ButlerSettingsContent />);
+
+      expect(await screen.findByText('自定义 Skill')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: '选择skill文件夹' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /选择中.../ })).not.toBeInTheDocument();
+      // 服务零调用（入口不可达）
+      expect(skillService.pickCustomDirectory).not.toHaveBeenCalled();
+    } finally {
+      (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = tauriInternals;
+      __resetTransportForTests();
+    }
   });
 
   it('管家选择 Skill 文件夹时可选择复用角色范围', async () => {

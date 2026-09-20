@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, Trash2, AlertCircle, Upload, ChevronDown, ChevronUp } from 'lucide-react';
+import { isDesktopOnly, isTauriHost } from '@/transport';
 import { cn } from '../../lib/utils';
 import { ROLE_COLORS, ROLE_ICONS, getRoleIconComponent, normalizeColorHex, normalizeIconId } from '../../lib/roleIcons';
 import { roleService } from '../../services/roleService';
@@ -830,14 +831,19 @@ export function SettingsTab({
                 <div className="text-[14.5px] font-medium text-slate-800 dark:text-slate-100">自定义 Skill</div>
                 <p className="mt-1 text-[12.5px] leading-relaxed text-slate-500 dark:text-slate-400">选择包含 SKILL.md 的文件夹后，可按角色启用。</p>
               </div>
-              <button
-                type="button"
-                onClick={handleSkillDirectorySelected}
-                disabled={isImportingSkill || isPickingDirectory}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 dark:bg-indigo-900/30 px-3 py-2 text-[12px] font-medium text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
-              >
-                <Upload size={14} /> {isPickingDirectory ? '选择中...' : '选择skill文件夹'}
-              </button>
+              {/* Story 16.1：desktop-only 入口门控——skill 文件夹选择依赖
+                  skill_pick_custom_directory（本机目录选择对话框），
+                  isDesktopOnly(cmd) 驱动隐藏（命令毕业为 web-ok 时自动出现）。 */}
+              {(!isDesktopOnly('skill_pick_custom_directory') || isTauriHost()) && (
+                <button
+                  type="button"
+                  onClick={handleSkillDirectorySelected}
+                  disabled={isImportingSkill || isPickingDirectory}
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 dark:bg-indigo-900/30 px-3 py-2 text-[12px] font-medium text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+                >
+                  <Upload size={14} /> {isPickingDirectory ? '选择中...' : '选择skill文件夹'}
+                </button>
+              )}
             </div>
 
             {skillPreview && (

@@ -1,5 +1,6 @@
 import { act, render, waitFor, screen, fireEvent, within } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { __resetTransportForTests } from '@/transport';
 import { ChatStream } from './ChatStream';
 import { chatService } from '../../services/chatService';
 import { useEngineEvent } from '../../hooks/useEngineEvent';
@@ -470,6 +471,26 @@ describe('ChatStream conversation initialization (Story 2.2 AC-2 / AC-7)', () =>
     expect(screen.queryByText('工作目录')).not.toBeInTheDocument();
     expect(screen.queryByText('选择工作目录')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '选择工作目录' })).toHaveTextContent('默认目录 · 选择');
+  });
+
+  // Story 16.1：浏览器分支（删桩-恢复-重置三件套）——desktop-only 入口
+  //（chat_pick_working_directory，isDesktopOnly 驱动）不渲染。
+  it('浏览器分支：工作目录入口整行不渲染（isDesktopOnly 门控）', async () => {
+    const tauriInternals = (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+    delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+    try {
+      vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
+
+      render(<ChatStream role={null} />);
+      await waitFor(() => expect(chatService.getButlerConversation).toHaveBeenCalled());
+
+      expect(screen.queryByRole('button', { name: '选择工作目录' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: '使用默认目录' })).not.toBeInTheDocument();
+      expect(screen.queryByText('默认目录 · 选择')).not.toBeInTheDocument();
+    } finally {
+      (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = tauriInternals;
+      __resetTransportForTests();
+    }
   });
 
   it('选择工作目录后发送消息会携带该目录', async () => {

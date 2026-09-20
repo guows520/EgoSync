@@ -11,6 +11,18 @@ export type UnlistenFn = () => void;
 export type ConnectionState = 'connecting' | 'online' | 'reconnecting';
 
 /**
+ * `/api/auth/status` 返回形状（Story 16.1 类型化）。
+ *
+ * - `setupRequired`：无 env 令牌且库内无哈希（首访引导）——env 锁定态与
+ *   已初始化态协议上不可区分（15.4 特性，不泄露实例状态）；
+ * - `authenticated`：当前会话 Cookie 有效。
+ */
+export interface AuthStatus {
+  setupRequired: boolean;
+  authenticated: boolean;
+}
+
+/**
  * HTTP 传输层错误（仅 HTTP 侧存在；Tauri 分支无此路径）。
  *
  * - 业务错误（AppError）不是传输层错误：200 + 判别头 `X-Egosync-App-Error: 1`

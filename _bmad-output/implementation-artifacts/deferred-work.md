@@ -426,3 +426,16 @@ All items resolved in the same session:
 - source_spec: `_bmad-output/implementation-artifacts/15-5-frontend-transport-and-parity-test-suite.md`
   summary: npm run test:all 不含 server crate 测试（须独立 cd server && cargo test），本地 test:all 全绿不等于 server 侧绿。
   evidence: 15.5 评审盲扫 #10：15.5 规格明言不改 test:all 构成，server-ci 工作流在 CI 兜底；后续 chore 可加聚合脚本（test:repo）或把 server cargo 并入 test:all。
+
+- source_spec: `_bmad-output/implementation-artifacts/16-1-web-entry-auth-and-first-visit-flow.md`
+  summary: SSE 通道 401 不产生认证失效信号——纯被动浏览（无 invoke）中会话失效时 EventSource 致命关闭→5s 重建无限循环，UI 停「重连中」永不回登录页。
+  evidence: auth:unauthorized 仅由 invoke 401 发射（http.ts 亲证）；当前无 TTL/吊销、触发面窄（仅跨 tab 登出等服务端会话死亡场景）；17.x 引入 TTL 清扫后将成为常态路径。修法：16.2 SSE UX 或 17.x 会话故事补「SSE 401 → 失效缓存 + 发射 auth:unauthorized」。
+- source_spec: `_bmad-output/implementation-artifacts/16-1-web-entry-auth-and-first-visit-flow.md`
+  summary: 登出不终止已建立的 SSE 流——require_auth 只挡新连接，跨 tab 登出后其他 tab 的事件流继续推送到 idle timeout（120s）。
+  evidence: auth.rs logout 只删行+过期 Cookie，已建立的 /api/events 流不受影响（亲证）；同浏览器其他 tab 到下一次 invoke 401 才被感知。修法：17.x 会话生命周期故事（登出广播/流终止）。
+- source_spec: `_bmad-output/implementation-artifacts/16-1-web-entry-auth-and-first-visit-flow.md`
+  summary: resolve_static_dir 的 env 解析三分支（env 显式/默认存在/皆缺 None+警告）零自动化覆盖。
+  evidence: 集成测试全部注入 static_dir，env 胶水仅手工冒烟覆盖；bin 级 env 单测在 cargo test 并行线程下有竞态，需先参数化重构才可测（验证缺口层 filed defer）。
+- source_spec: `_bmad-output/implementation-artifacts/16-1-web-entry-auth-and-first-visit-flow.md`
+  summary: Google Fonts 外链依赖——16.1 以 CSP 放行 fonts.googleapis.com/gstatic 修复视觉分叉，但离线/内网部署两端都回退系统字体且外链依赖第三方 CDN。
+  evidence: index.html:7 外链（Inter/JetBrains Mono/Noto Sans SC）；17.x Docker/离线部署故事评估自托管字体（随 dist 分发，兼顾离线一致性与隐私）。

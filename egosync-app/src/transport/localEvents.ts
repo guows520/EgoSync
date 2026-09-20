@@ -8,12 +8,16 @@
 // 名单：
 // - `skill-scope-updated`：全仓唯一前端→前端 emit（skillService.notifyScopeUpdated）；
 // - `transport:reconnected`：HttpTransport 重连重放的结果集交付通道
-//   （payload = { results: { 命令名: 结果或错误 } }，UI 消费归 16.2）。
+//   （payload = { results: { 命令名: 结果或错误 } }，UI 消费归 16.2）；
+// - `auth:unauthorized`（Story 16.1）：认证失效全局信号——HttpTransport
+//   invoke 401 与主动登出都发射；AuthGate 订阅后回登录页（内存态随 App
+//   卸载清空）。不进 SSE 契约（认证失效时 SSE 已在拆除路径上）。
 
 /** 前端本地事件名单（路由判别用；Tauri 分支不消费本名单——统一走 listen）。 */
 export const FRONTEND_LOCAL_EVENTS: readonly string[] = [
   'skill-scope-updated',
   'transport:reconnected',
+  'auth:unauthorized',
 ];
 
 /** 是否前端本地事件（浏览器分支进程内消化、不进 SSE 契约）。 */

@@ -1,9 +1,12 @@
 //! egosync-server bin 入口：tracing init + env 配置 + 完整引导 + 优雅退出。
 //!
-//! env（Story 15.4 冻结面）：
+//! env（Story 15.4 冻结面 + 16.1 静态目录）：
 //! - `EGOSYNC_DATA_DIR`（必填）：数据目录（双库 + secrets.json + workspace）；
 //! - `EGOSYNC_TOKEN`（可选）：env 态引导令牌——存在即冻结为「login 仅常时
 //!   比对 env、setup 不挂载」形态；不存在走库态 Argon2id（首访 setup）；
+//! - `EGOSYNC_STATIC_DIR`（可选，16.1）：静态目录（`egosync-app/dist` 构建
+//!   产物）——未设时默认 `../egosync-app/dist`（存在即用；缺失则 tracing
+//!   警告并 API-only，进程不崩溃）；
 //! - `EGOSYNC_HOST`（默认 `127.0.0.1`——安全默认，公网暴露需显式声明）；
 //! - `EGOSYNC_PORT`（默认 `8080`）；
 //! - `RUST_LOG`（默认 info）。
@@ -24,6 +27,44 @@ use egosync_server::idle_timeout::{IdleTimeoutListener, IDLE_TIMEOUT_SECS};
 
 /// 优雅退出兜底上限（秒）：给 SSE 长连接与在途请求留收尾窗口。
 const SHUTDOWN_DEADLINE_SECS: u64 = 8;
+
+/// 静态目录默认路径（相对 server 进程 CWD——`cargo run` 自 server/ 发起）。
+const DEFAULT_STATIC_DIR: &str = "../egosync-app/dist";
+
+/// 解析静态目录（Story 16.1）：env `EGOSYNC_STATIC_DIR` 显式设置优先
+/// （不校验存在性——ServeDir 对缺失目录自然 404，警告交由运行期响应呈现）；
+/// 未设时默认 `../egosync-app/dist` 存在即用；两者皆缺 ⇒ API-only +
+/// tracing 警告（I/O 矩阵：不崩溃，API 面照常服务）。
+fn resolve_static_dir() -> Option<std::path::PathBuf> {
+    match std::env::var("EGOSYNC_STATIC_DIR") {
+        Ok(v) if !v.is_empty() => {
+            let dir = std::path::PathBuf::from(v);
+            if !dir.is_dir() {
+                tracing::warn!(
+                    path = %dir.display(),
+                    "EGOSYNC_STATIC_DIR 已设置但目录不存在——静态面将整体 404"
+                );
+            }
+            Some(dir)
+        }
+        _ => {
+            let default = std::path::PathBuf::from(DEFAULT_STATIC_DIR);
+            if default.is_dir() {
+                tracing::info!(
+                    path = %default.display(),
+                    "静态目录未显式设置，默认路径存在即用（EGOSYNC_STATIC_DIR 可覆盖）"
+                );
+                Some(default)
+            } else {
+                tracing::warn!(
+                    "EGOSYNC_STATIC_DIR 未设置且默认路径 {} 不存在——server 以 API-only 模式运行（浏览器入口不可用）",
+                    DEFAULT_STATIC_DIR
+                );
+                None
+            }
+        }
+    }
+}
 
 #[tokio::main]
 async fn main() {
@@ -65,13 +106,17 @@ async fn main() {
     };
     let addr = format!("{}:{}", host, port);
 
+    // 静态目录解析（16.1）：env 显式设置优先；未设时默认 ../egosync-app/dist
+    // （存在即用）；两者皆缺 ⇒ API-only + tracing 警告（不崩溃）
+    let static_dir = resolve_static_dir();
+
     let state = build_app_state(data_dir, env_token)
         .await
         .unwrap_or_else(|e| {
             eprintln!("server 引导失败: {}", e);
             std::process::exit(1);
         });
-    let app = build_router(state.clone());
+    let app = build_router(state.clone(), static_dir);
 
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap_or_else(|e| {
         // 二轮评审修复 #7：监听失败不 panic——明确报错 + 退出

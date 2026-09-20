@@ -146,6 +146,32 @@ npm install
 npm run tauri build
 ```
 
+## Web 自托管服务（server/）
+
+`server/` 是云端自托管版二进制（axum）：同一前端构建产物（`egosync-app/dist`）双宿主复用——桌面走 Tauri，浏览器直接由 server 伺服（含 SPA 回退），认证/业务/事件面与桌面同构（详见 `_bmad-output/planning-artifacts/architecture.md` 云端托管章节）。
+
+本地运行（开发验证用）：
+
+```bash
+cd egosync-app && npm run build   # 先产出 dist（server 伺服的就是它）
+cd ../server && cargo run         # http://localhost:8080
+```
+
+关键环境变量：
+
+| 变量 | 语义 |
+| --- | --- |
+| `EGOSYNC_DATA_DIR` | 数据目录（egosync.db / conversations.db / secrets.json 落点） |
+| `EGOSYNC_TOKEN` | 预置访问令牌（存在则首访初始化向导关闭、登录按 env 常时比对） |
+| `EGOSYNC_STATIC_DIR` | 静态目录（默认回退 `../egosync-app/dist`） |
+
+部署要点：
+
+- **静态目录缺失 = API-only 警告运行**：`EGOSYNC_STATIC_DIR` 与默认路径皆无产物时 server 照常提供 API，日志告警——浏览器访问将得到 404；先 `npm run build` 再启动。
+- **重部署无需清缓存**：index.html 响应统一 `Cache-Control: no-cache`，带 hash 的资产可被浏览器安全长缓存。
+- **首访流程**：无凭据实例打开页面即进「初始化」向导（设置 ≥8 位令牌）；登录会话为 30 天持久 Cookie（关浏览器重开免重登），侧栏提供登出入口。
+- **生产部署**：进程只讲 HTTP——置于 TLS 反代（Caddy/自有反代）之后；认证端点限流 5 次/分钟/IP。
+
 ## 手机伴侣连接
 
 桌面应用支持与手机伴侣 App（`companion-android/`）建立加密连接（局域网直连优先，可选中继）：

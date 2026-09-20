@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, Fragment } from 'react';
 import { FolderOpen, Home } from 'lucide-react';
+import { isDesktopOnly, isTauriHost } from '@/transport';
 import { chatService } from '../../services/chatService';
 import { skillService } from '../../services/skillService';
 import { useEngineEvent } from '../../hooks/useEngineEvent';
@@ -1373,30 +1374,36 @@ export function ChatStream({
           {(sendError || skillLoadError) && (
             <div role="alert" className="text-sm text-red-600 dark:text-red-400">{sendError || skillLoadError}</div>
           )}
-          <div className="flex items-center gap-2 pl-1 text-[11px] text-slate-400 dark:text-slate-500">
-            <button
-              type="button"
-              aria-label="选择工作目录"
-              title={workingDirectory ?? undefined}
-              onClick={handlePickWorkingDirectory}
-              className="inline-flex min-w-0 max-w-[220px] items-center gap-1 rounded-md px-1.5 py-0.5 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-300"
-            >
-              <FolderOpen size={12} className="shrink-0" />
-              <span className="truncate">
-                {workingDirectory ? `${workingDirectoryLabel(workingDirectory)} · 更换` : '默认目录 · 选择'}
-              </span>
-            </button>
-            {workingDirectory && (
+          {/* Story 16.1：desktop-only 入口门控——工作目录选择依赖
+              chat_pick_working_directory（本机目录选择对话框）。
+              isDesktopOnly(cmd) 驱动：命令毕业为 web-ok 时入口自动在浏览器
+              出现（不按宿主硬编码入口清单）；宿主探测仅作分支臂。 */}
+          {(!isDesktopOnly('chat_pick_working_directory') || isTauriHost()) && (
+            <div className="flex items-center gap-2 pl-1 text-[11px] text-slate-400 dark:text-slate-500">
               <button
                 type="button"
-                aria-label="使用默认目录"
-                onClick={() => setWorkingDirectory(null)}
-                className="rounded-md px-1.5 py-0.5 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-300"
+                aria-label="选择工作目录"
+                title={workingDirectory ?? undefined}
+                onClick={handlePickWorkingDirectory}
+                className="inline-flex min-w-0 max-w-[220px] items-center gap-1 rounded-md px-1.5 py-0.5 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-300"
               >
-                默认
+                <FolderOpen size={12} className="shrink-0" />
+                <span className="truncate">
+                  {workingDirectory ? `${workingDirectoryLabel(workingDirectory)} · 更换` : '默认目录 · 选择'}
+                </span>
               </button>
-            )}
-          </div>
+              {workingDirectory && (
+                <button
+                  type="button"
+                  aria-label="使用默认目录"
+                  onClick={() => setWorkingDirectory(null)}
+                  className="rounded-md px-1.5 py-0.5 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-300"
+                >
+                  默认
+                </button>
+              )}
+            </div>
+          )}
         </div>
       </div>
 

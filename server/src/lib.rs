@@ -10,6 +10,11 @@
 //! `app_settings` kv）。两态切换须重启进程；已发 Cookie 存于 `auth_sessions`
 //! 表，跨重启/跨切换不失效。无任何 dev 免认证旁路。
 //!
+//! 静态服务（Story 16.1）：`build_router` 尾部 fallback 挂载
+//! `egosync-app/dist`（单一构建产物双宿主复用）+ SPA 回退；目录经参数
+//! 注入（main.rs 读 env `EGOSYNC_STATIC_DIR` / 默认路径；`None` = API-only），
+//! 测试经 fixture 目录注入。
+//!
 //! 错误白名单（架构 ②）：AppError 全 variant 一律 `200 + 原样单键 map`；
 //! 非 200 仅 401 / 429 / 404 / 进程级 5xx（handler panic 经 CatchPanicLayer
 //! → 500）；传输面前置拒绝（跨源 403 / 超限 413）为显式登记的传输面扩展。
@@ -23,6 +28,7 @@ pub mod routes;
 pub mod secret_store;
 pub mod security;
 pub mod sse;
+pub mod static_files;
 
 use std::sync::Arc;
 
@@ -54,11 +60,16 @@ pub struct AppState {
 
 /// 构建完整路由（生产与测试共用；测试经 [`bootstrap::build_test_state`]
 /// 注入轻量状态）。
-pub fn build_router(state: Arc<AppState>) -> Router {
+///
+/// `static_dir`（Story 16.1）：静态目录（`egosync-app/dist`）——`Some` 挂
+/// ServeDir + SPA 回退，`None` API-only；中间件叠放对 fallback 同样生效
+/// （CSP / 安全头 / 跨源 / body 上限天然覆盖静态响应）。
+pub fn build_router(state: Arc<AppState>, static_dir: Option<std::path::PathBuf>) -> Router {
     // 认证面前的公开路由（限流 5/min/IP：/api/auth/* + /api/setup）
     let public = Router::new()
         .route("/api/auth/status", get(auth::auth_status))
         .route("/api/auth/login", post(auth::login))
+        .route("/api/auth/logout", post(auth::logout))
         .route("/api/setup", post(auth::setup))
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
@@ -76,20 +87,35 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         ))
         .with_state(state.clone());
 
-    // 探针（认证豁免面：仅 healthz；静态资源归 16.1）
+    // 探针（认证豁免面：仅 healthz）
     let probes = Router::new()
         .route("/healthz", get(healthz::healthz))
         .with_state(state.clone());
 
-    Router::new()
-        .merge(probes)
-        .merge(public)
-        .merge(authed)
-        // 中间件叠放（后加者为外层）：CatchPanic 最外兜底 → CSP 全响应
-        // （须在跨源拒绝之外——403 也下发 CSP）→ 跨源拒绝 → body 上限。
+    // 静态服务（16.1）：`/` 显式路由直出 index.html（ServeDir 的
+    // append_index 不支持自定义响应头——no-cache 须显式路由）+ 尾部
+    // fallback——仅未命中任何路由的请求到达；/api/* 未知路径在 fallback
+    // 内守卫为 JSON 404（不落入 SPA 面）
+    let base = Router::new().merge(probes).merge(public).merge(authed);
+    let router = match static_dir {
+        Some(dir) => {
+            // index.html 路径句柄（`/` 直出与 SPA 回退共用 + no-cache）
+            let index_path = Arc::new(dir.join("index.html"));
+            base.route(
+                "/",
+                get(move || static_files::index_response(Some(index_path.clone()))),
+            )
+            .fallback_service(static_files::serve_dir_fallback(dir))
+        }
+        None => base.fallback_service(static_files::api_only_fallback()),
+    };
+
+    router
+        // 中间件叠放（后加者为外层）：CatchPanic 最外兜底 → CSP+安全头全响应
+        // （须在跨源拒绝之外——403 也下发）→ 跨源拒绝 → body 上限。
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(axum::middleware::from_fn(security::reject_cross_origin))
-        .layer(axum::middleware::from_fn(security::csp_headers))
+        .layer(axum::middleware::from_fn(security::security_headers))
         .layer(tower_http::catch_panic::CatchPanicLayer::custom(
             security::panic_response,
         ))

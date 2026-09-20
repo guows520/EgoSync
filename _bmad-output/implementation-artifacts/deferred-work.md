@@ -448,3 +448,9 @@ All items resolved in the same session:
 - source_spec: `_bmad-output/implementation-artifacts/16-2-realtime-streaming-and-browser-compat.md`
   summary: 恢复流 done 后的 history 重拉失败静默（console.error 有痕、本地完成段如实停留，刷新即愈的双失败窗口）。
   evidence: ChatStream done 分支 getHistory().catch 仅 console.error；触发需「断线恢复后 done 到达 + 紧接着重拉再失败」双重故障（边界层 filed，无重试机制——加指数退避重试属后续打磨）。
+- source_spec: `_bmad-output/implementation-artifacts/16-3-desktop-remote-mode-fr48-optional.md`
+  summary: 远程模式用户文档与令牌轮换指引缺失（设置 tab 语义、诚实代价、keyring 令牌、轮换=切本地→重配→切远程双重启流程）。
+  evidence: 16.3 diff 内无任何 README/用户文档更新；远程模式为可选特性，桌面侧令牌重录入口仅认证失败时出现，常规轮换需双重启——发布前需面向用户文档说明（评审盲扫层 T16 filed，属文档工作而非代码缺口）。
+- source_spec: `_bmad-output/implementation-artifacts/16-3-desktop-remote-mode-fr48-optional.md`
+  summary: app_data_dir 预读派生（dirs::data_dir()/identifier）与 Tauri PathResolver 的等价性未钉死，Tauri 升级漂移会静默错读模式文件目录。
+  evidence: 评审员已核 vendored tauri-2.11.2 今日逐字一致；若 Tauri 升级改变路径语义，builder 期模式裁决将读到与 remote_mode_save_config 写入不同的目录（模式错读=medium 级）。下次 Tauri 升级时做一次双路径交叉校验可定谳，或在升级故事中加启动期比对断言（评审盲扫层 T13 filed，maybe-false）。

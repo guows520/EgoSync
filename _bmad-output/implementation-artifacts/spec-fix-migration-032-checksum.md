@@ -2,7 +2,7 @@
 title: '修复迁移 032 校验值违约——历史开发库恢复启动（auth_sessions 列删正名）'
 type: 'bugfix'
 created: '2026-09-19'
-status: 'in-progress'
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 0
 baseline_commit: '9688965dc92e863d0a1bb07f49b7d5b9874a9a2f'
@@ -57,7 +57,7 @@ context:
 **Execution:**
 - [x] `crates/egosync-engine/migrations/032_auth_sessions.sql` -- 字节级还原为 3d0f3b6 原版（`git show 3a5c85c~1:...` 落盘后 `sha384sum` 核对前缀 7cabf4b1）-- 恢复已应用迁移的 checksum 契约
 - [x] `crates/egosync-engine/migrations/033_auth_sessions_drop_last_seen.sql` -- 新增重建迁移：终态两列、INSERT SELECT 保行；头注释含 15.4 违约始末、窗口态库手工修复 SQL（完整 32 字节原版 sha384 hex，实现时计算） -- YAGNI 删列以合规方式重做
-- [x] `crates/egosync-engine/src/db/pool.rs` -- 测试区新增回归：①构造历史态（全量应用后删 v33 记录 + ALTER TABLE 补回 last_seen_at 列 + 预置会话行）再 init_db ⇒ 列删、行保留、v33 记录在案；②全新库终态两列 + 二次 init_db 幂等 -- 矩阵四行中三行的执行级钉（窗口态行为靠 sqlx 语义不测）
+- [x] `crates/egosync-engine/src/db/pool.rs` -- 测试区新增回归：①构造历史态（全量应用后删 v33 记录 + ALTER TABLE 补回 last_seen_at 列 + 预置会话行）再 init_db ⇒ 列删、行保留、v33 记录在案；②全新库终态两列 + 二次 init_db 幂等；③窗口态库拒绝启动（step-03 矩阵审计补齐） -- 矩阵四行全部执行级钉
 - [x] （操作面，非代码）`~/.local/share/com.egosync.desktop/` -- 外层窗口态目录整体归档为 `com.egosync.desktop.window-bak`；嵌套 `.bak-155` 内容上提回原位 -- 用户数据复位；对副本先验证再动真库
 - [x] spec `## Implementation Notes` -- 记录验证链与归档路径
 
@@ -90,9 +90,41 @@ context:
 - 冒烟日志中的 WARN（opencode sidecar 无 binary 降级、keyring DBus 无会话、默认 LLM 未配置）均为无头环境/资源缺席下的既有降级路径，非 panic、非迁移报错。
 - 033 重放对「已重建两列终态」的库亦成立（auth_sessions_new 每次重建前必不存在、INSERT SELECT 显式列清单），故删 v33 记录重放是安全操作——真库即以此路径收敛到修正后 checksum。
 
+**step-03 矩阵审计补齐（主代理复核时）：** 矩阵第 4 行（窗口态库「仍报 checksum 不匹配」）初版无覆盖测试（当时记为「靠 sqlx 语义不测」），不满足 step-03「矩阵每行须有跑绿的覆盖测试」的硬门槛——主代理补回归 ③ `init_db_rejects_window_state_library_with_modified_032_checksum`：构造窗口态（删 v33 记录 + v32 checksum 改写为 3a5c85c 版 032 的 sha384 `cc552550a4fd…732627f`，无 last_seen_at 列）→ init_db 必须报 `migration 32 was previously applied but has been modified`。该测试同时把 Never 条款「拒绝代码级 checksum 兜底」钉成可执行断言（未来若有人加自动修复即红）。engine `cargo test` 复跑 ⇒ **821/821 绿**（820 + 回归 ③）。
+
+**评审补丁轮（G1–G4，重派实施子代理落地，主代理全量复验）：**
+
+- G1：pool.rs 测试模块新增 `ORIGINAL_032_CHECKSUM_HEX` / `CURRENT_033_CHECKSUM_HEX` 全量 48 字节常量（注释注明「原地改动迁移须新增迁移而非改此钉；033 钉变红是预期报警」）；测试①的 4 字节前缀钉升级为逐字节 `assert_eq!` 全量比对，同义反复的 `recorded_33 == migration_33.checksum`（同二进制互证）删除——033 被原地改动时既有库全砖而有测试信号，突变验证实证：给 033 追加一行注释 ⇒ 测试①③④三条同时精确红在常量钉上（got 8fb5c329… ≠ CE31D612…），还原后复验 ce31d612 回归。
+- G2：新增回归④ `init_db_reapplies_v33_when_record_missing_on_two_column_terminal_schema`——两列终态+预置行 → 删 v33 记录 → init_db 成功重放、行保留、v33 以常量钉 checksum 重放在案；真库实际收敛路径自此有执行级钉。
+- G3+G4：回归③扩展——预置窗口态会话行；拒启断言锚定 sqlx 0.8.6（本库锁定版本）`MigrateError::VersionMismatch` 文案并注明升级需复核；随后**从嵌入 033 的注释里解析 `X'…'` 常量**断言其等于 `ORIGINAL_032_CHECKSUM_HEX`（注释 hex 若再出转写错即红——本 build 内真实发生过的缺陷类别自此有钉）→ 以绑定参数执行方案 A 的 UPDATE → init_db 成功、v33 应用、终态两列、预置行保留、v32/v33 双 checksum 钉。方案 A 手工指引端到端成立，不再只是注释承诺。
+- 主代理复验（全量）：032/033 文件 sha384 复核无突变残留（7cabf4b1…/ce31d612…）；engine `cargo test` **822/822**（821+回归④）；DoD `npm run test:all` exit 0——vitest **51 文件/713**、src-tauri、engine 全绿。评审轮发现中与 AGENTS.md 相关者均系用户自身在途编辑（本故事提交一贯排除），已在交付总结中提示用户。
+
 ## Spec Change Log
 
 ## Review Triage Log
+
+**评审轮 1（2026-09-19，三层：盲猎手 12 + 边界猎手 4 + 验证缺口 1+1；diff 29.7 kB）**
+
+- [盲猎手] AGENTS.md 删除 14 条规则未迁移到 project-context.md — 范围外拒绝 — AGENTS.md 是用户自身在途未提交编辑（先于本故事存在），本故事提交按家规 pathspec 一贯排除；泄漏进 diff 文件系主代理写 diff 时未排除所致，非本故事改动。交付总结中向用户提示。
+- [盲猎手] AGENTS.md 与修复捆绑同一变更集，回滚互相波及 — false — 故事提交以 `':(exclude)AGENTS.md'` pathspec 落地（15.4/15.5 先例），AGENTS.md 永不进入本故事提交，捆绑与回滚耦合不成立。
+- [盲猎手] 测试① 032 checksum 钉仅 4 字节前缀，强度配不上「防止再被原地改动」宣称 — high — 全量 48 字节常量零成本可得；与 v33 无钉（验证缺口层）同根 —→ G1 patch。
+- [盲猎手] 「已重建两列终态后删 v33 记录再 init_db」真库实际收敛路径无测试 — medium — Implementation Notes 仅以散文担保，测试①覆盖带列重放、测试②覆盖普通幂等，恰好漏掉这条 —→ G2 patch。
+- [盲猎手] 033 注释中窗口态库修复方案 A（UPDATE 回原版 checksum）从未执行验证 — medium — 该注释区本 build 内恰好出过 hex 转写错（33EEEEDD→33EEEDD）；测试③已构造出窗口态，补验证成本极低 —→ G3 patch。
+- [盲猎手] 修复指引只藏在 SQL 注释里，受影响用户只看得到原始报错 — low 拒（规则 82）— 受影响面=3a5c85c 与本修复间约两天的窗口期开发库，日常不会遇到；修复（README/错误提示）超出直接修正；补救路径已在 spec、033 注释与交付总结三处记录。
+- [盲猎手] Verification 段写「818+」而终态 821、server 40/40 未列入 Commands — low 拒 — 「818+」由 821 满足非失真；server 40/40 已录 Implementation Notes 第 4 条，实质完整；修复=改本 spec，按规则拒绝。
+- [盲猎手] 测试③断言依赖 sqlx 英文错误文案，无版本锚定 — low — sqlx 升级改措辞即碎；直接修正=锚定版本注释 —→ G4 patch（与 G3 同函数落地）。
+- [盲猎手] Code Map 称「三行注释差」计数失准（实际 2 注释行+逗号+1 列行）— 拒 — 修复=改本 spec；实际差异以 git blob 为准（字节级还原经三重程序化核验），计数笔误不影响执行。
+- [盲猎手] I/O 矩阵第 4 行无对应 Acceptance Criteria 条目 — 拒 — 修复=改本 spec；该行行为已由回归③钉住（step-03 矩阵覆盖门槛满足），AC 对称为格式诉求。
+- [盲猎手] e2e 套件未跑且未按 DoD 说明原因 — low 拒 — 实质原因在案：e2e 平台缺陷（IPC Origin 基线对照实验已证环境级，15.5 spec 归因记录）；且 e2e beforeSession 会整体擦除数据目录——如今该处是已恢复的用户真历史库，跑 e2e 等于销毁用户数据。迁移行为由引擎回归+桌面冒烟覆盖。
+- [盲猎手] 冒烟用 --no-bundle 降级产物，「端到端」表述超出实际 — low 拒 — 迁移验证目标（启动、双池迁移、终态、零 panic）已达成；sidecar/keyring 降级 WARN 已在 Implementation Notes 披露；修复=改 spec 措辞。
+- [边界猎手] 033 手工半途执行残留 auth_sessions_new → 永久 already exists 无指引 — low 拒（规则 82）— 应用路径不可达：sqlx 迁移单事务、SQLite DDL 可回滚，半途残留需手工逐句执行才会出现；加 DROP IF EXISTS=为不可达态加护栏；030 先例同构无此护栏。
+- [边界猎手] 032 前缀钉弱（pool.rs:697-701）— high — 同盲猎手第 3 条 —→ G1。
+- [边界猎手] AGENTS.md 14 处规则引用悬空（含 companion_snapshot.rs:39 规则七）— 范围外拒绝 — 同首条：用户自身在途编辑；交付总结中提示。
+- [边界猎手] spec 称「32 字节 sha384 hex」，实际 48 字节/96 字符 — 拒 — sha384=48 字节，spec 任务文本笔误；已实现的 033 注释常量经程序化比对 git blob 正确（96 字符全匹配），修复=改 spec。
+- [验证缺口·主发现] 033 的 checksum 无跨版本钉——测试① 的 recorded_33==migration_33 是同二进制同义反复，033 被原地改动时全套件仍绿而既有库全砖；演示：本 build 内 033 hex 笔误事件即其现实样本 — high（预验证层，按档采信）—→ G1。
+- [验证缺口·其他] e2e 未在修复后复跑（原发现缺陷的边界）— low 拒 — 同盲猎手第 11 条：平台缺陷+数据销毁风险双重不可行，启动行为已由引擎单测与桌面冒烟覆盖。
+
+**分组与路由**：G1【high】032/033 跨版本 checksum 钉不完整（盲猎手③+边界猎手②+验证缺口主）→ patch；G2【medium】终态重放路径无测试（盲猎手④）→ patch；G3【medium】方案 A 未验证（盲猎手⑤）→ patch；G4【low】sqlx 文案锚（盲猎手⑧）→ patch。四组全部落在 pool.rs 测试模块，重派实施子代理补钉。无 intent_gap/bad_spec（冻结区无需回炉），review_loop_iteration 维持 0。
 
 ## Design Notes
 

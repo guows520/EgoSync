@@ -21,7 +21,6 @@
 
 pub mod auth;
 pub mod bootstrap;
-pub mod cors;
 pub mod dispatch_gen;
 pub mod healthz;
 pub mod idle_timeout;
@@ -40,7 +39,7 @@ use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
 use crate::auth::AuthState;
-use crate::sse::{SseEvent, SseTicketStore};
+use crate::sse::SseEvent;
 
 /// 请求体上限（F11）：显式覆盖 axum 默认 2MB——导入/大 payload 需要。
 pub const MAX_BODY_BYTES: usize = 50 * 1024 * 1024;
@@ -53,8 +52,6 @@ pub struct AppState {
     pub auth: AuthState,
     /// SSE 事件扇出通道（SseEventBus 的广播端）。
     pub events_tx: broadcast::Sender<SseEvent>,
-    /// SSE 一次性票据表（Story 16.3：桌面远程 EventSource 通道）。
-    pub sse_tickets: SseTicketStore,
     /// sidecar 句柄（healthz deep / 退出清理）。
     pub sidecar: Arc<tokio::sync::Mutex<egosync_engine::services::sidecar::SidecarManager>>,
     /// 全局取消令牌（watchdog / delegate 监听 / 退出清理）。
@@ -80,27 +77,13 @@ pub fn build_router(state: Arc<AppState>, static_dir: Option<std::path::PathBuf>
         ))
         .with_state(state.clone());
 
-    // 业务路由（认证中间件守门——未认证含 SSE 一律 401；Bearer 叠加通道
-    // 见 auth::require_auth）
+    // 业务路由（认证中间件守门——未认证含 SSE 一律 401）
     let authed = Router::new()
         .route("/api/cmd/{command}", post(routes::cmd_handler))
-        .route(
-            "/api/events/ticket",
-            post(sse::ticket_handler),
-        )
-        .route_layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            auth::require_auth,
-        ))
-        .with_state(state.clone());
-
-    // SSE 事件流（Story 16.3 三通道认证：Bearer / 一次性票据 / 会话
-    // Cookie——票据只在 `/api/events` 接受，EventSource 无法带自定义头）
-    let sse_stream = Router::new()
         .route("/api/events", get(sse::events_handler))
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
-            auth::require_auth_with_sse_ticket,
+            auth::require_auth,
         ))
         .with_state(state.clone());
 
@@ -113,11 +96,7 @@ pub fn build_router(state: Arc<AppState>, static_dir: Option<std::path::PathBuf>
     // append_index 不支持自定义响应头——no-cache 须显式路由）+ 尾部
     // fallback——仅未命中任何路由的请求到达；/api/* 未知路径在 fallback
     // 内守卫为 JSON 404（不落入 SPA 面）
-    let base = Router::new()
-        .merge(probes)
-        .merge(public)
-        .merge(authed)
-        .merge(sse_stream);
+    let base = Router::new().merge(probes).merge(public).merge(authed);
     let router = match static_dir {
         Some(dir) => {
             // index.html 路径句柄（`/` 直出与 SPA 回退共用 + no-cache）
@@ -133,13 +112,9 @@ pub fn build_router(state: Arc<AppState>, static_dir: Option<std::path::PathBuf>
 
     router
         // 中间件叠放（后加者为外层）：CatchPanic 最外兜底 → CSP+安全头全响应
-        // （须在跨源拒绝之外——403 也下发）→ CORS 白名单层（16.3：桌面
-        // webview 跨源放行 + 预检短路；须在跨源拒绝之外——白名单 Origin 的
-        // 响应/预检需要本层回写放行头，且预检不得落入拒绝层）→ 跨源拒绝 →
-        // body 上限。
+        // （须在跨源拒绝之外——403 也下发）→ 跨源拒绝 → body 上限。
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(axum::middleware::from_fn(security::reject_cross_origin))
-        .layer(axum::middleware::from_fn(cors::cors_allowlist))
         .layer(axum::middleware::from_fn(security::security_headers))
         .layer(tower_http::catch_panic::CatchPanicLayer::custom(
             security::panic_response,

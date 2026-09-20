@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Plus, X, Download, Trash2, Loader2, Check, AlertCircle, Clock, Bell, Upload } from 'lucide-react';
 import { isDesktopOnly, isTauriHost } from '@/transport';
-import { isLocalDesktop } from '../../appMode';
 import { cn } from '../../lib/utils';
 import { Modal } from '../layout/Modal';
 import { llmConfigService } from '../../services/llmConfigService';
@@ -10,7 +9,6 @@ import { schedulerService } from '../../services/schedulerService';
 import { appService } from '../../services/appService';
 import { dataService } from '../../services/dataService';
 import { CompanionPairingSection } from './CompanionPairingSection';
-import { RemoteModeSection } from './RemoteModeSection';
 import type { ExportFormat, ExportResult, ImportResult } from '../../services/dataService';
 import type { LlmConfig, CreateLlmConfigInput, UpdateLlmConfigInput, LlmProviderType, NetworkLocation } from '../../types/settings';
 import type { McpServer, McpServerType } from '../../types/mcp';
@@ -575,27 +573,18 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
           <button onClick={() => { setTab('mcp'); setIsEditing(false); setIsEditingMcp(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'mcp' ? "bg-white dark:bg-slate-900 text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-700/50")}>MCP Server</button>
           <button onClick={() => { setTab('scheduler'); setIsEditing(false); setIsEditingMcp(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'scheduler' ? "bg-white dark:bg-slate-900 text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-700/50")}>调度时间</button>
           <button onClick={() => { setTab('data'); setIsEditing(false); setIsEditingMcp(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'data' ? "bg-white dark:bg-slate-900 text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-700/50")}>数据与隐私</button>
-          {/* Story 16.3：远程模式 tab——桌面宿主专属（模式切换是桌面壳语义；
-              local/remote 两态都需入口：本地态配置切换入口、远程态切回入口）。
-              浏览器宿主无本地模式可切换（零渲染）。 */}
-          {isTauriHost() && (
-            <button onClick={() => { setTab('remote'); setIsEditing(false); setIsEditingMcp(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors flex items-center gap-1.5", tab === 'remote' ? "bg-white dark:bg-slate-900 text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-700/50")}>远程模式</button>
-          )}
           {/* Story 16.1：desktop-only 入口门控——手机伴侣配对面（QR/已配对
               设备）全部依赖 companion_* 命令（挂载即调 companion_get_status）。
               isDesktopOnly(cmd) 驱动：侧栏入口与 tab 内容双重门控（光藏按钮
               不够——tab 值残留时内容也不得挂载即调）；命令毕业为 web-ok 时
-              入口自动在浏览器出现（不按宿主硬编码入口清单）。
-              Story 16.3：门控臂改 isLocalDesktop()——远程桌面虽是 Tauri 宿主，
-              companion_* 走远端 HTTP 物理不可达（desktop-only 不在 dispatch
-              白名单），不得渲染入口（远程态桌面 = 浏览器等价物）。 */}
-          {(!isDesktopOnly('companion_get_status') || isLocalDesktop()) && (
+              入口自动在浏览器出现（不按宿主硬编码入口清单）。 */}
+          {(!isDesktopOnly('companion_get_status') || isTauriHost()) && (
             <button onClick={() => { setTab('companion'); setIsEditing(false); setIsEditingMcp(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'companion' ? "bg-white dark:bg-slate-900 text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-700/50")}>手机伴侣</button>
           )}
         </div>
         <div className="flex-1 p-10 overflow-y-auto">
           <div className="flex justify-between items-center mb-8">
-            <h3 className="text-[24px] font-semibold text-slate-800 dark:text-slate-100">{tab === 'llm' ? 'LLM Provider 配置' : tab === 'mcp' ? 'MCP Server配置' : tab === 'scheduler' ? '调度时间配置' : tab === 'companion' ? '手机伴侣' : tab === 'remote' ? '远程模式' : '数据与隐私'}</h3>
+            <h3 className="text-[24px] font-semibold text-slate-800 dark:text-slate-100">{tab === 'llm' ? 'LLM Provider 配置' : tab === 'mcp' ? 'MCP Server配置' : tab === 'scheduler' ? '调度时间配置' : tab === 'companion' ? '手机伴侣' : '数据与隐私'}</h3>
             <button
               onClick={() => {
                 if (tab === 'mcp' && isEditingMcp) {
@@ -990,10 +979,8 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
               {/* Story 16.1：desktop-only 入口门控——导出依赖 data_export
                   （本机文件写入），isDesktopOnly(cmd) 驱动整区隐藏；
                   「数据与隐私」tab 本体保留（data_destroy 是 web-ok——
-                  销毁区在下方保留）。
-                  Story 16.3：门控臂改 isLocalDesktop()——远程桌面远端不可
-                  达本机文件写入面（同浏览器隐藏语义）。 */}
-              {(!isDesktopOnly('data_export') || isLocalDesktop()) && (
+                  销毁区在下方保留）。 */}
+              {(!isDesktopOnly('data_export') || isTauriHost()) && (
               <div>
                 <h4 className="text-[15px] font-medium text-slate-800 dark:text-slate-100 mb-2">导出数据</h4>
                 <p className="text-[13px] text-slate-500 dark:text-slate-400 mb-4">将所有角色的记忆、任务和对话记录导出为标准格式。选择需要的格式后点击确认，系统会弹出文件夹选择对话框。</p>
@@ -1086,8 +1073,8 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
 
               {/* Story 16.1：desktop-only 入口门控——导入依赖 pick_import_file
                   （本机文件选择对话框）+ data_import，isDesktopOnly(cmd)
-                  驱动整区隐藏。Story 16.3：门控臂改 isLocalDesktop()。 */}
-              {(!isDesktopOnly('pick_import_file') || isLocalDesktop()) && (
+                  驱动整区隐藏。 */}
+              {(!isDesktopOnly('pick_import_file') || isTauriHost()) && (
               <div>
                 <h4 className="text-[15px] font-medium text-slate-800 dark:text-slate-100 mb-2">导入数据</h4>
                 <p className="text-[13px] text-slate-500 dark:text-slate-400 mb-4">导入 存档文件（.db 或 .json）恢复数据。导入前会自动备份当前数据。</p>
@@ -1213,16 +1200,9 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
 
           {/* Story 16.1：tab 级门控（防挂载即调）——tab 值残留 'companion' 时
               浏览器宿主也不得挂载 CompanionPairingSection（挂载即调
-              companion_get_status/paired_device_list）。
-              Story 16.3：门控臂改 isLocalDesktop()（远程桌面同隐藏）。 */}
-          {tab === 'companion' && (!isDesktopOnly('companion_get_status') || isLocalDesktop()) && (
+              companion_get_status/paired_device_list）。 */}
+          {tab === 'companion' && (!isDesktopOnly('companion_get_status') || isTauriHost()) && (
             <CompanionPairingSection />
-          )}
-
-          {/* Story 16.3：远程模式 tab（桌面宿主专属入口——侧栏按钮处门控；
-              分区内部按模式自分流：local 配置/切换，remote 连接信息/切回）。 */}
-          {tab === 'remote' && isTauriHost() && (
-            <RemoteModeSection />
           )}
         </div>
       </div>

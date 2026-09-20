@@ -1,8 +1,8 @@
 //! Story 15.4 对等断言（「靠机制不靠纪律」的测试侧守门）：
 //!
 //! 1. 壳 lib.rs generate_handler 源码扫描集合 == commands.json 工件
-//!    web-ok ∪ desktop-only(15) ∪ perf-test 门控(2) ∪ 宿主壳命令(3)
-//!    （lib.rs:567-595 源码扫描先例；壳命令见 [`HOST_SHELL_COMMANDS`]）；
+//!    web-ok ∪ desktop-only(15) ∪ perf-test 门控(2)（lib.rs:567-595
+//!    源码扫描先例）；
 //! 2. 生成的 dispatch registry（WEB_OK_COMMANDS）与工件同源零漂移；
 //! 3. desktop-only / perf-test 门控命令不在 server 路由面（物理 404 输入）；
 //! 4. 无 dev 免认证旁路（探针串见测试内——源码零字面量防自噬）；
@@ -71,21 +71,6 @@ fn artifact_web_ok_names() -> BTreeSet<String> {
     names
 }
 
-/// 宿主壳命令（Story 16.3）：注册于壳 generate_handler 但**不属业务命令面**
-/// 的双模式壳命令——经 Tauri IPC 直连（前端 `@tauri-apps/api/core` invoke），
-/// 永不进 `/api/cmd/*` dispatch 路由（远端不可达也不可远程调度——模式
-/// 配置是本机事实）。
-///
-/// 与 desktop-only 的区别：desktop-only 是「引擎命令按宿主分级」，壳命令
-/// 是「非引擎的宿主自身命令」——后者不进 engine capabilities 工件
-/// （capabilities.ts 生成物 103/15/31 计数为本故事冻结款，engine crate
-/// 零源码 diff）。
-const HOST_SHELL_COMMANDS: [&str; 3] = [
-    "desktop_get_boot_config",
-    "remote_mode_save_config",
-    "remote_mode_restart",
-];
-
 #[test]
 fn generate_handler_scan_matches_artifact_union_gated() {
     let scanned = scan_generate_handler();
@@ -101,53 +86,24 @@ fn generate_handler_scan_matches_artifact_union_gated() {
             .iter()
             .map(|s| s.to_string())
             .collect();
-    let host_shell: BTreeSet<String> =
-        HOST_SHELL_COMMANDS.iter().map(|s| s.to_string()).collect();
 
-    // 名单完整性先钉死（desktop-only 15 / 门控 2 / 工件 103 / 壳命令 3）
+    // 名单完整性先钉死（desktop-only 15 / 门控 2 / 工件 103）
     // （评审回环裁决 A：secret_store_save/load/delete 划归 desktop-only）
     assert_eq!(desktop_only.len(), 15, "desktop-only 名单必须为 15 条");
     assert_eq!(perf_gated.len(), 2, "perf-test 门控名单必须为 2 条");
     assert_eq!(artifact.len(), 103, "web-ok 命令必须为 103 条");
-    assert_eq!(host_shell.len(), 3, "宿主壳命令名单必须为 3 条");
 
     let mut expected = artifact.clone();
     expected.extend(desktop_only);
     expected.extend(perf_gated);
-    expected.extend(host_shell);
 
     assert_eq!(
         scanned, expected,
-        "generate_handler 注册面必须 == 工件 web-ok ∪ desktop-only(15) ∪ 门控 ∪ 宿主壳命令(3)\n\
+        "generate_handler 注册面必须 == 工件 web-ok ∪ desktop-only(15) ∪ 门控\n\
          仅在壳侧: {:?}\n仅在期望面: {:?}",
         scanned.difference(&expected).collect::<Vec<_>>(),
         expected.difference(&scanned).collect::<Vec<_>>(),
     );
-}
-
-#[test]
-fn host_shell_commands_never_in_dispatch() {
-    // 壳命令是本机事实（模式配置/重启），永不入远端 dispatch 面——
-    // 远端不可调度 = 攻击面收敛 + 语义守门（远端无桌面壳语境）。
-    let dispatch: BTreeSet<String> = egosync_server::dispatch_gen::WEB_OK_COMMANDS
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-    for name in HOST_SHELL_COMMANDS {
-        assert!(
-            !dispatch.contains(name),
-            "宿主壳命令 {} 不得入 dispatch 路由面",
-            name
-        );
-    }
-    // 同理不入能力工件分级（desktop-only/web-ok 均为引擎命令面）
-    for name in HOST_SHELL_COMMANDS {
-        assert!(
-            !egosync_engine::capabilities::DESKTOP_ONLY_COMMANDS.contains(&name),
-            "壳命令 {} 不是引擎命令，不得入 desktop-only 名单",
-            name
-        );
-    }
 }
 
 #[test]

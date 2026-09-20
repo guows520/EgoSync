@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, Trash2, AlertCircle, Upload, ChevronDown, ChevronUp } from 'lucide-react';
-import { isDesktopOnly } from '@/transport';
-import { isLocalDesktop } from '@/appMode';
+import { isDesktopOnly, isTauriHost } from '@/transport';
 import { cn } from '../../lib/utils';
 import { ROLE_COLORS, ROLE_ICONS, getRoleIconComponent, normalizeColorHex, normalizeIconId } from '../../lib/roleIcons';
 import { roleService } from '../../services/roleService';
@@ -834,10 +833,8 @@ export function SettingsTab({
               </div>
               {/* Story 16.1：desktop-only 入口门控——skill 文件夹选择依赖
                   skill_pick_custom_directory（本机目录选择对话框），
-                  isDesktopOnly(cmd) 驱动隐藏（命令毕业为 web-ok 时自动出现）。
-                  Story 16.3：门控臂改 isLocalDesktop()——远程桌面远端不可达
-                  本机目录对话框（同浏览器隐藏语义）。 */}
-              {(!isDesktopOnly('skill_pick_custom_directory') || isLocalDesktop()) && (
+                  isDesktopOnly(cmd) 驱动隐藏（命令毕业为 web-ok 时自动出现）。 */}
+              {(!isDesktopOnly('skill_pick_custom_directory') || isTauriHost()) && (
                 <button
                   type="button"
                   onClick={handleSkillDirectorySelected}

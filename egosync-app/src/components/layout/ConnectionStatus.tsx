@@ -1,7 +1,6 @@
-import { Wifi, WifiOff, Loader2, Cloud } from 'lucide-react';
+import { Wifi, WifiOff, Loader2 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { useConnectionState } from '../../hooks/useConnectionState';
-import { getDesktopMode } from '../../appMode';
 import type { ConnectionState } from '@/transport';
 
 /**
@@ -14,9 +13,6 @@ import type { ConnectionState } from '@/transport';
  *   登出后撤订阅回 connecting——不与 reconnecting 混淆）；
  * - `reconnecting`：显著横幅（页面顶部通栏 + 铃铛级视觉重量）+
  *   徽标变色——网络中断期间用户必须明确知道「重连中」，不静默。
- *
- * Story 16.3：远程桌面附 REMOTE 标识（AC：REMOTE 标识+三态连接呈现——
- * 远程态桌面 = 远端实例客户端，用户须能一眼区分数据来源）。
  *
  * 退避与重连逻辑归传输层（架构④：应用层只管状态呈现）——本组件
  * 零副作用，纯渲染。
@@ -38,7 +34,6 @@ export function ConnectionStatus() {
   const state = useConnectionState();
   const Icon = BADGE_ICON[state];
   const { badgeCls, label } = STATE_CONFIG[state];
-  const isRemote = getDesktopMode() === 'remote';
 
   // reconnecting 期间显著横幅：置顶通栏（pointer-events-none 防误吞点击
   // ——只提示不挡操作）。评审修复：z-[60] 确保不被通知面板（z-50）遮挡
@@ -60,22 +55,11 @@ export function ConnectionStatus() {
       <div
         data-testid="connection-status"
         data-state={state}
-        data-remote={isRemote ? 'true' : undefined}
         role="status"
-        aria-label={`连接状态：${label}${isRemote ? '（远程模式）' : ''}`}
-        title={`连接状态：${label}${isRemote ? '（远程模式）' : ''}`}
+        aria-label={`连接状态：${label}`}
+        title={`连接状态：${label}`}
         className={cn('flex items-center gap-1 text-[11px] font-medium select-none', badgeCls)}
       >
-        {isRemote && (
-          <span
-            data-testid="remote-mode-badge"
-            title="远程模式：桌面作为远端实例的客户端运行"
-            className="hidden sm:inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-indigo-50 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-300"
-          >
-            <Cloud size={10} className="shrink-0" />
-            远程
-          </span>
-        )}
         <Icon
           size={12}
           className={cn(

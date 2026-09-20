@@ -22,7 +22,6 @@ pub mod companion_connection;
 pub mod companion_dispatch;
 pub mod companion_pairing;
 pub mod companion_snapshot;
-pub mod desktop_mode;
 pub mod secret_store;
 pub mod secret_store_keyring;
 pub mod tauri_event_bus;

@@ -4,6 +4,7 @@ pub mod data;
 pub mod briefing;
 pub mod chat;
 pub mod dashboard;
+pub mod desktop_mode;
 pub mod llm_config;
 pub mod memory;
 pub mod mcp;

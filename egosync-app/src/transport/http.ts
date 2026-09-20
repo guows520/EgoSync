@@ -22,6 +22,15 @@
 //   ——15.4 Design Notes 遗嘱）；登录/setup 成功与登出后经
 //   invalidateAuthStatusCache() 失效（15-5 G11 遗嘱——否则 pre-login 的
 //   authenticated:false 钉死整个进程期）。
+//
+// Story 16.3 远程桌面通道（构造选项注入，浏览器默认路径字节级不变）：
+// - `new HttpTransport()`（浏览器）：相对路径 + Cookie 凭证——既有行为；
+// - `new HttpTransport({kind:'remote', baseUrl, token})`（桌面远程模式）：
+//   绝对 URL + `Authorization: Bearer` 头 + SSE 一次性票据
+//   （`POST /api/events/ticket` 签发 → `GET /api/events?ticket=` 建流——
+//   EventSource 无法带自定义头）；
+// - 远程模式应用层退避 governor：致命关闭重建 1s→30s 封顶指数退避+抖动
+//   （架构裁决 B；浏览器分支维持既有固定 5s——浏览器由原生重连兜底）。
 
 import { TRANSPORT_CAPABILITIES } from './capabilities';
 import {
@@ -37,6 +46,25 @@ const APP_ERROR_HEADER = 'x-egosync-app-error';
 
 /** EventSource 致命关闭（非 200 等）后的重建退避间隔（浏览器不原生重连）。 */
 const FATAL_CLOSE_REBUILD_MS = 5000;
+
+/** 远程模式退避参数（架构裁决 B 冻结款）：基数 1s、封顶 30s、抖动 ±20%。 */
+const REMOTE_BACKOFF_BASE_MS = 1000;
+const REMOTE_BACKOFF_MAX_MS = 30000;
+const REMOTE_BACKOFF_JITTER = 0.2;
+
+/**
+ * 远程桌面构造选项（Story 16.3）。
+ *
+ * `kind:'remote'` ⇒ 绝对 base URL + Bearer 令牌 + SSE 票据流程 + 应用层
+ * 退避 governor。缺省（无参构造）= 浏览器相对路径语义（字节级不变）。
+ */
+export interface HttpTransportOptions {
+  kind: 'remote';
+  /** 远程实例 base URL（`https://host[:port]`，无尾斜杠——经 trimRemoteBase 归一）。 */
+  baseUrl: string;
+  /** 远程实例主令牌（Bearer 头与票据签发共用）。 */
+  token: string;
+}
 
 type StateHandler = (state: ConnectionState) => void;
 type EventHandler = (payload: unknown) => void;
@@ -60,12 +88,38 @@ export class HttpTransport implements Transport {
   /** `/api/auth/status` 结果缓存（限流预算保护）。 */
   private authStatusCache: AuthStatus | undefined;
 
+  // ── Story 16.3：远程桌面通道态 ──
+  /** 远程模式配置（null = 浏览器相对路径——既有行为）。 */
+  private remote: HttpTransportOptions | null;
+  /** 远程退避 governor 当前指数（致命关闭连续次数；onopen 复位）。 */
+  private remoteBackoffAttempt = 0;
+  /**
+   * SSE 建流票（远程模式专用）：ticket 在手 ⇒ 直接携票建流（免一次
+   * 签发往返）；票据一次性——建流后置空，下次重建重走签发。
+   */
+  private sseTicket: string | null = null;
+  /** 票据重试防环：建流票据被拒后重取重试仅一次（防签发-建流死循环）。 */
+  private sseTicketRetried = false;
+  /**
+   * 建流世代号（teardown 递增）：异步签发-建流期间发生 teardown（订阅
+   * 撤空）时，进行中的建流作废——防孤儿连接（无订阅即关不变量）。
+   */
+  private sseGeneration = 0;
+
+  constructor(options?: HttpTransportOptions) {
+    this.remote = options ?? null;
+  }
+
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
     const body = JSON.stringify(args ?? {});
-    return fetch(`/api/cmd/${command}`, {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (this.remote) {
+      headers['Authorization'] = `Bearer ${this.remote.token}`;
+    }
+    return fetch(this.resolveUrl(`/api/cmd/${command}`), {
       method: 'POST',
       credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body,
     }).then(
       (res) =>
@@ -88,6 +142,7 @@ export class HttpTransport implements Transport {
               // Story 16.1：会话失效全局信号——AuthGate 收到后回登录页
               //（内存态随 App 卸载清空）。rejection 照旧交付（调用方 catch
               // 路径行为不变）；登录面自身的 401 走 REST 直连不经此处。
+              // 远程桌面（16.3）同语义消费：AuthGate 远程分支回令牌重录视图。
               emitFrontendLocalEvent('auth:unauthorized');
             }
             return Promise.reject(
@@ -166,12 +221,22 @@ export class HttpTransport implements Transport {
    * 为消费者。缓存失效见 [`invalidateAuthStatusCache`]（15-5 G11 遗嘱：
    * 登录/setup 成功与登出后必须失效，否则 pre-login 的
    * authenticated:false 钉死整个进程期）。
+   *
+   * 远程桌面（16.3）：Bearer 头携带主令牌——`authenticated:true` 即
+   * 令牌有效（server auth_status 支持 Bearer 叠加判定）。
    */
   async getAuthStatus(): Promise<AuthStatus> {
     if (this.authStatusCache !== undefined) {
       return this.authStatusCache;
     }
-    const res = await fetch('/api/auth/status', { credentials: 'same-origin' });
+    const headers: Record<string, string> = {};
+    if (this.remote) {
+      headers['Authorization'] = `Bearer ${this.remote.token}`;
+    }
+    const res = await fetch(this.resolveUrl('/api/auth/status'), {
+      credentials: 'same-origin',
+      headers,
+    });
     if (res.status !== 200) {
       const parsed = parseJsonOrText(await res.text());
       throw new HttpTransportError(res.status, parsed);
@@ -185,6 +250,21 @@ export class HttpTransport implements Transport {
     this.authStatusCache = undefined;
   }
 
+  /**
+   * 远程令牌更新（Story 16.3 令牌重录路径）：进程内实例**不重建**——
+   * AuthGate 的 auth:unauthorized 订阅挂在既有实例上，重建实例会割裂
+   * 订阅面；就地换令牌 + 认证缓存失效（下次 getAuthStatus 以新令牌判定）。
+   *
+   * 仅远程实例有意义（浏览器实例 no-op）；SSE 在手票据一并作废
+   * （以旧令牌签发的票据不该再用于新令牌会话——下次建流重走签发）。
+   */
+  updateToken(token: string): void {
+    if (!this.remote) return;
+    this.remote = { ...this.remote, token };
+    this.authStatusCache = undefined;
+    this.sseTicket = null;
+  }
+
   // ── 内部：EventSource 生命周期与状态机 ──
 
   /**
@@ -192,9 +272,12 @@ export class HttpTransport implements Transport {
    *
    * - 登出/401 后 App 卸载 ⇒ 最后一个事件订阅撤空 ⇒ 本方法执行：
    *   EventSource 关闭 + 重建定时器取消（防 401 重建循环）；
-   * - 状态回 connecting（诚实呈现：下次订阅时懒重建、onopen 后回 online）。
+   * - 状态回 connecting（诚实呈现：下次订阅时懒重建、onopen 后回 online）；
+   * - 远程模式（16.3）：世代号递增（在手票据与进行中的异步建流一并作废
+   *   ——票据 30s TTL 短时效，重订阅时重走签发，不做跨生命周期滞留）。
    */
   private teardownEventSource(): void {
+    this.sseGeneration += 1;
     if (this.rebuildTimer) {
       clearTimeout(this.rebuildTimer);
       this.rebuildTimer = null;
@@ -203,14 +286,92 @@ export class HttpTransport implements Transport {
       this.eventSource.close();
       this.eventSource = null;
     }
+    this.sseTicket = null;
+    this.sseTicketRetried = false;
+    this.remoteBackoffAttempt = 0;
     this.setState('connecting');
   }
 
   private ensureEventSource(): void {
     if (this.eventSource) return;
-    const source = new EventSource('/api/events');
+    if (this.remote) {
+      // 远程模式：票据流程建流（异步签发——EventSource 构造是同步的，
+      // 票据获取后才构造；世代号防 teardown 竞态）
+      void this.ensureRemoteEventSource();
+      return;
+    }
+    this.connectEventSource('/api/events');
+  }
+
+  /**
+   * 远程模式 SSE 建流（Story 16.3）：
+   * 1. 无在手票据 ⇒ `POST /api/events/ticket`（Bearer）签发；
+   * 2. `GET /api/events?ticket=` 构造 EventSource；
+   * 3. 签发失败（网络断/服务器不可达）⇒ 退避 governor 调度重建
+   *    （REMOTE_OFFLINE 呈现归 useConnectionState/ConnectionStatus 三态面）。
+   *
+   * 令牌失效（签发 401）**不由本通道判定**——票据签发失败只意味着
+   * 「此刻无法建流」；令牌失效由 invoke 通道的 401 统一判定
+   * （网络错误≠401 严格分流）。此处 401 仅转发全局事件供 AuthGate
+   * 分流（AuthGate 在此场景必然先经 invoke/status 通道收到同一信号）。
+   */
+  private async ensureRemoteEventSource(): Promise<void> {
+    const generation = this.sseGeneration;
+    try {
+      if (!this.sseTicket) {
+        this.sseTicket = await this.fetchSseTicket();
+      }
+    } catch (e) {
+      if (e instanceof HttpTransportError && e.status === 401) {
+        emitFrontendLocalEvent('auth:unauthorized');
+        return;
+      }
+      // 网络失败/5xx/429：退避 governor 重试（1s→30s+抖动）
+      this.scheduleRebuild();
+      return;
+    }
+    // 签发往返期间发生了 teardown（订阅撤空/世代翻新）——建流作废
+    if (generation !== this.sseGeneration) return;
+    // 另一条建流路径已构造连接（并发订阅场景）——本票据作废即可
+    if (this.eventSource) return;
+    this.connectEventSource(`/api/events?ticket=${encodeURIComponent(this.sseTicket)}`);
+  }
+
+  /** `POST /api/events/ticket`（Bearer）→ `{ticket}`（网络失败 ⇒ status 0 错误）。 */
+  private async fetchSseTicket(): Promise<string> {
+    const res = await fetch(this.resolveUrl('/api/events/ticket'), {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${this.remote!.token}`,
+      },
+      body: '{}',
+    }).catch(() => {
+      throw new HttpTransportError(0, null);
+    });
+    const text = await res.text().catch(() => {
+      throw new HttpTransportError(0, null);
+    });
+    if (res.status !== 200) {
+      throw new HttpTransportError(res.status, parseJsonOrText(text));
+    }
+    const parsed = parseJsonOrText(text) as { ticket?: unknown };
+    if (typeof parsed?.ticket !== 'string' || parsed.ticket.length === 0) {
+      throw new HttpTransportError(0, null);
+    }
+    return parsed.ticket;
+  }
+
+  /** EventSource 构造与桥接挂接（浏览器/远程同路径，仅 URL 与重连策略不同）。 */
+  private connectEventSource(url: string): void {
+    const source = new EventSource(this.remote ? this.resolveUrl(url) : url);
     source.onopen = () => {
       const wasReconnecting = this.state === 'reconnecting';
+      this.remoteBackoffAttempt = 0;
+      this.sseTicketRetried = false;
+      // 票据已消费（一次性）——持票清空，下次重建重走签发
+      this.sseTicket = null;
       this.setState('online');
       if (wasReconnecting) {
         // onopen-after-error：恢复并重放白名单（结果经 transport:reconnected 交付）
@@ -221,13 +382,31 @@ export class HttpTransport implements Transport {
       if (this.state === 'online') {
         this.setState('reconnecting');
       }
-      // 致命关闭（HTTP 错误等）：浏览器对非 200 不做原生重连（WHATWG
-      // 语义=永久关闭）——应用层定时重建，否则事件与恢复重放永不复活
-      // （评审 G2）；首连期非致命 onerror 保持 connecting（冻结语义）
-      if ((source as EventSource).readyState === EventSource.CLOSED) {
-        this.eventSource = null;
-        this.scheduleRebuild();
+      if (!this.remote) {
+        // 浏览器路径（字节级不变）：致命关闭（HTTP 错误等）浏览器对非 200
+        // 不做原生重连（WHATWG 语义=永久关闭）——应用层定时重建，否则
+        // 事件与恢复重放永不复活（评审 G2）；首连期非致命 onerror 保持
+        // connecting（冻结语义）
+        if ((source as EventSource).readyState === EventSource.CLOSED) {
+          this.eventSource = null;
+          this.scheduleRebuild();
+        }
+        return;
       }
+      // 远程路径（16.3 全接管）：票据是一次性的——原生重连复用已消费
+      // 票据的 URL 必然 401（永远无法成功），浏览器自管退避也不可控。
+      // 任何错误都由应用层接管：首个错误立即重取票据重试（票据消费/
+      // 过期的正常路径——I/O 矩阵「票据过期→重取，不升级为离线」），
+      // 其后走退避 governor（1s→30s+抖动——AC「拔线后指数退避重连」）。
+      source.close();
+      this.eventSource = null;
+      this.sseTicket = null;
+      if (!this.sseTicketRetried) {
+        this.sseTicketRetried = true;
+        void this.ensureRemoteEventSource();
+        return;
+      }
+      this.scheduleRebuild();
     };
     this.eventSource = source;
     // 重建场景（致命关闭后）：既有桥接重挂到新连接——桥接闭包按
@@ -240,10 +419,36 @@ export class HttpTransport implements Transport {
   /** 致命关闭后的重建退避：单一定时器防叠加，到期重建 SSE 连接。 */
   private scheduleRebuild(): void {
     if (this.rebuildTimer) return;
+    const delay = this.remote
+      ? this.remoteBackoffDelay()
+      : FATAL_CLOSE_REBUILD_MS;
     this.rebuildTimer = setTimeout(() => {
       this.rebuildTimer = null;
       this.ensureEventSource();
-    }, FATAL_CLOSE_REBUILD_MS);
+    }, delay);
+  }
+
+  /**
+   * 远程退避 governor（架构裁决 B 冻结款）：1s→30s 封顶指数退避 + ±20% 抖动。
+   *
+   * attempt 从 1 起（首次失败即 1s 档），封顶 30s；抖动为乘性（对期望
+   * 延迟 ±20%）——多客户端同断线场景防雷鸣群重连（thundering herd）。
+   */
+  private remoteBackoffDelay(): number {
+    this.remoteBackoffAttempt += 1;
+    const exponential = Math.min(
+      REMOTE_BACKOFF_BASE_MS * 2 ** (this.remoteBackoffAttempt - 1),
+      REMOTE_BACKOFF_MAX_MS,
+    );
+    const jitter = 1 + (Math.random() * 2 - 1) * REMOTE_BACKOFF_JITTER;
+    return Math.round(exponential * jitter);
+  }
+
+  /** 远程模式绝对 URL 拼接（base 无尾斜杠归一 + path 保证前导斜杠）。 */
+  private resolveUrl(path: string): string {
+    if (!this.remote) return path;
+    const base = this.remote.baseUrl.replace(/\/+$/, '');
+    return `${base}${path.startsWith('/') ? path : `/${path}`}`;
   }
 
   private setState(next: ConnectionState): void {

@@ -1,6 +1,11 @@
 //! 单用户认证（Story 15.4，架构决策 #5）：env/首访 setup、Argon2id、
 //! httpOnly Cookie 会话、401 中间件、IP 滑动窗口限流。
 //!
+//! Story 16.3：叠加 Bearer 通道——桌面远程客户端（webview 跨源，Cookie
+//! 无法携带）经 `Authorization: Bearer <token>` 认证，校验引导主令牌
+//! （env 常时比对 / 库态 Argon2id），**非会话表**；Cookie 路径零变化
+//! （无 Authorization 头的请求行为与 15.4 逐语义一致）。
+//!
 //! 初始化优先级冻结：
 //! - env 存在 `EGOSYNC_TOKEN` ⇒ `/api/setup` 不挂载（请求 404）、login 仅
 //!   常时比对 env；
@@ -166,11 +171,20 @@ pub async fn rate_limit(
 /// `GET /api/auth/status`：认证前发现端点（setupRequired / authenticated）。
 ///
 /// setupRequired = 无 env 且库内无哈希（首访引导）；authenticated = 当前
-/// Cookie 会话有效。不泄露令牌存在性之外的信息。
+/// Cookie 会话有效 **或** Bearer 主令牌有效（16.3 叠加通道——桌面远程
+/// 客户端的连接测试/引导探测走此分支；200 形状不变，不泄露存在性之外
+/// 的信息）。
 pub async fn auth_status(State(state): State<Arc<AppState>>, req: Request) -> Response {
     // 注意：Body 为 !Sync——Request 只能按值跨 await（引用会使 future !Send）
     let session_token = extract_session_token(&req);
-    let authenticated = session_cookie_valid(&state, session_token.as_deref()).await;
+    let bearer_token = extract_bearer_token(&req);
+    let authenticated = if let Some(bearer) = bearer_token.as_deref() {
+        // Bearer 提供即以 Bearer 判定（不回落 Cookie——客户端显式出示
+        // 凭据时结果须确定，免 fail-open 组合读法）
+        verify_primary_token(&state, bearer).await
+    } else {
+        session_cookie_valid(&state, session_token.as_deref()).await
+    };
     (
         StatusCode::OK,
         Json(json!({
@@ -357,12 +371,54 @@ pub async fn logout(State(state): State<Arc<AppState>>, req: Request) -> Respons
 }
 
 /// 认证中间件：业务端点（含 SSE）守门——会话 Cookie 无效 ⇒ 401 统一形状。
+///
+/// Story 16.3 叠加通道：`Authorization: Bearer <token>` 有效 ⇒ 放行（校验
+/// 引导主令牌，非会话表）。Bearer 提供但无效 ⇒ 401（不回落 Cookie——
+/// 客户端显式出示凭据时结果须确定）。无 Authorization 头 ⇒ Cookie 路径
+/// 零变化（与 15.4 逐语义一致）。
 pub async fn require_auth(
     State(state): State<Arc<AppState>>,
     req: Request,
     next: Next,
 ) -> Response {
-    // 注意：Body 为 !Sync——先同步提取 Cookie 再入异步校验
+    // 注意：Body 为 !Sync——先同步提取凭据再入异步校验
+    if let Some(bearer) = extract_bearer_token(&req) {
+        if !verify_primary_token(&state, &bearer).await {
+            return unauthorized();
+        }
+        return next.run(req).await;
+    }
+    let session_token = extract_session_token(&req);
+    if !session_cookie_valid(&state, session_token.as_deref()).await {
+        return unauthorized();
+    }
+    next.run(req).await
+}
+
+/// SSE 事件流专用认证（Story 16.3）：三通道——Bearer 主令牌 / 一次性
+/// 票据（`?ticket=`，EventSource 无法带自定义头）/ 会话 Cookie。
+///
+/// 票据通道：存在即校验并**消费**（单次使用）——有效放行、无效/过期 ⇒
+/// 401（不回落其他通道：票据是显式出示的凭据）。票据只在 `/api/events`
+/// 路由接受（本中间件不挂业务命令面——命令通道无 EventSource 约束）。
+pub async fn require_auth_with_sse_ticket(
+    State(state): State<Arc<AppState>>,
+    req: Request,
+    next: Next,
+) -> Response {
+    if let Some(bearer) = extract_bearer_token(&req) {
+        if !verify_primary_token(&state, &bearer).await {
+            return unauthorized();
+        }
+        return next.run(req).await;
+    }
+    if let Some(ticket) = extract_query_ticket(&req) {
+        if !state.sse_tickets.consume(&ticket) {
+            return unauthorized();
+        }
+        return next.run(req).await;
+    }
+    // Cookie 路径（浏览器 EventSource 既有语义零变化）
     let session_token = extract_session_token(&req);
     if !session_cookie_valid(&state, session_token.as_deref()).await {
         return unauthorized();
@@ -382,6 +438,51 @@ fn extract_session_token(req: &Request) -> Option<String> {
         .find(|(name, _)| *name == SESSION_COOKIE)
         .map(|(_, value)| value.to_string())
         .filter(|value| !value.is_empty())
+}
+
+/// 同步提取 `Authorization: Bearer <token>` 值（Story 16.3 叠加通道）。
+///
+/// scheme 大小写不敏感（RFC 9110）；无 Authorization 头 / 非 Bearer /
+/// 空令牌 ⇒ None（调用方回落 Cookie 通道）。
+fn extract_bearer_token(req: &Request) -> Option<String> {
+    let value = req.headers().get(header::AUTHORIZATION)?.to_str().ok()?;
+    let (scheme, token) = value.split_once(' ')?;
+    if !scheme.eq_ignore_ascii_case("bearer") {
+        return None;
+    }
+    let token = token.trim();
+    if token.is_empty() {
+        return None;
+    }
+    Some(token.to_string())
+}
+
+/// 同步提取查询参数 `ticket` 值（SSE 一次性票据通道）。
+fn extract_query_ticket(req: &Request) -> Option<String> {
+    let query = req.uri().query()?;
+    query.split('&').find_map(|pair| {
+        let (key, value) = pair.split_once('=')?;
+        (key == "ticket" && !value.is_empty()).then(|| value.to_string())
+    })
+}
+
+/// 引导主令牌校验（Bearer 通道——与 login 同源逻辑，**非会话表**）：
+/// env 态常时比对（SHA256 摘要常时比较）；库态 Argon2id（哈希缺失 ⇒
+/// 未初始化 ⇒ false）。
+///
+/// 性能口径：env 态亚毫秒；库态每请求一次 Argon2id（桌面远程单用户
+/// 低 QPS，规格钉死「校验 env/Argon2id 主令牌，非会话表」——不走
+/// Cookie 会话换发通道）。
+async fn verify_primary_token(state: &Arc<AppState>, token: &str) -> bool {
+    match state.auth.env_token.as_deref() {
+        // env 态：仅常时比对 env（优先级冻结，无 fail-open）
+        Some(env_token) => constant_time_eq_token(token, env_token),
+        // 库态：Argon2id 校验（哈希缺失 ⇒ 未初始化 ⇒ 拒绝）
+        None => match app_settings::get_setting(&state.auth.pool, TOKEN_HASH_SETTING_KEY).await {
+            Ok(Some(phc)) => verify_token_argon2id(token, &phc),
+            _ => false,
+        },
+    }
 }
 
 /// 会话 Cookie 校验：SHA256 → auth_sessions 主键查找（跨重启/跨凭据形态

@@ -11,6 +11,20 @@ export type UnlistenFn = () => void;
 export type ConnectionState = 'connecting' | 'online' | 'reconnecting';
 
 /**
+ * 桌面引导配置（Story 16.3——Rust `desktop_get_boot_config` 同形契约）。
+ *
+ * - `mode`：`'local'` | `'remote'`（进程生命周期内恒定，切换必经重启）；
+ * - `remoteUrl`：远程实例 base URL（local 态保留作下次切换预填）；
+ * - `remoteToken`：远程实例主令牌（仅 remote 态由 keyring 读出；本地态
+ *   为 null——本地引导零 keyring I/O）。
+ */
+export interface DesktopBootConfig {
+  mode: 'local' | 'remote';
+  remoteUrl: string | null;
+  remoteToken: string | null;
+}
+
+/**
  * `/api/auth/status` 返回形状（Story 16.1 类型化）。
  *
  * - `setupRequired`：无 env 令牌且库内无哈希（首访引导）——env 锁定态与

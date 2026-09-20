@@ -93,6 +93,55 @@ impl Client {
         req.send().await.expect("GET 请求")
     }
 
+    /// GET（带可选 Bearer 令牌与可选 Origin——Story 16.3 桌面远程通道）。
+    pub async fn get_bearer(
+        &self,
+        url: &str,
+        bearer: Option<&str>,
+        origin: Option<&str>,
+    ) -> reqwest::Response {
+        let mut req = self.inner.get(url);
+        if let Some(bearer) = bearer {
+            req = req.bearer_auth(bearer);
+        }
+        if let Some(origin) = origin {
+            req = req.header(reqwest::header::ORIGIN, origin);
+        }
+        req.send().await.expect("GET 请求（Bearer）")
+    }
+
+    /// OPTIONS（CORS preflight 探测——Story 16.3）。
+    pub async fn options(&self, url: &str, origin: Option<&str>) -> reqwest::Response {
+        let mut req = self.inner.request(reqwest::Method::OPTIONS, url);
+        if let Some(origin) = origin {
+            req = req.header(reqwest::header::ORIGIN, origin);
+            // 预检必带 Access-Control-Request-Method（浏览器形态）
+            req = req.header("Access-Control-Request-Method", "POST");
+        }
+        req.send().await.expect("OPTIONS 请求")
+    }
+
+    /// POST JSON（带可选 Bearer 令牌与可选 Origin——Story 16.3）。
+    pub async fn post_json_bearer<T: serde::Serialize>(
+        &self,
+        url: &str,
+        body: Option<&T>,
+        bearer: Option<&str>,
+        origin: Option<&str>,
+    ) -> reqwest::Response {
+        let mut req = self.inner.post(url);
+        if let Some(body) = body {
+            req = req.json(body);
+        }
+        if let Some(bearer) = bearer {
+            req = req.bearer_auth(bearer);
+        }
+        if let Some(origin) = origin {
+            req = req.header(reqwest::header::ORIGIN, origin);
+        }
+        req.send().await.expect("POST 请求（Bearer）")
+    }
+
     /// POST JSON（带可选会话 Cookie 与可选 Origin）。
     pub async fn post_json<T: serde::Serialize>(
         &self,

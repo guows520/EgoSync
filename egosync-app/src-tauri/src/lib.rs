@@ -38,14 +38,57 @@ pub fn run() {
         .with(fmt_file)
         .try_init();
 
-    tauri::Builder::default()
-        .setup(|app| {
+    // ── Story 16.3：模式预读（builder 构造前） ──
+    // 模式事实源在 DB 外（desktop-mode.json——远程模式不打开 egosync.db，
+    // app_settings 表在引擎启动后才可得，先有鸡问题）。此处的
+    // app_data_dir 派生与 tauri PathResolver desktop 实现同式
+    // （`dirs::data_dir()/identifier`），与 setup 内 `app.path().app_data_dir()`
+    // 指向同一目录。
+    // 预读结果决定两件事：invoke_handler 注册面（远程 = 仅壳命令）与
+    // setup 装配序列（远程 = 引擎整体跳过）——模式在进程生命周期内恒定
+    // （切换必经重启，见 remote_mode_restart）。
+    let context = tauri::generate_context!();
+    let pre_app_data_dir = dirs::data_dir().map(|dir| dir.join(&context.config().identifier));
+    let boot_mode = pre_app_data_dir
+        .as_deref()
+        .map(services::desktop_mode::read_mode)
+        .unwrap_or(services::desktop_mode::DesktopMode::Local);
+    let remote_mode = boot_mode.is_remote();
+    if remote_mode {
+        tracing::info!(
+            "桌面远程模式（desktop-mode.json=remote）：本地引擎装配整体跳过，桌面 = 远端实例客户端"
+        );
+    }
+
+    // invoke_handler 注册面按模式二选一：远程模式仅注册双模式壳命令
+    // （desktop_mode 三命令零引擎 state 依赖；远程态引擎 state 未 manage，
+    // 业务命令在此模式物理不可达，不得注册——取未 manage 的 state 会
+    // panic）。
+    let builder = if remote_mode {
+        tauri::Builder::default().invoke_handler(tauri::generate_handler![
+            commands::desktop_mode::desktop_get_boot_config,
+            commands::desktop_mode::remote_mode_save_config,
+            commands::desktop_mode::remote_mode_restart,
+        ])
+    } else {
+        tauri::Builder::default()
+        .setup(move |app| {
             // Windows: 移除 DWM 边框，消除无边框窗口左/下/右的黑色边线
             #[cfg(target_os = "windows")]
             {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.set_shadow(false);
                 }
+            }
+
+            // ── Story 16.3：远程模式守卫（架构裁决 B：LOCAL→REMOTE 守卫 =
+            // 本地引擎完整停机；重启式切换以进程退出达成，强于运行中停机）。
+            // 引擎装配整体跳过 = 远程模式零本地业务写入：不打开
+            // egosync.db/conversations.db、不写 opencode-workspace、不启
+            // sidecar/调度器/伴侣/委派桥/双 watch。前端经壳命令
+            // desktop_get_boot_config 获取 remoteUrl/keyring 令牌直连远端。
+            if remote_mode {
+                return Ok(());
             }
 
             let app_data_dir = app
@@ -456,6 +499,11 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            // Story 16.3：双模式壳命令（本地态同样注册——本地→远程切换入口；
+            // 远程态见上方 builder 分支）
+            commands::desktop_mode::desktop_get_boot_config,
+            commands::desktop_mode::remote_mode_save_config,
+            commands::desktop_mode::remote_mode_restart,
             commands::secret::secret_store_save,
             commands::secret::secret_store_load,
             commands::secret::secret_store_delete,
@@ -579,10 +627,18 @@ pub fn run() {
             commands::companion::companion_get_relay_addr,
             commands::companion::companion_set_relay_addr,
         ])
-        .build(tauri::generate_context!())
+    };
+
+    builder
+        .build(context)
         .expect("error while building tauri application")
-        .run(|app_handle, event| {
+        .run(move |app_handle, event| {
             if let tauri::RunEvent::Exit = event {
+                // Story 16.3：远程模式 Exit 分支——引擎 state 未 manage，
+                // 不得取（state() 会 panic）；本地引擎从未启动，零清理面。
+                if remote_mode {
+                    return;
+                }
                 tracing::info!("Tauri exiting — stopping opencode sidecar");
                 let cancel = app_handle.state::<CancellationToken>();
                 cancel.cancel();
@@ -633,5 +689,122 @@ mod tests {
             "let legacy_config_path = app_data_dir.join(\"opencode.json\");"
         ));
         assert!(source.contains("purge_legacy_managed_mcp(&legacy_config_path)"));
+    }
+
+    // ── Story 16.3：远程模式装配守卫（源码扫描钉——「重启清理序」与
+    //    远程态注册面不变量；与上方既有源码扫描测试同款纪律） ──
+
+    fn lib_source() -> String {
+        std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs"),
+        )
+        .expect("read lib.rs")
+    }
+
+    #[test]
+    fn remote_mode_restart_cleans_up_before_restart() {
+        // WHY（spec「重启清理序」守卫）：remote_mode_restart 必须在
+        // app.restart() **之前**显式执行既有退出清理（watchdog cancel +
+        // sidecar.stop）——RunEvent::Exit 在 restart 路径不保证触发，
+        // 清理先行是唯一可靠面；且用 try_state（远程态引擎 state 未
+        // manage，state() 会 panic）。commands/desktop_mode.rs 源码序钉。
+        let source = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("src/commands/desktop_mode.rs"),
+        )
+        .expect("read commands/desktop_mode.rs");
+
+        // 清理序：try_state 探测（不 panic）→ cancel → sidecar.stop → restart
+        let cancel_pos = source
+            .find("app.try_state::<CancellationToken>()")
+            .expect("watchdog 取消须以 try_state 探测（远程态未 manage 不 panic）");
+        let sidecar_pos = source
+            .find("app.try_state::<Arc<Mutex<SidecarManager>>>()")
+            .expect("sidecar 停机须以 try_state 探测");
+        let stop_pos = source
+            .find("sidecar.lock().await.stop().await")
+            .expect("sidecar 显式停机调用");
+        // 实调用点（带分号——文档注释中的 `app.restart()` 不带分号）
+        let restart_pos = source
+            .find("app.restart();")
+            .expect("restart 调用点");
+        assert!(cancel_pos < restart_pos, "cancel 须先于 restart");
+        assert!(sidecar_pos < stop_pos, "try_state 探测须先于 stop");
+        assert!(stop_pos < restart_pos, "sidecar.stop 须先于 restart（清理先行）");
+        // 禁用面：不得使用会 panic 的 state()（远程态引擎 state 未 manage）
+        assert!(
+            !source.contains("app.state::<"),
+            "壳命令不得使用 state()——远程态未 manage 会 panic（须 try_state）"
+        );
+    }
+
+    #[test]
+    fn remote_mode_exit_branch_does_not_touch_unmanaged_state() {
+        // WHY（spec Code Map 明示）：远程模式 RunEvent::Exit 分支不得取
+        // 未 manage 的 state（state() 会 panic）——先守卫后清理的序钉。
+        let source = lib_source();
+        let exit_branch = source
+            .find("if let tauri::RunEvent::Exit = event {")
+            .expect("Exit 事件分支存在");
+        let guard = source[exit_branch..]
+            .find("if remote_mode {")
+            .expect("Exit 分支内的远程模式守卫存在");
+        let cleanup = source[exit_branch..]
+            .find("app_handle.state::<CancellationToken>()")
+            .expect("Exit 分支内的本地清理面存在");
+        // 守卫（远程 return）必须先于 state() 取用——远程态先短路
+        assert!(
+            guard < cleanup,
+            "Exit 分支的远程守卫须先于 state() 取用（远程态未 manage，后取会 panic）"
+        );
+    }
+
+    #[test]
+    fn remote_builder_registers_only_dual_mode_shell_commands() {
+        // WHY：远程模式 invoke_handler 只注册双模式壳命令（零引擎 state
+        // 依赖）——业务命令在此模式物理不可达（引擎未装配、state 未
+        // manage），注册即 panic 面。lib.rs 的 builder 分支结构钉。
+        let source = lib_source();
+        let remote_branch = source
+            .find("let builder = if remote_mode {")
+            .expect("模式二选一 builder 分支存在");
+        let local_branch = source
+            .find(".setup(move |app| {")
+            .expect("本地分支 setup 存在");
+        // 远程分支片段（到本地分支为止）只含壳命令注册
+        let remote_fragment = &source[remote_branch..local_branch];
+        assert!(remote_fragment.contains("commands::desktop_mode::desktop_get_boot_config"));
+        assert!(remote_fragment.contains("commands::desktop_mode::remote_mode_save_config"));
+        assert!(remote_fragment.contains("commands::desktop_mode::remote_mode_restart"));
+        // 片段内不得注册任何非 desktop_mode 命令（引擎依赖面零注册）
+        for line in remote_fragment.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("commands::") {
+                assert!(
+                    trimmed.starts_with("commands::desktop_mode::"),
+                    "远程分支只可注册 desktop_mode 壳命令，发现: {}",
+                    trimmed
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn remote_mode_skips_engine_assembly_before_db_open() {
+        // WHY（架构裁决 B 守卫）：远程模式引擎装配整体跳过须发生在
+        // **打开数据库之前**（零本地业务写入的硬前提——init_db 是首个
+        // 本地写入面）。setup 闭包内的守卫序钉。
+        let source = lib_source();
+        let guard = source
+            .find("if remote_mode {\n                return Ok(());")
+            .or_else(|| source.find("if remote_mode {"))
+            .expect("setup 内远程守卫存在");
+        let db_init = source
+            .find("db::pool::init_db(&db_path)")
+            .expect("主库初始化存在");
+        assert!(
+            guard < db_init,
+            "远程守卫须先于 init_db（远程模式零本地业务写入——不打开 egosync.db）"
+        );
     }
 }

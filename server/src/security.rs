@@ -68,6 +68,10 @@ pub async fn security_headers(req: Request, next: Next) -> Response {
 /// Origin 存在而 Host 缺失/不可解析 ⇒ 直接 403（二轮评审 #1：原
 /// `(Some, Some)` 匹配式在该形态下整体跳过检查放行——跨源拒绝冻结
 /// 语义被旁路；同源判定需要宿主，宿主不可得时按不可证明同源处理）。
+///
+/// Story 16.3 白名单豁免：桌面 webview 宿主源（`tauri://localhost` /
+/// `http://tauri.localhost`）显式放行——CORS 层（crate::cors）为白名单
+/// 成员回写放行头；白名单判定两侧同源引用（单一名单，无第二清单）。
 pub async fn reject_cross_origin(req: Request, next: Next) -> Response {
     let origin = req
         .headers()
@@ -81,9 +85,11 @@ pub async fn reject_cross_origin(req: Request, next: Next) -> Response {
         .map(|s| s.to_string());
 
     match (origin, host) {
-        // Origin 存在：必须有可解析 Host 且同源，否则拒绝
+        // Origin 存在：必须有可解析 Host 且（同源或桌面白名单），否则拒绝
         (Some(origin), Some(host)) => {
-            if !is_same_origin(&origin, &host) {
+            if !is_same_origin(&origin, &host)
+                && !crate::cors::is_allowlisted_tauri_origin(&origin)
+            {
                 // 显式拒绝：不带任何 CORS 放行头（不回 Origin/ACAO/ACAC）。
                 return cross_origin_rejected();
             }

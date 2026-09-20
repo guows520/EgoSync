@@ -4,6 +4,7 @@ import { emitFrontendEvent, HttpTransportError, isTauriHost } from '@/transport'
 import { authService } from '../../services/authService';
 import { cn } from '../../lib/utils';
 import { RoleSidebarIcon } from './RoleSidebarIcon';
+import { ConnectionStatus } from './ConnectionStatus';
 
 export function Sidebar({ roles, currentView, onViewChange, isSettingsOpen, onOpenSettings, onCloseSettings, onAddRole, onArchiveRole, onDeleteRole, theme, onToggleTheme, onEditRole, isNotifOpen, onToggleNotif, unreadCount = 0, whisperUnread = 0 }: any) {
   const handleNav = (view: string) => {
@@ -164,6 +165,9 @@ export function Sidebar({ roles, currentView, onViewChange, isSettingsOpen, onOp
         <button onClick={onOpenSettings} title="设置" aria-label="设置" className={cn("w-11 h-11 rounded-xl flex items-center justify-center transition-colors", isSettingsOpen ? "bg-indigo-600 text-white shadow-lg shadow-indigo-200 dark:shadow-indigo-900/50" : "text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 hover:text-slate-700 dark:hover:text-slate-200")}>
           <SettingsIcon size={22} />
         </button>
+        {/* Story 16.2：连接状态徽标（NFR-C7）——常驻低显著度；重连横幅
+            由组件内部 fixed 通栏渲染（挂载点仅定徽标位置）。 */}
+        <ConnectionStatus />
       </div>
 
       {/* Context Menu */}

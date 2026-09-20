@@ -1,5 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { dashboardService } from '../services/dashboardService';
+import { useEngineEvent } from './useEngineEvent';
+import type { TransportReconnectedPayload } from '@/transport';
 import type { DashboardMetrics, DashboardMetricsScope, DashboardStatus } from '../types/dashboard';
 
 const DASHBOARD_LOAD_ERROR = '仪表盘数据加载失败，请稍后再试';
@@ -51,6 +53,36 @@ export function useDashboard() {
       cancelled = true;
     };
   }, []);
+
+  // Story 16.2：重连恢复——dashboard_get_status（无参）在白名单内，直接
+  // 消费重放结果集；statuses 引用更新会触发 metrics 依赖 effect 重拉
+  // （dashboard_get_metrics 带 scope/时间范围参数，不在白名单——以重放
+  // 为触发器定向重查）。重放缺失/失败回退主动重拉状态。
+  useEngineEvent<TransportReconnectedPayload>(
+    'transport:reconnected',
+    useCallback((payload: TransportReconnectedPayload) => {
+      const replayed = payload?.results?.['dashboard_get_status'];
+      if (Array.isArray(replayed)) {
+        setStatuses(replayed as DashboardStatus[]);
+        statusesLoadedRef.current = true;
+        // 评审修复：初载失败的错误横幅须随成功消费清除
+        setError(null);
+        return;
+      }
+      void dashboardService.getStatus()
+        .then(items => {
+          setStatuses(items ?? []);
+          statusesLoadedRef.current = true;
+          setError(null);
+        })
+        .catch(e => {
+          console.error('重连后重拉仪表盘状态失败:', e);
+          // 评审修复：与初载路径一致——重连后重拉失败不静默（NFR-C7）
+          setError(DASHBOARD_LOAD_ERROR);
+        });
+    }, []),
+    []
+  );
 
   useEffect(() => {
     // AC-5 归档角色安全回退：角色列表加载完成后，若 scope 指向的角色不在活跃列表中，回退到 all

@@ -72,7 +72,9 @@ describe('NotificationPanel', () => {
     render(
       <NotificationPanel onClose={onClose} notifications={[]} isLoading={false} markAsRead={vi.fn()} />,
     );
-    fireEvent.click(screen.getByRole('button', { name: '' }));
+    // 评审修复后的可访问名称定位（此前 name:'' 恰好编码了图标按钮
+    // 无可访问名称的 a11y 缺陷——修复后按钮带 aria-label）
+    fireEvent.click(screen.getByRole('button', { name: '关闭通知中心' }));
     expect(onClose).toHaveBeenCalled();
   });
 });

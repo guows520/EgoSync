@@ -38,14 +38,14 @@ export function NotificationPanel({ onClose, notifications, isLoading, markAsRea
 
   return (
     <div
-      className="fixed top-0 right-0 bottom-0 w-[380px] z-50 animate-in slide-in-from-right duration-300"
+      className="fixed top-[max(0px,env(safe-area-inset-top))] right-[max(0px,env(safe-area-inset-right))] bottom-[max(0px,env(safe-area-inset-bottom))] w-full max-w-[380px] z-50 animate-in slide-in-from-right duration-300"
       role="complementary"
       aria-label="通知中心"
     >
       <div className="h-full bg-white dark:bg-slate-900 shadow-2xl border-l border-slate-200 dark:border-slate-700 flex flex-col">
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 dark:border-slate-700 shrink-0">
           <h2 className="text-[16px] font-semibold text-slate-800 dark:text-slate-100 flex items-center gap-2"><Bell size={18} /> 通知中心</h2>
-          <button onClick={onClose} className="p-1.5 text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors"><X size={18} /></button>
+          <button onClick={onClose} aria-label="关闭通知中心" className="p-1.5 text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors"><X size={18} /></button>
         </div>
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
           {isLoading && (

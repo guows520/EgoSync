@@ -90,7 +90,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
   if (state === 'checking') {
     // 真实浏览器由 #egosync-splash 覆盖；无 splash 环境（测试）的兜底呈现
     return (
-      <div className="h-screen flex items-center justify-center bg-[#F1F3F5] dark:bg-slate-800">
+      <div className="h-screen supports-[height:100dvh]:h-dvh flex items-center justify-center bg-[#F1F3F5] dark:bg-slate-800">
         <div className="text-slate-400 text-[14px]">正在检查登录状态...</div>
       </div>
     );
@@ -98,7 +98,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
   if (state === 'offline') {
     return (
-      <div className="h-screen flex flex-col items-center justify-center bg-[#F1F3F5] dark:bg-slate-800">
+      <div className="h-screen supports-[height:100dvh]:h-dvh flex flex-col items-center justify-center bg-[#F1F3F5] dark:bg-slate-800">
         <div className="max-w-md text-center space-y-6 p-8">
           <div className="text-slate-600 dark:text-slate-300 text-[14px] leading-relaxed">
             {offlineMessage}

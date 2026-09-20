@@ -5,6 +5,10 @@ import type { DashboardStatus } from '../../types/dashboard';
 
 vi.mock('@/transport', () => ({
   invoke: vi.fn(),
+  // Story 16.2：useDashboard 订阅 transport:reconnected——注册成功、零事件投递
+  getTransport: () => ({
+    on: () => () => {},
+  }),
 }));
 
 vi.mock('../../lib/roleIcons', () => ({

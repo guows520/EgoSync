@@ -77,7 +77,7 @@ export function SetupView({ onSuccess, onSwitchToLogin }: SetupViewProps) {
   };
 
   return (
-    <div className="h-screen flex flex-col items-center justify-center bg-[#F1F3F5] dark:bg-slate-800 transition-colors duration-300">
+    <div className="h-screen supports-[height:100dvh]:h-dvh flex flex-col items-center justify-center bg-[#F1F3F5] dark:bg-slate-800 transition-colors duration-300">
       <div className="max-w-md w-full mx-4 text-center space-y-6 p-8">
         <div className="w-16 h-16 rounded-2xl bg-slate-800 dark:bg-indigo-600 text-white flex items-center justify-center mx-auto shadow-sm">
           <Home size={32} strokeWidth={2} />

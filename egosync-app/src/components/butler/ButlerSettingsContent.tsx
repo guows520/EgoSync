@@ -1279,7 +1279,7 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
 
       {deleteSkillTarget && (
         <div className="fixed inset-0 z-[220] flex items-center justify-center bg-slate-900/20 backdrop-blur-sm">
-          <div role="dialog" aria-modal="true" aria-label="删除自定义 Skill" className="w-[380px] rounded-2xl bg-white dark:bg-slate-800 p-6 shadow-2xl">
+          <div role="dialog" aria-modal="true" aria-label="删除自定义 Skill" className="w-[380px] max-md:w-[calc(100%-2rem)] rounded-2xl bg-white dark:bg-slate-800 p-6 shadow-2xl">
             <h3 className="mb-3 text-[16px] font-semibold text-slate-800 dark:text-slate-100">删除自定义 Skill</h3>
             <p className="mb-5 text-[14px] leading-relaxed text-slate-600 dark:text-slate-300">
               确认删除「{deleteSkillTarget.name}」吗？
@@ -1306,7 +1306,7 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
             aria-modal="true"
             aria-label="编辑使命宣言"
             onClick={e => e.stopPropagation()}
-            className="w-[640px] max-h-[85vh] overflow-y-auto rounded-2xl bg-white dark:bg-slate-800 p-6 shadow-2xl"
+            className="w-[640px] max-md:w-[calc(100%-2rem)] max-h-[85vh] overflow-y-auto rounded-2xl bg-white dark:bg-slate-800 p-6 shadow-2xl"
           >
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-[16px] font-semibold text-slate-800 dark:text-slate-100">编辑使命宣言</h3>
@@ -1432,7 +1432,7 @@ export function ButlerSettingsContent({ activeRoles = [], archivedRoles = [], on
             aria-modal="true"
             aria-label="推断的使命宣言"
             onClick={e => e.stopPropagation()}
-            className="w-[480px] rounded-2xl bg-white dark:bg-slate-800 p-6 shadow-2xl"
+            className="w-[480px] max-md:w-[calc(100%-2rem)] rounded-2xl bg-white dark:bg-slate-800 p-6 shadow-2xl"
           >
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-[16px] font-semibold text-slate-800 dark:text-slate-100">基于行为推断的使命宣言</h3>

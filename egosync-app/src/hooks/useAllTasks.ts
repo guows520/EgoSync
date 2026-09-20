@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { taskService } from '../services/taskService';
 import type { AllTasksFilter, CreateTaskInput, CrossRoleTask, Task, UpdateTaskInput } from '../types/task';
 import { useEngineEvent } from './useEngineEvent';
+import type { TransportReconnectedPayload } from '@/transport';
 
 const TASK_LOAD_ERROR = '任务暂时加载失败，请稍后再试';
 const TASK_CLASSIFIED_EVENT = 'task:classified';
@@ -60,6 +61,27 @@ export function useAllTasks(filter: AllTasksFilter = {}) {
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
+  );
+
+  // Story 16.2：重连恢复——task_list_all 在白名单内，但当前视图带
+  // quadrant/isBigRock 筛选（带参命令）时不消费重放结果，一律重拉保
+  // 筛选语义正确；无筛选时直接消费结果集避免重复查询。写入类零重放。
+  useEngineEvent<TransportReconnectedPayload>(
+    'transport:reconnected',
+    useCallback((payload: TransportReconnectedPayload) => {
+      const unfiltered = filter.quadrant === undefined && filter.isBigRock === undefined;
+      const replayed = payload?.results?.['task_list_all'];
+      if (unfiltered && Array.isArray(replayed)) {
+        setTasks(replayed as CrossRoleTask[]);
+        // 评审修复：初载失败的错误横幅须随成功消费清除（回退路径经
+        // reloadKey 走载入 effect，其自带 setError(null)，无需处理）
+        setError(null);
+        return;
+      }
+      setReloadKey(key => key + 1);
+    }, [stableFilterKey]),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [stableFilterKey],
   );
 
   const refetch = useCallback(() => {

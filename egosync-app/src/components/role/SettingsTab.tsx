@@ -1061,7 +1061,7 @@ export function SettingsTab({
 
       {deleteSkillTarget && (
         <div className="fixed inset-0 z-[220] flex items-center justify-center bg-slate-900/20 backdrop-blur-sm">
-          <div role="dialog" aria-modal="true" aria-label="删除自定义 Skill" className="w-[380px] rounded-2xl bg-white dark:bg-slate-800 p-6 shadow-2xl">
+          <div role="dialog" aria-modal="true" aria-label="删除自定义 Skill" className="w-[380px] max-md:w-[calc(100%-2rem)] rounded-2xl bg-white dark:bg-slate-800 p-6 shadow-2xl">
             <h3 className="mb-3 text-[16px] font-semibold text-slate-800 dark:text-slate-100">删除自定义 Skill</h3>
             <p className="mb-5 text-[14px] leading-relaxed text-slate-600 dark:text-slate-300">
               确认删除「{deleteSkillTarget.name}」吗？该 Skill 将从所有角色和管家中删除。

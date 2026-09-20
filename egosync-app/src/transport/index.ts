@@ -20,6 +20,7 @@ export type {
 } from './types';
 export { HttpTransportError } from './types';
 export { FRONTEND_LOCAL_EVENTS, isFrontendLocalEvent } from './localEvents';
+export type { TransportReconnectedPayload } from './localEvents';
 export { TRANSPORT_CAPABILITIES, isDesktopOnly, isWebCommand } from './capabilities';
 
 /** Tauri 宿主探测（WebView 注入 `__TAURI_INTERNALS__`）。 */

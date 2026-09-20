@@ -2357,3 +2357,357 @@ describe('ChatStream Skill 选择 (Story 10.1)', () => {
     await waitFor(() => expect(skillService.listSelectableForScope).toHaveBeenCalledTimes(2));
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Story 16.2：流式中途刷新恢复（is_complete=false 占位 / 去重 / transport:reconnected 定向重拉）
+//
+// 服务端是事实源：刷新后历史重拉，未完成助手行（chat_send_message 插入、
+// 终止时才落库完成）呈「生成中」占位而非空气泡；流仍在进行则后续 token
+// 帧按 messageId 归位且不与历史占位行双显；done 后以服务端全文补齐。
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('ChatStream 流式中途刷新恢复（Story 16.2）', () => {
+  /** 按事件名捕获 useEngineEvent 订阅的 handler（llm:stream / transport:reconnected）。 */
+  function captureEventHandlers() {
+    const handlersByEvent = new Map<string, (payload: unknown) => void>();
+    vi.mocked(useEngineEvent).mockImplementation(((event: string, cb: (payload: unknown) => void) => {
+      handlersByEvent.set(event, cb);
+    }) as typeof useEngineEvent);
+    return handlersByEvent;
+  }
+
+  /** 刷新后的典型历史：完整 user 消息 + is_complete=false 空内容 assistant 占位行。 */
+  function historyWithPendingRow(pendingId = 'assistant-pending') {
+    return [
+      chatMessage({ id: 'user-1', role: 'user', content: '帮我看看任务' }),
+      chatMessage({ id: pendingId, role: 'assistant', content: '', isComplete: false }),
+    ];
+  }
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.mocked(chatService.getHistory).mockResolvedValue([]);
+    vi.mocked(chatService.listConversations).mockResolvedValue([]);
+    vi.mocked(chatService.getMessageProcessEvents).mockResolvedValue([]);
+    vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
+  });
+
+  it('is_complete=false 的 assistant 行呈「生成中」占位（非空气泡）', async () => {
+    vi.mocked(chatService.getHistory).mockResolvedValue(historyWithPendingRow());
+
+    render(<ChatStream role={null} />);
+
+    const placeholder = await screen.findByTestId('pending-generation-placeholder');
+    expect(placeholder).toHaveTextContent('生成中');
+  });
+
+  it('无帧到达则占位停留，不伪造内容', async () => {
+    vi.mocked(chatService.getHistory).mockResolvedValue(historyWithPendingRow());
+
+    render(<ChatStream role={null} />);
+
+    await screen.findByTestId('pending-generation-placeholder');
+    // 无帧到达（流已死或未恢复）：占位停留——诚实呈现服务端状态
+    await act(async () => { });
+    expect(screen.getByTestId('pending-generation-placeholder')).toBeInTheDocument();
+  });
+
+  it('流仍在进行时后续 token 帧归位：占位行让位（不双显）', async () => {
+    vi.mocked(chatService.getHistory).mockResolvedValue(historyWithPendingRow());
+    const handlers = captureEventHandlers();
+    const deliver = (payload: StreamPayload) =>
+      act(() => { (handlers.get('llm:stream') as (p: StreamPayload) => void)(payload); });
+
+    render(<ChatStream role={null} />);
+    await screen.findByTestId('pending-generation-placeholder');
+
+    await deliver({ conversationId: 'conv-butler', token: '后到的回复内容', done: false, thinking: false });
+
+    // 实时流式渲染已是该行的呈现——历史占位行隐藏（去重规则B）
+    expect(screen.queryByTestId('pending-generation-placeholder')).toBeNull();
+    expect(screen.getByText('后到的回复内容')).toBeInTheDocument();
+  });
+
+  it('活跃流式桶 id 与占位行 id 相同时按 messageId 归位去重（规则A）', async () => {
+    vi.mocked(chatService.getHistory).mockResolvedValue([
+      ...historyWithPendingRow('assistant-a'),
+      chatMessage({ id: 'assistant-busy', role: 'assistant', content: '我还在想上一个问题，请稍等片刻...' }),
+    ]);
+    const handlers = captureEventHandlers();
+
+    render(<ChatStream role={null} />);
+    await screen.findByTestId('pending-generation-placeholder');
+
+    await act(() => {
+      (handlers.get('llm:stream') as (p: StreamPayload) => void)({
+        conversationId: 'conv-butler',
+        token: '委派后续内容',
+        done: false,
+        thinking: false,
+        messageId: 'assistant-a',
+      });
+    });
+
+    // 桶 id === 占位行 id（委派 follow-up 帧）——实时桶呈现，历史行隐藏
+    expect(screen.queryByTestId('pending-generation-placeholder')).toBeNull();
+    expect(screen.getByText('委派后续内容')).toBeInTheDocument();
+    // 其余历史行如实呈现（busy 消息不受去重影响）
+    expect(screen.getByText('我还在想上一个问题，请稍等片刻...')).toBeInTheDocument();
+  });
+
+  it('更早的死流占位行不受在途流影响（用户消息边界）', async () => {
+    vi.mocked(chatService.getHistory).mockResolvedValue([
+      chatMessage({ id: 'user-1', role: 'user', content: '第一问' }),
+      chatMessage({ id: 'assistant-old', role: 'assistant', content: '', isComplete: false }),
+      chatMessage({ id: 'user-2', role: 'user', content: '第二问' }),
+      chatMessage({ id: 'assistant-new', role: 'assistant', content: '', isComplete: false }),
+    ]);
+    const handlers = captureEventHandlers();
+
+    render(<ChatStream role={null} />);
+    // 无帧：两个占位行均如实呈现「生成中」
+    await waitFor(() => {
+      expect(screen.getAllByTestId('pending-generation-placeholder')).toHaveLength(2);
+    });
+
+    await act(() => {
+      (handlers.get('llm:stream') as (p: StreamPayload) => void)({
+        conversationId: 'conv-butler',
+        token: '第二问的回复',
+        done: false,
+        thinking: false,
+      });
+    });
+
+    // 在途流只让位末位占位行（其后的用户消息即边界）；死流行停留
+    expect(screen.getAllByTestId('pending-generation-placeholder')).toHaveLength(1);
+    expect(screen.getByText('第二问的回复')).toBeInTheDocument();
+  });
+
+  it('done 后以服务端全文补齐：就地补全 + 历史重拉替换，不双显不丢内容', async () => {
+    vi.mocked(chatService.getHistory)
+      .mockResolvedValueOnce(historyWithPendingRow())
+      .mockResolvedValueOnce([
+        chatMessage({ id: 'user-1', role: 'user', content: '帮我看看任务' }),
+        chatMessage({ id: 'assistant-pending', role: 'assistant', content: '服务端全文回复（含刷新前 token）' }),
+      ]);
+    const handlers = captureEventHandlers();
+    const deliver = (payload: StreamPayload) =>
+      act(() => { (handlers.get('llm:stream') as (p: StreamPayload) => void)(payload); });
+
+    render(<ChatStream role={null} />);
+    await screen.findByTestId('pending-generation-placeholder');
+
+    await deliver({ conversationId: 'conv-butler', token: '刷新后收到的部分', done: false, thinking: false });
+    await deliver({ conversationId: 'conv-butler', token: '', done: true, thinking: false });
+
+    // 历史重拉后以服务端权威全文呈现；本地部分内容被替换（不双显）
+    expect(await screen.findByText('服务端全文回复（含刷新前 token）')).toBeInTheDocument();
+    expect(screen.queryByText('刷新后收到的部分')).toBeNull();
+    expect(screen.queryByTestId('pending-generation-placeholder')).toBeNull();
+  });
+
+  it('transport:reconnected 定向重拉当前会话历史（带参命令不在白名单）', async () => {
+    vi.mocked(chatService.getHistory)
+      .mockResolvedValueOnce(historyWithPendingRow())
+      .mockResolvedValueOnce([
+        chatMessage({ id: 'user-1', role: 'user', content: '帮我看看任务' }),
+        chatMessage({ id: 'assistant-pending', role: 'assistant', content: '重连后落库的完整回复' }),
+      ]);
+    const handlers = captureEventHandlers();
+
+    render(<ChatStream role={null} />);
+    await screen.findByTestId('pending-generation-placeholder');
+    expect(chatService.getHistory).toHaveBeenCalledTimes(1);
+
+    await act(() => {
+      (handlers.get('transport:reconnected') as (p: { results: Record<string, unknown> }) => void)({
+        results: {},
+      });
+    });
+
+    // 重连后定向重拉当前会话（chat_get_history 带参不在重放白名单）
+    await waitFor(() => expect(chatService.getHistory).toHaveBeenCalledTimes(2));
+    expect(chatService.getHistory).toHaveBeenLastCalledWith('conv-butler');
+    expect(await screen.findByText('重连后落库的完整回复')).toBeInTheDocument();
+  });
+
+  it('transport:reconnected 优先消费白名单重放结果集（会话列表不重复查询）', async () => {
+    vi.mocked(chatService.getHistory).mockResolvedValue(historyWithPendingRow());
+    vi.mocked(chatService.listConversations).mockResolvedValue([]);
+    const handlers = captureEventHandlers();
+
+    render(<ChatStream role={null} />);
+    await screen.findByTestId('pending-generation-placeholder');
+    const listCallsAfterLoad = vi.mocked(chatService.listConversations).mock.calls.length;
+
+    await act(() => {
+      (handlers.get('transport:reconnected') as (p: { results: Record<string, unknown> }) => void)({
+        results: { chat_list_conversations: [butlerConv] },
+      });
+    });
+    await waitFor(() => expect(chatService.getHistory).toHaveBeenCalledTimes(2));
+
+    // 重放结果集直接消费——不重复查询 chat_list_conversations
+    expect(vi.mocked(chatService.listConversations).mock.calls.length).toBe(listCallsAfterLoad);
+  });
+});
+
+// Story 16.2 评审修复：占位谓词补全 / 流式中断线复位 / convId 空重试 / 角色过滤
+describe('ChatStream 重连恢复评审修复（Story 16.2 Review）', () => {
+  function captureEventHandlers() {
+    const handlersByEvent = new Map<string, (payload: unknown) => void>();
+    vi.mocked(useEngineEvent).mockImplementation(((event: string, cb: (payload: unknown) => void) => {
+      handlersByEvent.set(event, cb);
+    }) as typeof useEngineEvent);
+    return handlersByEvent;
+  }
+
+  function historyWithPendingRow(pendingId = 'assistant-pending') {
+    return [
+      chatMessage({ id: 'user-1', role: 'user', content: '帮我看看任务' }),
+      chatMessage({ id: pendingId, role: 'assistant', content: '', isComplete: false }),
+    ];
+  }
+
+  const suggestionFixture = {
+    id: 'sugg-1',
+    roleId: 'role-1',
+    title: '建议标题',
+    content: '建议内容',
+    priority: 'medium' as const,
+    status: 'pending' as const,
+    rejectionReason: null,
+    convertedTaskId: null,
+    conversationId: null,
+    createdAt: '2026-01-02T00:00:00Z',
+    roleName: '产品经理',
+    roleIcon: 'briefcase',
+    roleColor: '#4F46E5',
+  };
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.mocked(chatService.getHistory).mockResolvedValue([]);
+    vi.mocked(chatService.listConversations).mockResolvedValue([]);
+    vi.mocked(chatService.getMessageProcessEvents).mockResolvedValue([]);
+    vi.mocked(chatService.getButlerConversation).mockResolvedValue(butlerConv);
+    vi.mocked(chatService.getRoleConversation).mockResolvedValue(roleConv);
+  });
+
+  it('建议卡与未完成助手行同屏时仍呈「生成中」占位（showActions 分支谓词补全）', async () => {
+    vi.mocked(chatService.getHistory).mockResolvedValue(historyWithPendingRow());
+
+    render(
+      <ChatStream
+        role={null}
+        suggestions={[suggestionFixture]}
+        onConfirmSuggestion={vi.fn()}
+        onRejectSuggestion={vi.fn()}
+        onDismissSuggestion={vi.fn()}
+      />,
+    );
+
+    // 评审修复前：showActions 分支的 renderMessage 未传 isPendingResume，
+    // 建议卡在场时占位行渲染回空气泡
+    const placeholder = await screen.findByTestId('pending-generation-placeholder');
+    expect(placeholder).toHaveTextContent('生成中');
+  });
+
+  it('流式中途收到 transport:reconnected 时复位流式态并解锁输入（死流不再卡死）', async () => {
+    const handlers = captureEventHandlers();
+    vi.mocked(chatService.sendMessage).mockImplementation(() => new Promise(() => {}));
+
+    render(<ChatStream role={null} />);
+    const input = await screen.findByPlaceholderText('跟 管家 说点什么，比如：查看一下我有哪些任务…');
+    fireEvent.change(input, { target: { value: '开始处理' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await waitFor(() => expect(input).toBeDisabled());
+
+    // 服务器重启（done 永不再来）后 SSE 重连——流式态必须复位
+    await act(() => {
+      (handlers.get('transport:reconnected') as (p: unknown) => void)({ results: {} });
+    });
+
+    await waitFor(() => expect(input).toBeEnabled());
+  });
+
+  it('convId 为空（初次解析在断线期间失败）时重连重走初始化路径', async () => {
+    const handlers = captureEventHandlers();
+    // 首次解析失败（页面在服务端宕机期间加载）
+    vi.mocked(chatService.getButlerConversation).mockRejectedValueOnce(new Error('network down'));
+
+    render(<ChatStream role={null} />);
+    await waitFor(() => expect(chatService.getButlerConversation).toHaveBeenCalledTimes(1));
+    // 初始化失败：conversationIdRef 仍为 null，输入禁用
+    expect(screen.getByPlaceholderText('跟 管家 说点什么，比如：查看一下我有哪些任务…')).toBeDisabled();
+
+    // 服务器回来——重连必须重试初始化（评审修复前：早退，聊天区永久空白）
+    await act(() => {
+      (handlers.get('transport:reconnected') as (p: unknown) => void)({ results: {} });
+    });
+
+    await waitFor(() => {
+      expect(chatService.getButlerConversation).toHaveBeenCalledTimes(2);
+      expect(chatService.getHistory).toHaveBeenCalledWith('conv-butler');
+    });
+    await waitFor(() =>
+      expect(screen.getByPlaceholderText('跟 管家 说点什么，比如：查看一下我有哪些任务…')).toBeEnabled(),
+    );
+  });
+
+  it('角色视图下重放会话列表按 roleId 过滤（不串台他角色会话）', async () => {
+    const handlers = captureEventHandlers();
+    vi.mocked(chatService.getHistory).mockResolvedValue([]);
+
+    render(<ChatStream role={baseRole} />);
+    await waitFor(() => expect(chatService.getRoleConversation).toHaveBeenCalledWith('role-1'));
+    // 无参重放返回全部会话：本角色 1 条 + 他角色 1 条 + 管家 1 条
+    await act(() => {
+      (handlers.get('transport:reconnected') as (p: { results: Record<string, unknown> }) => void)({
+        results: {
+          chat_list_conversations: [
+            { ...roleConv, title: '本角色的对话' },
+            { id: 'conv-role-2', roleId: 'role-2', title: '他角色的对话', startedAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' },
+            { ...butlerConv, title: '管家的对话' },
+          ],
+        },
+      });
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /历史对话/ }));
+    // 只见本角色会话——他角色与管家会话不串台
+    expect(screen.getByText('本角色的对话')).toBeInTheDocument();
+    expect(screen.queryByText('他角色的对话')).toBeNull();
+    expect(screen.queryByText('管家的对话')).toBeNull();
+  });
+
+  // 评审修复（e2e 取证补充）：启动窗口内瞬时 REST 失败 → 有限重试自愈，
+  // 不再永久空白（e2e 复现 bodyTextLen=86 空聊天死态——服务端 busy 与
+  // 刷新后的启动请求竞争，单次失败即死态）。
+  it('初始化瞬时失败后有限重试自愈（1.5s 退避 ×2，代际守卫取消）', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      vi.mocked(chatService.getButlerConversation)
+        .mockRejectedValueOnce(new Error('transient 1'))
+        .mockRejectedValueOnce(new Error('transient 2'))
+        .mockResolvedValue(butlerConv);
+      vi.mocked(chatService.getHistory).mockResolvedValue(
+        historyWithPendingRow('assistant-retry'),
+      );
+
+      render(<ChatStream role={null} />);
+
+      // 两次瞬时失败 + 第三次成功 → 占位行最终呈现（重试自愈）
+      const placeholder = await screen.findByTestId('pending-generation-placeholder', {}, { timeout: 6000 });
+      expect(placeholder).toHaveTextContent('生成中');
+      expect(chatService.getButlerConversation).toHaveBeenCalledTimes(3);
+      // 输入解锁（会话解析成功）
+      await waitFor(() =>
+        expect(screen.getByPlaceholderText('跟 管家 说点什么，比如：查看一下我有哪些任务…')).toBeEnabled(),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

@@ -4,9 +4,14 @@ import { cn } from '../../lib/utils';
 export interface ModalProps {
   children: React.ReactNode;
   onClose: () => void;
+  /** 期望宽度（Tailwind w-* class）。375px 级移动视口下统一收缩为
+   *  w-[calc(100%-2rem)]（Story 16.2 响应式基线），桌面宽度不变。 */
   width?: string;
   ariaLabel: string;
 }
+
+/** 移动视口断点下的统一宽度（与视口留 16px 两侧边距）。 */
+const MODAL_MOBILE_WIDTH = 'max-md:w-[calc(100%-2rem)] max-md:max-w-none';
 
 export function Modal({ children, onClose, width = "w-[540px]", ariaLabel }: ModalProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -51,7 +56,7 @@ export function Modal({ children, onClose, width = "w-[540px]", ariaLabel }: Mod
         aria-modal="true"
         aria-label={ariaLabel}
         tabIndex={-1}
-        className={cn("bg-white rounded-2xl shadow-2xl overflow-hidden relative z-10 animate-in zoom-in-95 duration-200 outline-none", width)}
+        className={cn("bg-white rounded-2xl shadow-2xl overflow-hidden relative z-10 animate-in zoom-in-95 duration-200 outline-none", width, MODAL_MOBILE_WIDTH)}
       >
         {children}
       </div>

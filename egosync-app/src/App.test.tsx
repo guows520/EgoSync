@@ -135,6 +135,8 @@ let bigrockReminderHandler: ((payload: { message: string; notificationId: string
 let reviewGeneratedHandler: ((payload: { reviewId: string; weekStart: string; weekEnd: string }) => void) | undefined
 let bigrockProtectionHandler: ((payload: { taskId: string; taskTitle: string; message: string; notificationId: string }) => void) | undefined
 let skillRegistryUpdatedHandler: ((payload: { ownerId: string; skillId: string }) => void) | undefined
+// Story 16.2 评审 V1：transport:reconnected 角色列表消费的守护
+let transportReconnectedHandler: ((payload: { results?: Record<string, unknown> }) => void) | undefined
 
 function mockNormalLaunch() {
   vi.mocked(appService.isFirstLaunch).mockResolvedValue(false)
@@ -157,6 +159,9 @@ function mockNormalLaunch() {
     if (eventName === 'skill-registry-updated') {
       skillRegistryUpdatedHandler = handler as (payload: { ownerId: string; skillId: string }) => void
     }
+    if (eventName === 'transport:reconnected') {
+      transportReconnectedHandler = handler as (payload: { results?: Record<string, unknown> }) => void
+    }
   })
 }
 
@@ -167,6 +172,7 @@ describe('App', () => {
     reviewGeneratedHandler = undefined
     bigrockProtectionHandler = undefined
     skillRegistryUpdatedHandler = undefined
+    transportReconnectedHandler = undefined
     vi.clearAllMocks()
     mockNormalLaunch()
   })
@@ -318,5 +324,45 @@ describe('App', () => {
       const after = Number(screen.getByTestId('app-butler-chat-refresh').textContent)
       expect(after).toBe(before + 1)
     })
+  })
+
+  // Story 16.2 评审 V1：transport:reconnected 角色列表消费的两分支守护——
+  // 重放命中（role_list + role_list_archived 齐备）直接消费不重复查询；
+  // 重放缺失回退 refreshAllRoles 主动重拉。
+  it('transport:reconnected 重放齐备时直接消费角色列表（不重复查询）', async () => {
+    render(<App />)
+
+    await waitFor(() => expect(roleService.list).toHaveBeenCalledTimes(1))
+    expect(transportReconnectedHandler).toBeDefined()
+
+    await act(async () => {
+      transportReconnectedHandler?.({
+        results: {
+          role_list: [{ ...createdRole, skillsConfig: '{"enabledSkillIds":["skill-replayed"]}' }],
+          role_list_archived: [],
+        },
+      })
+    })
+
+    // 重放结果直接消费：视图反映断线窗口内的服务端最新态
+    expect(screen.getByTestId('app-role-skills-config')).toHaveTextContent('skill-replayed')
+    // 未触发主动重查（避免重复查询——白名单重放的消费语义）
+    expect(roleService.list).toHaveBeenCalledTimes(1)
+  })
+
+  it('transport:reconnected 重放缺失时回退 refreshAllRoles 主动重拉', async () => {
+    render(<App />)
+
+    await waitFor(() => expect(roleService.list).toHaveBeenCalledTimes(1))
+
+    vi.mocked(roleService.list).mockResolvedValueOnce([
+      { ...createdRole, skillsConfig: '{"enabledSkillIds":["skill-refetched"]}' },
+    ])
+    await act(async () => {
+      transportReconnectedHandler?.({ results: {} })
+    })
+
+    await waitFor(() => expect(roleService.list).toHaveBeenCalledTimes(2))
+    expect(screen.getByTestId('app-role-skills-config')).toHaveTextContent('skill-refetched')
   })
 })

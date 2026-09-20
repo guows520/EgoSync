@@ -9,5 +9,5 @@
     "noEmit": true,
     "types": ["node", "@wdio/globals", "@wdio/mocha-framework", "webdriverio"]
   },
-  "include": ["specs/**/*.ts", "helpers/**/*.ts", "wdio.conf.ts"]
+  "include": ["specs/**/*.ts", "web-specs/**/*.ts", "helpers/**/*.ts", "wdio.conf.ts", "wdio.web.conf.ts"]
 }

@@ -82,11 +82,15 @@ export function RoleView({
     <div className="h-full flex flex-col transition-colors duration-300 animate-in fade-in duration-300">
       <RoleHeader role={role} openTab={openTab} onToggleTab={toggleTab} />
 
-      <div className="flex-1 flex overflow-hidden">
+      {/* Story 16.2 响应式基线：≥md 维持 65/35 双栏；小屏（375px 级）
+          flex-col 堆叠——对话区 58% + 工作区 42%（断点方案归 UX 勘注定稿）。 */}
+      <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
         <div
           className={cn(
-            'flex flex-col relative bg-white/40 dark:bg-slate-900/40 transition-all duration-500 ease-in-out',
-            openTab ? 'w-[65%] border-r border-slate-200/60 dark:border-slate-700/60' : 'w-full',
+            'flex flex-col relative bg-white/40 dark:bg-slate-900/40 transition-all duration-500 ease-in-out min-h-0',
+            openTab
+              ? 'w-full h-[58%] md:h-auto md:w-[65%] border-b md:border-b-0 md:border-r border-slate-200/60 dark:border-slate-700/60'
+              : 'w-full h-full',
           )}
         >
           <ChatStream
@@ -102,8 +106,10 @@ export function RoleView({
 
         <div
           className={cn(
-            'bg-white dark:bg-slate-900 flex flex-col border-l border-slate-200/60 dark:border-slate-700/60 overflow-hidden transition-all duration-500 ease-in-out',
-            openTab ? 'w-[35%] opacity-100' : 'w-0 opacity-0 border-l-0 shadow-none pointer-events-none',
+            'bg-white dark:bg-slate-900 flex flex-col border-slate-200/60 dark:border-slate-700/60 overflow-hidden transition-all duration-500 ease-in-out min-h-0',
+            openTab
+              ? 'w-full h-[42%] md:h-auto md:w-[35%] border-t md:border-t-0 md:border-l opacity-100'
+              : 'w-0 h-0 md:h-auto opacity-0 border-0 shadow-none pointer-events-none',
           )}
           aria-hidden={!openTab}
         >

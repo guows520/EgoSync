@@ -55,8 +55,12 @@
   }
 
   body {
-    @apply text-[--text-primary] antialiased overflow-hidden h-screen;
+    @apply text-[--text-primary] antialiased overflow-hidden;
     background-color: transparent;
+    /* Story 16.2：iOS Safari 100vh 地址栏抖动缓解——dvh 优先、
+       不支持 dvh 的浏览器回退 100vh（声明级渐进增强） */
+    height: 100vh;
+    height: 100dvh;
   }
 
   html {

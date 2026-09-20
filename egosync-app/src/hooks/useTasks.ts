@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { taskService } from '../services/taskService';
 import type { CreateTaskInput, Task, UpdateTaskInput } from '../types/task';
 import { useEngineEvent } from './useEngineEvent';
+import type { TransportReconnectedPayload } from '@/transport';
 
 const TASK_LOAD_ERROR = '任务暂时加载失败，请稍后再试';
 
@@ -56,6 +57,29 @@ export function useTasks(scope: TaskScope | null) {
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
+  );
+
+  // Story 16.2：重连恢复——task_list_butler（无参）在白名单内直接消费
+  // 重放结果集；task_list_by_role 带参不在白名单，重连后定向重拉。
+  // 写入类零重放（transport 契约——防重复确认副作用）。
+  useEngineEvent<TransportReconnectedPayload>(
+    'transport:reconnected',
+    useCallback((payload: TransportReconnectedPayload) => {
+      if (!scope) return;
+      if (scope.ownerType === 'butler') {
+        const replayed = payload?.results?.['task_list_butler'];
+        if (Array.isArray(replayed)) {
+          setTasks(replayed as Task[]);
+          // 评审修复：初载失败的错误横幅须随成功消费清除（回退路径经
+          // reloadKey 走载入 effect，其自带 setError(null)，无需处理）
+          setError(null);
+          return;
+        }
+      }
+      setReloadKey(key => key + 1);
+    }, [scopeKey]),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [scopeKey],
   );
 
   const refetch = useCallback(() => {

@@ -18,6 +18,7 @@ import { appService } from './services/appService';
 import { roleService } from './services/roleService';
 import { useEngineEvent } from './hooks/useEngineEvent';
 import { useNotifications } from './hooks/useNotifications';
+import type { TransportReconnectedPayload } from '@/transport';
 import { normalizeColorHex } from './lib/roleIcons';
 import { playNotificationSound } from './lib/notificationSound';
 import type { Role } from './types/role';
@@ -163,6 +164,26 @@ export default function App() {
       });
     }, [refreshRoles]),
     [refreshRoles]
+  );
+
+  // Story 16.2：重连恢复——role_list / role_list_archived 均在白名单内，
+  // 直接消费重放结果集（避免重复查询）；任一缺失/失败回退 refreshAllRoles。
+  // 侧边栏/角色视图重连后反映最新态；写入类零重放（transport 契约）。
+  useEngineEvent<TransportReconnectedPayload>(
+    'transport:reconnected',
+    useCallback((payload: TransportReconnectedPayload) => {
+      const replayedActive = payload?.results?.['role_list'];
+      const replayedArchived = payload?.results?.['role_list_archived'];
+      if (Array.isArray(replayedActive) && Array.isArray(replayedArchived)) {
+        setRoles(replayedActive as Role[]);
+        setArchivedRoles(replayedArchived as Role[]);
+        return;
+      }
+      void refreshAllRoles().catch(error => {
+        console.error('重连后刷新角色列表失败:', error);
+      });
+    }, [refreshAllRoles]),
+    [refreshAllRoles]
   );
 
   // Story 2.5 AC-6: 管家模式下 role:proposed 事件监听
@@ -349,7 +370,11 @@ export default function App() {
   }, [roles, currentView]);
 
   return (
-    <div className={cn("flex flex-col h-screen font-sans transition-colors duration-300 bg-[#F1F3F5] text-slate-900 selection:bg-indigo-100 dark:bg-slate-800 dark:text-slate-100 dark:selection:bg-indigo-900 relative rounded-lg overflow-hidden", theme === 'dark' && "dark")}>
+    // Story 16.2：dvh 优先（iOS Safari 地址栏抖动缓解）、100vh 回退
+    // （supports 门控变体与基础 h-screen 在 twMerge 中不冲突，双声明共存）；
+    // 左右安全区内边距（评审修复）：viewport-fit=cover 下 iOS 横屏刘海
+    // 不压侧栏与内容（非刘海/桌面环境 env()=0 零影响）。
+    <div className={cn("flex flex-col h-screen supports-[height:100dvh]:h-dvh font-sans transition-colors duration-300 bg-[#F1F3F5] text-slate-900 selection:bg-indigo-100 dark:bg-slate-800 dark:text-slate-100 dark:selection:bg-indigo-900 relative rounded-lg overflow-hidden pl-[max(0px,env(safe-area-inset-left))] pr-[max(0px,env(safe-area-inset-right))]", theme === 'dark' && "dark")}>
         <TitleBar />
         <div className="flex-1 flex overflow-hidden relative">
         <Sidebar

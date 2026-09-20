@@ -2,8 +2,13 @@
   "name": "egosync-e2e",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "scripts": {
     "test": "wdio run wdio.conf.ts",
+    "test:web": "wdio run wdio.web.conf.ts",
+    "setup:web-drivers": "node scripts/setup-web-drivers.mjs",
     "test:ci": "wdio run wdio.conf.ts --suite ci",
     "test:perf": "wdio run wdio.conf.ts --suite perf",
     "test:perf:local": "wdio run wdio.conf.ts --suite perf",

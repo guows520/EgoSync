@@ -20,6 +20,14 @@ export const FRONTEND_LOCAL_EVENTS: readonly string[] = [
   'auth:unauthorized',
 ];
 
+/**
+ * `transport:reconnected` 载荷形状（Story 16.2 消费侧类型化）。
+ * `results` = 白名单重放结果集：命令名 → 结果或错误（单条失败逐条入集）。
+ */
+export interface TransportReconnectedPayload {
+  results: Record<string, unknown>;
+}
+
 /** 是否前端本地事件（浏览器分支进程内消化、不进 SSE 契约）。 */
 export function isFrontendLocalEvent(event: string): boolean {
   return FRONTEND_LOCAL_EVENTS.includes(event);

@@ -85,33 +85,39 @@ export function ButlerView({ roles, onViewChange, archivedRoles, onRestoreRole, 
 
   return (
     <div className="h-full flex flex-col relative bg-white/40 dark:bg-slate-900/40 animate-in fade-in duration-500">
-      {/* Header */}
-      <header className="h-[76px] border-b border-slate-200/60 dark:border-slate-700/60 bg-white/60 dark:bg-slate-800/60 backdrop-blur-md flex items-center px-8 shrink-0 justify-between shadow-[0_1px_2px_rgba(0,0,0,0.02)]">
-        <div className="flex items-center gap-4">
+      {/* Header — Story 16.2 响应式基线：小屏 px-4 + 高度自适应（tab 组可换行），
+          ≥px-8 与 h-[76px] 维持桌面原样 */}
+      <header className="h-auto md:h-[76px] py-2 md:py-0 border-b border-slate-200/60 dark:border-slate-700/60 bg-white/60 dark:bg-slate-800/60 backdrop-blur-md flex flex-wrap items-center px-4 md:px-8 gap-2 shrink-0 justify-between shadow-[0_1px_2px_rgba(0,0,0,0.02)]">
+        <div className="flex items-center gap-3 md:gap-4">
           <div className="w-[46px] h-[46px] rounded-xl bg-slate-800 dark:bg-indigo-600 text-white flex items-center justify-center shadow-sm">
             <Home size={24} strokeWidth={2} />
           </div>
           <h2 className="font-semibold text-lg leading-tight text-slate-800 dark:text-slate-100">数字分身管家</h2>
         </div>
-        <div className="flex items-center gap-2">
-          <button onClick={() => toggleTab('dashboard')} className={cn("flex items-center gap-1.5 px-3 py-2 rounded-lg text-[13px] font-medium transition-all", openTab === 'dashboard' ? "bg-white dark:bg-slate-700 shadow-sm text-indigo-600 dark:text-indigo-300" : "text-slate-500 dark:text-slate-400 hover:bg-white/50 dark:hover:bg-slate-700/60")}>
+        <div className="flex items-center gap-1.5 md:gap-2">
+          <button onClick={() => toggleTab('dashboard')} className={cn("flex items-center gap-1.5 px-2.5 md:px-3 py-2 rounded-lg text-[13px] font-medium transition-all", openTab === 'dashboard' ? "bg-white dark:bg-slate-700 shadow-sm text-indigo-600 dark:text-indigo-300" : "text-slate-500 dark:text-slate-400 hover:bg-white/50 dark:hover:bg-slate-700/60")}>
             <BarChart2 size={16} /> 仪表盘
           </button>
-          <button onClick={() => toggleTab('tasks')} className={cn("flex items-center gap-1.5 px-3 py-2 rounded-lg text-[13px] font-medium transition-all", openTab === 'tasks' ? "bg-white dark:bg-slate-700 shadow-sm text-indigo-600 dark:text-indigo-300" : "text-slate-500 dark:text-slate-400 hover:bg-white/50 dark:hover:bg-slate-700/60")}>
+          <button onClick={() => toggleTab('tasks')} className={cn("flex items-center gap-1.5 px-2.5 md:px-3 py-2 rounded-lg text-[13px] font-medium transition-all", openTab === 'tasks' ? "bg-white dark:bg-slate-700 shadow-sm text-indigo-600 dark:text-indigo-300" : "text-slate-500 dark:text-slate-400 hover:bg-white/50 dark:hover:bg-slate-700/60")}>
             <ListTodo size={16} /> 任务
           </button>
-          <button onClick={() => toggleTab('memory')} className={cn("flex items-center gap-1.5 px-3 py-2 rounded-lg text-[13px] font-medium transition-all", openTab === 'memory' ? "bg-white dark:bg-slate-700 shadow-sm text-indigo-600 dark:text-indigo-300" : "text-slate-500 dark:text-slate-400 hover:bg-white/50 dark:hover:bg-slate-700/60")}>
+          <button onClick={() => toggleTab('memory')} className={cn("flex items-center gap-1.5 px-2.5 md:px-3 py-2 rounded-lg text-[13px] font-medium transition-all", openTab === 'memory' ? "bg-white dark:bg-slate-700 shadow-sm text-indigo-600 dark:text-indigo-300" : "text-slate-500 dark:text-slate-400 hover:bg-white/50 dark:hover:bg-slate-700/60")}>
             <BrainCircuit size={16} /> 记忆
           </button>
-          <button onClick={() => toggleTab('settings')} className={cn("flex items-center gap-1.5 px-3 py-2 rounded-lg text-[13px] font-medium transition-all", openTab === 'settings' ? "bg-white dark:bg-slate-700 shadow-sm text-indigo-600 dark:text-indigo-300" : "text-slate-500 dark:text-slate-400 hover:bg-white/50 dark:hover:bg-slate-700/60")}>
+          <button onClick={() => toggleTab('settings')} className={cn("flex items-center gap-1.5 px-2.5 md:px-3 py-2 rounded-lg text-[13px] font-medium transition-all", openTab === 'settings' ? "bg-white dark:bg-slate-700 shadow-sm text-indigo-600 dark:text-indigo-300" : "text-slate-500 dark:text-slate-400 hover:bg-white/50 dark:hover:bg-slate-700/60")}>
             <Sliders size={16} /> 设置
           </button>
         </div>
       </header>
 
-      <div className="flex-1 flex overflow-hidden">
+      {/* Story 16.2 响应式基线：≥md 维持 65/35 双栏；小屏（375px 级）
+          flex-col 堆叠——对话区 58% + 工作区 42%（断点方案归 UX 勘注定稿）。 */}
+      <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
         {/* Chat Area */}
-        <div className={cn("flex flex-col relative bg-white/40 dark:bg-slate-900/40 transition-all duration-500 ease-in-out", openTab ? "w-[65%] border-r border-slate-200/60 dark:border-slate-700/60" : "w-full")}>
+        <div className={cn(
+          "flex flex-col relative bg-white/40 dark:bg-slate-900/40 transition-all duration-500 ease-in-out min-h-0",
+          openTab ? "w-full h-[58%] md:h-auto md:w-[65%] border-b md:border-b-0 md:border-r border-slate-200/60 dark:border-slate-700/60" : "w-full h-full",
+        )}>
           {knockNotifications.length > 0 && (
             <div className="px-4 pt-4 space-y-3 shrink-0">
               {knockNotifications.map(n => (
@@ -152,7 +158,7 @@ export function ButlerView({ roles, onViewChange, archivedRoles, onRestoreRole, 
 
         {/* Workspace Panel */}
         {openTab && (
-          <div className="w-[35%] bg-white dark:bg-slate-900 flex flex-col border-l border-slate-200/60 dark:border-slate-700/60 animate-in slide-in-from-right-8 duration-300">
+          <div className="w-full h-[42%] md:h-auto md:w-[35%] bg-white dark:bg-slate-900 flex flex-col border-t md:border-t-0 md:border-l border-slate-200/60 dark:border-slate-700/60 animate-in slide-in-from-right-8 duration-300 min-h-0">
             <ButlerWorkspacePanel
               roles={roles}
               currentTab={openTab}

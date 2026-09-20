@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef, useCallback, Fragment } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from 'react';
 import { FolderOpen, Home } from 'lucide-react';
 import { isDesktopOnly, isTauriHost } from '@/transport';
+import type { TransportReconnectedPayload } from '@/transport';
 import { chatService } from '../../services/chatService';
 import { skillService } from '../../services/skillService';
 import { useEngineEvent } from '../../hooks/useEngineEvent';
@@ -109,6 +110,23 @@ function isLikelyPersistedLocalUser(historyMsg: ChatMessage, localMsg: ChatMessa
 
 function isLocalCompletedAssistant(message: ChatMessage) {
   return message.role === 'assistant' && message.id.startsWith('__completed__');
+}
+
+/**
+ * 末位未完成助手行 id（Story 16.2 刷新恢复——与渲染去重规则B同源判定）。
+ *
+ * 从消息列表末尾回扫至首条用户消息为止，返回首个未完成助手行的 id；
+ * 该行就是「在途流的占位行」（chat_send_message 发送时插入、终止时落库
+ * 完成——进行中内容只在内存）。既有用户消息之后的旧死流占位行不会被
+ * 误取（其后再无对应在途流）。
+ */
+function findRecoveredPendingRowId(messages: ChatMessage[]): string | null {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const m = messages[i];
+    if (m.role === 'user') return null;
+    if (m.role === 'assistant' && !m.isComplete) return m.id;
+  }
+  return null;
 }
 
 function hasPersistedCompletedAssistantId(historyMsg: ChatMessage, localMsg: ChatMessage) {
@@ -724,32 +742,49 @@ export function ChatStream({
     }
   }, [resetProcessEvents, resetStreamingState]);
 
-  useEffect(() => {
-    const init = async () => {
-      const loadGeneration = ++conversationLoadGenerationRef.current;
-      // 切换 role/butler 时立即清空当前消息，避免上一会话的内容短暂泄漏到新视图
-      setConversation(null);
-      conversationIdRef.current = null;
-      setMessages([]);
-      resetStreamingState();
-      resetProcessEvents();
-        try {
-        const conv = roleId
-          ? await chatService.getRoleConversation(roleId)
-          : await chatService.getButlerConversation();
-        if (conversationLoadGenerationRef.current !== loadGeneration) return;
-        conversationIdRef.current = conv.id;
-        setConversation(conv);
-        const history = await chatService.getHistory(conv.id);
-        if (conversationIdRef.current !== conv.id || conversationLoadGenerationRef.current !== loadGeneration) return;
-        setMessages(prev => mergeHistoryWithLocalMessages(history, prev));
-        await loadConversations();
-      } catch (e) {
-        console.error('加载对话失败:', e);
+  // 会话初始化：解析（管家/角色）当前会话 → 拉历史 → 拉会话列表。
+  // 提取为回调（评审修复）：transport:reconnected 在初次解析失败
+  // （页面于宕机期加载）时须能重走本路径，否则聊天区永久空白。
+  // 评审修复（e2e 取证）：启动窗口内的瞬时 REST 失败（本地服务器忙/
+  // sidecar 重启竞争——e2e 复现 bodyTextLen=86 空聊天死态）同样会让
+  // 聊天区永久空白——有限重试自愈（被更晚的代际初始化/角色切换取消）。
+  const initializeConversation = useCallback(async (attempt = 0) => {
+    const loadGeneration = ++conversationLoadGenerationRef.current;
+    // 切换 role/butler 时立即清空当前消息，避免上一会话的内容短暂泄漏到新视图
+    setConversation(null);
+    conversationIdRef.current = null;
+    setMessages([]);
+    resetStreamingState();
+    resetProcessEvents();
+    try {
+      const conv = roleId
+        ? await chatService.getRoleConversation(roleId)
+        : await chatService.getButlerConversation();
+      if (conversationLoadGenerationRef.current !== loadGeneration) return;
+      conversationIdRef.current = conv.id;
+      setConversation(conv);
+      const history = await chatService.getHistory(conv.id);
+      if (conversationIdRef.current !== conv.id || conversationLoadGenerationRef.current !== loadGeneration) return;
+      setMessages(prev => mergeHistoryWithLocalMessages(history, prev));
+      await loadConversations();
+    } catch (e) {
+      console.error(`加载对话失败（第 ${attempt + 1} 次尝试）:`, e);
+      // 瞬时失败有限重试（最多 3 次尝试，1.5s 退避）：代际守卫确保只
+      // 在「本代仍是最新初始化」时重试——重连恢复/角色切换发起的新
+      // 初始化或组件卸载后不再空转。
+      if (attempt < 2 && conversationLoadGenerationRef.current === loadGeneration) {
+        setTimeout(() => {
+          if (conversationLoadGenerationRef.current === loadGeneration) {
+            void initializeConversation(attempt + 1);
+          }
+        }, 1500);
       }
-    };
-    init();
+    }
   }, [resetProcessEvents, loadConversations, resetStreamingState, roleId]);
+
+  useEffect(() => {
+    void initializeConversation();
+  }, [initializeConversation]);
 
   // Story 4.6: refreshTrigger 递增时重新加载当前对话历史（Q2 提醒写入后刷新）
   useEffect(() => {
@@ -913,6 +948,33 @@ export function ChatStream({
         );
         if (completedMessages.length > 0) {
           setMessages(prev => {
+            // Story 16.2 刷新恢复：本地完成段若属于恢复流（末位未完成助手
+            // 行存在——刷新前发起的流），就地补全该行而非追加本地完成消息：
+            // null 桶的本地完成 id（__completed__N_final）与服务端行 id 无
+            // 关联、内容仅为服务端全文的后缀，追加会在历史重拉后与权威全文
+            // 行双显。就地补全后历史 merge 按同 id 以服务端全文替换。
+            // 本地发起的流（桌面既有路径）无占位行，追加逻辑零变化。
+            const recoveredRowId = findRecoveredPendingRowId(prev);
+            if (recoveredRowId) {
+              const completed = completedMessages[0]!;
+              const nextMessages = prev.map(m =>
+                m.id === recoveredRowId
+                  ? {
+                      ...m,
+                      content: completed.content,
+                      thinkingContent: completed.thinkingContent,
+                      isComplete: true,
+                    }
+                  : m,
+              );
+              if (completedProcessEvents.length > 0) {
+                setProcessEventsByMessageId(current => ({
+                  ...current,
+                  [recoveredRowId]: completedProcessEvents,
+                }));
+              }
+              return nextMessages;
+            }
             const nextMessages = appendLocalMessages(prev, completedMessages);
             if (completedProcessEvents.length === 0) return nextMessages;
             setProcessEventsByMessageId(current => {
@@ -1011,6 +1073,45 @@ export function ChatStream({
   }, [conversation, finishThinkingTimer, onStreamDone, resetStreamProcessEvents, startThinkingTimer, updateStreamProcessEvents, updateThinkingTrace]);
 
   useEngineEvent<StreamPayload>('llm:stream', handleStreamEvent, [conversation?.id]);
+
+  // Story 16.2：重连恢复——transport:reconnected 后定向重拉当前会话历史
+  // （chat_get_history 带参命令不在重放白名单，须由视图显式补拉；服务端
+  // 是事实源，重连后以重拉为准）。会话列表优先直接消费白名单重放结果集
+  // （chat_list_conversations 无参在白名单内），失败/缺失再回退主动重拉。
+  // 评审修复（三处）：
+  // ① convId 为空（初次解析在断线期间失败/未完成）→ 重走 initializeConversation，
+  //   否则页面在宕机期加载后聊天区永久空白；
+  // ② 流式中途断线（如服务器重启——done 帧永不再来）→ resetStreamingState
+  //   复位流式态并解锁输入；死流占位行由历史重拉诚实呈现「生成中」；
+  //   网络闪断（服务端存活）时后续 token 帧会重建气泡、done 就地补全，行为一致；
+  // ③ 角色视图下重放结果集须按 roleId 过滤（无参重放返回全部会话）。
+  const handleTransportReconnected = useCallback((payload: TransportReconnectedPayload) => {
+    if (isStreaming) {
+      resetStreamingState();
+    }
+    const convId = conversationIdRef.current;
+    if (!convId) {
+      void initializeConversation();
+    } else {
+      chatService.getHistory(convId).then(history => {
+        if (conversationIdRef.current !== convId) return;
+        setMessages(prev => mergeHistoryWithLocalMessages(history, prev));
+      }).catch(e => {
+        console.error('重连后重拉对话历史失败:', e);
+      });
+    }
+    const replayedConversations = payload?.results?.['chat_list_conversations'];
+    if (Array.isArray(replayedConversations)) {
+      const list = roleId
+        ? (replayedConversations as Conversation[]).filter(c => c.roleId === roleId)
+        : (replayedConversations as Conversation[]);
+      setConversations(list);
+    } else {
+      void loadConversations();
+    }
+  }, [isStreaming, initializeConversation, loadConversations, resetStreamingState, roleId]);
+
+  useEngineEvent<TransportReconnectedPayload>('transport:reconnected', handleTransportReconnected, [handleTransportReconnected]);
 
   const handleTitleUpdated = useCallback((payload: TitleUpdatedPayload) => {
     setConversations(prev =>
@@ -1220,6 +1321,26 @@ export function ChatStream({
     ? messages.find(message => suppressedProcessMessageIds.has(message.id))?.id ?? null
     : null;
 
+  // Story 16.2 刷新恢复：服务端 is_complete=false 的助手占位行与实时流的
+  // 去重集合（不双显）。两条规则：
+  // - 规则A（messageId 归位）：活跃流式桶 id 与历史行 id 相同（委派
+  //   follow-up 桶 id = assistant 占位行 id）——实时桶已是该行的呈现；
+  // - 规则B（在途流占位行）：流式进行中（isStreaming）时，最后一条用户
+  //   消息之后的未完成助手行就是在途流的占位行——实时流式渲染（气泡/
+  //   思考/过程指示）已是它的呈现，历史占位行让位。更早的死流占位行
+  //   （其后又有用户消息）不受影响，按服务端状态如实停留「生成中」。
+  const hiddenPendingResumeIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const bubble of streamBubbles) {
+      if (bubble.id) ids.add(bubble.id);
+    }
+    if (isStreaming) {
+      const recoveredRowId = findRecoveredPendingRowId(messages);
+      if (recoveredRowId) ids.add(recoveredRowId);
+    }
+    return ids;
+  }, [streamBubbles, isStreaming, messages]);
+
   return (
     <div className="flex flex-col h-full">
       <ChatHeader
@@ -1242,11 +1363,18 @@ export function ChatStream({
               && onAcceptTaskDecomposition
               && onKeepSingleTaskDecomposition;
             const showActions = !isStreaming && (showSuggestions || showTaskDecompositions);
-            const filteredMessages = messages.filter(m =>
-              m.role !== 'system'
-              && (m.role !== 'assistant' || m.content.trim().length > 0 || m.thinkingContent.trim().length > 0)
-              && Boolean(m.isComplete || m.content || m.thinkingContent)
-            );
+            const filteredMessages = messages
+              .filter(m => {
+                if (m.role === 'system') return false;
+                if (m.role === 'assistant') {
+                  // Story 16.2：未完成助手行保留（「生成中」占位——非空气泡，
+                  // 服务端事实源呈现）；完成行维持既有可见性口径。
+                  if (!m.isComplete) return true;
+                  return m.content.trim().length > 0 || m.thinkingContent.trim().length > 0;
+                }
+                return Boolean(m.isComplete || m.content || m.thinkingContent);
+              })
+              .filter(m => !hiddenPendingResumeIds.has(m.id));
 
             if (!showActions) {
               return filteredMessages.map(msg => (
@@ -1261,6 +1389,7 @@ export function ChatStream({
                   >
                     <ChatBubble
                       message={msg}
+                      isPendingResume={msg.role === 'assistant' && !msg.isComplete}
                       executionTraceBlocks={suppressedProcessMessageIds.has(msg.id) ? [] : processEventsToTraceBlocks(processEventsByMessageId[msg.id] ?? [])}
                       assistantName={role?.name}
                       assistantIcon={assistantIcon}
@@ -1293,6 +1422,10 @@ export function ChatStream({
                 >
                   <ChatBubble
                     message={msg}
+                    /* 评审修复：showActions 分支同样传递未完成占位谓词——
+                       建议卡/任务分解卡与刷新恢复的占位行同屏时，行内
+                       须呈现「生成中」而非空气泡（与无 action 分支一致）。 */
+                    isPendingResume={msg.role === 'assistant' && !msg.isComplete}
                     executionTraceBlocks={suppressedProcessMessageIds.has(msg.id) ? [] : processEventsToTraceBlocks(processEventsByMessageId[msg.id] ?? [])}
                     assistantName={role?.name}
                     assistantIcon={assistantIcon}
@@ -1358,7 +1491,9 @@ export function ChatStream({
         </div>
       </div>
 
-      <div className="p-5 bg-white/70 dark:bg-slate-800/70 backdrop-blur-md border-t border-slate-200/60 dark:border-slate-700/60 shrink-0">
+      {/* Story 16.2：对话输入区底部 safe-area inset（iOS viewport-fit=cover
+          下底部横条/手势条不压输入框；无 inset 设备维持 p-5 原值）。 */}
+      <div className="p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] bg-white/70 dark:bg-slate-800/70 backdrop-blur-md border-t border-slate-200/60 dark:border-slate-700/60 shrink-0">
         <div className="mx-auto max-w-3xl space-y-3">
           <ChatInput
             onSend={handleSend}

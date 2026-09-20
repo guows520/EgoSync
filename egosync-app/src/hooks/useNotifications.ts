@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { notificationService } from '../services/notificationService';
 import { useEngineEvent } from './useEngineEvent';
+import type { TransportReconnectedPayload } from '@/transport';
 import type { NotificationNewPayload, NotificationWithRole } from '../types/notification';
 
 const NOTIFICATION_LOAD_ERROR = '通知加载失败，请稍后再试';
@@ -35,6 +36,29 @@ export function useNotifications() {
       cancelled = true;
     };
   }, []);
+
+  // Story 16.2：重连恢复——优先直接消费白名单重放结果集
+  // （notification_list 无参在白名单内，避免重复查询）；重放缺失/失败
+  // （结果集内为错误对象）时回退主动重拉。写入类零重放（transport 契约）。
+  useEngineEvent<TransportReconnectedPayload>(
+    'transport:reconnected',
+    useCallback((payload: TransportReconnectedPayload) => {
+      const replayed = payload?.results?.['notification_list'];
+      if (Array.isArray(replayed)) {
+        setNotifications(replayed as NotificationWithRole[]);
+        // 评审修复：初载失败的错误横幅须随成功消费清除（不与新鲜数据同屏）
+        setError(null);
+        return;
+      }
+      void notificationService.list()
+        .then(items => setNotifications(items ?? []))
+        .catch(e => {
+          console.error('重连后重拉通知失败:', e);
+          setError(NOTIFICATION_LOAD_ERROR);
+        });
+    }, []),
+    []
+  );
 
   useEngineEvent<NotificationNewPayload>(
     'notification:new',

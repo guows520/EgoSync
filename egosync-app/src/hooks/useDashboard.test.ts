@@ -4,6 +4,11 @@ import { useDashboard } from './useDashboard';
 
 vi.mock('@/transport', () => ({
   invoke: vi.fn(),
+  // Story 16.2：useDashboard 订阅 transport:reconnected（useEngineEvent
+  // 经 getTransport().on）——注册成功、零事件投递
+  getTransport: () => ({
+    on: () => () => {},
+  }),
 }));
 
 import { invoke } from '@/transport';

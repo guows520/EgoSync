@@ -15,11 +15,24 @@ const BounceDots = memo(function BounceDots() {
   );
 });
 
+/** Story 16.2：刷新恢复占位——服务端 is_complete=false 的助手行呈「生成中」非空气泡。 */
+const PendingResumePlaceholder = memo(function PendingResumePlaceholder() {
+  return (
+    <div data-testid="pending-generation-placeholder" className="flex items-center gap-2.5">
+      <BounceDots />
+      <span className="text-xs text-slate-400 dark:text-slate-500">生成中…</span>
+    </div>
+  );
+});
+
 interface ChatBubbleProps {
   message: ChatMessage;
   isStreaming?: boolean;
   streamingThinking?: string;
   isThinkingPhase?: boolean;
+  /** Story 16.2：刷新恢复占位——服务端 is_complete=false 的助手行（调用方
+   * 已完成与实时流的去重；无帧到达则占位停留，不伪造 token）。 */
+  isPendingResume?: boolean;
   streamStatus?: Pick<StreamPayload, 'phase' | 'statusText' | 'toolName'> | null;
   executionTraceBlocks?: ExecutionTraceBlock[];
   /** 助手气泡显示的角色名。未传时回退到「管家」。 */
@@ -268,6 +281,7 @@ export function ChatBubble({
   message,
   isStreaming,
   isThinkingPhase,
+  isPendingResume,
   streamStatus,
   executionTraceBlocks = [],
   assistantName,
@@ -340,6 +354,8 @@ export function ChatBubble({
         )}
         {(isStreaming || isThinkingPhase) && !message.content ? (
           <BounceDots />
+        ) : isPendingResume && !message.content ? (
+          <PendingResumePlaceholder />
         ) : (
           <>
             {isUser ? (

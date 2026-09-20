@@ -323,7 +323,8 @@ export function DashboardTab({ onViewChange }: { onViewChange?: (view: string) =
           <div className="text-center text-amber-500 text-[12px] py-1">{metricsError}（显示上一次成功数据）</div>
         )}
 
-        <div className="grid grid-cols-2 gap-2.5" aria-label="活动指标卡区域">
+        {/* Story 16.2 响应式基线：小屏单列堆叠、≥sm 维持双列 */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5" aria-label="活动指标卡区域">
           {metricCards.map((card) => {
             const Icon = card.icon;
             return (

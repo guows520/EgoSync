@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-21
-last_updated: 2026-09-20T14:10:00+08:00
+last_updated: 2026-09-20T20:48:00+08:00
 project: "探索 (EgoSync)"
 project_key: NOKEY
 tracking_system: file-system
@@ -225,7 +225,7 @@ development_status:
   # Epic 16: WEB 客户端 (Web Client)
   epic-16: in-progress
   16-1-web-entry-auth-and-first-visit-flow: review
-  16-2-realtime-streaming-and-browser-compat: backlog
+  16-2-realtime-streaming-and-browser-compat: review
   16-3-desktop-remote-mode-fr48-optional: backlog
   epic-16-retrospective: optional
 

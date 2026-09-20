@@ -439,3 +439,12 @@ All items resolved in the same session:
 - source_spec: `_bmad-output/implementation-artifacts/16-1-web-entry-auth-and-first-visit-flow.md`
   summary: Google Fonts 外链依赖——16.1 以 CSP 放行 fonts.googleapis.com/gstatic 修复视觉分叉，但离线/内网部署两端都回退系统字体且外链依赖第三方 CDN。
   evidence: index.html:7 外链（Inter/JetBrains Mono/Noto Sans SC）；17.x Docker/离线部署故事评估自托管字体（随 dist 分发，兼顾离线一致性与隐私）。
+- source_spec: `_bmad-output/implementation-artifacts/16-2-realtime-streaming-and-browser-compat.md`
+  summary: test:web 的 CI 接线——Linux job 内执行 web e2e（构建 server 二进制 + dist 后跑 npm run test:web），供给步骤已先行落地（scripts/setup-web-drivers.mjs）。
+  evidence: .github/workflows/ci.yml 全文无 test:web 步骤且桌面 e2e 均以 && false 禁用；web e2e 仅由本 VM 手工三连跑守护，合入后浏览器栈回归（SSE/重连/刷新恢复/375px 溢出）CI 全绿不可见（验证缺口层 filed）。
+- source_spec: `_bmad-output/implementation-artifacts/16-2-realtime-streaming-and-browser-compat.md`
+  summary: 记忆/使命宣言/晨间简报/周复盘等面的 transport:reconnected 重放消费——断线窗口内服务端变更后这些视图保持陈旧直至重挂载。
+  evidence: 全仓 grep results?.[ 消费仅覆盖通知/任务/仪表盘/角色列表四视图（与冻结矩阵枚举一致）；memory_list/briefing_get_latest/review_get_latest 无消费者。矩阵外扩属后续增强（盲扫层 filed）。
+- source_spec: `_bmad-output/implementation-artifacts/16-2-realtime-streaming-and-browser-compat.md`
+  summary: 恢复流 done 后的 history 重拉失败静默（console.error 有痕、本地完成段如实停留，刷新即愈的双失败窗口）。
+  evidence: ChatStream done 分支 getHistory().catch 仅 console.error；触发需「断线恢复后 done 到达 + 紧接着重拉再失败」双重故障（边界层 filed，无重试机制——加指数退避重试属后续打磨）。

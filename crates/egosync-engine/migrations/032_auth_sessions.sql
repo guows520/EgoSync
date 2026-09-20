@@ -3,10 +3,9 @@
 -- 每请求校验 = 主键索引查找 + 哈希比对（亚毫秒）。
 -- 多行 = 多会话（多浏览器/多窗口语义平移）；env/库态凭据切换不失效
 -- 已发 Cookie（会话生命周期独立于引导凭据形态）。
--- 评审修复 #7：无活跃度列（YAGNI——校验读路径保持纯读零写放大，
--- created_at 即会话建立时间）。
 
 CREATE TABLE IF NOT EXISTS auth_sessions (
     token_hash TEXT PRIMARY KEY NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    last_seen_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );

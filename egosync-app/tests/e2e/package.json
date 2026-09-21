@@ -8,6 +8,7 @@
   "scripts": {
     "test": "wdio run wdio.conf.ts",
     "test:web": "wdio run wdio.web.conf.ts",
+    "test:web:smoke": "wdio run wdio.web.conf.ts --suite smoke",
     "setup:web-drivers": "node scripts/setup-web-drivers.mjs",
     "test:ci": "wdio run wdio.conf.ts --suite ci",
     "test:perf": "wdio run wdio.conf.ts --suite perf",

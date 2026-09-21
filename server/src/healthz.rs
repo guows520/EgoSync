@@ -2,9 +2,11 @@
 //!
 //! - 无认证豁免（「静态资源豁免」指认证豁免面，静态服务归 16.1）；
 //! - `?deep=1` / `?deep=true`：DB SELECT 1（双池）+ sidecar health_check
-//!   全过 ⇒ 200+flags，任一败 ⇒ 503+flags（5xx 家族——升级前巡检语义）。
-//!   同时接受 `1` 与 `true`（二轮评审修复 #8：监控方写 `deep=true` 曾
-//!   静默拿到浅探针假 200——严格匹配 `1` 反成可用性陷阱）。
+//!   + migrations 状态（Story 17.3：内嵌 MIGRATOR 与库内已应用集一致——
+//!   只读检查不跑迁移；升级前巡检语义）全过 ⇒ 200+flags，任一败 ⇒
+//!   503+flags（5xx 家族）。同时接受 `1` 与 `true`（二轮评审修复 #8：
+//!   监控方写 `deep=true` 曾静默拿到浅探针假 200——严格匹配 `1` 反成
+//!   可用性陷阱）。
 
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
@@ -36,7 +38,7 @@ pub async fn healthz(
         return (StatusCode::OK, Json(json!({"status": "ok"}))).into_response();
     }
 
-    // 深度探针：双池 SELECT 1 + sidecar health_check
+    // 深度探针：双池 SELECT 1 + sidecar health_check + migrations 状态
     let db_ok = sqlx::query_scalar::<_, i32>("SELECT 1")
         .fetch_one(&state.ctx.pool)
         .await
@@ -46,11 +48,15 @@ pub async fn healthz(
             .await
             .is_ok();
     let opencode_ok = {
-        let mut mgr = state.sidecar.lock().await;
+        let mgr = state.sidecar.lock().await;
         mgr.health_check().await
     };
+    // Story 17.3：migrations 状态项（只读巡检——升级前核对库是否滞后于
+    // 二进制内嵌 MIGRATOR；浅探针/存活探词语义不变）
+    let migrations_ok =
+        egosync_engine::db::pool::migrations_up_to_date(&state.ctx.pool).await;
 
-    let healthy = db_ok && opencode_ok;
+    let healthy = db_ok && opencode_ok && migrations_ok;
     let status = if healthy { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE };
     (
         status,
@@ -58,6 +64,7 @@ pub async fn healthz(
             "status": if healthy { "ok" } else { "degraded" },
             "db": db_ok,
             "opencode": opencode_ok,
+            "migrations": migrations_ok,
         })),
     )
         .into_response()

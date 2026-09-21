@@ -11,7 +11,7 @@ import { appService } from '../../services/appService';
 import { dataService } from '../../services/dataService';
 import { CompanionPairingSection } from './CompanionPairingSection';
 import { RemoteModeSection } from './RemoteModeSection';
-import type { ExportFormat, ExportResult, ImportResult } from '../../services/dataService';
+import type { ExportFormat, ExportResult, ImportResult, WebImportResult } from '../../services/dataService';
 import type { LlmConfig, CreateLlmConfigInput, UpdateLlmConfigInput, LlmProviderType, NetworkLocation } from '../../types/settings';
 import type { McpServer, McpServerType } from '../../types/mcp';
 
@@ -120,6 +120,15 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
   const [isImporting, setIsImporting] = useState(false);
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
   const [importError, setImportError] = useState('');
+  // Story 17.3：云端（浏览器宿主）逻辑级备份入口状态——/api/export、
+  // /api/import 是 server 独立路由（不经 cmd 分发），UI 仅浏览器分支渲染
+  const [isWebExporting, setIsWebExporting] = useState(false);
+  const [webExportError, setWebExportError] = useState('');
+  const [pendingWebImportFile, setPendingWebImportFile] = useState<File | null>(null);
+  const [isWebImporting, setIsWebImporting] = useState(false);
+  const [webImportResult, setWebImportResult] = useState<WebImportResult | null>(null);
+  const [webImportError, setWebImportError] = useState('');
+  const webImportFileInputRef = useRef<HTMLInputElement>(null);
 
   const loadConfigs = useCallback(async () => {
     try {
@@ -444,6 +453,69 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
       setImportError(typeof msg === 'string' ? msg : '导入失败');
     } finally {
       setIsImporting(false);
+    }
+  };
+
+  // ── Story 17.3：云端（浏览器宿主）导出/导入——「一键导出」对云端
+  //    用户成立（已裁决 Q3=A 最小 UI）。导出=GET /api/export blob 下载；
+  //    导入=file input 选包 → 确认 → POST /api/import（导入前服务端自动
+  //    备份）；密钥缺失报告逐项展示重录路径文案。
+
+  const handleWebExport = async () => {
+    setIsWebExporting(true);
+    setWebExportError('');
+    try {
+      const blob = await dataService.webExport();
+      // attachment 文件名沿用桌面导出命名（egosync-export-YYYY-MM-DD.json）
+      // 评审修复：本地时区日期（与服务端 chrono::Local 一致——UTC 偏东时区
+      // 会在晚间导出时与服务端 attachment 名差一天）
+      const now = new Date();
+      const pad = (n: number) => String(n).padStart(2, '0');
+      const date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `egosync-export-${date}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e: any) {
+      const msg = typeof e === 'object' && e !== null
+        ? (e.ValidationError || e.DbError || Object.values(e)[0] || '导出失败')
+        : String(e);
+      setWebExportError(typeof msg === 'string' ? msg : '导出失败');
+    } finally {
+      setIsWebExporting(false);
+    }
+  };
+
+  const handleWebImportSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setWebImportError('');
+    setWebImportResult(null);
+    const file = e.target.files?.[0] ?? null;
+    if (!file) return;
+    setPendingWebImportFile(file);
+    // 允许重复选择同一文件（change 事件以值变化触发——确认取消后重选同文件）
+    e.target.value = '';
+  };
+
+  const handleWebImport = async () => {
+    if (!pendingWebImportFile) return;
+    setIsWebImporting(true);
+    setWebImportError('');
+    try {
+      const result = await dataService.webImport(pendingWebImportFile);
+      setWebImportResult(result);
+      setPendingWebImportFile(null);
+      onDataImported?.();
+    } catch (e: any) {
+      const msg = typeof e === 'object' && e !== null
+        ? (e.ValidationError || e.DbError || Object.values(e)[0] || '导入失败')
+        : String(e);
+      setWebImportError(typeof msg === 'string' ? msg : '导入失败');
+    } finally {
+      setIsWebImporting(false);
     }
   };
 
@@ -1149,6 +1221,114 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
                     <Loader2 size={16} className="animate-loading-spin" /> 导入中...
                   </div>
                 )}
+              </div>
+              )}
+
+              {/* Story 17.3：云端（浏览器宿主）数据备份入口——/api/export、
+                  /api/import 是 server 独立逻辑级备份路由（不经 cmd 分发，
+                  data_export/data_import 保持 desktop-only），仅浏览器分支
+                  渲染（!isTauriHost()——桌面本地走上方本机文件入口，不重复；
+                  远程桌面模式对远端实例可用浏览器访问同一入口）。 */}
+              {!isTauriHost() && (
+              <div>
+                <h4 className="text-[15px] font-medium text-slate-800 dark:text-slate-100 mb-2">云端数据备份</h4>
+                <p className="text-[13px] text-slate-500 dark:text-slate-400 mb-4">将云端实例的全部数据（角色、任务、记忆、对话与配置）下载为标准导出包，或从导出包恢复。导出包与桌面版格式互通，可跨形态导入。</p>
+
+                {webExportError && (
+                  <div className="mb-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-[13px] text-red-600 flex items-center gap-2">
+                    <AlertCircle size={14} /> {webExportError}
+                  </div>
+                )}
+
+                <div className="space-y-2">
+                  <button
+                    onClick={handleWebExport}
+                    disabled={isWebExporting}
+                    className="flex items-center gap-2 px-5 py-2.5 border border-slate-300 dark:border-slate-600 rounded-lg text-[14px] font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isWebExporting ? <Loader2 size={16} className="animate-loading-spin" /> : <Download size={16} />}
+                    {isWebExporting ? '导出中...' : '导出数据包'}
+                  </button>
+                  <p className="text-[12px] text-slate-400 dark:text-slate-500">导出包仅含密钥引用，不含密钥值——云端迁移后需在「模型服务配置」重新录入 API Key。</p>
+                </div>
+
+                <div className="mt-6 space-y-2">
+                  <p className="text-[13px] text-slate-600 dark:text-slate-300 font-medium">从导出包恢复</p>
+
+                  {webImportError && (
+                    <div className="mb-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-[13px] text-red-600 flex items-center gap-2">
+                      <AlertCircle size={14} /> {webImportError}
+                    </div>
+                  )}
+
+                  {webImportResult && (
+                    <div className="mb-3 rounded-lg border border-green-100 bg-green-50 px-3 py-2 text-[13px] text-green-700">
+                      <div className="flex items-center gap-2 mb-1">
+                        <Check size={14} /> 导入完成
+                      </div>
+                      <p className="ml-6 text-[12px] text-green-600">
+                        已恢复 {webImportResult.imported.rolesCount} 个角色、{webImportResult.imported.tasksCount} 个任务、{webImportResult.imported.memoriesCount} 条记忆、{webImportResult.imported.conversationsCount} 个对话、{webImportResult.imported.messagesCount} 条消息
+                      </p>
+                      {webImportResult.missingSecrets.length > 0 && (
+                        <div className="mt-2 ml-6 rounded-lg border border-amber-200 bg-amber-50/60 px-3 py-2 space-y-1">
+                          <p className="text-[12px] font-medium text-amber-700">有 {webImportResult.missingSecrets.length} 个模型服务配置缺少 API Key（不影响导入结果，需重新录入后可用）：</p>
+                          {webImportResult.missingSecrets.map((s, i) => (
+                            <p key={i} className="text-[12px] text-amber-700/90 break-all">· {s.message}</p>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {pendingWebImportFile && !isWebImporting && (
+                    <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50/50 p-4 space-y-3">
+                      <p className="text-[13px] text-amber-700 leading-relaxed">
+                        导入将覆盖云端当前所有数据（导入前服务端已自动备份）。确认要继续吗？
+                      </p>
+                      <p className="text-[12px] text-slate-500 dark:text-slate-400 break-all">文件：{pendingWebImportFile.name}</p>
+                      <div className="flex items-center gap-2 pt-1">
+                        <button
+                          onClick={handleWebImport}
+                          className="px-4 py-2 rounded-lg text-[13px] font-medium text-white bg-indigo-600 hover:bg-indigo-700 transition-colors"
+                        >
+                          确认导入
+                        </button>
+                        <button
+                          onClick={() => { setPendingWebImportFile(null); setWebImportError(''); }}
+                          className="px-4 py-2 rounded-lg text-[13px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+                        >
+                          取消
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {!pendingWebImportFile && !isWebImporting && (
+                    <div className="space-y-2">
+                      <input
+                        ref={webImportFileInputRef}
+                        type="file"
+                        accept=".json,application/json"
+                        onChange={handleWebImportSelect}
+                        className="hidden"
+                        data-testid="web-import-file-input"
+                      />
+                      <button
+                        onClick={() => webImportFileInputRef.current?.click()}
+                        className="flex items-center gap-2 px-5 py-2.5 border border-slate-300 dark:border-slate-600 rounded-lg text-[14px] font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+                      >
+                        <Upload size={16}/> 选择导出包
+                      </button>
+                      <p className="text-[12px] text-slate-400 dark:text-slate-500">支持 JSON 导出包（桌面版或云端版导出均可，格式互通）。</p>
+                    </div>
+                  )}
+
+                  {isWebImporting && (
+                    <div className="flex items-center gap-2 px-5 py-2.5 text-[14px] text-slate-600 dark:text-slate-300">
+                      <Loader2 size={16} className="animate-loading-spin" /> 导入中...
+                    </div>
+                  )}
+                </div>
               </div>
               )}
 

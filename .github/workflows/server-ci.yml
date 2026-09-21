@@ -1,4 +1,6 @@
 # Story 15.4 server crate CI：cargo test + 工件新鲜度 + 无旁路守门
+# Story 17.3：+ web e2e 冒烟 job（三链路并行阻塞落位：桌面=test-and-build
+# ci.yml 现状、server=本文件 server-test、web e2e=本文件 web-e2e-smoke）
 name: server-ci
 
 on:
@@ -8,12 +10,30 @@ on:
       - server/**
       - crates/egosync-engine/**
       - egosync-app/src-tauri/src/**
+      - egosync-app/src/**
+      - egosync-app/tests/e2e/**
+      - egosync-app/package.json
+      - egosync-app/package-lock.json
+      - egosync-app/index.html
+      - egosync-app/vite.config.ts
+      - egosync-app/tsconfig.json
+      - egosync-app/tailwind.config.js
+      - egosync-app/postcss.config.js
       - .github/workflows/server-ci.yml
   pull_request:
     paths:
       - server/**
       - crates/egosync-engine/**
       - egosync-app/src-tauri/src/**
+      - egosync-app/src/**
+      - egosync-app/tests/e2e/**
+      - egosync-app/package.json
+      - egosync-app/package-lock.json
+      - egosync-app/index.html
+      - egosync-app/vite.config.ts
+      - egosync-app/tsconfig.json
+      - egosync-app/tailwind.config.js
+      - egosync-app/postcss.config.js
       - .github/workflows/server-ci.yml
 
 concurrency:
@@ -25,6 +45,8 @@ concurrency:
 jobs:
   server-test:
     runs-on: ubuntu-latest
+    # 评审补丁（分诊 P14）：挂起门禁默认可烧 6h runner 分钟
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -90,3 +112,85 @@ jobs:
             echo "grep 执行错误 (rc=$rc)"; exit 1
           fi
           echo "engine 零 tauri:: 引用确认"
+
+  # ── Story 17.3：web e2e 冒烟（17.2 评审缺口层收口：test:web 此前不进
+  #    任何 CI workflow，浏览器栈回归靠手跑）──
+  # 链路：server debug 构建 + 前端 dist 构建 + 钉版 chrome-for-testing 148
+  # 供给（setup-web-drivers.mjs：driver + chrome 双下载）→ test:web:smoke
+  # （web-streaming + web-reconnect——无时钟对齐依赖的确定性子集；
+  # web-events/web-resident-loop 留 test:web 全量本地/夜跑，Design Notes
+  # 「冒烟套件切分」）。任一红即阻塞合并（PR 门禁三链路之一）。
+  web-e2e-smoke:
+    runs-on: ubuntu-latest
+    # 评审补丁（分诊 P14）：挂起门禁默认可烧 6h runner 分钟——构建+驱动
+    # 下载+双 spec 冒烟实际 <20 分钟，45 分钟上限已含充分裕量
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            server
+            crates/egosync-engine
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsqlite3-dev unzip
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          # 评审补丁（分诊 P15）：e2e 有独立 lockfile（tests/e2e），此前
+          # cache 只挂主包——每跑冒烟都全量冷装 e2e 依赖
+          cache-dependency-path: |
+            egosync-app/package-lock.json
+            egosync-app/tests/e2e/package-lock.json
+
+      # 前端 dist（server 静态目录消费——EGOSYNC_STATIC_DIR 指向 dist）
+      - name: Build frontend dist
+        working-directory: egosync-app
+        run: |
+          npm ci
+          npm run build
+
+      # server debug 二进制（wdio.web.conf.ts 布局约定：
+      # server/target/debug/egosync-server）
+      - name: Build server binary (debug)
+        working-directory: server
+        run: cargo build
+
+      - name: Install e2e dependencies
+        working-directory: egosync-app/tests/e2e
+        run: npm ci
+
+      # 钉版驱动供给：chromedriver 148 + Chrome for Testing 148（Linux 下载
+      # 落 puppeteer 缓存布局——wdio.web.conf.ts 缺省解析路径，零 env）
+      - name: Supply pinned web drivers
+        working-directory: egosync-app/tests/e2e
+        run: npm run setup:web-drivers
+
+      - name: Run web e2e smoke suite
+        working-directory: egosync-app/tests/e2e
+        run: npm run test:web:smoke
+
+      # 评审补丁（分诊 P15）：冒烟失败时上传取证物（wdio 日志/截图/
+      # server.log）——首个 Actions run 即首次真实验证，失败取证最关键
+      - name: Upload e2e failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-e2e-smoke-logs-${{ github.run_id }}
+          path: |
+            egosync-app/tests/e2e/logs/**
+          retention-days: 7
+          if-no-files-found: ignore

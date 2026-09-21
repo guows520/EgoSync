@@ -286,6 +286,19 @@ describe('GlobalSettingsModal', () => {
       expect(screen.getByLabelText(/Markdown 报告/)).toBeInTheDocument();
     });
 
+    // Story 17.3：云端备份入口（!isTauriHost() 门控）——桌面本地模式
+    // 不渲染（本机文件入口即桌面路径，不重复出现两套导出/导入）。
+    it('桌面本地模式：云端数据备份区不渲染（本机入口不重复）', async () => {
+      render(<GlobalSettingsModal onClose={vi.fn()} />);
+
+      fireEvent.click(screen.getByRole('button', { name: '数据与隐私' }));
+
+      expect(await screen.findByRole('button', { name: /导出存档/ })).toBeInTheDocument();
+      expect(screen.queryByText('云端数据备份')).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /导出数据包/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /选择导出包/ })).not.toBeInTheDocument();
+    });
+
     it('未选择格式时确认导出按钮被禁用', async () => {
       render(<GlobalSettingsModal onClose={vi.fn()} />);
 

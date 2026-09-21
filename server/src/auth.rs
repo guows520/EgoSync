@@ -158,19 +158,49 @@ impl RateLimiter {
 ///
 /// 连接信息载体为 [`crate::idle_timeout::RemoteAddr`]（自定义 Listener 的
 /// `Connected` 实现需本地类型——见其文档）。
+///
+/// Story 17.3（17.1 评审 #4 收口）：反代拓扑下限流键 XFF 感知——
+/// `EGOSYNC_BEHIND_PROXY=1` 时取 [`rate_limit_key`]（X-Forwarded-For
+/// 最右值），否则 socket IP（直连语义零变化）。
 pub async fn rate_limit(
     ConnectInfo(addr): ConnectInfo<crate::idle_timeout::RemoteAddr>,
     State(state): State<Arc<AppState>>,
     req: Request,
     next: Next,
 ) -> Response {
-    if !state.auth.rate.check(addr.0.ip()) {
+    // 键先同步提取（Body 为 !Sync——headers 引用不得跨 await）
+    let key = rate_limit_key(state.behind_proxy, req.headers(), addr.0.ip());
+    if !state.auth.rate.check(key) {
         // 二轮评审修复 #6：限流拒绝对运维可见（不含任何用户输入——
         // 冻结只禁密钥/载荷入日志，不禁事件）
-        tracing::warn!(ip = %addr.0.ip(), "认证面限流拒绝（5 次/分钟/IP）");
+        tracing::warn!(ip = %key, "认证面限流拒绝（5 次/分钟/IP）");
         return too_many_requests();
     }
     next.run(req).await
+}
+
+/// XFF 感知限流键（Story 17.3，17.1 评审 #4 收口）。
+///
+/// - `EGOSYNC_BEHIND_PROXY=1`：取 `X-Forwarded-For` **最右**可解析 IP。
+///   单可信代理跳语义（Design Notes 冻结）：compose 拓扑=单 caddy，最右值
+///   由 caddy 追加真实客户端 IP——客户端可伪造左侧条目、不可伪造最右值；
+///   多级反代属用户自建拓扑（文档明示「仅信任一跳」边界）；
+/// - 无 XFF / 最右值不可解析为 IP ⇒ 回落 socket IP；
+/// - 门控未启用 ⇒ 恒 socket IP（直连暴露下伪造 XFF 一律忽略——与
+///   X-Forwarded-Proto 门控同款防伪造纪律，15.4 直连语义零变化）。
+pub fn rate_limit_key(behind_proxy: bool, headers: &HeaderMap, socket_ip: IpAddr) -> IpAddr {
+    if !behind_proxy {
+        return socket_ip;
+    }
+    headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        // 逗号分隔代理链取最右（rsplit 首段）；trim 消化 "a, b" 空白
+        .and_then(|v| v.rsplit(',').next())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(socket_ip)
 }
 
 /// `GET /api/auth/status`：认证前发现端点（setupRequired / authenticated）。
@@ -281,6 +311,9 @@ pub async fn login(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
+    // 反代拓扑下日志口径与限流键一致（XFF 最右值——运维看到的是客户端
+    // 而非 caddy 容器 IP）；直连态即 socket IP
+    let client_ip = rate_limit_key(state.behind_proxy, &headers, addr.0.ip());
     let Some(token) = parse_token_body(&body) else {
         return unauthorized();
     };
@@ -299,7 +332,7 @@ pub async fn login(
         // 二轮评审修复 #6：失败登录对运维可见（公网单用户服务器的爆破
         // 尝试）——只记来源 IP，不含令牌或任何用户输入（冻结只禁密钥/
         // 载荷入日志，不禁事件）
-        tracing::warn!(ip = %addr.0.ip(), "登录失败（令牌不匹配）");
+        tracing::warn!(ip = %client_ip, "登录失败（令牌不匹配）");
         return unauthorized();
     }
 
@@ -399,11 +432,13 @@ pub async fn require_auth(
     req: Request,
     next: Next,
 ) -> Response {
-    // 注意：Body 为 !Sync——先同步提取凭据再入异步校验
+    // 注意：Body 为 !Sync——先同步提取凭据与限流键再入异步校验；
+    // Story 17.3：失败面限流键 XFF 感知（与登录面同键语义）
+    let bearer_ip = rate_limit_key(state.behind_proxy, req.headers(), addr.0.ip());
     if let Some(bearer) = extract_bearer_token(&req) {
         if !verify_primary_token(&state, &bearer).await {
-            if !state.bearer_rate.check(addr.0.ip()) {
-                tracing::warn!(ip = %addr.0.ip(), "Bearer 通道限流拒绝（5 次/分钟/IP）");
+            if !state.bearer_rate.check(bearer_ip) {
+                tracing::warn!(ip = %bearer_ip, "Bearer 通道限流拒绝（5 次/分钟/IP）");
                 return too_many_requests();
             }
             return unauthorized();
@@ -434,10 +469,12 @@ pub async fn require_auth_with_sse_ticket(
     req: Request,
     next: Next,
 ) -> Response {
+    // 同 require_auth：键先同步提取（Body !Sync）；XFF 感知（17.3）
+    let bearer_ip = rate_limit_key(state.behind_proxy, req.headers(), addr.0.ip());
     if let Some(bearer) = extract_bearer_token(&req) {
         if !verify_primary_token(&state, &bearer).await {
-            if !state.bearer_rate.check(addr.0.ip()) {
-                tracing::warn!(ip = %addr.0.ip(), "Bearer 通道限流拒绝（5 次/分钟/IP）");
+            if !state.bearer_rate.check(bearer_ip) {
+                tracing::warn!(ip = %bearer_ip, "Bearer 通道限流拒绝（5 次/分钟/IP）");
                 return too_many_requests();
             }
             return unauthorized();
@@ -761,5 +798,46 @@ mod tests {
         // 直连暴露（门控未启用）：伪造 XFP=https 不得附加
         assert_eq!(cookie_secure_flag(false, &https_headers("https")), "");
         assert_eq!(cookie_secure_flag(false, &HeaderMap::new()), "");
+    }
+
+    /// Story 17.3（17.1 评审 #4 收口）：XFF 感知限流键纯函数——
+    /// - 反代态取 X-Forwarded-For **最右**可解析 IP（单可信跳：客户端可
+    ///   伪造左侧、不可伪造 caddy 追加的最右值）；
+    /// - 伪造多跳链（`forged, real`）⇒ 键=最右 real（伪造左侧失效）；
+    /// - 无 XFF / 最右不可解析 ⇒ 回落 socket IP；
+    /// - 门控未启用（直连）⇒ 恒 socket IP（伪造 XFF 被忽略——直连语义
+    ///   零变化，与 XFP 门控同款防伪造纪律）。
+    #[test]
+    fn rate_limit_key_uses_rightmost_xff_only_behind_proxy() {
+        use std::net::Ipv4Addr;
+        let socket = IpAddr::from(Ipv4Addr::new(127, 0, 0, 1));
+        let real_client = IpAddr::from(Ipv4Addr::new(203, 0, 113, 7));
+
+        let xff = |v: &'static str| {
+            let mut h = HeaderMap::new();
+            h.insert("x-forwarded-for", HeaderValue::from_static(v));
+            h
+        };
+
+        // 反代态：单值 / 伪造多跳（最右=真实客户端）/ 带空白 / IPv6
+        assert_eq!(rate_limit_key(true, &xff("203.0.113.7"), socket), real_client);
+        assert_eq!(
+            rate_limit_key(true, &xff("1.2.3.4, 203.0.113.7"), socket),
+            real_client,
+            "伪造多跳 ⇒ 最右值分桶（左侧伪造失效）"
+        );
+        assert_eq!(rate_limit_key(true, &xff("1.2.3.4,203.0.113.7"), socket), real_client);
+        assert_eq!(
+            rate_limit_key(true, &xff("2001:db8::1"), socket),
+            "2001:db8::1".parse::<IpAddr>().expect("ipv6")
+        );
+        // 反代态但 XFF 缺失 / 最右不可解析 ⇒ 回落 socket IP
+        assert_eq!(rate_limit_key(true, &HeaderMap::new(), socket), socket);
+        assert_eq!(rate_limit_key(true, &xff("not-an-ip"), socket), socket);
+        assert_eq!(rate_limit_key(true, &xff("1.2.3.4, not-an-ip"), socket), socket);
+        // 门控未启用（直连）：伪造任意 XFF 一律忽略
+        assert_eq!(rate_limit_key(false, &xff("203.0.113.7"), socket), socket);
+        assert_eq!(rate_limit_key(false, &xff("1.2.3.4"), socket), socket);
+        assert_eq!(rate_limit_key(false, &HeaderMap::new(), socket), socket);
     }
 }

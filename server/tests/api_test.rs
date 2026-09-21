@@ -58,6 +58,53 @@ async fn healthz_deep_reports_db_and_opencode_flags() {
     let body: Value = res.json().await.expect("healthz deep body");
     assert_eq!(body["db"], true, "双池 SELECT 1 应通过");
     assert_eq!(body["opencode"], false, "sidecar 未启动应如实降级");
+    // Story 17.3：migrations 状态项在场（测试态刚跑完迁移 ⇒ true）
+    assert_eq!(
+        body["migrations"], true,
+        "新装配库迁移已全量应用（应用数==内嵌 MIGRATOR 数）"
+    );
+}
+
+/// Story 17.3：迁移滞后库 ⇒ 503 + migrations:false（升级前巡检面）。
+/// 滞后模拟：删除最高版本迁移记录（应用数 < 内嵌数）；恢复后回 true
+/// （巡检只读——不自动补迁移，补齐走 init_db/升级重启路径）。
+#[tokio::test]
+async fn healthz_deep_reports_migrations_false_for_stale_database() {
+    let state = build_test_state(temp_data_dir("healthz-migrations"), None)
+        .await
+        .expect("测试状态装配");
+    let server = InProcessServer::start(state).await;
+    let client = Client::new();
+
+    // 制造滞后：删最高版本记录（库版本落后于二进制内嵌 MIGRATOR）
+    let max_version: i64 =
+        sqlx::query_scalar("SELECT MAX(version) FROM _sqlx_migrations")
+            .fetch_one(&server.state.ctx.pool)
+            .await
+            .expect("max version");
+    sqlx::query("DELETE FROM _sqlx_migrations WHERE version = ?1")
+        .bind(max_version)
+        .execute(&server.state.ctx.pool)
+        .await
+        .expect("删迁移记录");
+
+    let res = client
+        .get(&server.url("/healthz?deep=1"), None, None)
+        .await;
+    assert_eq!(res.status(), 503, "滞后库 ⇒ 503（巡检降级）");
+    let body: Value = res.json().await.expect("healthz deep body");
+    assert_eq!(
+        body["migrations"], false,
+        "滞后库 migrations:false（应用数 != 内嵌 MIGRATOR 数）"
+    );
+    assert_eq!(body["db"], true, "双池连通本身不受迁移滞后影响");
+    assert_eq!(body["opencode"], false, "sidecar 位照实（互不遮蔽）");
+
+    // 存活探针语义不变（浅探针不检查迁移——防误杀容器）
+    let res = client.get(&server.url("/healthz"), None, None).await;
+    assert_eq!(res.status(), 200, "浅探针不受迁移滞后影响");
+    let body: Value = res.json().await.expect("浅探针 body");
+    assert_eq!(body["status"], "ok");
 }
 
 // ── env 态引导（优先级冻结）──

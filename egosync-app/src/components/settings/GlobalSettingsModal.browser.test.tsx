@@ -12,7 +12,7 @@
 // - 桌面零回归由 GlobalSettingsModal.test.tsx 默认桩覆盖（companion 按钮
 //   / 导出导入区在桌面分支可见的既有断言）。
 
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { __resetTransportForTests } from '@/transport';
 import { GlobalSettingsModal } from './GlobalSettingsModal';
@@ -53,6 +53,8 @@ vi.mock('../../services/dataService', () => ({
     dataDestroy: vi.fn(),
     pickImportFile: vi.fn(),
     dataImport: vi.fn(),
+    webExport: vi.fn(),
+    webImport: vi.fn(),
   },
 }));
 
@@ -141,5 +143,107 @@ describe('GlobalSettingsModal 浏览器分支 desktop-only 门控（Story 16.1�
     expect(screen.getByPlaceholderText(/输入"确认销毁"以继续/)).toBeInTheDocument();
     const confirmBtn = await screen.findByRole('button', { name: '确认销毁' });
     expect(confirmBtn).toBeInTheDocument();
+  });
+
+  // ── Story 17.3：云端数据备份入口（/api/export、/api/import 独立路由，
+  //    !isTauriHost() 门控——web 模式可见、桌面模式不重复）──
+
+  it('data tab：云端数据备份区在浏览器渲染（导出数据包/选择导出包入口）', async () => {
+    render(<GlobalSettingsModal onClose={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: '数据与隐私' }));
+
+    // 云端备份区渲染（与桌面入口互斥——上方导出/导入区仍不渲染）
+    expect(await screen.findByText('云端数据备份')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /导出数据包/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /选择导出包/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /导出存档/ })).not.toBeInTheDocument();
+  });
+
+  it('data tab：云端导出点击调用 webExport（blob 下载）', async () => {
+    // jsdom 无 URL.createObjectURL——stub 下载管线（断言服务调用即可）
+    const createObjectURL = vi.fn(() => 'blob:mock-url');
+    const revokeObjectURL = vi.fn();
+    Object.defineProperty(URL, 'createObjectURL', { value: createObjectURL, configurable: true });
+    Object.defineProperty(URL, 'revokeObjectURL', { value: revokeObjectURL, configurable: true });
+    vi.mocked(dataService.webExport).mockResolvedValue(new Blob(['{"exportVersion":"1.0"}']));
+
+    render(<GlobalSettingsModal onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: '数据与隐私' }));
+    fireEvent.click(await screen.findByRole('button', { name: /导出数据包/ }));
+
+    await waitFor(() => expect(dataService.webExport).toHaveBeenCalledTimes(1));
+    expect(createObjectURL).toHaveBeenCalledTimes(1);
+    // 桌面导出服务零调用（web 分支不经 cmd 通道）
+    expect(dataService.dataExport).not.toHaveBeenCalled();
+  });
+
+  it('data tab：云端导入流程——选包确认后调用 webImport 并展示缺失密钥报告', async () => {
+    vi.mocked(dataService.webImport).mockResolvedValue({
+      imported: {
+        rolesCount: 3, tasksCount: 5, memoriesCount: 7,
+        conversationsCount: 2, messagesCount: 11,
+      },
+      missingSecrets: [
+        {
+          configName: 'DeepSeek 主力',
+          apiKeyRef: 'llm_demo_api_key',
+          message: "未找到配置 'DeepSeek 主力' 的 API Key（密钥缺失，常见于桌面→云端迁移后）。请前往 设置 → 模型服务配置，编辑该配置并重新保存密钥",
+        },
+      ],
+    });
+
+    render(<GlobalSettingsModal onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: '数据与隐私' }));
+
+    // 隐藏 file input：模拟选择导出包文件
+    const input = await screen.findByTestId('web-import-file-input');
+    const file = new File(['{"exportVersion":"1.0"}'], 'egosync-export-2026-09-21.json', {
+      type: 'application/json',
+    });
+    fireEvent.change(input, { target: { files: [file] } });
+
+    // 确认面出现（含文件名）
+    expect(await screen.findByText('文件：egosync-export-2026-09-21.json')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '确认导入' }));
+
+    await waitFor(() => expect(dataService.webImport).toHaveBeenCalledTimes(1));
+    // 导入结果 + 计数
+    expect(await screen.findByText(/已恢复 3 个角色、5 个任务、7 条记忆/)).toBeInTheDocument();
+    // 密钥缺失报告：逐项展示重录路径文案
+    expect(screen.getByText(/有 1 个模型服务配置缺少 API Key/)).toBeInTheDocument();
+    expect(screen.getByText(/未找到配置 'DeepSeek 主力' 的 API Key/)).toBeInTheDocument();
+    // 桌面导入服务零调用
+    expect(dataService.dataImport).not.toHaveBeenCalled();
+    expect(dataService.pickImportFile).not.toHaveBeenCalled();
+  });
+
+// ── 评审补丁（验证缺口层 V4）：云端导入错误分支——与桌面孪生
+//（dataExport 失败显示错误）同款验收，webImport 失败须呈现 AppError
+// 单键 map 文案且不渲染结果面板。──
+  it('webImport reject AppError 单键 map 时显示具体错误且不渲染结果面板', async () => {
+    // 同文件前序用例的调用计数不清零——先清（断言只数本用例）
+    vi.mocked(dataService.webImport).mockClear();
+    vi.mocked(dataService.webImport).mockRejectedValue({
+      ValidationError: '导出包格式不正确：exportVersion 不受支持',
+    });
+
+    render(<GlobalSettingsModal onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: '数据与隐私' }));
+
+    const input = await screen.findByTestId('web-import-file-input');
+    const file = new File(['{"exportVersion":"9.9"}'], 'bad-package.json', {
+      type: 'application/json',
+    });
+    fireEvent.change(input, { target: { files: [file] } });
+    fireEvent.click(await screen.findByRole('button', { name: '确认导入' }));
+
+    await waitFor(() => expect(dataService.webImport).toHaveBeenCalledTimes(1));
+    // AppError 单键 map 的具体文案上屏（非笼统「导入失败」）
+    expect(await screen.findByText(/导出包格式不正确/)).toBeInTheDocument();
+    // 结果面板不出现（失败≠成功）
+    expect(screen.queryByText(/已恢复/)).not.toBeInTheDocument();
+    // 桌面导入服务零调用
+    expect(dataService.dataImport).not.toHaveBeenCalled();
   });
 });

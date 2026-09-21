@@ -1,6 +1,6 @@
 [package]
 name = "egosync-engine"
-version = "0.1.0"
+version = "0.1.6-alpha.3"
 edition = "2021"
 # lock 文件为 v4 格式（cargo 1.78+ 才能解析）；低于此版本给出明确错误而非解析失败
 rust-version = "1.78"
@@ -38,3 +38,9 @@ filetime = "0.2"
 version = "0.32"
 default-features = false
 features = ["system"]
+
+# ---- dev profile 瘦身（2026-09-21，磁盘治理）----
+# 独立构建本 crate 时生效；作为 server/src-tauri 的路径依赖时，以构建根的 profile 为准。
+[profile.dev]
+debug = "line-tables-only"
+incremental = false

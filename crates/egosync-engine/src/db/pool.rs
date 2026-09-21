@@ -52,6 +52,34 @@ pub async fn init_db(db_path: &Path) -> Result<DbPool, AppError> {
     Ok(pool)
 }
 
+/// Story 17.3：主库迁移状态巡检（只读，**不跑迁移**）。
+///
+/// 判定口径（I/O 矩阵「deep 巡检」行）：`_sqlx_migrations` 中 success=1 的
+/// 已应用版本集合与内嵌 [`MIGRATOR`] 的版本集合**完全一致**（应用数相等
+/// 且逐一在案）——既覆盖「落后」（内嵌有而库无，升级前巡检语义）也覆盖
+/// 「超前」（库有而内嵌无，降级二进制挂新库——同样视为不健康）。
+///
+/// 任何读错误（表缺失 / 库故障）一律按 `false` 上报（healthz 503 家族），
+/// 不上抛——巡检是健康面不是启动面（启动面的迁移失败走 `init_db` 拒启）。
+pub async fn migrations_up_to_date(pool: &DbPool) -> bool {
+    let applied: Vec<i64> = match sqlx::query_scalar(
+        "SELECT version FROM _sqlx_migrations WHERE success = 1",
+    )
+    .fetch_all(pool)
+    .await
+    {
+        Ok(versions) => versions,
+        Err(_) => return false,
+    };
+    let embedded: Vec<i64> = MIGRATOR.iter().map(|m| m.version).collect();
+    // 集合相等：数量相等 + 内嵌版本全部在案（数量相等时后者蕴含双向一致，
+    // 版本号在 _sqlx_migrations 内有 UNIQUE 约束，无重复计数歧义）
+    applied.len() == embedded.len()
+        && embedded
+            .iter()
+            .all(|v| applied.contains(v))
+}
+
 async fn run_migrations(pool: &DbPool) -> Result<(), AppError> {
     repair_legacy_crlf_migration_checksums(pool).await?;
     MIGRATOR
@@ -1168,6 +1196,63 @@ mod tests {
             decode_hex(CURRENT_033_CHECKSUM_HEX),
             "重放的 v33 checksum 必须逐字节等于当前 033 文件完整 sha384（got {}）",
             recorded_33.iter().map(|b| format!("{b:02x}")).collect::<String>()
+        );
+    }
+
+    /// Story 17.3：migrations_up_to_date 只读巡检——健康库 true；删除任一
+    /// 已应用记录（模拟滞后库）⇒ false；读错误（表缺失）⇒ false 不 panic。
+    /// 只读语义钉死：检查后库内容零变化（不跑迁移、不写任何行）。
+    #[tokio::test]
+    async fn migrations_up_to_date_reports_status_without_running_migrations() {
+        let dir = tempdir().expect("create temp dir");
+        let pool = init_db(&dir.path().join("egosync.db")).await.expect("init db");
+
+        // 健康库：应用集 == 内嵌集
+        assert!(
+            migrations_up_to_date(&pool).await,
+            "全量应用后的库必须报告 migrations:true"
+        );
+
+        // 只读语义：检查前后 _sqlx_migrations 行数不变（无副作用）
+        let before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations")
+            .fetch_one(&pool)
+            .await
+            .expect("count migrations");
+        let _ = migrations_up_to_date(&pool).await;
+        let after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations")
+            .fetch_one(&pool)
+            .await
+            .expect("count migrations again");
+        assert_eq!(before, after, "巡检必须只读（不跑迁移不写行）");
+
+        // 滞后库：删除最高版本记录（模拟升级前旧库）⇒ false
+        let max_version: i64 =
+            sqlx::query_scalar("SELECT MAX(version) FROM _sqlx_migrations")
+                .fetch_one(&pool)
+                .await
+                .expect("max version");
+        sqlx::query("DELETE FROM _sqlx_migrations WHERE version = ?1")
+            .bind(max_version)
+            .execute(&pool)
+            .await
+            .expect("remove max version record");
+        assert!(
+            !migrations_up_to_date(&pool).await,
+            "缺最新迁移记录（滞后库）必须 false"
+        );
+
+        // 读错误面：_sqlx_migrations 表整体缺失 ⇒ false（不 panic 不上抛）
+        let dir2 = tempdir().expect("create temp dir");
+        let pool2 = init_db(&dir2.path().join("egosync.db"))
+            .await
+            .expect("init db");
+        sqlx::query("DROP TABLE _sqlx_migrations")
+            .execute(&pool2)
+            .await
+            .expect("drop migrations table");
+        assert!(
+            !migrations_up_to_date(&pool2).await,
+            "迁移表缺失必须按不健康上报（false），而非 panic"
         );
     }
 

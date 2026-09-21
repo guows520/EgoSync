@@ -9,6 +9,10 @@
 //! | 直连 HTTP（未设门控） | 行为逐字节不变（无 Secure；http 缺省 80 比对） |
 //! | 伪造 X-Forwarded-\*（直连暴露 + 客户端伪造头） | 头被忽略（403 不放行） |
 //!
+//! Story 17.3（17.1 评审 #4 收口）：限流键 XFF 感知——反代态取
+//! X-Forwarded-For 最右值（单可信跳语义），不同客户端分桶互不挤兑；
+//! 无 XFF 回落 socket IP；直连态伪造 XFF 被忽略。
+//!
 //! Host 头经 reqwest 显式覆写（hyper 尊重用户提供的 Host）；直连/反代
 //! 两态各起独立 server（behind_proxy 是装配期门控，非请求期开关）。
 
@@ -17,6 +21,21 @@ mod common;
 use common::InProcessServer;
 use egosync_server::bootstrap::{build_test_state, build_test_state_with_proxy};
 use reqwest::header::{HeaderMap, HeaderValue, ORIGIN};
+use serde_json::json;
+
+/// 登录失败响应（不消费 Set-Cookie——计数面观察）。
+async fn failed_login(
+    client: &reqwest::Client,
+    url: &str,
+    xff: Option<&str>,
+) -> reqwest::StatusCode {
+    let mut req = client.post(url).json(&json!({"token": "wrong"}));
+    if let Some(xff) = xff {
+        req = req.header("x-forwarded-for", xff);
+    }
+    let res = req.send().await.expect("失败 login 请求");
+    res.status()
+}
 
 /// 临时数据目录（与 api_test.rs 同款：TempDir::keep 保持存活）。
 fn temp_data_dir(tag: &str) -> std::path::PathBuf {
@@ -175,5 +194,169 @@ async fn direct_http_unchanged_and_forged_xfp_ignored() {
         res.status(),
         403,
         "直连暴露下伪造 X-Forwarded-Proto 不得被信任（头被忽略）"
+    );
+}
+
+// ── Story 17.3：限流键 XFF 感知（17.1 评审 #4 收口）──
+
+/// 反代态（BEHIND_PROXY=1）：登录失败按 XFF 最右值分桶——客户端 A（伪造
+/// 多跳链，最右=真实 A）5 次失败后超限 429，客户端 B（不同最右值）不受
+/// 挤兑仍 401；无 XFF 回落 socket IP。
+#[tokio::test]
+async fn behind_proxy_login_rate_limit_buckets_by_rightmost_xff() {
+    let state = build_test_state_with_proxy(temp_data_dir("xff-login"), Some("t".into()), true)
+        .await
+        .expect("反代态测试装配");
+    let server = InProcessServer::start(state).await;
+    let client = reqwest::Client::new();
+    let login_url = server.url("/api/auth/login");
+
+    // 客户端 A：伪造多跳链 `1.2.3.4, 198.51.100.10`（模拟客户端伪造左侧 +
+    // caddy 追加真实客户端 IP=最右值）；5 次失败（401）
+    for i in 1..=5 {
+        let status = failed_login(&client, &login_url, Some("1.2.3.4, 198.51.100.10")).await;
+        assert_eq!(status, 401, "客户端 A 第 {i} 次失败应为 401（未超限）");
+    }
+    // 客户端 A 第 6 次（链左侧再变也不影响——桶键恒最右值）⇒ 429
+    let status = failed_login(&client, &login_url, Some("9.9.9.9, 198.51.100.10")).await;
+    assert_eq!(
+        status, 429,
+        "同一最右值的第 6 次失败必须 429（左侧伪造不改变桶键）"
+    );
+
+    // 客户端 B（不同最右值）：不受 A 的失败挤兑 ⇒ 仍 401（而非 429）
+    let status = failed_login(&client, &login_url, Some("5.6.7.8, 198.51.100.20")).await;
+    assert_eq!(
+        status, 401,
+        "反代态限流按客户端分桶——合法不同 IP 用户互不挤兑（17.1 评审 #4 收口）"
+    );
+
+    // 无 XFF（直连 app 端口的调试路径）⇒ 回落 socket IP：与前述 XFF 桶独立
+    let status = failed_login(&client, &login_url, None).await;
+    assert_eq!(
+        status, 401,
+        "无 XFF 回落 socket IP（独立桶——caddy 链路故障不殃及直连调试）"
+    );
+}
+
+/// 直连态（门控未启用）：伪造 XFF 不得改变限流桶——恒 socket IP（5 次
+/// 失败后第 6 次 429，与 15.4 行为一致——直连语义零变化）。
+#[tokio::test]
+async fn direct_mode_forged_xff_does_not_change_rate_limit_bucket() {
+    let state = build_test_state(temp_data_dir("xff-direct"), Some("t".into()))
+        .await
+        .expect("直连态测试装配");
+    let server = InProcessServer::start(state).await;
+    let client = reqwest::Client::new();
+    let login_url = server.url("/api/auth/login");
+
+    // 5 次失败（每次伪造不同 XFF——门控未启用时头一律忽略）
+    for i in 1..=5 {
+        let status = failed_login(&client, &login_url, Some("198.51.100.30")).await;
+        assert_eq!(status, 401, "直连态第 {i} 次失败应为 401");
+    }
+    // 第 6 次（再换伪造 XFF）⇒ 429——桶键恒 socket IP，伪造不得换桶
+    let status = failed_login(&client, &login_url, Some("198.51.100.99")).await;
+    assert_eq!(
+        status, 429,
+        "直连态伪造 XFF 不得绕过/转移限流桶（头被忽略，恒 socket IP）"
+    );
+}
+
+/// 反代态 Bearer 失败面（T5 修订限流器）：同按 XFF 最右值分桶——客户端 A
+/// Bearer 失败 5 次超限，客户端 B 持正确令牌不受影响（成功不计数）。
+#[tokio::test]
+async fn behind_proxy_bearer_failures_bucket_by_rightmost_xff() {
+    let state = build_test_state_with_proxy(temp_data_dir("xff-bearer"), Some("t".into()), true)
+        .await
+        .expect("反代态测试装配");
+    let server = InProcessServer::start(state).await;
+    let client = reqwest::Client::new();
+    let cmd_url = server.url("/api/cmd/role_list");
+
+    // 客户端 A（最右 198.51.100.10）：Bearer 失败 5 次（401）
+    for i in 1..=5 {
+        let res = client
+            .post(&cmd_url)
+            .header("x-forwarded-for", "1.2.3.4, 198.51.100.10")
+            .bearer_auth("wrong-token")
+            .json(&json!({}))
+            .send()
+            .await
+            .expect("A Bearer 失败请求");
+        assert_eq!(res.status(), 401, "客户端 A 第 {i} 次 Bearer 失败应为 401");
+    }
+    // 客户端 A 第 6 次 ⇒ 429
+    let res = client
+        .post(&cmd_url)
+        .header("x-forwarded-for", "9.9.9.9, 198.51.100.10")
+        .bearer_auth("wrong-token-again")
+        .json(&json!({}))
+        .send()
+        .await
+        .expect("A 超限请求");
+    assert_eq!(res.status(), 429, "同最右值 Bearer 失败超限须 429");
+
+    // 客户端 B（不同最右值 + 正确令牌）：成功访问不受 A 失败挤兑
+    let res = client
+        .post(&cmd_url)
+        .header("x-forwarded-for", "5.6.7.8, 198.51.100.20")
+        .bearer_auth("t")
+        .json(&json!({}))
+        .send()
+        .await
+        .expect("B 正确令牌请求");
+    assert_eq!(
+        res.status(), 200,
+        "合法客户端不受他人失败挤兑（仅计失败、成功不计数）"
+    );
+}
+
+/// 反代态 SSE 流端点（`GET /api/events` 的 `require_auth_with_sse_ticket`
+/// Bearer 分支）：同按 XFF 最右值分桶——评审补丁（17.3 分诊 P2，验证缺口
+/// 层发现：SSE 面是 17.1 #4 收口的四个应用点中唯一无反代态测试的一个，
+/// 键回退为 socket IP 时全部既有测试照绿）。客户端 A 伪造多跳 Bearer
+/// 失败 5 次超限 429，客户端 B（不同最右值）不受挤兑仍 401。
+#[tokio::test]
+async fn behind_proxy_sse_bearer_failures_bucket_by_rightmost_xff() {
+    let state = build_test_state_with_proxy(temp_data_dir("xff-sse"), Some("t".into()), true)
+        .await
+        .expect("反代态测试装配");
+    let server = InProcessServer::start(state).await;
+    let client = reqwest::Client::new();
+    let events_url = server.url("/api/events");
+
+    // 客户端 A（最右 198.51.100.10）：SSE 流端点 Bearer 失败 5 次（401）
+    for i in 1..=5 {
+        let res = client
+            .get(&events_url)
+            .header("x-forwarded-for", "1.2.3.4, 198.51.100.10")
+            .bearer_auth("wrong-token")
+            .send()
+            .await
+            .expect("A SSE Bearer 失败请求");
+        assert_eq!(res.status(), 401, "客户端 A 第 {i} 次 SSE Bearer 失败应为 401");
+    }
+    // 客户端 A 第 6 次 ⇒ 429（同最右值超限——左侧伪造不换桶）
+    let res = client
+        .get(&events_url)
+        .header("x-forwarded-for", "9.9.9.9, 198.51.100.10")
+        .bearer_auth("wrong-token-again")
+        .send()
+        .await
+        .expect("A SSE 超限请求");
+    assert_eq!(res.status(), 429, "SSE 流端点同最右值 Bearer 失败超限须 429");
+
+    // 客户端 B（不同最右值）：不受 A 失败挤兑 ⇒ 401（非 429）
+    let res = client
+        .get(&events_url)
+        .header("x-forwarded-for", "5.6.7.8, 198.51.100.20")
+        .bearer_auth("also-wrong")
+        .send()
+        .await
+        .expect("B SSE 请求");
+    assert_eq!(
+        res.status(), 401,
+        "SSE 面反代限流按客户端分桶——远程桌面事件流不受他人失败挤兑"
     );
 }

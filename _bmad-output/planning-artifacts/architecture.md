@@ -2642,6 +2642,13 @@ volumes: { egosync-data: {} }
 - healthz：两级——存活（进程/端口）与深度（DB 连通、opencode 存活，`?deep=1`）；compose 用存活级，升级前巡检用深度级
 - 结构化日志：tracing JSON 到 stdout（`RUST_LOG` 控制），与 relay-server 同范式；密钥与事件 payload 明文永不入日志（零知识纪律继承）
 - CI：`server-docker.yml` 多阶段镜像构建发布（实现期故事 17.3）
+- **17.3 落地注记（2026-09-21，追加式）**：
+  - **逻辑级备份端点**：`GET /api/export`（attachment 导出包 JSON，与桌面 `export_json` 写盘内容逐字节同源——`to_string_pretty(gather_export_data())`）与 `POST /api/import`（body 落 tempfile→`import_all`，engine 签名零改动；导入成功后 SSE 广播 `data:imported`，响应含 `imported`（ImportResult）+ `missingSecrets`（密钥可达性报告——`load_secret` 双通道存在性探测，缺失项以 `missing_api_key_error` 同款文案列出，不阻塞导入）。两路由挂认证面（Bearer/Cookie），**不经 cmd 分发**——`data_export`/`data_import` 保持 desktop-only（本机文件对话框语义）；错误形状沿用冻结口径（200+AppError 单键 map+判别头，非 200 白名单 401/429/404/413/5xx）。
+  - **healthz deep 增 `migrations` 位**：`migrations_up_to_date`（engine pool.rs，只读巡检不跑迁移——`_sqlx_migrations` 已应用集==内嵌 MIGRATOR 版本集，既覆盖滞后也覆盖降级挂新库）；浅探针语义不变。
+  - **限流键 XFF 感知**（17.1 评审 #4 收口）：`EGOSYNC_BEHIND_PROXY=1` 时认证失败限流键取 `X-Forwarded-For` **最右值**（单可信跳——caddy 追加真实客户端 IP，客户端可伪造左侧、不可伪造最右）；无 XFF 回落 socket IP；门控未启用恒 socket IP（直连伪造头一律忽略——与 XFP 门控同款纪律）。登录面与 Bearer 失败面（T5）两限流器同键语义。
+  - **镜像发布**：`server-docker.yml`——push tag `v*`/main 构建推 ghcr（`ghcr.io/<owner小写>/egosync-server`：tag=剥 v 版本号+latest，main 加 sha）；版本校验 job 钉 tag==server==engine==桌面三处（五文件口径，全仓统一——engine/server 对齐 0.1.6-alpha.3）；镜像运行冒烟（docker run→healthz→stdout 首行 JSON 断言，17.1 deferred #33 收口）；PR 面仅跑版本一致性+.dockerignore 三副本一致性（17.1 deferred #8 收口）轻量 job。镜像保持 ghcr 默认**私有**（部署侧 VPS docker login PAT，见部署文档 11.2）。compose 镜像引用参数化 `ghcr.io/guows520/egosync-server:${EGOSYNC_IMAGE_TAG:-latest}`（build 保留供本地，升级=pull→up 两步成立）。
+  - **CI 三链路落位**：桌面=`ci.yml` test-and-build（现状原样）、server=`server-ci.yml` server-test、web e2e=`server-ci.yml` 新增 web-e2e-smoke job（node 22+rust-cache 构建 server debug+dist+chrome-for-testing 148 供给→`test:web:smoke` 冒烟套件=web-streaming+web-reconnect；web-events/web-resident-loop 留 `test:web` 全量本地/夜跑）。
+  - **web UI 最小入口（已裁决 Q3=A）**：设置页数据区新增「云端数据备份」（`!isTauriHost()` 门控——桌面本地不重复）：导出=blob 下载（`dataService.webExport`）、导入=file input→确认→POST（`dataService.webImport`），导入报告逐项展示缺失密钥重录文案。
 
 ### ⑧安全威胁模型
 

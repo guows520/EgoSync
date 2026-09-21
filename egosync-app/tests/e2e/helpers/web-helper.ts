@@ -6,14 +6,15 @@
 // - IPC 走 REST：POST /api/cmd/{command}（camelCase 参数，200 + 判别头
 //   X-Egosync-App-Error 表示业务错误）——与桌面 invoke 错误通道同构；
 // - 服务端进程控制：PID 文件（onPrepare 在 launcher 进程起的 detached
-//   实例，worker 进程读 PID kill；重启用同 env 重放）。
+//   实例，worker 进程读 PID kill；重启用同 env 重放——先杀旧实例再起新
+//   进程，PID 文件始终指向唯一存活实例）。
 
 import { spawn, ChildProcess } from 'child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, openSync } from 'fs';
 import { resolve, dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { browser } from '@wdio/globals';
-import { webServerEnv, webServerUrl, waitForPort } from '../wdio.web.conf';
+import { webServerEnv, webServerUrl, waitForPort, waitForPortClosed } from '../wdio.web.conf';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // __dirname = egosync-app/tests/e2e/helpers —— e2e 根目录上一级；
@@ -47,11 +48,27 @@ export async function saveWebSmokeScreenshot(name: string): Promise<void> {
 
 /**
  * 读当前服务端 PID（onPrepare 起服时写入；重启后由本助手覆写）。
+ * 评审补丁（17.3 分诊 P1）：导出给 spec 断言「重启真实置换存活实例」。
  */
-function readServerPid(): number | null {
+export function readServerPid(): number | null {
   if (!existsSync(pidFile)) return null;
   const pid = Number(readFileSync(pidFile, 'utf-8').trim());
   return Number.isFinite(pid) ? pid : null;
+}
+
+/**
+ * 判定 PID 是否仍是 egosync-server 进程（评审补丁 17.3 分诊 P12：PID
+ * 回收场景下盲杀会命中无关进程）。读 /proc/{pid}/cmdline 核验身份；
+ * 非 Linux 无 /proc ⇒ 返回 true（保持既有杀语义，e2e 实际只在 Linux 跑）。
+ */
+export function isEgoSyncServerPid(pid: number): boolean {
+  if (!existsSync('/proc')) return true; // 非 Linux：无法核验，维持既有杀语义
+  try {
+    const cmdline = readFileSync(`/proc/${pid}/cmdline`, 'utf-8');
+    return cmdline.includes('egosync-server');
+  } catch {
+    return false; // /proc 在而读不到 ⇒ 进程已死——无需杀
+  }
 }
 
 /**
@@ -81,7 +98,28 @@ export async function killWebServer(): Promise<void> {
  * 返回子进程句柄仅用于防 GC；PID 落盘供后续控制/清理。
  */
 export async function restartWebServer(): Promise<void> {
+  // 根因修复（17.3 验证期发现，详见 17-3 spec Implementation Notes）：旧版
+  // 只起新进程、不杀旧实例——resident-loop「同分钟重启」用例从未真正重启
+  // 过：新进程因端口被占绑定失败退出，PID 文件被覆写为死 PID，真正的旧
+  // 服务端沦为孤儿僵尸，污染下一轮 onPrepare（端口误判就绪 → DB 双写 →
+  // spec 雪崩）。现在：先按 PID 文件杀旧实例，等端口真正关闭，最后才同
+  // env 重放——「重启」名副其实。
+  const oldPid = readServerPid();
+  if (oldPid != null && isEgoSyncServerPid(oldPid)) {
+    // 身份核验后才杀（评审补丁 P12）：PID 回收场景下盲杀会命中无关进程
+    try {
+      process.kill(oldPid, 'SIGKILL');
+    } catch {
+      // 旧实例已死（如 reconnect spec 先 killWebServer 过）——继续
+    }
+  }
   const env = webServerEnv();
+  const { EGOSYNC_PORT } = env;
+  if (!EGOSYNC_PORT) throw new Error('EGOSYNC_PORT missing in web server env');
+  // 端口真空闲后才起新进程：既等被杀旧实例的 socket 释放，也把「端口被
+  // 未知进程占用」从静默假重启（新进程绑定失败退出、旧进程继续顶名服务）
+  // 变成明确报错。
+  await waitForPortClosed(Number(EGOSYNC_PORT), 15000);
   const serverLogFd = openSync(resolve(e2eRoot, 'logs', 'web', 'server.log'), 'a');
   const child: ChildProcess = spawn(serverBinary, [], {
     env,
@@ -95,8 +133,6 @@ export async function restartWebServer(): Promise<void> {
   });
   if (!child.pid) throw new Error('server restart spawn 失败：无 PID');
   writeFileSync(pidFile, String(child.pid));
-  const { EGOSYNC_PORT } = env;
-  if (!EGOSYNC_PORT) throw new Error('EGOSYNC_PORT missing in web server env');
   await Promise.race([waitForPort(Number(EGOSYNC_PORT), 20000), spawnFailed]);
 }
 

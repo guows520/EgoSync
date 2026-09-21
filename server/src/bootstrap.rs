@@ -374,6 +374,8 @@ pub async fn build_app_state(
         cancel,
         // Story 17.1：反代感知门控（main.rs 读取 env 后参数下发）
         behind_proxy,
+        // Story 17.3 评审修复：逻辑级备份导入/导出互斥（见 AppState 字段注）
+        import_lock: tokio::sync::Mutex::new(()),
     }))
 }
 
@@ -453,6 +455,8 @@ pub async fn build_test_state_with_proxy(
         cancel: CancellationToken::new(),
         // Story 17.1：反代感知门控（测试通道参数化）
         behind_proxy,
+        // Story 17.3 评审修复：备份互斥（测试态与生产态同语义）
+        import_lock: tokio::sync::Mutex::new(()),
     }))
 }
 

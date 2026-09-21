@@ -20,6 +20,7 @@
 //! → 500）；传输面前置拒绝（跨源 403 / 超限 413）为显式登记的传输面扩展。
 
 pub mod auth;
+pub mod backup;
 pub mod bootstrap;
 pub mod cors;
 pub mod dispatch_gen;
@@ -69,6 +70,10 @@ pub struct AppState {
     /// X-Forwarded-\* 一律忽略（直连语义与 15.4 逐字节一致——dev/e2e
     /// 零影响，防直连暴露下的伪造信任）。
     pub behind_proxy: bool,
+    /// 逻辑级备份串行锁（Story 17.3 评审修复）：导入是双库全量替换，
+    /// 并发导入交错会混装两个包的数据；导出共享同锁保证快照不落在
+    /// 替换中间态。恒锁到请求结束（guard drop 释放）。
+    pub import_lock: tokio::sync::Mutex<()>,
 }
 
 /// 构建完整路由（生产与测试共用；测试经 [`bootstrap::build_test_state`]
@@ -91,9 +96,13 @@ pub fn build_router(state: Arc<AppState>, static_dir: Option<std::path::PathBuf>
         .with_state(state.clone());
 
     // 业务路由（认证中间件守门——未认证含 SSE 一律 401；Bearer 叠加通道
-    // 见 auth::require_auth）
+    // 见 auth::require_auth）。/api/export、/api/import 是 server 独立
+    // 逻辑级备份路由（Story 17.3）——不经 cmd 分发（data_export/data_
+    // import 保持 desktop-only），Bearer/Cookie 双通道与 cmd 路由一致。
     let authed = Router::new()
         .route("/api/cmd/{command}", post(routes::cmd_handler))
+        .route("/api/export", get(backup::export_handler))
+        .route("/api/import", post(backup::import_handler))
         .route(
             "/api/events/ticket",
             post(sse::ticket_handler),

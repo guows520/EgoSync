@@ -440,8 +440,8 @@ All items resolved in the same session:
   summary: Google Fonts 外链依赖——16.1 以 CSP 放行 fonts.googleapis.com/gstatic 修复视觉分叉，但离线/内网部署两端都回退系统字体且外链依赖第三方 CDN。
   evidence: index.html:7 外链（Inter/JetBrains Mono/Noto Sans SC）；17.x Docker/离线部署故事评估自托管字体（随 dist 分发，兼顾离线一致性与隐私）。
 - source_spec: `_bmad-output/implementation-artifacts/16-2-realtime-streaming-and-browser-compat.md`
-  summary: test:web 的 CI 接线——Linux job 内执行 web e2e（构建 server 二进制 + dist 后跑 npm run test:web），供给步骤已先行落地（scripts/setup-web-drivers.mjs）。
-  evidence: .github/workflows/ci.yml 全文无 test:web 步骤且桌面 e2e 均以 && false 禁用；web e2e 仅由本 VM 手工三连跑守护，合入后浏览器栈回归（SSE/重连/刷新恢复/375px 溢出）CI 全绿不可见（验证缺口层 filed）。
+  summary: 【已收口（17.3，2026-09-21）】test:web 的 CI 接线——Linux job 内执行 web e2e（构建 server 二进制 + dist 后跑 npm run test:web），供给步骤已先行落地（scripts/setup-web-drivers.mjs）。
+  evidence: ~~.github/workflows/ci.yml 全文无 test:web 步骤且桌面 e2e 均以 && false 禁用；web e2e 仅由本 VM 手工三连跑守护，合入后浏览器栈回归（SSE/重连/刷新恢复/375px 溢出）CI 全绿不可见（验证缺口层 filed）~~。**收口落地**：server-ci.yml 新增 web-e2e-smoke job（node 22 + server debug 构建 + dist 构建 + setup-web-drivers 双下载 → `npm run test:web:smoke` 冒烟套件 = web-streaming + web-reconnect）；全量 `test:web` 留本地/夜跑（web-events/web-resident-loop 的 60s tick 对齐 + LLM stub 不进 CI）。触发 paths 含前端/e2e/engine 面。
 - source_spec: `_bmad-output/implementation-artifacts/16-2-realtime-streaming-and-browser-compat.md`
   summary: 记忆/使命宣言/晨间简报/周复盘等面的 transport:reconnected 重放消费——断线窗口内服务端变更后这些视图保持陈旧直至重挂载。
   evidence: 全仓 grep results?.[ 消费仅覆盖通知/任务/仪表盘/角色列表四视图（与冻结矩阵枚举一致）；memory_list/briefing_get_latest/review_get_latest 无消费者。矩阵外扩属后续增强（盲扫层 filed）。
@@ -462,18 +462,18 @@ All items resolved in the same session:
   evidence: server/src/lib.rs public 路由组挂 rate_limit；desktop_remote_test 仅验证 Bearer 失败计数与 auth 限流器独立（单方向），未覆盖桌面常规用量撞限的交互。预算拆分/状态查询豁免值得独立决策（属 15.4 既有预算面的再分配）
 
 - source_spec: `_bmad-output/implementation-artifacts/17-1-docker-deploy-secrets-and-tls.md`
-  summary: 导入后密钥可达性批量探测（Additional 9 后半）——对导入的每个 api_key_ref 探测 secrets.json/env 是否有值，无值返回指明重录路径的结构化错误。
-  evidence: 17.1 人工裁决（2026-09-21，Open Question 1 选项 A）：server 侧无 data_import 命令，/api/import 端点属 17.3 计划（architecture.md:2560、epics.md:3644）——探测触发点随端点落地，17.1 已先交付错误文案收敛（NFR-C7）；探测数据源复用 settings::list_llm_configs 的 ref 清单（destroy_all_data:1397 同款用法）。
+  summary: 【已收口（17.3，2026-09-21）】导入后密钥可达性批量探测（Additional 9 后半）——对导入的每个 api_key_ref 探测 secrets.json/env 是否有值，无值返回指明重录路径的结构化错误。
+  evidence: ~~17.1 人工裁决（2026-09-21，Open Question 1 选项 A）：server 侧无 data_import 命令，/api/import 端点属 17.3 计划（architecture.md:2560、epics.md:3644）——探测触发点随端点落地，17.1 已先交付错误文案收敛（NFR-C7）；探测数据源复用 settings::list_llm_configs 的 ref 清单（destroy_all_data:1397 同款用法）~~。**收口落地**：server/src/backup.rs `probe_missing_secrets`（导入后 `list_llm_configs` × `load_secret` 存在性探测，`Ok(None)`/`Err` 计缺失，空 env 串按 17.1 冻结语义计在场）；报告随 /api/import 响应 `missingSecrets` 数组下发（configName/apiKeyRef/message，message 复用 `missing_api_key_error` 同款重录文案），不阻塞导入；backup_roundtrip_test 覆盖跨实例报告项与 DB 落库。
 
 - source_spec: `_bmad-output/implementation-artifacts/17-1-docker-deploy-secrets-and-tls.md`
-  summary: 反代拓扑下认证限流退化为实例级单桶——限流键取 socket IP（caddy 容器 IP），需 XFF 感知的可信代理语义设计（防伪造 XFF 绕过限流）。
-  evidence: 17.1 评审（三层）#4：auth.rs 限流按 ConnectInfo，EGOSYNC_BEHIND_PROXY 仅消费 X-Forwarded-Proto 未消费 X-Forwarded-For；公网失败登录可把合法用户打成 429。README 已诚实化措辞。修法需裁决信任链（取 XFF 最右值 vs 可信代理网段），17.3 反代加固一并处理。
+  summary: 【已收口（17.3，2026-09-21）】反代拓扑下认证限流退化为实例级单桶——限流键取 socket IP（caddy 容器 IP），需 XFF 感知的可信代理语义设计（防伪造 XFF 绕过限流）。
+  evidence: ~~17.1 评审（三层）#4：auth.rs 限流按 ConnectInfo，EGOSYNC_BEHIND_PROXY 仅消费 X-Forwarded-Proto 未消费 X-Forwarded-For；公网失败登录可把合法用户打成 429。README 已诚实化措辞。修法需裁决信任链（取 XFF 最右值 vs 可信代理网段），17.3 反代加固一并处理~~。**收口落地**：裁决取 XFF **最右值**（单可信跳语义——caddy 追加的真实客户端 IP，客户端可伪造左侧不可伪造最右；多级串联的诚实边界已写入部署文档 11.4）。server/src/auth.rs `rate_limit_key(behind_proxy, headers, socket_ip)`：门控开→XFF 最右值（无头/不可解析回落 socket IP）；门控关→恒 socket IP（直连伪造头忽略）。登录面 `rate_limit` 中间件、login 失败日志、`require_auth`/`require_auth_with_sse_ticket` 的 Bearer 失败限流（T5）四点同键。单测（单值/伪造多跳/空白/IPv6/缺头/不可解析/门控关）+ proxy_tls_test 三集成测试（XFF 分桶/直连伪造无效/Bearer 面分桶）覆盖。
 - source_spec: `_bmad-output/implementation-artifacts/17-1-docker-deploy-secrets-and-tls.md`
-  summary: 三份 .dockerignore（仓库根 / server/ / Dockerfile.dockerignore）无防漂移机械校验——副本失手（尤其 secrets 排除项）会无声重开构建上下文洞。
-  evidence: 17.1 评审 #8：三副本仅靠头注纪律同步维护；CI 比对脚本/单一来源生成属 CI 基建，17.3 server-docker.yml（镜像构建工作流）是自然归宿。
+  summary: 【已收口（17.3，2026-09-21）】三份 .dockerignore（仓库根 / server/ / Dockerfile.dockerignore）无防漂移机械校验——副本失手（尤其 secrets 排除项）会无声重开构建上下文洞。
+  evidence: ~~17.1 评审 #8：三副本仅靠头注纪律同步维护；CI 比对脚本/单一来源生成属 CI 基建，17.3 server-docker.yml（镜像构建工作流）是自然归宿~~。**收口落地**：server-docker.yml `dockerignore-consistency` job（PR/main/tag 全触发）：①server 两份排除模式集逐行相同（注释/空行漂移放行）；②根文件 = server 份 − `relay-server/`（根是 relay 构建共享面）；③密钥排除项（`**/secrets.json`、`**/*.db`、`**/node_modules/`、`**/target/`、`**/.env`）在场断言。本机已用同逻辑预演全绿。
 - source_spec: `_bmad-output/implementation-artifacts/17-1-docker-deploy-secrets-and-tls.md`
-  summary: server stdout JSON 日志格式无自动化验证（丢 .json() 或翻回 stderr 时全部测试仍绿）。
-  evidence: 17.1 评审 #33：server 测试全走 InProcessRouter 不执行 main；钉法需 spawn bin 读输出（CARGO_BIN_EXE）属进程级烟囱测试，17.3 CI 镜像冒烟（docker run + logs 断言）自然闭合。
+  summary: 【已收口（17.3，2026-09-21）】server stdout JSON 日志格式无自动化验证（丢 .json() 或翻回 stderr 时全部测试仍绿）。
+  evidence: ~~17.1 评审 #33：server 测试全走 InProcessRouter 不执行 main；钉法需 spawn bin 读输出（CARGO_BIN_EXE）属进程级烟囱测试，17.3 CI 镜像冒烟（docker run + logs 断言）自然闭合~~。**收口落地**：server-docker.yml 镜像运行冒烟 job（push tag/main）：docker run → /healthz 存活断言 + `docker logs` stdout 首条非空行经 python3 json.loads 解析为含 `level` 字段的 JSON 对象（丢 .json() 或翻 stderr 即红）。注：CI 内执行，本 VM 无法预演（诚实登记：断言逻辑以独立 python 片段本地验证过语法，未在真实镜像上跑）。
 - source_spec: `_bmad-output/implementation-artifacts/17-1-docker-deploy-secrets-and-tls.md`
   summary: SecretStore env 兜底把空值当有值——.env 设 EGOSYNC_SECRET_{ref}=（空串）时返回空密钥致 provider 401，而非结构化重录错误。
   evidence: 17.1 评审 #22：secret_store.rs env 读取 Ok("") 计入 Some；修法（filter 非空）触碰 17.1 冻结「不改 SecretStore 行为」边界，需独立故事裁决语义（空 env = 缺失 or 显式空值）。
@@ -481,11 +481,39 @@ All items resolved in the same session:
   summary: project-context.md 未收录 17.1 交付的部署拓扑与三个新 env（EGOSYNC_BEHIND_PROXY / EGOSYNC_OPENCODE_PATH / EGOSYNC_SECRET_{ref}）及 compose/Docker 部署面。
   evidence: 17.1 评审 #7b：agent-context 文件按分诊规则固定 defer；AGENTS.md 规定项目细节以 project-context.md 为准，后续故事执行者不可见新 env 面。
 - source_spec: `_bmad-output/implementation-artifacts/17-2-resident-work-loop-hardening-fr47.md`
-  summary: epic-17-context.md 仍写「三处内存去重 map」并漏 trigger_count 字段，与 17.2 落地的五处口径及 scheduler_triggers 表结构矛盾。
-  evidence: 17.2 评审 #16：同 diff 内两份规划工件口径打架，后续故事（17.3）执行者读 epic context 会拿到陈旧口径；agent-context 编译产物按分诊规则 defer，重编译时对齐 architecture.md 注记即可。
+  summary: 【已收口（17.3 评审轮，2026-09-21）】epic-17-context.md 仍写「三处内存去重 map」并漏 trigger_count 字段，与 17.2 落地的五处口径及 scheduler_triggers 表结构矛盾。
+  evidence: ~~17.2 评审 #16：同 diff 内两份规划工件口径打架，后续故事（17.3）执行者读 epic context 会拿到陈旧口径；agent-context 编译产物按分诊规则 defer，重编译时对齐 architecture.md 注记即可~~。**收口落地**：17.3 diff 内 epic-17-context.md 重写（:60 现文「规划口径三处，实现期实测五处——另两处 bigrock 规划提醒/周五检查同款失忆」+ scheduler_triggers 表结构含 trigger_count 字段列全）——17.3 评审盲扫层发现该收口未销账，本条补记。
 - source_spec: `_bmad-output/implementation-artifacts/17-2-resident-work-loop-hardening-fr47.md`
-  summary: test:web（含新 web-resident-loop spec）不在任何 CI workflow，回归靠手跑，评审层 3 演示的接线回归（如误删 record 调用）CI 拦不住。
-  evidence: 17.2 评审缺口层：ci.yml 三链路（vitest/双 cargo/build）+ server-ci.yml 均无 web e2e；epic-17-context 明确 17.3 范围含「CI 三链路 + web e2e 冒烟」，空窗期缺口真实（缺腿时长 = 直至 17.3 交付）。
+  summary: 【已收口（17.3，2026-09-21）】test:web（含新 web-resident-loop spec）不在任何 CI workflow，回归靠手跑，评审层 3 演示的接线回归（如误删 record 调用）CI 拦不住。
+  evidence: ~~17.2 评审缺口层：ci.yml 三链路（vitest/双 cargo/build）+ server-ci.yml 均无 web e2e；epic-17-context 明确 17.3 范围含「CI 三链路 + web e2e 冒烟」，空窗期缺口真实（缺腿时长 = 直至 17.3 交付）~~。**收口落地**：server-ci.yml 新增 `web-e2e-smoke` job（与 16.2 登记的 test:web CI 接线同一条目收口）：冒烟套件 = web-streaming + web-reconnect（确定性子集，`npm run test:web:smoke`，wdio.web.conf.ts `suites` 切分）；全量 `test:web`（含 web-events/web-resident-loop）留本地/夜跑。engine 侧接线由 server-ci 既有 server-test（cargo test）与 build 面覆盖。
 - source_spec: `_bmad-output/implementation-artifacts/17-2-resident-work-loop-hardening-fr47.md`
   summary: scheduler 循环体内 weekly/bigrock-planning 两个结构相同块的 job 常量接线无执行级验证（常量混用检测不出）。
   evidence: 17.2 评审缺口层：判定函数级测试（含评审修复后的 weekly 同 cycle 真路径断言）各自通过，但循环块传参（JOB_BIGROCK_PLANNING vs JOB_WEEKLY_REVIEW）只有代码审读背书；闭合需 job 参数注入化重构或周级 e2e，超出 17.2 验证级别；e2e 重启腿已覆盖 work_loop 块的执行级接线。
+
+- source_spec: `_bmad-output/implementation-artifacts/17-3-backup-cicd-and-release.md`
+  summary: import_handler 密钥探测失败降级分支（Err ⇒ missingSecrets 空数组 + warn 日志，不阻塞导入）无测试钉死。
+  evidence: 17.3 评审验证缺口层 V6：唯一 Err 源是「导入刚成功后 DB 读失败」，经 InProcessServer 注入需不存在的故障注入缝；防御性分支、爆炸半径小（用户最多少看一份重录指引，导入本身已成功）。简化重构破坏该语义时 backup_roundtrip_test 全绿——若后续为 probe 加故障注入缝，补断言「探测 Err ⇒ 200 + missingSecrets: []」即可。
+- source_spec: `_bmad-output/implementation-artifacts/17-3-backup-cicd-and-release.md`
+  summary: 镜像仅构建 runner 原生架构（linux/amd64）——ARM VPS（部署文档目标价位 $5-10/月含大量 ARM 机型）拉不到可用镜像，且无任何地方显式说明。
+  evidence: 17.3 评审盲扫层：server-docker.yml buildx 未指定 platforms；relay-docker.yml（17.1 先例）同样单架构——本轮裁决忠实先例、不改发布面语义。修复需 multi-arch 构建裁决（QEMU 模拟 arm64 的时长代价 vs 目标用户硬件分布）+ 部署文档架构说明，属独立决策；dockerignore-consistency 式的一致性 job 不覆盖该面。
+- source_spec: `_bmad-output/implementation-artifacts/17-3-backup-cicd-and-release.md`
+  summary: latest tag 每次 main push 即被覆盖（docs-only 提交也构建并移动 latest），且补推旧版本 tag 会把 latest 回写为旧版本——latest ≠ 最新发布版。
+  evidence: 17.3 评审盲扫层 + 边界层：push 面无 paths 过滤是发布可靠性裁决（刻意），代价未登记；回滚/钉版场景补推旧 tag 时 latest 会被回写（compose 缺省拉 latest 的用户静默降级）。relay-docker.yml（17.1 先例）同款 latest 策略——本轮不改。候选修法：仅 tag push 推 latest，main 只推 sha tag；或 version job 校验 tag 为 semver 时才挂 latest。
+- source_spec: `_bmad-output/implementation-artifacts/17-3-backup-cicd-and-release.md`
+  summary: docker-compose.yml 同时挂 image: 与 build:——镜像不在本地时 `docker compose up -d` 静默走源码构建（5-20 分钟）而非拉取 registry 镜像；compose owner 硬编码 guows520 与 workflow 的 GITHUB_REPOSITORY_OWNER 派生不一致（fork/改名后 pull 静默失效）。
+  evidence: 17.3 评审盲扫层：本地构建兜底是调试便利与部署脚枪的取舍；owner 硬编码影响 fork 部署者。候选修法：compose 加 `pull_policy: always`（或拆 compose.local.yml 承载 build: 面）+ owner 参数化（env 注入）。属部署体验优化，非本故事验收面。
+- source_spec: `_bmad-output/implementation-artifacts/17-3-backup-cicd-and-release.md`
+  summary: CI 触发路径清单四份手工副本（server-docker PR / server-ci push / server-ci PR / 部署文档）已开始漂移，漏列文件即静默跳过门禁。
+  evidence: 17.3 评审盲扫层：三处 YAML 枚举条目互有出入（如 src-tauri/Cargo.toml 此前仅在部分清单）；本轮已补齐版本文件与构建配置缺口（tauri.conf.json / src-tauri/Cargo.toml 入 server-docker PR paths——版本一致性 job 消费面），收敛为单一来源（如 paths 由脚本生成 or 放宽为 egosync-app/** 前缀减排除项）留待后续 CI 债务清理。
+- source_spec: `_bmad-output/implementation-artifacts/17-3-backup-cicd-and-release.md`
+  summary: Chrome for Testing 下载无 zip sha256 钉版——每个 PR 都会执行的浏览器二进制供给仅有尺寸启发式 + 解压后 --version 执行校验（本轮已补），无密码学完整性保障。
+  evidence: 17.3 评审盲扫层（供应链面）：opencode 在 Dockerfile 里钉了 sha256，浏览器二进制却无 checksum。本轮补了解压后可执行校验（残缺/截断二进制会被明确报错 + 缓存自愈），真哈希钉版需把官方 known-good sha256 常量化进 setup-web-drivers.mjs 并在 unzip 前校验——机械工作量小，留作后续加固。
+- source_spec: `_bmad-output/implementation-artifacts/17-3-backup-cicd-and-release.md`
+  summary: [profile.dev] 瘦身块在三份 Cargo.toml 各贴一份——profile 仅在「该 crate 为构建根」时生效（engine 的那份经 server/src-tauri 构建时形同虚设），且全局剥夺本地调试的变量查看能力。
+  evidence: 17.3 评审盲扫层：收敛为工作区根单份或 .cargo/config.toml 更不易漂移；engine 那份为独立 cargo test 提速真实有效（本机实测），故本轮保留现状。属构建配置整洁度而非正确性。
+- source_spec: `_bmad-output/implementation-artifacts/17-3-backup-cicd-and-release.md`
+  summary: /api/import 响应对「导入后密钥探测失败」不可见——Err 降级为 missingSecrets 空数组 + 服务端 warn 日志，用户会把「探测失败」误读为「所有密钥都在场」。
+  evidence: 17.3 评审盲扫层 B2：探测失败的唯一 Err 源是导入刚成功后 DB 读失败（触发面极窄），且候选修法（响应加 probeError 字段）扩响应契约面（冻结口径为 {imported, missingSecrets} 两键 camelCase）——需独立裁决响应形状演化。定夺时同步补 V6 的降级分支断言（探测 Err ⇒ 200 + 空数组而非 AppError）。
+- source_spec: `_bmad-output/implementation-artifacts/17-3-backup-cicd-and-release.md`
+  summary: 全量 web e2e（test:web 4 spec）不在任何 CI workflow 也无 nightly——回归 100% 手工守护，17.2 D2 的空窗只被冒烟子集部分收口。
+  evidence: 17.3 评审盲扫层 B14：spec/architecture/17.2 收口条目三处「留本地/夜跑」措辞已如实修正（本地手工），但真 nightly workflow（schedule: cron 跑全量 4 spec，约 8-10 分钟 runner + 已知 events/resident-loop 的负载敏感面需观察）从未存在。web-events/web-resident-loop 的回归守护当前为零自动化。

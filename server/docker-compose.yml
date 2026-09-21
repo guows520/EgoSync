@@ -25,7 +25,11 @@ services:
       # path 依赖要求 build context 为仓库根（见 Dockerfile 头注）
       context: ..
       dockerfile: server/Dockerfile
-    image: egosync-server:local
+    # Story 17.3：镜像参数化——升级 = `docker compose pull` → `up -d`
+    # 两步成立（CI server-docker.yml 推 ghcr；私有镜像 VPS 侧 docker login
+    # 见部署指南 11.2）。build 保留供本地构建（`up -d --build` 覆盖本地；
+    # 镜像在场时 up 不重建——升级前必先 pull）。
+    image: ghcr.io/guows520/egosync-server:${EGOSYNC_IMAGE_TAG:-latest}
     # 生产不暴露端口给宿主机——唯一入口经 caddy；需要直连调试时
     # 自行加 ports 映射（勿在公网裸暴露 HTTP）
     expose:

@@ -13,7 +13,7 @@
 // 就绪探测：/healthz 200（服务端）+ DOM 标记（connection-status
 // data-state="online"，前端 HttpTransport 三态机落位）。
 
-import { spawn, ChildProcess } from 'child_process';
+import { spawn, execFileSync, ChildProcess } from 'child_process';
 import { existsSync, mkdirSync, rmSync, writeFileSync, readFileSync, openSync } from 'fs';
 import { join, resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -133,12 +133,68 @@ export function waitForPortClosed(port: number, timeout = 15000): Promise<void> 
 
 let serverProcess: ChildProcess | null = null;
 
+/**
+ * 探测端口占用者（ss -tlnp 解析 + /proc cmdline 校验）——无占用返回 null。
+ * Story 17.3 验证期事故加固：孤儿 egosync-server 占端口时，waitForPort 会被
+ * 僵尸应答误判为「新服务端就绪」，后续全线雪崩；本函数让 onPrepare 能在
+ * 起服前发现并处置。ss/proc 不可用（非 Linux）时返回 null——退化为不检查。
+ */
+/** PID 身份核验（评审补丁 P12 余项，与 web-helper isEgoSyncServerPid 同纪律）：
+ * PID 文件陈旧且 PID 被系统回收复用时，盲杀会命中无关进程——先验
+ * /proc/{pid}/cmdline 确是 egosync-server；非 Linux /proc 缺席时维持旧杀语义。 */
+function pidIsEgosyncServer(pid: number): boolean {
+  if (!existsSync('/proc')) return true;
+  try {
+    return readFileSync(`/proc/${pid}/cmdline`, 'utf-8').includes('egosync-server');
+  } catch {
+    return false; // 进程已死——无需杀
+  }
+}
+
+function findPortSquatter(port: number): { pid: number; isEgosyncServer: boolean } | null {
+  try {
+    const stdout = execFileSync('ss', ['-tlnp'], { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] });
+    const line = stdout.split('\n').find(l => new RegExp(`:${port}\\b`).test(l));
+    if (!line) return null;
+    const pidMatch = line.match(/pid=(\d+)/);
+    if (!pidMatch) return null;
+    const pid = Number(pidMatch[1]);
+    let isEgosyncServer = false;
+    try {
+      // 只对「确证是本仓库 egosync-server 二进制」的占用者自动清理——
+      // 其它任何进程占用端口都只报错不杀，绝不误杀用户进程。
+      const cmdline = readFileSync(`/proc/${pid}/cmdline`, 'utf-8');
+      isEgosyncServer = cmdline.includes('egosync-server');
+    } catch {
+      // /proc 不可读——按未知占用者处理（只报错）
+    }
+    return { pid, isEgosyncServer };
+  } catch {
+    return null; // ss 不可用等——维持旧行为（不检查）
+  }
+}
+
 export const config: WebdriverIO.Config = {
   // 留空 hostname/port ⇒ wdio startWebDriver 自动拉起 chromedriver
   // （CHROMEDRIVER_PATH 指向钉版二进制），worker 直连本机随机端口。
   // Web specs 与桌面 specs（specs/**/*.ts）分目录——桌面链路 wdio.conf.ts
   // 的 glob 零改动即不吞 web specs（桌面零回归约束）
   specs: ['./web-specs/*.spec.ts'],
+  // Story 17.3：套件切分（Design Notes「冒烟套件切分」）——
+  // - smoke（CI 冒烟，server-ci.yml web-e2e-smoke job 消费）：
+  //   web-streaming + web-reconnect——无时钟对齐依赖（确定性），负载
+  //   抖动敏感度低；
+  // - full（本地/夜跑全量，`npm run test:web` 缺省即全部 specs）：
+  //   加 web-events / web-resident-loop——含 60s tick 对齐与 LLM stub，
+  //   留本地全量（`npm run test:web:smoke` 跑 smoke 子集）。
+  // 用法：`npm run test:web:smoke`（--suite smoke）；不指定 suite 时跑
+  // specs 全量（缺省行为零变化）。
+  suites: {
+    smoke: [
+      './web-specs/web-streaming.spec.ts',
+      './web-specs/web-reconnect.spec.ts',
+    ],
+  },
   maxInstances: 1,
   capabilities: [
     {
@@ -200,15 +256,38 @@ export const config: WebdriverIO.Config = {
     rmSync(dataDir, { recursive: true, force: true });
     mkdirSync(dataDir, { recursive: true });
 
-    // 残留服务端进程清理（上一轮异常退出）
+    // 残留服务端进程清理（上一轮异常退出）——身份核验后才杀（评审补丁
+    // P12 余项：PID 回收复用时盲杀会命中无关进程；核验失败仅清文件不杀）
     if (existsSync(pidFile)) {
       try {
         const pid = Number(readFileSync(pidFile, 'utf-8').trim());
-        if (Number.isFinite(pid)) process.kill(pid, 'SIGKILL');
+        if (Number.isFinite(pid) && pidIsEgosyncServer(pid)) process.kill(pid, 'SIGKILL');
       } catch {
         // 已死/无权限——忽略
       }
       rmSync(pidFile, { force: true });
+    }
+    // 端口占用守卫（17.3 验证期事故加固）：PID 文件只追踪「最后写入」的
+    // 实例——若存在未被追踪的孤儿 egosync-server 仍占着端口，起服后
+    // waitForPort 会被僵尸应答误判为就绪。此处主动处置：孤儿 egosync-server
+    // 直接清理（SIGKILL + 等端口释放）；其它占用者明确报错，绝不误杀。
+    const squatter = findPortSquatter(WEB_PORT);
+    if (squatter) {
+      if (squatter.isEgosyncServer) {
+        console.warn(
+          `[wdio.web.conf] 端口 ${WEB_PORT} 被孤儿 egosync-server(pid=${squatter.pid})占用——已清理`,
+        );
+        try {
+          process.kill(squatter.pid, 'SIGKILL');
+        } catch {
+          // ss 扫描与 kill 之间恰好退出——继续（waitForPortClosed 兜底）
+        }
+        await waitForPortClosed(WEB_PORT, 10000);
+      } else {
+        throw new Error(
+          `端口 ${WEB_PORT} 被非 egosync-server 进程(pid=${squatter.pid})占用——请手工排查后重跑`,
+        );
+      }
     }
     // 限流窗口标记清残留（上一轮遗留会让首个 spec 白等 61s）
     rmSync(authWindowMarker, { force: true });

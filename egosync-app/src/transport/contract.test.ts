@@ -21,6 +21,24 @@ describe('AppError 判别头契约耦合（TS ⇄ server routes.rs）', () => {
     const tsMatch = httpSource.match(/const APP_ERROR_HEADER = '([^']+)'/);
     expect(tsMatch, 'http.ts 应含 APP_ERROR_HEADER 字符串常量').not.toBeNull();
 
+    // Story 17.3 评审补丁：dataService.ts 是判别头常量的第三份副本
+    //（云端备份端点独立 fetch 客户端）——纳入同一 source-scan 门禁，
+    // 防三副本漂移（此前只有 http.ts/routes.rs 双侧互锁）。
+    const dataServiceSource = readFileSync(
+      resolve(process.cwd(), 'src/services/dataService.ts'),
+      'utf8'
+    );
+    const dataServiceMatch = dataServiceSource.match(
+      /const APP_ERROR_HEADER = '([^']+)'/
+    );
+    expect(
+      dataServiceMatch,
+      'dataService.ts 应含 APP_ERROR_HEADER 字符串常量（云端备份端点判别）'
+    ).not.toBeNull();
+    expect(
+      dataServiceMatch![1]!.toLowerCase()
+    ).toBe(tsMatch![1]!.toLowerCase());
+
     const rustSource = readFileSync(
       resolve(process.cwd(), '..', 'server/src/routes.rs'),
       'utf8'

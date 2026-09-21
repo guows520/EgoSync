@@ -1,0 +1,273 @@
+# Story 17.3：server 镜像 CI/CD——构建、发布与冒烟（relay-docker.yml 先例 +
+# Additional 10/11/12）。
+#
+# 触发面（评审裁决：push 面不带 paths 过滤）：
+# - push main：构建镜像推 ghcr（tag=latest + sha-<short>）+ 运行冒烟；
+# - push tag v*：构建镜像推 ghcr（tag=剥 v 版本号 + latest）+ 运行冒烟；
+# - PR（paths 过滤，既有约定）：仅版本一致性 + .dockerignore 三副本一致性
+#   两个轻量 job——镜像构建约 20 分钟（node dist + rust release 多阶段），
+#   PR 面用 server-ci cargo test + 本文件轻量一致性覆盖（Design Notes：
+#   「镜像冒烟放 tag/main 而非 PR」）；镜像破坏性回归由 main/tag 构建兜底。
+#
+# ⚠️ push 面刻意不挂 paths 过滤：paths 对 tag push 的求值语义文档化程度
+#   不足（tag 静默跳过 = 发布流程断裂），发布可靠性 > 省 CI 分钟。
+#
+# 镜像公开性（已裁决）：ghcr 默认**私有**——首次发布后需在 GitHub
+# package 设置中保持私有；部署侧 VPS docker login 见部署文档 11.2。
+#
+# 17.1 deferred #33/#8 收口：镜像运行冒烟钉 stdout JSON 日志格式；
+# .dockerignore 三副本（仓库根 / server/ / server/Dockerfile.dockerignore）
+# 一致性机械校验（此前仅靠头注纪律同步）。
+name: server-docker
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    paths:
+      - server/**
+      - crates/egosync-engine/**
+      - egosync-app/src/**
+      - egosync-app/src-tauri/tauri.conf.json
+      - egosync-app/src-tauri/Cargo.toml
+      - egosync-app/package.json
+      - egosync-app/package-lock.json
+      - egosync-app/index.html
+      - egosync-app/vite.config.ts
+      - egosync-app/tsconfig.json
+      - egosync-app/tailwind.config.js
+      - egosync-app/postcss.config.js
+      - .dockerignore
+      - server/.dockerignore
+      - server/Dockerfile.dockerignore
+      - .github/workflows/server-docker.yml
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # PR 内取消在跑运行；main/tag push 的门禁结论不得被静默取消
+  # （server-ci.yml 评审修复 #11 同款口径）
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # ── job1：版本一致性（tag==server==engine==桌面三处，五文件口径）──
+  # 已裁决（2026-09-21）：版本口径全仓统一——发版同步改 5 个版本文件
+  # （桌面 3 处 + engine + server）；本 job 校验五值一致，tag push 额外
+  # 校验 tag（剥 v）== 版本。漂移即红并打印差异（I/O 矩阵「镜像发布」行）。
+  # 注意：提取与比较同一步纯 bash 完成——GitHub 表达式在 bash 运行前渲染，
+  # 跨步骤引用循环变量（outputs[f]）会得空串（实现期自查发现）。
+  version-consistency:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 五文件版本一致（tag push 额外校验 tag==版本）
+        run: |
+          set -euo pipefail
+          DESKTOP_PACKAGE=$(grep -oP '"version":\s*"\K[^"]+' egosync-app/package.json | head -1)
+          DESKTOP_CARGO=$(grep -m1 -oP '^version\s*=\s*"\K[^"]+' egosync-app/src-tauri/Cargo.toml)
+          DESKTOP_CONF=$(grep -oP '"version":\s*"\K[^"]+' egosync-app/src-tauri/tauri.conf.json | head -1)
+          ENGINE=$(grep -m1 -oP '^version\s*=\s*"\K[^"]+' crates/egosync-engine/Cargo.toml)
+          SERVER=$(grep -m1 -oP '^version\s*=\s*"\K[^"]+' server/Cargo.toml)
+          echo "桌面 package.json=${DESKTOP_PACKAGE}"
+          echo "桌面 src-tauri/Cargo.toml=${DESKTOP_CARGO}"
+          echo "桌面 tauri.conf.json=${DESKTOP_CONF}"
+          echo "engine=${ENGINE}"
+          echo "server=${SERVER}"
+
+          OK=1
+          check() {
+            if [ "$2" != "${DESKTOP_PACKAGE}" ]; then
+              echo "::error::版本漂移：desktop_package=${DESKTOP_PACKAGE} 但 $1=$2（发版须同步改 5 个版本文件）"
+              OK=0
+            fi
+          }
+          check desktop_cargo "${DESKTOP_CARGO}"
+          check desktop_conf "${DESKTOP_CONF}"
+          check engine "${ENGINE}"
+          check server "${SERVER}"
+          if [ "${OK}" -ne 1 ]; then exit 1; fi
+          echo "OK: 五文件版本一致（${DESKTOP_PACKAGE}）"
+
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            TAG_VERSION="${GITHUB_REF_NAME#v}"
+            if [ "${TAG_VERSION}" != "${DESKTOP_PACKAGE}" ]; then
+              echo "::error::tag ${GITHUB_REF_NAME}（剥 v=${TAG_VERSION}）与版本 ${DESKTOP_PACKAGE} 不符（server==engine==tag 三口径）"
+              exit 1
+            fi
+            echo "OK: tag==server==engine（${TAG_VERSION}）"
+          fi
+
+  # ── job2：.dockerignore 三副本一致性（17.1 评审 #8 收口）──
+  # 三副本 = 仓库根 .dockerignore（经典构建器 + BuildKit 共用面，relay
+  # 镜像同享）/ server/.dockerignore（Story 工件钉死路径）/ server/
+  # Dockerfile.dockerignore（BuildKit per-Dockerfile 优先机制）。注释与
+  # 头注允许漂移，**排除模式集**必须满足：
+  #   - server 两份逐行相同；
+  #   - 根文件 = server 份减去 relay-server/（根是 relay 构建共享面，
+  #     不得排除 relay-server/）。
+  dockerignore-consistency:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 三副本排除模式集一致性
+        run: |
+          patterns() { grep -vE '^[[:space:]]*(#|$)' "$1"; }
+          patterns .dockerignore > /tmp/root.txt
+          patterns server/.dockerignore > /tmp/server.txt
+          patterns server/Dockerfile.dockerignore > /tmp/serverfile.txt
+
+          # 1) server 两份逐行相同
+          if ! diff -u /tmp/server.txt /tmp/serverfile.txt; then
+            echo "::error::server/.dockerignore 与 server/Dockerfile.dockerignore 排除模式漂移"
+            exit 1
+          fi
+
+          # 2) 根文件 = server 份 − relay-server/（根是 relay 共享面）
+          grep -vxF 'relay-server/' /tmp/server.txt > /tmp/server-minus-relay.txt
+          if ! diff -u /tmp/root.txt /tmp/server-minus-relay.txt; then
+            echo "::error::仓库根 .dockerignore 与 server 副本排除模式漂移（根=server−relay-server/，且根不得排除 relay-server/）"
+            exit 1
+          fi
+
+          # 3) 密钥排除项在场（失败即声——构建上下文洞防线）
+          for required in '**/secrets.json' '**/*.db' '**/node_modules/' '**/target/' '**/.env'; do
+            grep -qxF "$required" /tmp/root.txt || {
+              echo "::error::.dockerignore 缺关键排除项 ${required}（secrets/数据/缓存绝不进构建上下文）"
+              exit 1
+            }
+          done
+          echo "OK: 三副本排除模式集一致（含密钥排除项）"
+
+  # ── job3：构建 + 冒烟 + 推送（仅 push：main / tag v*）──
+  docker:
+    needs: [version-consistency, dockerignore-consistency]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 解析镜像名与 tag（小写 owner；tag=剥 v 版本号+latest，main 加 sha）
+        id: image
+        run: |
+          # GHCR 要求镜像名小写（relay-docker 先例）
+          OWNER_LC="${GITHUB_REPOSITORY_OWNER,,}"
+          IMAGE="ghcr.io/${OWNER_LC}/egosync-server"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+            TAGS="${IMAGE}:${VERSION}"
+          else
+            SHORT_SHA="${GITHUB_SHA::7}"
+            TAGS="${IMAGE}:sha-${SHORT_SHA}"
+          fi
+          TAGS="${TAGS} ${IMAGE}:latest"
+          # 多行 tag 列表（空格分隔 → buildx 多 -t）
+          TAG_ARGS=""
+          for t in ${TAGS}; do TAG_ARGS="${TAG_ARGS} -t ${t}"; done
+          {
+            echo "name=${IMAGE}"
+            echo "tags=${TAGS}"
+            echo "tag_args=${TAG_ARGS}"
+            echo "primary=${IMAGE}:latest"
+          } >> "$GITHUB_OUTPUT"
+          echo "镜像 tags: ${TAGS}"
+
+      - name: 构建镜像（load 本地供冒烟；gha 缓存）
+        run: |
+          docker buildx build \
+            --cache-from type=gha \
+            --cache-to type=gha,mode=max \
+            --load \
+            -f server/Dockerfile \
+            ${{ steps.image.outputs.tag_args }} \
+            .
+
+      - name: 镜像运行冒烟（healthz 存活 + 静态页 + stdout JSON 日志断言）
+        run: |
+          CONTAINER=egosync-smoke-$$
+          # 评审补丁（评审发现：python3 断言失败时 bash -e 跳过末尾 docker rm，
+          # 容器泄漏）：trap 兜底清理——任何失败路径都先清容器再红
+          trap 'docker rm -f "${CONTAINER}" 2>/dev/null || true' EXIT
+          docker run -d --name "${CONTAINER}" \
+            -p 18090:8080 \
+            -e EGOSYNC_TOKEN=smoke-secret \
+            -e RUST_LOG=info \
+            "${{ steps.image.outputs.primary }}"
+          # 就绪探测：/healthz 200（存活级——镜像内 server 已起）
+          READY=1
+          for i in $(seq 1 90); do
+            if curl -sf http://127.0.0.1:18090/healthz > /tmp/smoke-healthz.json; then
+              READY=0
+              break
+            fi
+            sleep 2
+          done
+          if [ "${READY}" -ne 0 ]; then
+            echo "::error::镜像 180s 内未就绪（healthz 不可达）——容器日志："
+            docker logs "${CONTAINER}" || true
+            docker rm -f "${CONTAINER}" || true
+            exit 1
+          fi
+          echo "healthz: $(cat /tmp/smoke-healthz.json)"
+          grep -q '"status":"ok"' /tmp/smoke-healthz.json || {
+            echo "::error::healthz 响应非 ok"
+            exit 1
+          }
+          # 静态资源断言（评审补丁：此前从不请求 /——dist 拷贝损坏或静态
+          # 服务回归时冒烟照绿）：SPA 首页必须可达且为 HTML
+          curl -sf http://127.0.0.1:18090/ > /tmp/smoke-index.html || {
+            echo "::error::静态首页 / 不可达（dist 拷贝或静态服务损坏）"
+            exit 1
+          }
+          head -c 200 /tmp/smoke-index.html | grep -qi '<!doctype html\|<html' || {
+            echo "::error::/ 响应非 HTML（疑似错误页/空壳）"
+            head -c 200 /tmp/smoke-index.html
+            exit 1
+          }
+          echo "静态首页 OK（$(wc -c < /tmp/smoke-index.html) 字节 HTML）"
+          # stdout JSON 日志断言（17.1 deferred #33 收口）：tracing JSON 结构化
+          # 日志走 stdout——首条非空行必须是含 level 字段的 JSON 对象
+          # （丢 .json() 或翻回 stderr 时此处即红）
+          docker logs "${CONTAINER}" 2>/dev/null | grep -m1 . > /tmp/smoke-first-line.json || true
+          python3 - <<'PY'
+          import json, sys
+          try:
+              with open('/tmp/smoke-first-line.json') as f:
+                  line = f.read().strip()
+              assert line, "容器 stdout 为空"
+              obj = json.loads(line)
+              assert isinstance(obj, dict) and 'level' in obj, f"首条日志非 tracing JSON 对象: {line[:200]}"
+              print(f"stdout JSON 日志格式 OK: level={obj.get('level')}")
+          except Exception as e:
+              print(f"::error::stdout JSON 日志断言失败: {e}")
+              sys.exit(1)
+          PY
+          docker rm -f "${CONTAINER}"
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push 镜像 tags
+        run: |
+          for t in ${{ steps.image.outputs.tags }}; do
+            docker push "${t}"
+          done
+          echo "已推送: ${{ steps.image.outputs.tags }}"

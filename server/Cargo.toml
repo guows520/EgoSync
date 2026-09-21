@@ -1,6 +1,6 @@
 [package]
 name = "egosync-server"
-version = "0.1.0"
+version = "0.1.6-alpha.3"
 edition = "2021"
 description = "EgoSync 云端自托管 server binary：web-ok 命令全量路由 + SSE 广播 + 单用户令牌认证（Epic 15/16 前置）"
 
@@ -34,6 +34,9 @@ dirs = "5"
 tokio-util = "0.7"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
+# chrono（Story 17.3）：导出 attachment 文件名的本地日期（与桌面 export_json
+# 落盘命名同构）；已在依赖树内（engine 同版本），无新增编译成本。
+chrono = "0.4"
 
 [dev-dependencies]
 tempfile = "3"
@@ -64,3 +67,12 @@ required-features = ["gen"]
 [[bin]]
 name = "egosync-server"
 path = "src/main.rs"
+
+# ---- dev profile 瘦身（2026-09-21，磁盘治理）----
+# 背景：本仓库三个工程各自为政的 target/ 曾在单轮构建后累计 ~24G 撑满磁盘。
+# 1) debug = "line-tables-only"：回溯仍带文件/行号，但调试器无法检查变量
+# 2) incremental = false：不再生成 incremental 缓存（此前一项即占 3.9G）
+# 效果：target/debug 约 13G → 3-4G。需完整调试能力时删除本节即可恢复。
+[profile.dev]
+debug = "line-tables-only"
+incremental = false

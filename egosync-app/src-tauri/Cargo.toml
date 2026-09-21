@@ -38,7 +38,9 @@ rfd = "0.15"
 indexmap = { version = "1", features = ["std"] }
 companion-proto = { version = "0.1.0", path = "../../crates/companion-proto" }
 # Story 15.1：引擎 crate（泛域纯逻辑经 pub use 回引，宿主能力经接缝注入）
-egosync-engine = { version = "0.1.0", path = "../../crates/egosync-engine" }
+# Story 17.3：版本口径全仓统一（5 文件）——path 依赖的版本要求随引擎对齐
+#（0.1.6-alpha.3 为 pre-release，不满足 ^0.1.0——要求行须与引擎版本同步改）
+egosync-engine = { version = "0.1.6-alpha.3", path = "../../crates/egosync-engine" }
 # Story 13.1: 快照分帧 envelope 的 chunk 编码（已在依赖树中，此处置为直接依赖）
 base64 = "0.22"
 tokio-tungstenite = "0.29.0"
@@ -62,3 +64,10 @@ perf-test = []
 version = "0.32"
 default-features = false
 features = ["system"]
+
+# ---- dev profile 瘦身（2026-09-21，磁盘治理）----
+# debug = "line-tables-only"：回溯仍带文件/行号，但调试器无法检查变量
+# incremental = false：不再生成 incremental 缓存。需完整调试能力时删除本节即可。
+[profile.dev]
+debug = "line-tables-only"
+incremental = false

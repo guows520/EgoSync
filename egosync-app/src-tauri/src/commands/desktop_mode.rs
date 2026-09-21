@@ -63,12 +63,11 @@ pub async fn desktop_get_boot_config(app: AppHandle) -> Result<DesktopBootConfig
 
     match mode {
         desktop_mode::DesktopMode::Remote => {
-            // keyring 不可用 ⇒ 令牌缺失（None）：前端走令牌重录视图，
-            // 不阻断引导（fail-safe——模式仍在远程，令牌可补）
-            let remote_token = desktop_mode::load_remote_token().unwrap_or_else(|e| {
-                tracing::warn!("读取远程实例令牌失败（走令牌重录）: {}", e);
-                None
-            });
+            // [评审轮2 U23] 令牌臂裁决抽 `resolve_boot_token` 纯函数
+            //（services 层直测——本地态零 keyring I/O / 出错 fail-safe
+            // 的冻结款此前无测试；此处只传加载器）
+            let remote_token =
+                desktop_mode::resolve_boot_token(mode, desktop_mode::load_remote_token);
             Ok(DesktopBootConfig {
                 mode: "remote".to_string(),
                 remote_url: file.and_then(|f| f.remote_url),

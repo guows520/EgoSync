@@ -319,7 +319,12 @@ export class HttpTransport implements Transport {
     const generation = this.sseGeneration;
     try {
       if (!this.sseTicket) {
-        this.sseTicket = await this.fetchSseTicket();
+        const ticket = await this.fetchSseTicket();
+        // [评审轮2 U16] 签发往返期间 teardown（世代翻新）：票据不入库
+        // ——原实现先赋值后检查，票据跨订阅生命周期滞留，重订阅会复用
+        // 旧票（过期票 ⇒ 多一次建流失败后才自愈）
+        if (generation !== this.sseGeneration) return;
+        this.sseTicket = ticket;
       }
     } catch (e) {
       if (e instanceof HttpTransportError && e.status === 401) {
@@ -380,6 +385,12 @@ export class HttpTransport implements Transport {
     };
     source.onerror = () => {
       if (this.state === 'online') {
+        this.setState('reconnecting');
+      } else if (this.remote && this.state === 'connecting') {
+        // [评审轮2 U17] 远程首连失败：立即转 reconnecting——gate 已过而
+        // 事件流失联时「重连中」横幅须可呈现（三态诚实呈现；此前恒留
+        // connecting ⇒ 静默失联无感知）。浏览器首连保持 connecting 为
+        // 冻结语义（非致命 onerror = 原生重连中），不受影响。
         this.setState('reconnecting');
       }
       if (!this.remote) {

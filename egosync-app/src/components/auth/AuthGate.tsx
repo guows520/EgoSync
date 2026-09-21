@@ -26,6 +26,7 @@ import { ReactNode, useEffect, useState } from 'react';
 import { getAuthStatus, getTransport, getTransportBoot, invalidateAuthStatusCache, isTauriHost } from '@/transport';
 import { HttpTransportError } from '@/transport';
 import { isRemoteDesktop } from '../../appMode';
+import { toErrorMessage } from '../../lib/errorMessage';
 import { remoteModeSaveConfig, remoteModeRestart } from '../../services/desktopModeService';
 import { LoginView } from './LoginView';
 import { RemoteLoginView } from './RemoteLoginView';
@@ -119,7 +120,9 @@ export function AuthGate({ children }: { children: ReactNode }) {
       // restart 不返回（进程退出重启）——此处实际不可达
     } catch (e) {
       setIsSwitchingLocal(false);
-      setOfflineMessage(`切回本地失败：${e instanceof Error ? e.message : String(e)}`);
+      // [评审轮2 U15] Tauri reject 值为序列化 AppError 单键对象（非
+      // Error 实例）——String(e) 呈 [object Object]，真实原因不可见
+      setOfflineMessage(`切回本地失败：${toErrorMessage(e)}`);
       throw e;
     }
   };
@@ -144,12 +147,23 @@ export function AuthGate({ children }: { children: ReactNode }) {
   }
 
   if (state === 'offline') {
+    // [评审轮2 U11] 离线屏展示远端地址：配错/失效 URL 时可就地诊断
+    // （与 login/setup 视图同源——login/setup 均展示 URL）
+    const offlineUrl = remote ? (getTransportBoot()?.remoteUrl ?? '') : '';
     return (
       <div className="h-screen supports-[height:100dvh]:h-dvh flex flex-col items-center justify-center bg-[#F1F3F5] dark:bg-slate-800">
         <div className="max-w-md text-center space-y-6 p-8">
           <div className="text-slate-600 dark:text-slate-300 text-[14px] leading-relaxed">
             {offlineMessage}
           </div>
+          {offlineUrl && (
+            <div
+              className="text-slate-400 dark:text-slate-500 text-[12px] font-mono break-all"
+              data-testid="auth-offline-url"
+            >
+              {offlineUrl}
+            </div>
+          )}
           <div className="flex items-center justify-center gap-3">
             <button
               type="button"

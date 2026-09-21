@@ -336,4 +336,75 @@ describe('HttpTransport 远程桌面通道', () => {
     });
     unlistenReconnected();
   });
+
+  // ── [评审轮2] 票据签发 401 / 首连失败状态机 / 签发竞态 ──
+
+  it('票据签发 401：auth:unauthorized 事件发射 + 不进退避（无重建定时器）', async () => {
+    // [评审轮2 U22] 令牌轮换经 SSE 通道抵达令牌重录视图的唯一信号——
+    // 漏 emit（或误入退避循环）则用户只见永久「重连中」
+    ticketResponse = () => jsonResponse(401, { error: 'unauthorized' });
+    const transport = makeRemote();
+    const unauthorized: unknown[] = [];
+    transport.on('auth:unauthorized', payload => unauthorized.push(payload));
+    transport.on(SAMPLE_EVENT, () => {});
+
+    await vi.waitFor(() => {
+      expect(unauthorized).toHaveLength(1);
+    });
+    // 不退避：无重建定时器、未建流（401 分流语义——区别于网络失败的
+    // 退避 governor）
+    expect(transport['rebuildTimer']).toBeNull();
+    expect(FakeEventSource.instances).toHaveLength(0);
+  });
+
+  it('远程首连失败：connecting → reconnecting（「重连中」横幅可呈现）', async () => {
+    // [评审轮2 U17] 首连（未 onopen）失败不得停留在 connecting——
+    // gate 已过而事件流失联时用户无感知（三态诚实呈现缺口）
+    const transport = makeRemote();
+    const states: string[] = [];
+    transport.onConnectionStateChange(s => states.push(s));
+    transport.on(SAMPLE_EVENT, () => {});
+    await vi.waitFor(() => {
+      expect(FakeEventSource.instances).toHaveLength(1);
+    });
+
+    FakeEventSource.instances[0]!.onerror!();
+    expect(states).toContain('reconnecting');
+    // 接管语义不变：立即重取票据重试（新连接）
+    await vi.waitFor(() => {
+      expect(FakeEventSource.instances).toHaveLength(2);
+    });
+  });
+
+  it('签发竞态：teardown 后票据不入库（不跨订阅生命周期滞留）', async () => {
+    // [评审轮2 U16] 慢签发 + 撤空订阅（世代翻新）→ 放行签发——票据
+    // 不得滞留在手（重订阅复用旧票 ⇒ 多一次建流失败后才自愈）
+    let gateOpen = false;
+    let pending: ((res: Response) => void) | null = null;
+    vi.unstubAllGlobals();
+    vi.stubGlobal('EventSource', FakeEventSource);
+    vi.stubGlobal('fetch', (url: string, init: RequestInit) => {
+      fetchCalls.push({ url, init });
+      if (url.endsWith('/api/events/ticket')) {
+        if (gateOpen) return Promise.resolve(ticketResponse());
+        return new Promise<Response>(resolve => { pending = resolve; });
+      }
+      return Promise.resolve(jsonResponse(200, { ok: true }));
+    });
+
+    const transport = makeRemote();
+    const unlisten = transport.on(SAMPLE_EVENT, () => {});
+    // 签发挂起中撤空订阅：teardown 世代翻新
+    unlisten();
+    expect(transport['sseGeneration']).toBeGreaterThan(0);
+
+    // 放行签发：世代已翻新 ⇒ 不建流且票据不入库
+    gateOpen = true;
+    pending!(ticketResponse());
+    await vi.waitFor(() => new Promise(resolve => setTimeout(resolve, 0)));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(FakeEventSource.instances).toHaveLength(0);
+    expect(transport['sseTicket']).toBeNull();
+  });
 });

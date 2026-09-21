@@ -17,6 +17,7 @@
 import { FormEvent, useState } from 'react';
 import { Cloud, Loader2, Check, AlertCircle, ArrowLeft, RefreshCw } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { toErrorMessage } from '../../lib/errorMessage';
 import { getTransportBoot } from '@/transport';
 import { getDesktopMode } from '@/appMode';
 import {
@@ -138,7 +139,9 @@ export function RemoteModeSection() {
     } catch (e) {
       setIsSwitching(false);
       setShowSwitchConfirm(false);
-      setSwitchError(e instanceof Error ? e.message : String(e));
+      // [评审轮2 U15] Tauri reject = 序列化 AppError 单键对象——
+      // String(e) 呈 [object Object]，keyring/校验真实原因不可见
+      setSwitchError(toErrorMessage(e));
     }
   };
 
@@ -154,7 +157,8 @@ export function RemoteModeSection() {
     } catch (e) {
       setIsSwitchingBack(false);
       setShowLocalConfirm(false);
-      setSwitchBackError(e instanceof Error ? e.message : String(e));
+      // [评审轮2 U15] 同上——AppError 单键对象 ⇒ 首值
+      setSwitchBackError(toErrorMessage(e));
     }
   };
 

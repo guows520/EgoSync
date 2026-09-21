@@ -204,21 +204,55 @@ describe('AuthGate 远程桌面分支（Story 16.3）', () => {
     expect(shellMocks.saveConfig).not.toHaveBeenCalled();
   });
 
-  it('重录验证网络失败：断网文案（不误报令牌失效）', async () => {
+  it('引导检查网络失败 ⇒ 离线屏 + 重试 + 切回本地逃生口（I/O 矩阵「远程不可达」）', async () => {
+    // [评审轮2 U13 改名] 原名「重录验证网络失败」不副实：桩对全部
+    // status 请求 reject——实际跑的是 gate 首查失败 → 离线屏（重录视图
+    // 内 verifyToken 网络失败分支由下方独立用例覆盖）
     stubFetch(url => {
       if (url === `${REMOTE_URL}/api/auth/status`) {
-        // 首次（gate 检查）成功；重录验证断网
         return Promise.reject(new TypeError('network down'));
       }
       return jsonResponse(404, { error: 'not found' });
     });
     bootRemote('tk');
     renderGate();
-    // 首次 status 网络失败 ⇒ 离线屏（I/O 矩阵「远程不可达」）
     expect(await screen.findByText('无法连接服务器，请检查网络后重试。')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '重试' })).toBeInTheDocument();
     // 远程态：切回本地逃生口在离线屏呈现
     expect(screen.getByRole('button', { name: '切回本地模式' })).toBeInTheDocument();
+    // [评审轮2 U11] 离线屏展示远端地址（配错/失效 URL 时可就地诊断）
+    expect(screen.getByTestId('auth-offline-url')).toHaveTextContent(REMOTE_URL);
+  });
+
+  it('重录验证网络失败：登录视图内断网文案（不误报令牌失效）', async () => {
+    // [评审轮2 U13] 真分支：gate 首查成功（authenticated:false → 重录
+    // 视图）后，候选令牌的 verifyToken 直连断网 ⇒ loginErrorText 分流
+    // 为网络不可达文案（HttpTransportError(0)——网络错误≠401 严格分流）
+    let statusCallCount = 0;
+    stubFetch(url => {
+      if (url === `${REMOTE_URL}/api/auth/status`) {
+        statusCallCount += 1;
+        if (statusCallCount === 1) {
+          // gate 首查：令牌缺失 ⇒ 重录视图
+          return jsonResponse(200, { setupRequired: false, authenticated: false });
+        }
+        // 重录提交后的候选令牌验证：断网
+        return Promise.reject(new TypeError('network down'));
+      }
+      return jsonResponse(404, { error: 'not found' });
+    });
+    bootRemote(null);
+    renderGate();
+    expect(await screen.findByText('连接远程实例')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('访问令牌'), { target: { value: 'candidate-token' } });
+    fireEvent.click(screen.getByRole('button', { name: /验证并进入/ }));
+
+    expect(await screen.findByText('无法连接服务器，请检查网络后重试。')).toBeInTheDocument();
+    // 未保存（keyring 零残留——失败可重试）
+    expect(shellMocks.saveConfig).not.toHaveBeenCalled();
+    // 表单仍在（可重试）
+    expect(screen.getByRole('button', { name: /验证并进入/ })).toBeEnabled();
   });
 
   it('离线屏切回本地：save(mode=local, 保留 URL) + restart（逃生口全链路）', async () => {
@@ -365,6 +399,26 @@ describe('AuthGate 令牌重录视图（RemoteLoginView 内部矩阵）', () => 
     // offlineMessage）
     expect(await screen.findByText(/切回本地失败：keyring 不可用/)).toBeInTheDocument();
     // finally 复位：按钮不再停在「正在切回本地...」永久禁用
+    expect(screen.getByRole('button', { name: '切回本地模式' })).not.toBeDisabled();
+  });
+
+  it('切回本地失败（[评审轮2 U15]）：AppError 单键对象 reject ⇒ 首值可见（非 [object Object]）', async () => {
+    // Tauri reject 的实际形状 = 序列化 AppError 单键对象（本仓
+    // GlobalSettingsModal.test 的 mock 形状为证）——String(e) 会呈
+    // [object Object]，keyring/校验真实原因不可见
+    stubFetch(url =>
+      url === `${REMOTE_URL}/api/auth/status`
+        ? jsonResponse(200, { setupRequired: false, authenticated: false })
+        : jsonResponse(404, { error: 'not found' })
+    );
+    shellMocks.saveConfig.mockRejectedValueOnce({ SidecarError: 'keyring 不可用' });
+    bootRemote(null);
+    renderGate();
+    expect(await screen.findByText('连接远程实例')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '切回本地模式' }));
+    expect(await screen.findByText(/切回本地失败：keyring 不可用/)).toBeInTheDocument();
+    expect(screen.queryByText(/切回本地失败：\[object Object\]/)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '切回本地模式' })).not.toBeDisabled();
   });
 });

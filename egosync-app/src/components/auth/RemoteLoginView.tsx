@@ -14,6 +14,7 @@
 import { FormEvent, useState } from 'react';
 import { KeyRound, ArrowLeft } from 'lucide-react';
 import { getAuthStatus, HttpTransportError, updateRemoteToken } from '@/transport';
+import { toErrorMessage } from '../../lib/errorMessage';
 import { remoteModeSaveConfig } from '../../services/desktopModeService';
 import { loginErrorText } from './authErrors';
 
@@ -22,8 +23,10 @@ interface RemoteLoginViewProps {
   remoteUrl: string;
   /** 令牌验证并持久化成功（gate 进 ready）。 */
   onSuccess: () => void;
-  /** 切回本地模式（确认后 save+restart——逃生口）。 */
-  onSwitchToLocal: () => void;
+  /** 切回本地模式（确认后 save+restart——逃生口）。[评审轮2 U9]
+   * 如实声明 Promise：实参是失败 rethrow 的 async 函数——类型吞掉
+   * rejection 会让下一个不 await 的调用点变成 unhandled rejection。 */
+  onSwitchToLocal: () => Promise<void>;
 }
 
 export function RemoteLoginView({ remoteUrl, onSuccess, onSwitchToLocal }: RemoteLoginViewProps) {
@@ -74,7 +77,8 @@ export function RemoteLoginView({ remoteUrl, onSuccess, onSwitchToLocal }: Remot
     try {
       await onSwitchToLocal();
     } catch (e) {
-      setError(`切回本地失败：${e instanceof Error ? e.message : String(e)}`);
+      // [评审轮2 U15] AppError 单键对象 reject ⇒ 首值（非 [object Object]）
+      setError(`切回本地失败：${toErrorMessage(e)}`);
     } finally {
       setIsSwitching(false);
     }

@@ -2,7 +2,7 @@
 title: '桌面客户端远程模式（Story 16.3，FR-48）'
 type: 'feature'
 created: '2026-09-20'
-status: 'in-progress'
+status: 'in-review'
 route: 'dispatch'
 review_loop_iteration: 1
 baseline_commit: 'e285060c90c9a2311024863dd09ac188b9f2965b'
@@ -127,6 +127,16 @@ server：auth.rs（Bearer 叠加）、sse.rs（SseTicketStore + ticket_handler�
 - **main.tsx splash 兜底误伤浏览器**：引导完成即撤 splash 的兜底原为无条件执行——浏览器宿主 checking 态的品牌 splash（16.1 语义）会在 400ms 内被换成灰底兜底文案。已限定仅 Tauri 宿主执行兜底。
 - **实现子代理两度死于环境**：磁盘被 cargo target 瞬时填满（ENOSPC）→ 子代理崩溃遗留部分变更；第二次失败无输出。剩余工作由父代理接手直接完成（step-03 兜底条款），全部验证由父代理独立重跑。
 
+### 评审轮 2 补丁（2026-09-21 step-04——16 项 patch 由父代理亲自落实，实现子代理不可续）
+
+- **U1 隐藏窗口（high）**：main.tsx 引导完成后 `isRemoteDesktop() ⇒ getCurrentWindow().show()`（远程认证界面全在 App 挂载前，App.tsx 的 show() 不可达）；本地态首显时机不变。main.remote.test 三态断言（远程 show / 本地与浏览器零调用）。
+- **U2 CORS expose（high）**：cors.rs 白名单实际响应回写 `Access-Control-Expose-Headers: x-egosync-app-error`（常量与 routes.rs 同源引用）——跨源 JS 可读判别头，远程模式业务错误不再被当成功值 resolve；无 Origin 响应零变化（测试钉）。desktop_remote_test 补成功/401 双响应 expose 断言 + 无 Origin 零 expose 断言。
+- **U15 错误文案（medium）**：新增 `src/lib/errorMessage.ts`（toErrorMessage：Error→message / AppError 单键对象→首值 / 兜底 String），五处 catch 换用（AuthGate/RemoteLoginView/RemoteSetupView/RemoteModeSection×2）+ 单测 3 例 + AuthGate 单键对象形状用例。
+- **U17 首连状态机（medium）**：http.ts onerror 远程分支补 `connecting → reconnecting`（浏览器首连保持 connecting 冻结语义）+ http.remote.test 用例；U16 票据竞态：赋值移到世代检查后 + 用例；U22 票据签发 401：事件发射 + 无退避定时器用例。
+- **其余 patch**：U6 useConnectionState 惰性初值钉（订阅隔离断言——防 16.2 首帧闪错回归）；U7 ConnectionStatus 改 isRemoteDesktop() 谓词；U9 onSwitchToLocal 类型如实 `() => Promise<void>`（两视图）；U11 离线屏展示远端地址；U12 main.tsx splash 兜底收窄至 settings-demo 分支（正式路径由 AuthGate/App 管理）；U13 测试改名（引导检查网络失败）+ 补真「重录视图内 verifyToken 断网」用例；U18 read_mode_file 读侧 URL 归一（trim/空白⇒None）+ 2 测；U23 令牌臂裁决抽 `resolve_boot_token` 纯函数（local⇒None 零 keyring I/O / remote 透传 / 出错⇒None）+ 2 测；U24 RemoteModeSection 双切换失败路径用例；U21 main.remote.test splash 语义断言（浏览器/Tauri 均不由 main 撤）。
+- **补丁后全电池复验**（父代理独立）：build ✅ / vitest 67 文件 877 例（865+12）✅ / server cargo 64 例 ✅ / src-tauri cargo 107 例（103+4）✅ / engine 零 diff ✅ / http.ts 本轮增量仅两处且均 this.remote 门控（浏览器路径行为零变化——http.test.ts 全绿钉住；U20 维持 T21 裁决）✅ / test:web 3 specs ✅。
+- 首次编译错误（HeaderValue::from_static 非 Result——if let 误用）即改即过，无连续失败。
+
 ### 重推导轮（2026-09-21 step-03，review loop 1 之后）
 
 - **执行方式**：分发实现子代理（规格为唯一事实源）——先恢复 KEEP 参照 aeee913 的代码面（36 文件原样），再逐条落地 12 项修订（净增量 18 文件 +1115/−115）。子代理一次成功（前轮两度死于磁盘 ENOSPC，本轮目标目录已预热、增量构建）。
@@ -186,6 +196,39 @@ server：auth.rs（Bearer 叠加）、sse.rs（SseTicketStore + ticket_handler�
 - **patch（本轮回环下并入规格修订，随重推导落实）**：T2、T3、T4、T7、T8、T10、T11、T12、T18、T22。
 - **defer**：T13、T16 → 已录 deferred-work.md。
 - **拒绝**：T6、T9、T14、T15、T17、T19、T20、T21（证据见各行）。
+
+### 评审轮 2（2026-09-21，重推导后 step-04 三层：盲扫 14 / 边界 7 / 验证缺口 4+1；diff 6344 行 312KB）
+
+边界层首跑撞 token 上限，重发（精简笔记指令）后完成。逐项裁决（编号 U*，来源同上轮）：
+
+| # | 来源 | 发现 | 裁决 | 证据与处置 |
+|---|------|------|------|-----------|
+| U1 | 盲+缺 | 远程认证界面渲染在不可见窗口：tauri.conf.json `visible:false`，全仓唯一 `show()` 在 App 挂载且角色加载完后（App.tsx:264）——离线屏/令牌重录/初始化向导全在 App 挂载之前；远端宕机时用户看到「应用没打开」，矩阵 3-5 行逃生口物理不可达 | **high → patch** | 已核 tauri.conf.json:25 与 App.tsx:264（jsdom 测不了窗口可见性，桌面 e2e 环境受阻故全绿）。修=main.tsx 引导完成时远程桌面即 `getCurrentWindow().show()`（本地态 show 时机不变——防首帧闪白既定设计）；main.remote.test 补远程 show / 本地不 show 断言 |
+| U2 | 盲 | CORS 层缺 `Access-Control-Expose-Headers: x-egosync-app-error`：跨源 fetch 对非安全列表响应头不可读（http.ts:133 判别头恒 null）——远程模式**所有 200+头+错误体形态的业务错误被当成功值 resolve**，错误语义整体断裂（集成测试 reqwest / 前端测试裸 fetch 桩都不模拟 CORS 头过滤，故测不出） | **high → patch** | 已核 cors.rs 无 expose、http.ts:133 消费点、routes.rs 错误头。修=cors.rs 白名单实际响应回写 expose 头 + server 测试；浏览器同源可读头语义由此恢复等价 |
+| U3 | 盲 | 限流判定在 Argon2 校验之后：超限后第 6+ 次错误 Bearer 仍各烧一次 Argon2 才拿 429（登录面限流在 handler 之前，两通道不对称——T5 声称的 CPU 燃烧面未真正收窄） | low → defer | 修复（验证前 peek 窗口拦截）会连有效令牌一并 429——与 T5 任务冻结措辞「仅计失败、成功不限流」直接冲突，属设计取舍：peek 与「成功不限流」不可兼得（无凭据无法预知有效性）。现形态已把爆破钳到 5 次/min/IP，剩余面=登录面同款分布式暴露。记 deferred-work |
+| U4 | 盲 | T1 旅程「正常路径不可达」：设置 tab 测试连接对未初始化实例报错禁切（指引去浏览器），与矩阵第 5 行 in-app setup 向导矛盾 | false | 规格任务面自答：「测试连接通过才可切」为切换守卫；矩阵行描述远程态运行时状态机（status 返回 setupRequired ⇒ 向导）——两流各司其职；in-app setup 可达面=远程态期间实例重置/keyring 失效等边缘（设计如此） |
+| U5 | 盲 | 远程通道全程无超时：黑洞化主机挂死 checking | false | 浏览器等价语义（同源 web 同样挂死——冻结设计「桌面=浏览器等价物」）；AC 覆盖的拔线=快速失败形态；jsdom/e2e 均按此语义全绿 |
+| U6 | 盲 | useConnectionState 远程初始态（connecting）无测试钉住——把条件改回 `isTauriHost()?online` 全部测试仍绿（16.2 首帧闪错态修复在远程桌面静默回归） | low → patch | remoteGating.test 补断言（boot remote 后初始 connecting） |
+| U7 | 盲 | ConnectionStatus 直比 `getDesktopMode()==='remote'` 而非 `isRemoteDesktop()` 谓词（T4 单源纪律漏配点——'remote' 仅在 Tauri 宿主成立纯靠巧合） | low → patch | 一行改谓词（import 自 appMode） |
+| U8 | 盲 | SETUP_TOKEN_MIN_LEN=8 前后端手工双份（RemoteSetupView.tsx:28 / auth.rs:68） | low → 拒绝 | 跨语言常量天然双份（注释已锚定「与 Rust 同源约定」）；服务端为权威——漂移时 401 携服务端错误文案可见，无静默坏结果 |
+| U9 | 盲 | onSwitchToLocal prop 类型 `() => void` 吞 rejection（实参为 async 失败 rethrow 函数）——两个现有调用点恰好 try/catch，下一个即 unhandled rejection | low → patch | 类型改 `() => Promise<void>`（RemoteLoginView/RemoteSetupView 两处） |
+| U10 | 盲 | /api/auth/status 在登录面 5/min/IP 总量限流组（不分成败）：桌面 onboarding（gate 检查+验证+重验+测试连接）同 IP 同预算，常规用量贴边，超限 429「尝试过于频繁」 | low → defer | 预算设计属 15.4 既有面（浏览器同预算同计数方式）；本故事增量边际（onboarding +2-3 调用）；429 60s 自愈且文案如实。预算拆分/豁免值得独立决策——记 deferred-work |
+| U11 | 盲 | 离线屏不显示远端地址：配错/失效 URL 时无法就地诊断（login/setup 视图均展示 URL，唯离线屏没有） | low → patch | 离线屏补 URL 展示（getTransportBoot().remoteUrl） |
+| U12 | 盲 | main.tsx splash 兜底（400ms 撤）在远程模式实为主路径：checking 网络往返远超 400ms，品牌屏被换成灰底「正在检查登录状态...」 | low → patch | AuthGate（setup/login/offline 态）与 App（ready 态）已各自管理 splash 生命周期——main.tsx 兜底冗余，删除（浏览器分支本就不执行；本地态 show 前窗口隐藏无感） |
+| U13 | 盲 | AuthGate.remote.test「重录验证网络失败」用例名不符实：桩对全部 status reject（注释声称首次成功）——实际测 gate 首查失败→离线屏；重录视图内 verifyToken 网络失败分支零覆盖 | low → patch | 改名（离线语义）+ 补真重录网络失败用例（首次 200 authenticated:false → 登录视图 → 提交后 reject → 断网文案） |
+| U14 | 盲 | http:// 远程实例全程无明文传输警告（令牌 Bearer 明文过线） | low → 拒绝 | 局域网合法场景（测试钉 http://192.168.1.10:8080）；无坏结果，提示属发布期打磨（U/T16 文档 defer 已覆盖远程模式说明面） |
+| U15 | 边 | 壳命令失败呈现 `[object Object]`：Tauri reject 值为序列化 AppError 单键对象（{ValidationError:"…"}——本仓 GlobalSettingsModal.test mock 形状为证），5 处新 catch 均用 `e instanceof Error ? e.message : String(e)`：AuthGate/RemoteLoginView/RemoteSetupView/RemoteModeSection×2 | **medium → patch** | 共享错误文案提取器（Error→message / 单键对象→首值 / 兜底 String），五处换用 + 断言单键对象形状的测试 |
+| U16 | 边 | SSE 票据签发竞态：`this.sseTicket = await fetchSseTicket()` 赋值先于世代检查——teardown（世代翻新）后票据仍入库，跨订阅生命周期滞留（重订阅复用旧票=多一次建流失败后自愈） | low → patch | 赋值移到世代检查之后 |
+| U17 | 边 | 远程 SSE 首连持续失败永不离开 connecting：onerror 仅在 online 态置 reconnecting——首连失败期间无「重连中」横幅（矩阵拔线行「三态诚实呈现」缺口，gate 已过而事件流失联时用户无感） | **medium → patch** | 远程接管分支补 `connecting → reconnecting`（浏览器首连保持 connecting 为冻结语义，不受影响）+ http.remote.test 用例 |
+| U18 | 边 | 读侧不 trim remoteUrl：手改模式文件带首尾空白 ⇒ 远程引导携空白 base URL 全部 malformed、落误导性离线屏（写侧 validate_save_request trim、读侧不归一——两层不对称） | low → patch | read_mode_file 归一 trim（空白归 None）+ 单测 |
+| U19 | 边 | claim「全部 /api/* 接受 Bearer」证伪：login/logout/setup 无 Bearer 分支 | false | bootstrap 端点 cookie-only 属设计（远程桌面不经 login——Bearer 直连；setup 时无令牌可验；logout 属会话通道）；且携 Bearer 调用这些端点不 401 而是照常工作（头被忽略）——主张的坏结果不成立 |
+| U20 | 边 | claim「http.ts 浏览器路径零源码 diff」证伪 | 携带 T21 | 同位同主张、代码未变——维持 T21 裁决（拒绝；行为等价解释已录实现记录，http.test.ts 24 例钉住语义） |
+| U21 | 缺 | main.tsx splash 宿主门控无测试——本 diff 自己修的「误伤浏览器」可静默回归 | low → patch | main.remote.test 补 splash 断言（与 U12 合并为新语义：浏览器/Tauri 远程均不由 main.tsx 撤 splash） |
+| U22 | 缺 | SSE 票据签发 401 分支（emit auth:unauthorized、不退避）零测试——令牌轮换经 SSE 通道抵达重录视图的唯一信号无钉 | low → patch | http.remote.test 补 401 用例（事件发射 + rebuildTimer null） |
+| U23 | 缺 | desktop_get_boot_config 本地态「零 keyring I/O/令牌零回显」冻结款无测试——有人把两臂统一为始终读 keyring 即静默击穿 | low → patch | 令牌臂决策抽 services 纯函数（local⇒None 且不触 keyring / remote⇒透传 / 出错⇒None fail-safe）+ 直测（T12 范式） |
+| U24 | 缺 | RemoteModeSection 双切换流失败路径（save/restart reject）无测试——T3 同款吞错 bug 可在此静默复发 | low → patch | 补两例（错误文案呈现 + isSwitching 复位） |
+
+**轮 2 分组与路由：** 无 intent_gap、无 bad_spec（两条 high 根因均为实现疏漏——冻结块「桌面=浏览器等价物」语义已足够清晰：U1 之下逃生口不可达=矩阵行落空；U2 之下错误分流断裂=网络错误≠401 分流落空）→ **不回环**。patch：U1、U2、U6、U7、U9、U11、U12、U13、U15、U16、U17、U18、U21、U22、U23、U24（16 项；实现子代理已不可续——按 step-04 兜底条款由父代理亲自落实）。defer：U3、U10 → deferred-work.md。拒绝：U4、U5、U8、U14、U19、U20。
 
 ## Design Notes
 

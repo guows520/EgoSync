@@ -15,6 +15,7 @@ import { ConnectionStatus } from '../layout/ConnectionStatus';
 import { ChatStream } from '../chat/ChatStream';
 import {
   __resetTransportForTests,
+  getTransport,
   setTransportBoot,
 } from '@/transport';
 import {
@@ -192,6 +193,36 @@ describe('远程桌面 UI 门控（Story 16.3）', () => {
       render(<ConnectionStatus />);
       expect(screen.queryByTestId('remote-mode-badge')).not.toBeInTheDocument();
       expect(screen.getByTestId('connection-status')).not.toHaveAttribute('data-remote');
+    });
+
+    // [评审轮2 U6] useConnectionState 惰性初值钉死：传输订阅即回调会把
+    // 初值当帧自愈——隔离订阅（不回调）才能钉住惰性表达式。回归形态
+    // = 改回 isTauriHost()?online（16.2 修过的首帧闪错误在线态）。
+    it('远程桌面：useConnectionState 惰性初值 connecting（订阅回调前不闪 online）', () => {
+      bootRemote();
+      const spy = vi
+        .spyOn(getTransport(), 'onConnectionStateChange')
+        .mockImplementation(() => () => {});
+      try {
+        render(<ConnectionStatus />);
+        expect(screen.getByTestId('connection-status')).toHaveAttribute('data-state', 'connecting');
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('本地桌面：useConnectionState 惰性初值 online（零回归）', () => {
+      setTransportBoot({ mode: 'local', remoteUrl: null, remoteToken: null });
+      setDesktopMode('local');
+      const spy = vi
+        .spyOn(getTransport(), 'onConnectionStateChange')
+        .mockImplementation(() => () => {});
+      try {
+        render(<ConnectionStatus />);
+        expect(screen.getByTestId('connection-status')).toHaveAttribute('data-state', 'online');
+      } finally {
+        spy.mockRestore();
+      }
     });
   });
 });

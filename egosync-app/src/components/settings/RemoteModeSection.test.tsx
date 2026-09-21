@@ -219,6 +219,33 @@ describe('RemoteModeSection（local 态——配置与切换）', () => {
     expect(shellMocks.restart).not.toHaveBeenCalled();
   });
 
+  it('切换失败（[评审轮2 U24]）：save reject ⇒ 错误可见 + 按钮复位（不卡「正在重启...」）', async () => {
+    // T3 同款吞错 bug 在设置 tab 路径的防线——keyring 不可用等失败
+    // 必须复位可重试，确认框关闭，错误如实呈现
+    stubFetch(url => {
+      if (url === `${REMOTE_URL}/api/auth/status`) {
+        return jsonResponse(200, { setupRequired: false, authenticated: true });
+      }
+      return jsonResponse(404, { error: 'not found' });
+    });
+    shellMocks.saveConfig.mockRejectedValueOnce(new Error('keyring 不可用'));
+    render(<RemoteModeSection />);
+    fillLocalForm(REMOTE_URL, 'primary-token');
+    fireEvent.click(screen.getByRole('button', { name: /测试连接/ }));
+    await screen.findByTestId('remote-mode-test-result');
+
+    fireEvent.click(screen.getByRole('button', { name: /切换到远程模式/ }));
+    await screen.findByTestId('remote-mode-switch-confirm');
+    fireEvent.click(screen.getByRole('button', { name: /确认切换并重启/ }));
+
+    expect(await screen.findByText(/切换失败：keyring 不可用/)).toBeInTheDocument();
+    // 确认框关闭（错误态呈现，不再停留确认界面）
+    expect(screen.queryByTestId('remote-mode-switch-confirm')).not.toBeInTheDocument();
+    // 按钮复位：不卡在禁用态「正在重启...」（可重试）
+    expect(screen.getByRole('button', { name: /切换到远程模式/ })).toBeEnabled();
+    expect(shellMocks.restart).not.toHaveBeenCalled();
+  });
+
   it('URL 形态预校验：无 scheme ⇒ 测试按钮禁用', () => {
     render(<RemoteModeSection />);
     fillLocalForm('instance.example.com', 'token');
@@ -277,6 +304,20 @@ describe('RemoteModeSection（remote 态——连接信息与切回）', () => {
     fireEvent.click(screen.getByRole('button', { name: '取消' }));
 
     expect(shellMocks.saveConfig).not.toHaveBeenCalled();
+    expect(shellMocks.restart).not.toHaveBeenCalled();
+  });
+
+  it('切回本地失败（[评审轮2 U24]）：save reject ⇒ 错误可见 + 按钮复位', async () => {
+    shellMocks.saveConfig.mockRejectedValueOnce({ SidecarError: 'keyring 不可用' });
+    render(<RemoteModeSection />);
+    fireEvent.click(screen.getByRole('button', { name: /切回本地模式/ }));
+    await screen.findByText(/确认切回本地模式/);
+    fireEvent.click(screen.getByRole('button', { name: /确认并重启/ }));
+
+    // [评审轮2 U15] AppError 单键对象 reject ⇒ 首值可见（非 [object Object]）
+    expect(await screen.findByText(/切回本地失败：keyring 不可用/)).toBeInTheDocument();
+    // 按钮复位（不卡「正在重启...」永久禁用——可重试）
+    expect(screen.getByRole('button', { name: /切回本地模式/ })).toBeEnabled();
     expect(shellMocks.restart).not.toHaveBeenCalled();
   });
 });

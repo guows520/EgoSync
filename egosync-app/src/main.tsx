@@ -1,11 +1,12 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import App from './App.tsx'
 import { AuthGate } from './components/auth/AuthGate'
 import { ButlerSettingsGroupedDemo } from './components/butler/ButlerSettingsGroupedDemo'
 import { isTauriHost, setTransportBoot } from './transport'
 import type { DesktopBootConfig } from './transport'
-import { applyBootConfig } from './appMode'
+import { applyBootConfig, isRemoteDesktop } from './appMode'
 import { desktopGetBootConfig } from './services/desktopModeService'
 import './index.css'
 
@@ -18,7 +19,8 @@ const showSettingsDemo = window.location.pathname === '/settings-demo' || params
 // 与 appMode；浏览器宿主零壳调用（相对路径语义不变）。
 //
 // 等待期由 index.html 的 #egosync-splash 覆盖（z-9999——AuthGate 离开
-// checking 态 / App ready 时各自移除；引导失败兜底移除防白屏）。
+// checking 态 / App ready 时各自移除；仅 settings-demo 演示分支在渲染后
+// 兜底移除——它没有 gate/App 生命周期）。
 async function bootstrap(): Promise<DesktopBootConfig | null> {
   if (!isTauriHost()) return null;
   try {
@@ -58,15 +60,25 @@ function render() {
 
 bootstrap().finally(() => {
   render()
-  // 引导完成即撤 splash 的兜底：正常路径 AuthGate/App 按各自语义移除；
-  // 引导异常（壳命令 reject 后的 fail-safe 渲染）不至于让 splash 永盖。
-  // 仅 Tauri 宿主执行——浏览器宿主 checking 态仍由品牌 splash 覆盖
-  // （16.1 语义零回归），AuthGate/App 按既有机制各自移除。
-  if (isTauriHost()) {
+  // [评审轮2 U12] splash 兜底仅限 settings-demo 演示分支：它无
+  // AuthGate/App 生命周期（无人移除 splash——不撤则永盖）。正式应用
+  // 路径的 splash 由 AuthGate（离开 checking 进 setup/login/offline）与
+  // App（ready）按各自语义移除——原 400ms 无条件兜底在远程模式实为
+  // 主路径（checking 网络往返远超 400ms，品牌启动屏被换成灰底文案）。
+  if (showSettingsDemo && isTauriHost()) {
     const splash = document.getElementById('egosync-splash');
     if (splash) {
       splash.classList.add('hidden');
       setTimeout(() => splash.remove(), 400);
     }
+  }
+  // [评审轮2 U1] 远程桌面：认证界面（离线屏/令牌重录/初始化向导）全部
+  // 发生在 App 挂载之前——App.tsx 的 show() 对远程态不可达（gate 未过
+  // 则 App 永不挂载，窗口 visible:false 全程隐藏，用户看到「应用没
+  // 打开」）。引导完成即显示窗口：splash 仍在覆盖（gate 离开 checking
+  // 才撤），用户先见品牌屏再见认证界面；本地态保持 App ready 后首显
+  //（防首帧闪白——既有设计零变化）。
+  if (isRemoteDesktop()) {
+    getCurrentWindow().show().catch(() => {});
   }
 })

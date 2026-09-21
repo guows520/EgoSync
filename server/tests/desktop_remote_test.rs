@@ -450,7 +450,9 @@ async fn cors_headers_on_responses_for_tauri_origins() {
         "401 响应必须携带 ACAO（网络错误≠401 分流的必要条件）"
     );
 
-    // 成功响应同样携带 ACAO + Vary: Origin
+    // 成功响应同样携带 ACAO + Vary: Origin + 错误判别头 expose
+    //（[评审轮2 U2] 非安全列表响应头对跨源 JS 默认不可读——不 expose
+    // 则桌面 http.ts 读不到 x-egosync-app-error，业务错误整体呈成功形态）
     let res = client
         .post_json_bearer(
             &server.url("/api/cmd/role_list"),
@@ -467,6 +469,30 @@ async fn cors_headers_on_responses_for_tauri_origins() {
         Some(origin)
     );
     assert!(res.headers().contains_key(reqwest::header::VARY));
+    assert_eq!(
+        res.headers()
+            .get(reqwest::header::ACCESS_CONTROL_EXPOSE_HEADERS)
+            .and_then(|v| v.to_str().ok()),
+        Some("x-egosync-app-error"),
+        "白名单源响应必须 expose 业务错误判别头（跨源可读——桌面错误分流的必要条件）"
+    );
+    // 401 响应同样 expose（错误形态优先——桌面须能区分 401 与断网）
+    let res = client
+        .post_json_bearer(
+            &server.url("/api/cmd/role_list"),
+            Some(&json!({})),
+            Some("wrong-token"),
+            Some(origin),
+        )
+        .await;
+    assert_eq!(res.status(), 401);
+    assert_eq!(
+        res.headers()
+            .get(reqwest::header::ACCESS_CONTROL_EXPOSE_HEADERS)
+            .and_then(|v| v.to_str().ok()),
+        Some("x-egosync-app-error"),
+        "错误响应同样 expose 判别头"
+    );
 }
 
 #[tokio::test]
@@ -497,6 +523,11 @@ async fn cors_no_origin_responses_have_zero_cors_headers() {
     assert!(
         !res.headers().contains_key(reqwest::header::ACCESS_CONTROL_ALLOW_ORIGIN),
         "无 Origin 请求不得携带 ACAO"
+    );
+    assert!(
+        !res.headers()
+            .contains_key(reqwest::header::ACCESS_CONTROL_EXPOSE_HEADERS),
+        "无 Origin 请求不得携带 expose 头（[评审轮2 U2] 浏览器路径零变化）"
     );
 }
 

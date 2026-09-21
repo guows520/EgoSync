@@ -21,6 +21,7 @@
 import { FormEvent, useState } from 'react';
 import { Home, ArrowLeft } from 'lucide-react';
 import { getAuthStatus, HttpTransportError, updateRemoteToken } from '@/transport';
+import { toErrorMessage } from '../../lib/errorMessage';
 import { remoteModeSaveConfig } from '../../services/desktopModeService';
 import { setupErrorText } from './authErrors';
 
@@ -34,8 +35,9 @@ interface RemoteSetupViewProps {
   onSuccess: () => void;
   /** 返回登录页（env 锁定/已初始化的 404 路径或用户主动返回——令牌重录）。 */
   onSwitchToLogin: () => void;
-  /** 切回本地模式（确认后 save+restart——setup 态逃生口）。 */
-  onSwitchToLocal: () => void;
+  /** 切回本地模式（确认后 save+restart——setup 态逃生口）。[评审轮2 U9]
+   * 如实声明 Promise：实参是失败 rethrow 的 async 函数（见 RemoteLoginView）。 */
+  onSwitchToLocal: () => Promise<void>;
 }
 
 export function RemoteSetupView({ remoteUrl, onSuccess, onSwitchToLogin, onSwitchToLocal }: RemoteSetupViewProps) {
@@ -99,7 +101,8 @@ export function RemoteSetupView({ remoteUrl, onSuccess, onSwitchToLogin, onSwitc
     try {
       await onSwitchToLocal();
     } catch (err) {
-      setError(`切回本地失败：${err instanceof Error ? err.message : String(err)}`);
+      // [评审轮2 U15] AppError 单键对象 reject ⇒ 首值（非 [object Object]）
+      setError(`切回本地失败：${toErrorMessage(err)}`);
     } finally {
       setIsSwitching(false);
     }

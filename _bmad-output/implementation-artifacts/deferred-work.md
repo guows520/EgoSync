@@ -454,3 +454,9 @@ All items resolved in the same session:
 - source_spec: `_bmad-output/implementation-artifacts/16-3-desktop-remote-mode-fr48-optional.md`
   summary: app_data_dir 预读派生（dirs::data_dir()/identifier）与 Tauri PathResolver 的等价性未钉死，Tauri 升级漂移会静默错读模式文件目录。
   evidence: 评审员已核 vendored tauri-2.11.2 今日逐字一致；若 Tauri 升级改变路径语义，builder 期模式裁决将读到与 remote_mode_save_config 写入不同的目录（模式错读=medium 级）。下次 Tauri 升级时做一次双路径交叉校验可定谳，或在升级故事中加启动期比对断言（评审盲扫层 T13 filed，maybe-false）。
+- source_spec: `_bmad-output/implementation-artifacts/16-3-desktop-remote-mode-fr48-optional.md`
+  summary: Bearer 限流判定发生在 Argon2 校验之后——超限后的失败请求仍各烧一次 Argon2 才拿 429，CPU 燃烧面未随限流收窄（评审轮 2 U3）
+  evidence: server/src/auth.rs require_auth 先 verify_primary_token 再 bearer_rate.check；登录面 rate_limit 中间件在 handler 之前执行（两通道不对称）。修复需在验证前 peek 窗口是否已超限，但 peek 会连有效令牌一并 429——与 T5 冻结措辞「仅计失败、成功不限流」直接冲突，属需人工权衡的设计取舍；定夺时需重新裁决该语义
+- source_spec: `_bmad-output/implementation-artifacts/16-3-desktop-remote-mode-fr48-optional.md`
+  summary: /api/auth/status 按请求计数（不分成败）落在登录面 5/min/IP 限流组——远程桌面 onboarding（gate 检查+令牌验证+重验+测试连接）与同 IP 浏览器共享预算，常规用量贴边（评审轮 2 U10）
+  evidence: server/src/lib.rs public 路由组挂 rate_limit；desktop_remote_test 仅验证 Bearer 失败计数与 auth 限流器独立（单方向），未覆盖桌面常规用量撞限的交互。预算拆分/状态查询豁免值得独立决策（属 15.4 既有预算面的再分配）

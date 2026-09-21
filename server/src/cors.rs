@@ -8,7 +8,10 @@
 //! - **实际响应**（含 401/429/404/5xx 与 SSE 流）：回写
 //!   `Access-Control-Allow-Origin: <origin>` + `Vary: Origin`——CORS 下
 //!   无 ACAO 的错误响应对 fetch 呈网络错误形态，桌面将无法区分 401 与
-//!   断网（I/O 矩阵「网络错误≠401」严格分流的必要条件）。
+//!   断网（I/O 矩阵「网络错误≠401」严格分流的必要条件）；
+//!   并回写 `Access-Control-Expose-Headers: x-egosync-app-error`——
+//!   非安全列表响应头对跨源 JS 默认不可读，不 expose 则桌面读不到
+//!   业务错误判别头（200+错误体形态被当成功值 resolve）。
 //!
 //! 非白名单跨源 ⇒ 不经本层放行（[`crate::security::reject_cross_origin`]
 //! 403 显式拒绝的冻结语义零变化——白名单判定两侧同源引用）。
@@ -19,6 +22,8 @@ use axum::extract::Request;
 use axum::http::{header, HeaderValue, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+
+use crate::routes::APP_ERROR_HEADER;
 
 /// 桌面 webview 宿主源白名单（Tauri 2 跨平台形态）。
 pub const TAURI_ORIGIN_ALLOWLIST: &[&str] = &["tauri://localhost", "http://tauri.localhost"];
@@ -62,6 +67,15 @@ pub async fn cors_allowlist(req: Request, next: Next) -> Response {
         headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, value);
     }
     headers.insert(header::VARY, HeaderValue::from_static("Origin"));
+    // [评审轮2 U2] 业务错误判别头对跨源 JS 可读：CORS 下非安全列表
+    // 响应头默认不可读——不 expose 则远程桌面（http.ts）读不到
+    // `x-egosync-app-error`，200+错误体形态（AppError 单键对象）被当
+    // 成功值 resolve（错误语义整体断裂——桌面=浏览器等价性恢复）。
+    // 仅需加在实际响应上（预检响应无关——preflight 不携带业务头语义）。
+    headers.insert(
+        header::ACCESS_CONTROL_EXPOSE_HEADERS,
+        HeaderValue::from_static(APP_ERROR_HEADER),
+    );
     res
 }
 

@@ -1,7 +1,7 @@
 import { Wifi, WifiOff, Loader2, Cloud } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { useConnectionState } from '../../hooks/useConnectionState';
-import { getDesktopMode } from '../../appMode';
+import { isRemoteDesktop } from '../../appMode';
 import type { ConnectionState } from '@/transport';
 
 /**
@@ -38,7 +38,9 @@ export function ConnectionStatus() {
   const state = useConnectionState();
   const Icon = BADGE_ICON[state];
   const { badgeCls, label } = STATE_CONFIG[state];
-  const isRemote = getDesktopMode() === 'remote';
+  // [评审轮2 U7] 谓词判定（T4 单源纪律）：远程桌面 = Tauri 宿主 + remote
+  // 模式——直比模式值漏配宿主维度（今天等价纯靠 'remote' 仅桌面注入）
+  const isRemote = isRemoteDesktop();
 
   // reconnecting 期间显著横幅：置顶通栏（pointer-events-none 防误吞点击
   // ——只提示不挡操作）。评审修复：z-[60] 确保不被通知面板（z-50）遮挡

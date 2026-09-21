@@ -102,11 +102,24 @@ pub fn resolve_mode(file: &DesktopModeFile) -> DesktopMode {
 }
 
 /// 读模式文件（缺失/损坏 ⇒ None）。
+///
+/// [评审轮2 U18] 读侧 URL 归一（与写侧 `validate_save_request` 对称）：
+/// 手改模式文件带首尾空白 ⇒ 去除；纯空白 ⇒ None。不归一则远程引导携
+/// 空白 base URL（请求全部 malformed，落误导性离线屏）——`resolve_mode`
+/// 的空白裁决只兜「remote + 空白 ⇒ local」，boot config 仍可能携空白
+/// URL 出去。
 pub fn read_mode_file(app_data_dir: &Path) -> Option<DesktopModeFile> {
     let path = app_data_dir.join(MODE_FILE_NAME);
     let content = std::fs::read_to_string(path).ok()?;
     match serde_json::from_str::<DesktopModeFile>(&content) {
-        Ok(file) => Some(file),
+        Ok(mut file) => {
+            file.remote_url = file
+                .remote_url
+                .take()
+                .map(|u| u.trim().to_string())
+                .filter(|u| !u.is_empty());
+            Some(file)
+        }
         Err(e) => {
             tracing::warn!(
                 "desktop-mode.json 损坏（回退本地模式 fail-safe）: {}",
@@ -236,6 +249,25 @@ pub fn save_remote_token(token: &str) -> Result<(), AppError> {
 /// 读取远程实例令牌（无记录 ⇒ None；keyring 不可用 ⇒ Err 如实上抛）。
 pub fn load_remote_token() -> Result<Option<String>, AppError> {
     super::secret_store::load_secret(REMOTE_TOKEN_KEY)
+}
+
+/// [评审轮2 U23] boot config 令牌臂裁决（纯函数——冻结款直测面）：
+/// - `Local` ⇒ `None` 且**不触碰 keyring**（本地引导零 keyring I/O、
+///   本地设置 tab 零令牌回显——把两臂「统一」为始终读 keyring 即击穿，
+///   此前该不变量无任何测试）；
+/// - `Remote` ⇒ 透传 keyring 结果；keyring 出错 ⇒ `None`（fail-safe
+///   ——模式仍在远程，令牌可补，前端走令牌重录视图，不阻断引导）。
+pub fn resolve_boot_token<F>(mode: DesktopMode, load_from_keyring: F) -> Option<String>
+where
+    F: FnOnce() -> Result<Option<String>, AppError>,
+{
+    match mode {
+        DesktopMode::Local => None,
+        DesktopMode::Remote => load_from_keyring().unwrap_or_else(|e| {
+            tracing::warn!("读取远程实例令牌失败（走令牌重录）: {}", e);
+            None
+        }),
+    }
 }
 
 #[cfg(test)]
@@ -463,5 +495,74 @@ mod tests {
         // 空白 URL ⇒ None
         let (file, _) = validate_save_request("local", Some("  "), None).unwrap();
         assert_eq!(file.remote_url, None);
+    }
+
+    // ── [评审轮2 U18] 读侧 URL 归一（手改文件带空白） ──
+
+    #[test]
+    fn read_mode_file_trims_remote_url_whitespace() {
+        let dir = temp_dir("read-trim");
+        std::fs::create_dir_all(&dir).unwrap();
+        // 手改模式文件形态：URL 带首尾空白（写侧 validate_save_request
+        // 会归一，读侧不归一 ⇒ 引导携空白 base URL 全部 malformed）
+        std::fs::write(
+            dir.join(MODE_FILE_NAME),
+            r#"{"mode":"remote","remoteUrl":"  https://instance.example.com  "}"#,
+        )
+        .unwrap();
+        let file = read_mode_file(&dir).expect("读回");
+        assert_eq!(
+            file.remote_url.as_deref(),
+            Some("https://instance.example.com"),
+            "读侧归一 trim（与写侧对称）"
+        );
+        assert_eq!(read_mode(&dir), DesktopMode::Remote);
+    }
+
+    #[test]
+    fn read_mode_file_pure_whitespace_url_normalized_to_none() {
+        let dir = temp_dir("read-blank");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(MODE_FILE_NAME),
+            r#"{"mode":"local","remoteUrl":"   "}"#,
+        )
+        .unwrap();
+        let file = read_mode_file(&dir).expect("读回");
+        assert_eq!(file.remote_url, None, "纯空白 URL ⇒ None（不携出）");
+    }
+
+    // ── [评审轮2 U23] boot config 令牌臂裁决（冻结款直测） ──
+
+    #[test]
+    fn resolve_boot_token_local_is_none_without_keyring_io() {
+        // 本地态不触 keyring：加载器被调用即 panic（零 keyring I/O 冻结款
+        // ——有人把两臂统一为始终 load_remote_token 即击穿）
+        let boom = || -> Result<Option<String>, AppError> {
+            panic!("本地引导不得读 keyring（零 keyring I/O / 零令牌回显）")
+        };
+        assert_eq!(resolve_boot_token(DesktopMode::Local, boom), None);
+    }
+
+    #[test]
+    fn resolve_boot_token_remote_passes_through_and_fails_safe() {
+        // 有令牌 ⇒ 透传
+        assert_eq!(
+            resolve_boot_token(DesktopMode::Remote, || Ok(Some("tk".to_string())))
+                .as_deref(),
+            Some("tk")
+        );
+        // 无记录 ⇒ None
+        assert_eq!(
+            resolve_boot_token(DesktopMode::Remote, || Ok(None) as Result<Option<String>, AppError>),
+            None
+        );
+        // keyring 出错 ⇒ None（fail-safe：不阻断引导，前端走令牌重录）
+        assert_eq!(
+            resolve_boot_token(DesktopMode::Remote, || {
+                Err(AppError::SidecarError("keyring 不可用".to_string()))
+            }),
+            None
+        );
     }
 }

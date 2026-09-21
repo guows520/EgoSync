@@ -22,6 +22,13 @@ const tauriInternals = (window as unknown as Record<string, unknown>).__TAURI_IN
 const shellMock = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: shellMock.invoke }));
 
+/** 窗口 API mock（[评审轮2 U1] 远程引导显示窗口——jsdom 无窗口 API，
+ * 与 App.test.tsx 同款桩）。 */
+const windowMock = vi.hoisted(() => ({ show: vi.fn(() => Promise.resolve()) }));
+vi.mock('@tauri-apps/api/window', () => ({
+  getCurrentWindow: () => ({ show: windowMock.show }),
+}));
+
 /** ReactDOM.createRoot mock（捕获 render 的元素树）。 */
 const domMock = vi.hoisted(() => ({ render: vi.fn() }));
 vi.mock('react-dom/client', () => ({
@@ -56,14 +63,26 @@ async function resolveModules(): Promise<{
   return { transport, http, appMode };
 }
 
+/** 注入 index.html 形态的 splash 节点（[评审轮2 U21] splash 语义断言）。 */
+function injectSplash(): HTMLElement {
+  document.getElementById('egosync-splash')?.remove();
+  const splash = document.createElement('div');
+  splash.id = 'egosync-splash';
+  document.body.appendChild(splash);
+  return splash;
+}
+
 describe('main.tsx 渲染前异步引导（Story 16.3）', () => {
   beforeEach(() => {
     domMock.render.mockClear();
     shellMock.invoke.mockReset();
+    windowMock.show.mockClear();
+    document.getElementById('egosync-splash')?.remove();
     bootConfigAnswer = null;
     (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = tauriInternals;
   });
   afterEach(() => {
+    document.getElementById('egosync-splash')?.remove();
     (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = tauriInternals;
   });
 
@@ -80,6 +99,7 @@ describe('main.tsx 渲染前异步引导（Story 16.3）', () => {
     });
 
     const mods = await resolveModules();
+    const splash = injectSplash();
     await import('./main');
     await vi.waitFor(() => {
       expect(domMock.render).toHaveBeenCalled();
@@ -102,6 +122,13 @@ describe('main.tsx 渲染前异步引导（Story 16.3）', () => {
     });
     // 壳命令调用面：仅 desktop_get_boot_config
     expect(shellMock.invoke).toHaveBeenCalledWith('desktop_get_boot_config', null);
+    // [评审轮2 U1] 远程桌面：引导完成即显示窗口——认证界面发生在 App
+    // 挂载之前，App.tsx 的 show() 不可达（gate 未过 ⇒ 窗口永隐藏）
+    expect(windowMock.show).toHaveBeenCalledTimes(1);
+    // [评审轮2 U12/U21] 正式路径 splash 不由 main.tsx 撤除（AuthGate/
+    // App 按各自语义移除——checking 期间品牌屏保持覆盖）
+    expect(splash.classList.contains('hidden')).toBe(false);
+    expect(splash.parentElement).toBe(document.body);
   });
 
   it('Tauri 宿主 local 引导：boot 注入 local → render（本地引擎路径）', async () => {
@@ -113,12 +140,18 @@ describe('main.tsx 渲染前异步引导（Story 16.3）', () => {
     });
 
     const mods = await resolveModules();
+    const splash = injectSplash();
     await import('./main');
     await vi.waitFor(() => {
       expect(domMock.render).toHaveBeenCalled();
     });
     expect(mods.transport.getTransportBoot()).toMatchObject({ mode: 'local', remoteUrl: null, remoteToken: null });
     expect(mods.appMode.getDesktopMode()).toBe('local');
+    // [评审轮2 U1] 本地态不在引导期显示窗口（App ready 后首显——防首帧
+    // 闪白，既有设计零变化）
+    expect(windowMock.show).not.toHaveBeenCalled();
+    // [评审轮2 U12/U21] splash 不由 main.tsx 撤除（App ready 时自移除）
+    expect(splash.classList.contains('hidden')).toBe(false);
   });
 
   it('壳命令失败：fail-safe 回退 local（desktop-mode.json 缺失同语义——不拒启）', async () => {
@@ -138,6 +171,7 @@ describe('main.tsx 渲染前异步引导（Story 16.3）', () => {
     delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
 
     const mods = await resolveModules();
+    const splash = injectSplash();
     await import('./main');
     await vi.waitFor(() => {
       expect(domMock.render).toHaveBeenCalled();
@@ -145,5 +179,9 @@ describe('main.tsx 渲染前异步引导（Story 16.3）', () => {
     expect(shellMock.invoke).not.toHaveBeenCalled();
     expect(mods.transport.getTransportBoot()).toBeNull();
     expect(mods.appMode.getDesktopMode()).toBe('browser');
+    // [评审轮2 U21] 浏览器宿主：main.tsx 不撤 splash（16.1 语义——
+    // AuthGate 离开 checking 时自移除）也零窗口调用
+    expect(splash.classList.contains('hidden')).toBe(false);
+    expect(windowMock.show).not.toHaveBeenCalled();
   });
 });

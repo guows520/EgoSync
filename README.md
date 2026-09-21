@@ -150,6 +150,22 @@ npm run tauri build
 
 `server/` 是云端自托管版二进制（axum）：同一前端构建产物（`egosync-app/dist`）双宿主复用——桌面走 Tauri，浏览器直接由 server 伺服（含 SPA 回退），认证/业务/事件面与桌面同构（详见 `_bmad-output/planning-artifacts/architecture.md` 云端托管章节）。
 
+### Docker 一键部署（生产推荐）
+
+`server/` 目录提供完整部署物（多阶段 Dockerfile + docker-compose + Caddy 自动 HTTPS）：
+
+```bash
+cd server
+# 创建 .env（至少设 EGOSYNC_DOMAIN；详见部署指南 11.2）
+echo "EGOSYNC_DOMAIN=ego.example.com" > .env
+echo "EGOSYNC_TOKEN=$(openssl rand -base64 24)" >> .env   # 推荐：预设访问令牌
+docker compose up -d --build
+```
+
+两服务拓扑：`egosync-server`（引擎 + opencode + 双 SQLite 单容器，数据挂命名卷 /data，WAL 模式）+ `caddy`（TLS 终结与代理，自动签发证书；http 明文 308 重定向 https）。升级 = 拉新代码重跑 `docker compose up -d --build`；宿主机重启自动恢复（`restart: unless-stopped`）。
+
+**从零到浏览器的完整步骤**（域名解析、密钥注入、时区、备份、自有反代要求、1C1G 资源预算）见 **[docs/user-guide/11-云端自托管部署.md](docs/user-guide/11-云端自托管部署.md)**。
+
 本地运行（开发验证用）：
 
 ```bash
@@ -157,20 +173,26 @@ cd egosync-app && npm run build   # 先产出 dist（server 伺服的就是它�
 cd ../server && cargo run         # http://localhost:8080
 ```
 
-关键环境变量：
+### 环境变量全表
 
-| 变量 | 语义 |
-| --- | --- |
-| `EGOSYNC_DATA_DIR` | 数据目录（egosync.db / conversations.db / secrets.json 落点） |
-| `EGOSYNC_TOKEN` | 预置访问令牌（存在则首访初始化向导关闭、登录按 env 常时比对） |
-| `EGOSYNC_STATIC_DIR` | 静态目录（默认回退 `../egosync-app/dist`） |
+| 变量 | 语义 | 默认 |
+| --- | --- | --- |
+| `EGOSYNC_DATA_DIR` | 数据目录（egosync.db / conversations.db / secrets.json 落点） | 必填（compose 形态 `/data`） |
+| `EGOSYNC_TOKEN` | 预置访问令牌（存在则首访初始化向导关闭、登录按 env 常时比对） | 未设（走首访向导） |
+| `EGOSYNC_STATIC_DIR` | 静态目录（默认回退 `../egosync-app/dist`） | `/app/static`（镜像内） |
+| `EGOSYNC_HOST` / `EGOSYNC_PORT` | 监听地址 / 端口 | `127.0.0.1` / `8080`（安全默认；compose 形态 `0.0.0.0`） |
+| `EGOSYNC_BEHIND_PROXY` | 反代感知门控（`1`/`true`）：同源判定读 `X-Forwarded-Proto`（TLS 反代缺省端口归一），且反代 TLS 面 Cookie 加 `Secure`；未设则 X-Forwarded-\* 一律忽略（直连语义） | 未设 |
+| `EGOSYNC_OPENCODE_PATH` | opencode 二进制路径或其所在目录（文件取父目录；缺省按系统 PATH 解析） | 未设（PATH fallback） |
+| `EGOSYNC_SECRET_{api_key_ref}` | LLM Key env 引导通道（键名原样区分大小写；文件优先，文件有值时 env 不生效） | 未设 |
+| `TZ` / `RUST_LOG` | 容器时区（调度判定基准）/ 日志级别（stdout JSON 结构化输出） | 系统 / `info` |
 
 部署要点：
 
 - **静态目录缺失 = API-only 警告运行**：`EGOSYNC_STATIC_DIR` 与默认路径皆无产物时 server 照常提供 API，日志告警——浏览器访问将得到 404；先 `npm run build` 再启动。
 - **重部署无需清缓存**：index.html 响应统一 `Cache-Control: no-cache`，带 hash 的资产可被浏览器安全长缓存。
 - **首访流程**：无凭据实例打开页面即进「初始化」向导（设置 ≥8 位令牌）；登录会话为 30 天持久 Cookie（关浏览器重开免重登），侧栏提供登出入口。
-- **生产部署**：进程只讲 HTTP——置于 TLS 反代（Caddy/自有反代）之后；认证端点限流 5 次/分钟/IP。
+- **生产部署**：进程只讲 HTTP——置于 TLS 反代（Caddy/自有反代，反代要求见部署指南 11.4）之后；认证端点限流 5 次/分钟/IP（反代拓扑下所有外部请求来自代理容器，限流实际按实例计——XFF 感知限流见 deferred-work）。
+- **密钥安全**：LLM Key 只存于服务端内存与 `/data/secrets.json`（0600）；密钥缺失返回指明重录路径的结构化错误（设置 → 模型服务配置 → 重新保存密钥）。
 
 ## 手机伴侣连接
 

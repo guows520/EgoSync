@@ -11,14 +11,15 @@
 //    嵌的 hash-source（编辑脚本须同步重算 Rust 侧值，反之亦然）；
 // 2. CSP 不含 script-src 'unsafe-inline'（16.1 script 侧唯一放行项是
 //    hash-source——禁止整体放开，见 security.rs 头注释与架构 ⑧）；
-// 3. 字体源放行（16.1 评审修复）：index.html 外链 Google Fonts——桌面
-//    宿主（tauri csp:null）正常加载，web 不放行则字体回退系统字体，
-//    产生宿主门控项之外的视觉分叉；style-src 放行 css 源、font-src
-//    放行字体文件源，与桌面加载同链对齐；
+// 3. 零第三方域（Story 17.1，人工裁决 B）：16.1 曾放行的两 Google 字体
+//    域已随字体自托管（@fontsource-variable npm 包，woff2 随 dist 分发）
+//    撤除——font-src/style-src 回归 `'self'`；断言收紧为整个 policy
+//    不含任何 http(s) 外链源（离线/内网一致性与隐私）；
 // 4. 已构建产物存在时：dist/index.html 的内联脚本与源 byte 对 byte 一致
-//    （Vite 原样保留前提的回归门），且无其他 inline script。
+//    （Vite 原样保留前提的回归门），且无其他 inline script、无 Google
+//    Fonts 外链残留。
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -82,17 +83,16 @@ describe('CSP hash-source 契约耦合（index.html ⇄ server security.rs）', 
     expect(policy).toContain("style-src 'self' 'unsafe-inline'");
     expect(policy).toContain("connect-src 'self'");
 
-    // 字体源放行（16.1 评审修复——index.html:7 外链 Google Fonts）：
-    // style-src 尾追 css 源、font-src 新增字体文件源；从 CSP 撤掉任一
-    // ⇒ web 字体回退系统字体，与桌面（tauri csp:null）视觉分叉
-    expect(policy).toContain("style-src 'self' 'unsafe-inline' https://fonts.googleapis.com");
-    expect(policy).toContain("font-src 'self' https://fonts.gstatic.com");
-    // 字体放行仅此两源——不引入其余第三方域（隐私面最小化）
-    const fontSources = policy.match(/https:\/\/[a-z.]+/g) ?? [];
-    expect([...new Set(fontSources)]).toEqual([
-      'https://fonts.googleapis.com',
-      'https://fonts.gstatic.com',
-    ]);
+    // 零第三方域（Story 17.1，人工裁决 B）：16.1 曾放行的两 Google 字体域
+    // 已随自托管撤除——font-src/style-src 回归 'self'；字体经
+    // @fontsource-variable npm 包随 dist 分发（woff2 本地命中）
+    expect(policy).toContain("font-src 'self'");
+    // 整个 policy 不得含任何第三方域（http/https 外链源）——隐私面
+    // 最小化 + 离线一致；fontsource 的 woff2 与 css 都在 'self' 之下。
+    // i 标志（17.1 评审 #15）：CSP 域名源大小写不敏感，`https://FONTS.`
+    // 之类大写源不得绕过门禁
+    const externalSources = policy.match(/https?:\/\/[a-z.]+/gi) ?? [];
+    expect(externalSources, `CSP 必须零第三方域，实得: ${externalSources.join(', ')}`).toEqual([]);
   });
 
   it('已构建产物：dist/index.html 内联脚本与源一致，且无其他 inline script', () => {
@@ -116,5 +116,20 @@ describe('CSP hash-source 契约耦合（index.html ⇄ server security.rs）', 
     expect(inlineCount).toBe(1);
     // module 入口（src/main.tsx → 构建后带 src 的外置 chunk）不算 inline
     expect(distHtml).toMatch(/<script[^>]+src=/);
+    // Google Fonts 外链清零（17.1 自托管替换点回归门——外链回潮即红）
+    expect(distHtml).not.toContain('fonts.googleapis.com');
+    expect(distHtml).not.toContain('fonts.gstatic.com');
+
+    // 字体产物正向断言（17.1 评审 #30）：上面的「外链缺席」对「什么
+    // 都没有」天然成立——若 fontsource import 被删，字体整体静默消失
+    // 仍全绿。此处断言 dist/assets 实际含 woff2 分片（@fontsource-
+    // variable unicode-range 切片），字体丢失立即红。
+    const assetsDir = resolve(process.cwd(), 'dist/assets');
+    const woff2 = readdirSync(assetsDir).filter((f) => f.endsWith('.woff2'));
+    expect(woff2.length, 'dist/assets 应含自托管 woff2 字体分片').toBeGreaterThan(0);
+    // CSS 侧同样钉住：产物 CSS 引用 woff2（字体声明被打包进产物）
+    const cssFiles = readdirSync(assetsDir).filter((f) => f.endsWith('.css'));
+    const cssText = cssFiles.map((f) => readFileSync(resolve(assetsDir, f), 'utf8')).join('\n');
+    expect(cssText).toMatch(/\.woff2/);
   });
 });

@@ -1,0 +1,51 @@
+# Story 17.1（epic AC 8）：构建上下文裁剪——secrets.json / *.db /
+# node_modules / target / dist 等绝不进镜像层与构建上下文。
+#
+# ⚠️ 本文件仅 BuildKit 的 per-Dockerfile 机制消费（`docker build -f
+#   server/Dockerfile .` 时优先于仓库根 .dockerignore）；经典构建器
+#   实测忽略本文件、只认仓库根 `.dockerignore`（2026-09-21 本机验证）。
+#   三份 ignore（仓库根 / 本文件 / server/.dockerignore）内容同步维护，
+#   与根文件的差异仅多排除 relay-server/（server 镜像不需要）。
+#   详见 server/.dockerignore 头注。
+
+# ── 版本库元数据（镜像不需要） ──
+.git/
+.gitignore
+.github/
+.gitattributes
+
+# ── 本地产物 / 依赖缓存（镜像内自建） ──
+**/node_modules/
+**/target/
+**/dist/
+
+# ── 密钥与数据（绝不可进镜像层——epic AC 8） ──
+**/secrets.json
+**/secrets.json.tmp
+**/*.db
+**/*.db-wal
+**/*.db-shm
+**/*.db-journal
+**/*.log
+**/.env
+**/.env.*
+
+# ── 桌面打包资源（opencode.exe ~135MB 等平台二进制——镜像运行时层
+#    自行下载 linux 版，桌面资源不得进入上下文） ──
+egosync-app/src-tauri/
+
+# ── 与 server 镜像无关的仓库区域（保持上下文精简） ──
+_bmad/
+_bmad-output/
+_recovery_pre_cr_dirac/
+companion-android/
+relay-server/
+docs/
+UAT测试/
+宣发材料/
+assets/
+egosync-app/tests/
+egosync-app/clean_and_restart.bat
+egosync-app/activate.ps1
+logo_design_proposals.md
+README.md

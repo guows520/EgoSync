@@ -1,13 +1,19 @@
 //! 服务端 SecretStore 适配器（Story 15.4，OQ1 裁决 A——架构 ④ 完整落地）。
 //!
 //! 双通道、**文件优先、env 兜底**：
-//! - 数据目录 `secrets.json`（0600 明文）：运行时主存储；
+//! - 数据目录 `secrets.json`（0600 明文）：运行时主存储（唯一可写
+//!   事实源——save/delete 永远落此文件）；
 //! - env `EGOSYNC_SECRET_{api_key_ref}`：原样区分大小写拼接（ref 段零
-//!   大小写转换），仅固定名 secret 的引导通道，不构成运行时遮蔽源——
-//!   文件存在该键时 env 值不生效。
+//!   大小写转换）。**对全部 key 生效**——包括 UUID 形态的
+//!   `llm_{uuid}_api_key`（epic AC 的 LLM Key 引导示例即 UUID 形态，
+//!   云端首启可 `EGOSYNC_SECRET_llm_<uuid>_api_key=sk-...` 注入后再
+//!   前端重录持久化），不只限固定名 secret。env 不构成运行时遮蔽源
+//!   ——文件存在该键时 env 值不生效（防 env 静默遮蔽文件值）。
 //!
 //! 写入（save/delete）永远落 secrets.json 0600；禁止 InMemory 占位
 //! （静默丢 Key 的已知坏状态）。并发写经进程内互斥锁串行化。
+//! 行为由 `tests/secret_store_test.rs` 四断言钉死（读序 / env 键
+//! 区分大小写 / 0600 / 原子写），本模块行为面 Story 17.1 零改动。
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;

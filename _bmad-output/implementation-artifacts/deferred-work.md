@@ -460,3 +460,23 @@ All items resolved in the same session:
 - source_spec: `_bmad-output/implementation-artifacts/16-3-desktop-remote-mode-fr48-optional.md`
   summary: /api/auth/status 按请求计数（不分成败）落在登录面 5/min/IP 限流组——远程桌面 onboarding（gate 检查+令牌验证+重验+测试连接）与同 IP 浏览器共享预算，常规用量贴边（评审轮 2 U10）
   evidence: server/src/lib.rs public 路由组挂 rate_limit；desktop_remote_test 仅验证 Bearer 失败计数与 auth 限流器独立（单方向），未覆盖桌面常规用量撞限的交互。预算拆分/状态查询豁免值得独立决策（属 15.4 既有预算面的再分配）
+
+- source_spec: `_bmad-output/implementation-artifacts/17-1-docker-deploy-secrets-and-tls.md`
+  summary: 导入后密钥可达性批量探测（Additional 9 后半）——对导入的每个 api_key_ref 探测 secrets.json/env 是否有值，无值返回指明重录路径的结构化错误。
+  evidence: 17.1 人工裁决（2026-09-21，Open Question 1 选项 A）：server 侧无 data_import 命令，/api/import 端点属 17.3 计划（architecture.md:2560、epics.md:3644）——探测触发点随端点落地，17.1 已先交付错误文案收敛（NFR-C7）；探测数据源复用 settings::list_llm_configs 的 ref 清单（destroy_all_data:1397 同款用法）。
+
+- source_spec: `_bmad-output/implementation-artifacts/17-1-docker-deploy-secrets-and-tls.md`
+  summary: 反代拓扑下认证限流退化为实例级单桶——限流键取 socket IP（caddy 容器 IP），需 XFF 感知的可信代理语义设计（防伪造 XFF 绕过限流）。
+  evidence: 17.1 评审（三层）#4：auth.rs 限流按 ConnectInfo，EGOSYNC_BEHIND_PROXY 仅消费 X-Forwarded-Proto 未消费 X-Forwarded-For；公网失败登录可把合法用户打成 429。README 已诚实化措辞。修法需裁决信任链（取 XFF 最右值 vs 可信代理网段），17.3 反代加固一并处理。
+- source_spec: `_bmad-output/implementation-artifacts/17-1-docker-deploy-secrets-and-tls.md`
+  summary: 三份 .dockerignore（仓库根 / server/ / Dockerfile.dockerignore）无防漂移机械校验——副本失手（尤其 secrets 排除项）会无声重开构建上下文洞。
+  evidence: 17.1 评审 #8：三副本仅靠头注纪律同步维护；CI 比对脚本/单一来源生成属 CI 基建，17.3 server-docker.yml（镜像构建工作流）是自然归宿。
+- source_spec: `_bmad-output/implementation-artifacts/17-1-docker-deploy-secrets-and-tls.md`
+  summary: server stdout JSON 日志格式无自动化验证（丢 .json() 或翻回 stderr 时全部测试仍绿）。
+  evidence: 17.1 评审 #33：server 测试全走 InProcessRouter 不执行 main；钉法需 spawn bin 读输出（CARGO_BIN_EXE）属进程级烟囱测试，17.3 CI 镜像冒烟（docker run + logs 断言）自然闭合。
+- source_spec: `_bmad-output/implementation-artifacts/17-1-docker-deploy-secrets-and-tls.md`
+  summary: SecretStore env 兜底把空值当有值——.env 设 EGOSYNC_SECRET_{ref}=（空串）时返回空密钥致 provider 401，而非结构化重录错误。
+  evidence: 17.1 评审 #22：secret_store.rs env 读取 Ok("") 计入 Some；修法（filter 非空）触碰 17.1 冻结「不改 SecretStore 行为」边界，需独立故事裁决语义（空 env = 缺失 or 显式空值）。
+- source_spec: `_bmad-output/implementation-artifacts/17-1-docker-deploy-secrets-and-tls.md`
+  summary: project-context.md 未收录 17.1 交付的部署拓扑与三个新 env（EGOSYNC_BEHIND_PROXY / EGOSYNC_OPENCODE_PATH / EGOSYNC_SECRET_{ref}）及 compose/Docker 部署面。
+  evidence: 17.1 评审 #7b：agent-context 文件按分诊规则固定 defer；AGENTS.md 规定项目细节以 project-context.md 为准，后续故事执行者不可见新 env 面。

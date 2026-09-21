@@ -7,9 +7,13 @@ export default {
   ],
   theme: {
     extend: {
+      // Story 17.1（人工裁决 B）：Google Fonts 外链改 @fontsource-variable
+      // npm 包自托管（import 见 src/index.css）。@fontsource 可变字体
+      // 注册的 family 名带 " Variable" 后缀（单文件覆盖全字重 100-900）；
+      // 字体栈本身不变（Inter / Noto Sans SC / JetBrains Mono）。
       fontFamily: {
-        sans: ['Inter', 'Noto Sans SC', 'sans-serif'],
-        mono: ['JetBrains Mono', 'monospace'],
+        sans: ['Inter Variable', 'Noto Sans SC Variable', 'sans-serif'],
+        mono: ['JetBrains Mono Variable', 'monospace'],
       },
       colors: {
         accent: 'var(--role-accent)',

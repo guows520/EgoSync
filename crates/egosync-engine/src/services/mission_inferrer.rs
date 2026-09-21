@@ -438,8 +438,9 @@ async fn build_default_provider(
     secret: &dyn SecretStore,
 ) -> Result<Box<dyn LlmProvider>, AppError> {
     let config = db::settings::get_default_llm_config(pool).await?;
-    let api_key = secret.load_secret(&config.api_key_ref)?
-        .ok_or_else(|| AppError::KeyringError(format!("未找到配置 '{}' 的 API Key", config.name)))?;
+    let api_key = secret
+        .load_secret(&config.api_key_ref)?
+        .ok_or_else(|| crate::services::llm_config::missing_api_key_error(&config.name))?;
 
     use crate::models::settings::NetworkLocation;
     let net_loc = config.network_location.clone();

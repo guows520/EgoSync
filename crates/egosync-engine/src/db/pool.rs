@@ -1,6 +1,6 @@
 use sha2::{Digest, Sha384};
 use sqlx::migrate::Migrator;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use sqlx::SqlitePool;
 use std::path::Path;
 use std::str::FromStr;
@@ -21,6 +21,12 @@ impl std::ops::Deref for ConversationsPool {
     }
 }
 
+/// Story 17.1：双库统一启用 WAL——epic「WAL 单容器单写者」假设兑现
+///（此前 data_export.rs 的 `PRAGMA wal_checkpoint` 对 rollback-journal
+/// 库是无操作）。桌面与云端同引擎共享，首开库文件即切 WAL；`:memory:`
+/// 测试库 SQLite 规定保持 memory 模式（设 WAL 无效但不报错，无害）。
+const SQLITE_JOURNAL_MODE: SqliteJournalMode = SqliteJournalMode::Wal;
+
 pub async fn init_db(db_path: &Path) -> Result<DbPool, AppError> {
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent)
@@ -31,7 +37,8 @@ pub async fn init_db(db_path: &Path) -> Result<DbPool, AppError> {
     let options = SqliteConnectOptions::from_str(&db_url)
         .map_err(|e| AppError::DbError(format!("数据库连接选项解析失败: {}", e)))?
         .create_if_missing(true)
-        .foreign_keys(true);
+        .foreign_keys(true)
+        .journal_mode(SQLITE_JOURNAL_MODE);
 
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
@@ -114,7 +121,8 @@ pub async fn init_conversations_db(db_path: &Path) -> Result<ConversationsPool, 
     let options = SqliteConnectOptions::from_str(&db_url)
         .map_err(|e| AppError::DbError(format!("对话数据库连接选项解析失败: {}", e)))?
         .create_if_missing(true)
-        .foreign_keys(true);
+        .foreign_keys(true)
+        .journal_mode(SQLITE_JOURNAL_MODE);
 
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
@@ -352,6 +360,53 @@ mod tests {
             .await
             .expect("query foreign_keys pragma");
         assert_eq!(foreign_keys, 1);
+    }
+
+    /// Story 17.1：双库 WAL 启用——epic「WAL 单容器单写者」假设兑现
+    ///（data_export.rs 的 `PRAGMA wal_checkpoint` 自此为真实操作）。
+    /// 文件库 journal_mode 必须为 `wal`；`:memory:` 测试库保持 memory
+    /// 模式（SQLite 规定——设 WAL 无效但不报错，断言其无害性）。
+    #[tokio::test]
+    async fn init_dbs_enable_wal_journal_mode() {
+        let dir = tempdir().expect("create temp dir");
+
+        let pool = init_db(&dir.path().join("egosync.db")).await.expect("init db");
+        let mode: String = sqlx::query_scalar("PRAGMA journal_mode")
+            .fetch_one(&pool)
+            .await
+            .expect("query journal_mode");
+        assert_eq!(mode.to_ascii_lowercase(), "wal", "主库必须为 WAL 模式");
+
+        let conv = init_conversations_db(&dir.path().join("conversations.db"))
+            .await
+            .expect("init conversations db");
+        let mode: String = sqlx::query_scalar("PRAGMA journal_mode")
+            .fetch_one(&conv.0)
+            .await
+            .expect("query conversations journal_mode");
+        assert_eq!(mode.to_ascii_lowercase(), "wal", "对话库必须为 WAL 模式");
+
+        // :memory: 库保持 memory 模式——**施加 WAL 后断言**（17.1 评审
+        // #14：直连建池不施加 WAL 时断言对默认池恒真，没走被测路径；
+        // SQLite 规定 memory 库设 WAL 无效不报错——用 connect options
+        // 真实施加，钉死「无害」这一声明）
+        let mem_opts = SqliteConnectOptions::from_str("sqlite::memory:")
+            .expect("parse memory connect options")
+            .journal_mode(SqliteJournalMode::Wal);
+        let mem = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(mem_opts)
+            .await
+            .expect("connect memory db with WAL option");
+        let mode: String = sqlx::query_scalar("PRAGMA journal_mode")
+            .fetch_one(&mem)
+            .await
+            .expect("query memory journal_mode");
+        assert_eq!(
+            mode.to_ascii_lowercase(),
+            "memory",
+            "memory 库施加 WAL 无效但不报错（SQLite 规定），模式保持 memory"
+        );
     }
 
     #[tokio::test]

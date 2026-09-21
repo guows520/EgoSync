@@ -1,0 +1,32 @@
+# EgoSync 云端自托管 Caddyfile（Story 17.1，epic AC 3）。
+#
+# 职责（架构冻结）：TLS 终结 + 反向代理——仅此而已（刻意不叠 gzip 等
+# 中间件：SSE 逐写语义优先，静态资产压缩非本层职责）。
+# - 自动 HTTPS：公网域名经 ACME 自动签发（80/443 端口须可达；
+#   `localhost` / 内网 IP 走 Caddy 内部 CA 自签——浏览器需信任
+#   Caddy 根证书，见部署指南）；
+# - http:// 明文访问 308 重定向 https（Caddy 默认，方法保留的永久重定向；自有反代路径须同等要求）；
+# - request_body max_size 50MiB：与 server 侧 body 上限精确对齐
+#   （axum DefaultBodyLimit 50*1024*1024=52,428,800 字节；Caddy 的 50MB
+#   按 SI 十进制=50,000,000 会掐掉 4.7% 合法区间——必须用 MiB）；
+# - flush_interval -1：SSE 冗余保险（Caddy 对流式响应本自动刷新）；
+# - 不设 write timeout（chat 分钟级挂起是正常态——与 server 侧
+#   空闲超时 120s 语义对齐，代理层不得叠加短超时）。
+
+{$EGOSYNC_DOMAIN}
+
+# HSTS（17.1 评审 #5）：全程 HTTPS 的复访降级窗口闭合——首次明文 308
+# 之后的每次访问由浏览器强制 https（max-age 1 年；不设 includeSubDomains/
+# preload——域名下可能并存用户自己的其他服务）
+header Strict-Transport-Security "max-age=31536000"
+
+request_body {
+	# 上传上限与 server 侧对齐（50MiB=52,428,800 字节）——超出由
+	# server 413 统一拒绝
+	max_size 50MiB
+}
+
+reverse_proxy egosync-server:8080 {
+	# SSE 逐写：禁用响应缓冲（Caddy 对流式自动刷新的显式冗余保险）
+	flush_interval -1
+}

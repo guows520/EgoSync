@@ -65,3 +65,17 @@ server/target/
 # noise-java 互验 harness 运行时产物（jar 与 class 文件）
 crates/companion-proto/interop/noise-java/lib/
 crates/companion-proto/interop/noise-java/classes/
+
+# Story 17.1（epic AC 8）：部署密钥与本地数据绝不入库
+# - server/.env：compose 部署配置（含 EGOSYNC_TOKEN / EGOSYNC_SECRET_*）
+# - secrets.json：云端版 LLM Key 存储（0600 明文）
+# - *.db[-wal/-shm]：SQLite 运行时数据（桌面/云端数据目录不在仓库，
+#   此处兜底防误拷入库）
+**/secrets.json
+**/secrets.json.tmp
+**/.env
+**/.env.*
+*.db
+*.db-wal
+*.db-shm
+*.db-journal

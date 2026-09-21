@@ -1,5 +1,5 @@
 # generated: 2026-05-21
-# last_updated: 2026-09-17T20:18:00+08:00
+# last_updated: 2026-09-21T17:20:00+08:00
 # project: 探索 (EgoSync)
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-21
-last_updated: 2026-09-21T10:05:00+08:00
+last_updated: 2026-09-21T17:20:00+08:00
 project: "探索 (EgoSync)"
 project_key: NOKEY
 tracking_system: file-system
@@ -230,8 +230,8 @@ development_status:
   epic-16-retrospective: optional
 
   # Epic 17: 自托管部署与运维 (Self-Hosted Deployment & Ops)
-  epic-17: backlog
-  17-1-docker-deploy-secrets-and-tls: backlog
+  epic-17: in-progress
+  17-1-docker-deploy-secrets-and-tls: review
   17-2-resident-work-loop-hardening-fr47: backlog
   17-3-backup-cicd-and-release: backlog
   epic-17-retrospective: optional

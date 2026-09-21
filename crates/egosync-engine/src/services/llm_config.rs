@@ -29,6 +29,27 @@ pub fn normalize_host(base_url: &str) -> Option<String> {
     }
 }
 
+/// 密钥缺失统一错误（NFR-C7，人工裁决 A 2026-09-21）：SecretStore 对某
+/// `api_key_ref` 无值（secrets.json 与 env 双通道皆缺）时的单一结构化
+/// 错误。
+///
+/// 此前 6 处读取路径（list_models / test_connection / resolve_default_
+/// provider / sync_default_to_opencode / mission 推断 / 任务分类）各自
+/// 拼文案（措辞漂移且无重录指引）；收敛为本助手后所有触发面返回同一
+/// 文案。variant 维持 `KeyringError`（15.1 defer 裁决不改名——收敛的是
+/// 文案拼装，不是错误形状）。17.3 导入后的批量密钥可达性探测复用同一
+/// 助手（deferred-work 已登记接线计划）。
+///
+/// 文案刻意包含重录路径：云端部署是密钥缺失的常态路径（桌面 keyring
+/// 不随数据导出迁移），指路即修复指引。
+pub fn missing_api_key_error(config_name: &str) -> AppError {
+    AppError::KeyringError(format!(
+        "未找到配置 '{}' 的 API Key（密钥缺失，常见于桌面→云端迁移后）。\
+         请前往 设置 → 模型服务配置，编辑该配置并重新保存密钥",
+        config_name
+    ))
+}
+
 /// 检查同一 host 是否已存在不同 network_location 的配置。
 /// 规则以 host 为边界，不以 scheme/port 拆分。
 /// `exclude_id` 用于更新场景，排除自身。
@@ -226,12 +247,9 @@ pub async fn test_connection(
 ) -> Result<(), AppError> {
     let config = db::get_llm_config(pool, &id).await?;
 
-    let api_key = secrets.load_secret(&config.api_key_ref)?.ok_or_else(|| {
-        AppError::KeyringError(format!(
-            "未找到配置 '{}' 的 API Key，请重新保存",
-            config.name
-        ))
-    })?;
+    let api_key = secrets
+        .load_secret(&config.api_key_ref)?
+        .ok_or_else(|| missing_api_key_error(&config.name))?;
 
     let net_loc = config.network_location.clone();
     let no_proxy = net_loc == NetworkLocation::Internal;
@@ -272,12 +290,9 @@ pub async fn resolve_default_provider(
 ) -> Result<Arc<dyn LlmProvider>, AppError> {
     let config = db::get_default_llm_config(main_pool).await?;
 
-    let api_key = secret.load_secret(&config.api_key_ref)?.ok_or_else(|| {
-        AppError::KeyringError(format!(
-            "未找到配置 '{}' 的 API Key，请在设置中重新保存",
-            config.name
-        ))
-    })?;
+    let api_key = secret
+        .load_secret(&config.api_key_ref)?
+        .ok_or_else(|| missing_api_key_error(&config.name))?;
 
     let net_loc = config.network_location.clone();
     let no_proxy = net_loc == NetworkLocation::Internal;
@@ -313,9 +328,9 @@ pub async fn sync_default_to_opencode(
 ) -> Result<(), AppError> {
     (|| async {
         let config = db::get_default_llm_config(pool).await?;
-        let api_key = secrets.load_secret(&config.api_key_ref)?.ok_or_else(|| {
-            AppError::KeyringError(format!("未找到配置 '{}' 的 API Key", config.name))
-        })?;
+        let api_key = secrets
+            .load_secret(&config.api_key_ref)?
+            .ok_or_else(|| missing_api_key_error(&config.name))?;
 
         // Map EgoSync provider IDs to opencode-recognized provider IDs.
         // 所有 OpenAI 兼容的提供商都映射为 "openai"，opencode 通过 baseURL 区分。
@@ -411,12 +426,9 @@ pub async fn list_models(
     id: String,
 ) -> Result<Vec<String>, AppError> {
     let config = db::get_llm_config(pool, &id).await?;
-    let api_key = secrets.load_secret(&config.api_key_ref)?.ok_or_else(|| {
-        AppError::KeyringError(format!(
-            "未找到配置 '{}' 的 API Key，请重新保存",
-            config.name
-        ))
-    })?;
+    let api_key = secrets
+        .load_secret(&config.api_key_ref)?
+        .ok_or_else(|| missing_api_key_error(&config.name))?;
 
     let net_loc = config.network_location.clone();
     let no_proxy = net_loc == NetworkLocation::Internal;
@@ -813,5 +825,141 @@ mod tests {
             .await
             .expect("delete config");
         assert_eq!(secrets.load_secret(&key_ref).expect("load secret"), None);
+    }
+
+    /// NFR-C7（人工裁决 A，Story 17.1）：密钥缺失单一结构化错误契约。
+    ///
+    /// - 形状：`KeyringError`（15.1 defer 裁决维持 variant 名——收敛的是
+    ///   文案拼装，不是错误形状；序列化仍为单键 map，HTTP/桌面两通道
+    ///   形状不变）；
+    /// - 文案：含配置名（用户能对上是哪条配置）+ 重录路径（设置 →
+    ///   模型服务配置——云端部署是密钥缺失的常态路径，指路即修复指引）；
+    /// - 6 处调用点共用本助手 ⇒ 文案一致性由构造保证（无第二拼装点）。
+    #[test]
+    fn missing_api_key_error_is_structured_and_points_to_reentry_path() {
+        let err = missing_api_key_error("DeepSeek 主力");
+        assert!(
+            matches!(err, AppError::KeyringError(_)),
+            "variant 必须维持 KeyringError（15.1 defer 裁决）"
+        );
+        // 序列化形状：单键 map（HTTP 200 body / 桌面 rejection 同构）
+        let value = serde_json::to_value(&err).expect("序列化");
+        let map = value.as_object().expect("AppError 序列化为 object");
+        assert_eq!(map.len(), 1, "单键 map 形状: {map:?}");
+        let msg = map.get("KeyringError").and_then(|v| v.as_str()).expect("KeyringError 键");
+        assert!(msg.contains("DeepSeek 主力"), "文案须含配置名: {msg}");
+        assert!(
+            msg.contains("设置 → 模型服务配置"),
+            "文案须含重录路径: {msg}"
+        );
+        assert!(
+            msg.contains("API Key"),
+            "文案须说明缺失的是 API Key: {msg}"
+        );
+    }
+
+    /// NFR-C7 调用路径钉死（17.1 评审 #29）：构造函数测试只钉形状，
+    /// 任一调用点回退旧拼装文案无门禁——本测试**经真实调用路径**触发
+    ///（库内配置 + SecretStore 键被删 ⇒ 缺失态），断言错误文案与构造
+    /// 契约一致（配置名 + 重录路径）。覆盖 test_connection / list_models /
+    /// resolve_default_provider 三个读取端点（同一助手，一处证明）。
+    #[tokio::test]
+    async fn missing_key_call_paths_surface_structured_reentry_error() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let pool = crate::db::pool::init_db(&dir.path().join("missing-key.db"))
+            .await
+            .expect("init db");
+        let secrets = InMemorySecretStore::default();
+
+        let config = create_config(
+            &pool,
+            &secrets,
+            CreateLlmConfigInput {
+                name: "DeepSeek 主力".into(),
+                provider: "openai_compatible".into(),
+                base_url: "https://api.deepseek.com/v1".into(),
+                model: "deepseek-chat".into(),
+                api_key: "sk-tmp".into(),
+                network_location: NetworkLocation::External,
+            },
+        )
+        .await
+        .expect("create config");
+        // 首个配置自动 default——resolve_default_provider 同样命中它
+        assert!(config.is_default);
+
+        // 模拟密钥丢失（云端迁移/重装场景：库在、SecretStore 键不在）
+        secrets
+            .delete_secret(&config.api_key_ref)
+            .expect("delete secret");
+
+        let expect_reentry = |err: AppError| {
+            let msg = match &err {
+                AppError::KeyringError(m) => m.clone(),
+                other => panic!("必须为 KeyringError，实得: {other:?}"),
+            };
+            assert!(msg.contains("DeepSeek 主力"), "含配置名: {msg}");
+            assert!(msg.contains("设置 → 模型服务配置"), "含重录路径: {msg}");
+        };
+
+        expect_reentry(
+            test_connection(&pool, &secrets, config.id.clone())
+                .await
+                .expect_err("缺密钥的 test_connection 必须报错"),
+        );
+        expect_reentry(
+            list_models(&pool, &secrets, config.id.clone())
+                .await
+                .expect_err("缺密钥的 list_models 必须报错"),
+        );
+        // Arc<dyn LlmProvider> 无 Debug——expect_err 不可用，改手写分支
+        let err = match resolve_default_provider(&pool, &secrets).await {
+            Err(e) => e,
+            Ok(_) => panic!("默认配置缺密钥必须报错"),
+        };
+        expect_reentry(err);
+    }
+
+    /// NFR-C7 源契约（17.1 评审 #29）：6 处调用点必须共用
+    /// `missing_api_key_error`（llm_config ×4 + mission_inferrer /
+    /// task_classifier 各 ×1），且重录文案拼装点全库唯一（helper 内），
+    /// 旧文案内联构造回潮即红——后两文件的行为级测试需重 fixture
+    ///（mission 上下文），源契约先行钉住接线（同款先例：sidecar 的
+    /// --pure 源断言）。只扫描生产区段（`mod tests` 之前）。
+    #[test]
+    fn all_missing_key_call_sites_share_single_helper() {
+        let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        // (文件, 期望调用数, 期望拼装点数)——拼装点唯一在 helper 内
+        let files = [
+            ("src/services/llm_config.rs", 4, 1),
+            ("src/services/mission_inferrer.rs", 1, 0),
+            ("src/services/task_classifier.rs", 1, 0),
+        ];
+        let mut helper_uses = 0;
+        for (rel, expected_calls, expected_assembly) in &files {
+            let src = std::fs::read_to_string(base.join(rel))
+                .unwrap_or_else(|e| panic!("read {rel}: {e}"));
+            let prod = src.split("\nmod tests").next().unwrap_or(&src);
+            // 调用点形态：ok_or_else(|| missing_api_key_error(&config.name))
+            //（含全限定路径形态）；排除 helper 自身定义行
+            let uses = prod
+                .lines()
+                .filter(|l| l.contains("missing_api_key_error("))
+                .filter(|l| !l.contains("fn missing_api_key_error"))
+                .count();
+            assert_eq!(
+                uses, *expected_calls,
+                "{rel} 的 missing_api_key_error 调用数 {uses} != 期望 {expected_calls}"
+            );
+            helper_uses += uses;
+            // 拼装点唯一性：重录文案在生产区段仅 helper 内一次（测试断言
+            // 自身会引用该短语——只扫 prod）；任何第二拼装点即漂移
+            let assembly = prod.matches("设置 → 模型服务配置").count();
+            assert_eq!(
+                assembly, *expected_assembly,
+                "{rel} 的重录文案拼装点 {assembly} != 期望 {expected_assembly}"
+            );
+        }
+        assert_eq!(helper_uses, 6, "调用点总数须为 6（评审 #29 基线）");
     }
 }

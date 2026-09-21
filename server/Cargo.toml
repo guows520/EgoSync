@@ -19,7 +19,9 @@ serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# "json"（Story 17.1，架构 ⑦）：stdout JSON 结构化日志（容器 docker
+# logs 直采）；"env-filter"：RUST_LOG 覆盖面。
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 # "fs"（Story 16.1）：ServeDir/ServeFile 静态服务（web 入口同源服务 dist）。
 tower-http = { version = "0.6", features = ["catch-panic", "fs"] }
 # tower（Story 16.1）：仅取 Service trait（static.rs SPA 回退的自定义

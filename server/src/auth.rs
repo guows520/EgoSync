@@ -38,7 +38,7 @@ use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, Salt
 use argon2::Argon2;
 use axum::body::Bytes;
 use axum::extract::{ConnectInfo, Request, State};
-use axum::http::{header, HeaderValue, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Json, Response};
 use egosync_engine::db::app_settings;
@@ -272,11 +272,13 @@ pub async fn setup(State(state): State<Arc<AppState>>, body: Bytes) -> Response 
 /// 统一 401（不泄露存在性）：env 态常时比对（SHA256 摘要常时比较，长度
 /// 不敏感）；库态 Argon2id 校验。成功 ⇒ Set-Cookie（httpOnly SameSite=
 /// Strict + Max-Age=2592000——30 天持久会话，boss 2026-09-20 裁决；关闭
-/// 浏览器不再登出是该裁决接受的体验取舍，TTL 清扫/多端吊销归 17.x）。
+/// 浏览器不再登出是该裁决接受的体验取舍，TTL 清扫/多端吊销归 17.x）；
+/// 反代 TLS 面（BEHIND_PROXY=1 且 XFP=https）追加 `Secure`（17.1）。
 /// body 反序列化失败同样 401。
 pub async fn login(
     ConnectInfo(addr): ConnectInfo<crate::idle_timeout::RemoteAddr>,
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     body: Bytes,
 ) -> Response {
     let Some(token) = parse_token_body(&body) else {
@@ -322,9 +324,12 @@ pub async fn login(
     tracing::info!("单用户会话建立");
     // Max-Age=2592000（30 天持久会话）：boss 2026-09-20 裁决——auth_sessions
     // 行本就落库跨重启有效，30 天内重开浏览器仍保持登录。
+    // Story 17.1：反代 TLS 面（BEHIND_PROXY=1 且 XFP=https）追加 Secure。
     let cookie = format!(
-        "{}={}; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000",
-        SESSION_COOKIE, session_token
+        "{}={}; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000{}",
+        SESSION_COOKIE,
+        session_token,
+        cookie_secure_flag(state.behind_proxy, &headers)
     );
     let mut response = (StatusCode::OK, Json(json!({"ok": true}))).into_response();
     response.headers_mut().insert(
@@ -341,7 +346,8 @@ pub async fn login(
 /// - 携带有效会话 ⇒ 删 `auth_sessions` 当前行（伪造/未知值 DELETE 匹配
 ///   0 行，结果同幂等）；
 /// - Set-Cookie `egosync_session=; Max-Age=0` 同属性（Path/HttpOnly/
-///   SameSite=Strict）过期——浏览器立即丢弃；
+///   SameSite=Strict；反代 TLS 面追加 Secure——过期 Cookie 与签发 Cookie
+///   属性须对称，否则部分浏览器不覆盖）过期——浏览器立即丢弃；
 /// - 会话行删除失败（DB 故障）：仍 200 + 过期 Cookie（客户端态已清，
 ///   孤儿行不可达——无 Cookie 值即不可劫持；tracing::error 运维可见；
 ///   TTL 清扫归 17.x）。
@@ -364,8 +370,9 @@ pub async fn logout(State(state): State<Arc<AppState>>, req: Request) -> Respons
         }
     }
     let cookie = format!(
-        "{}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0",
-        SESSION_COOKIE
+        "{}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0{}",
+        SESSION_COOKIE,
+        cookie_secure_flag(state.behind_proxy, req.headers())
     );
     let mut response = (StatusCode::OK, Json(json!({"ok": true}))).into_response();
     response.headers_mut().insert(
@@ -554,6 +561,27 @@ fn parse_token_body(body: &Bytes) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// 反代感知 Cookie `Secure` 附加判定（Story 17.1）。
+///
+/// `EGOSYNC_BEHIND_PROXY=1` 且 `X-Forwarded-Proto` 首值（逗号分隔代理链
+/// 取最左）为 https ⇒ 追加 `; Secure`；其余（门控未启用 / XFP 缺失 /
+/// 明文入口 http）返回空串。语义：
+/// - 直连（dev/e2e，16.2 web e2e 直连 http://127.0.0.1 不设 env）行为
+///   与 15.4 逐字节一致——永不附加；
+/// - http 反代入口不附加（Secure Cookie 不得在明文面签发，浏览器会拒收）；
+/// - Bearer 通道不受影响（无 Cookie）。
+fn cookie_secure_flag(behind_proxy: bool, headers: &HeaderMap) -> &'static str {
+    if !behind_proxy {
+        return "";
+    }
+    let https = headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next())
+        .is_some_and(|v| v.trim().eq_ignore_ascii_case("https"));
+    if https { "; Secure" } else { "" }
+}
+
 /// 库内是否已有令牌哈希。
 ///
 /// 读错误原样上抛（绝不吞成「无哈希」——那是 fail-open：已初始化实例
@@ -702,5 +730,36 @@ mod tests {
         assert!(limiter.check(ip), "窗口内第 5 次失败仍属放行档（401）");
         // 第 6 条窗口内失败 ⇒ 超限（429）
         assert!(!limiter.check(ip), "窗口内满 5 条后第 6 次失败 ⇒ 429");
+    }
+
+    /// Story 17.1：Cookie Secure 门控判定（I/O 矩阵）——
+    /// - 反代 TLS（BEHIND_PROXY=1 + XFP=https）⇒ 追加 `; Secure`；
+    /// - 代理链首值语义（`https, http` 取最左）；
+    /// - 明文反代入口（XFP=http）⇒ 不附加；
+    /// - 直连暴露伪造 XFP=https（门控未启用）⇒ 忽略，不附加
+    ///   （16.2 web e2e 直连行为不变）。
+    #[test]
+    fn cookie_secure_flag_gates_on_behind_proxy_and_xfp() {
+        let https_headers = |v: &'static str| {
+            let mut h = HeaderMap::new();
+            h.insert("x-forwarded-proto", HeaderValue::from_static(v));
+            h
+        };
+        // 反代 TLS ⇒ Secure
+        assert_eq!(cookie_secure_flag(true, &https_headers("https")), "; Secure");
+        // 代理链取首值
+        assert_eq!(
+            cookie_secure_flag(true, &https_headers("https, http")),
+            "; Secure"
+        );
+        // 大小写不敏感
+        assert_eq!(cookie_secure_flag(true, &https_headers("HTTPS")), "; Secure");
+        // 明文入口 ⇒ 不附加
+        assert_eq!(cookie_secure_flag(true, &https_headers("http")), "");
+        // 反代启用但头缺失 ⇒ 不附加
+        assert_eq!(cookie_secure_flag(true, &HeaderMap::new()), "");
+        // 直连暴露（门控未启用）：伪造 XFP=https 不得附加
+        assert_eq!(cookie_secure_flag(false, &https_headers("https")), "");
+        assert_eq!(cookie_secure_flag(false, &HeaderMap::new()), "");
     }
 }

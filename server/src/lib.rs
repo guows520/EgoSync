@@ -63,6 +63,12 @@ pub struct AppState {
     pub sidecar: Arc<tokio::sync::Mutex<egosync_engine::services::sidecar::SidecarManager>>,
     /// 全局取消令牌（watchdog / delegate 监听 / 退出清理）。
     pub cancel: CancellationToken,
+    /// 反代感知门控（Story 17.1）：`EGOSYNC_BEHIND_PROXY=1` ⇒
+    /// security 同源判定读取 X-Forwarded-Proto（TLS 反代缺省端口归一）
+    /// + auth 在 XFP=https 时 Cookie 加 `Secure`。未启用时
+    /// X-Forwarded-\* 一律忽略（直连语义与 15.4 逐字节一致——dev/e2e
+    /// 零影响，防直连暴露下的伪造信任）。
+    pub behind_proxy: bool,
 }
 
 /// 构建完整路由（生产与测试共用；测试经 [`bootstrap::build_test_state`]
@@ -139,10 +145,13 @@ pub fn build_router(state: Arc<AppState>, static_dir: Option<std::path::PathBuf>
         // 中间件叠放（后加者为外层）：CatchPanic 最外兜底 → CSP+安全头全响应
         // （须在跨源拒绝之外——403 也下发）→ CORS 白名单层（16.3：桌面
         // webview 跨源放行 + 预检短路；须在跨源拒绝之外——白名单 Origin 的
-        // 响应/预检需要本层回写放行头，且预检不得落入拒绝层）→ 跨源拒绝 →
-        // body 上限。
+        // 响应/预检需要本层回写放行头，且预检不得落入拒绝层）→ 跨源拒绝
+        // （17.1 起带 state：BEHIND_PROXY 门控的 XFP 感知）→ body 上限。
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
-        .layer(axum::middleware::from_fn(security::reject_cross_origin))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            security::reject_cross_origin,
+        ))
         .layer(axum::middleware::from_fn(cors::cors_allowlist))
         .layer(axum::middleware::from_fn(security::security_headers))
         .layer(tower_http::catch_panic::CatchPanicLayer::custom(

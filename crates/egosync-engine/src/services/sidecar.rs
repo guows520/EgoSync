@@ -1175,6 +1175,43 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_resolve_binary_path_hits_resource_dir_binary() {
+        // WHY（17.1 评审 #28）：云端注入链 EGOSYNC_OPENCODE_PATH →
+        // bootstrap 传 SidecarManager::new(Some(dir), ..) → 本函数——
+        // 既有测试只覆盖 None / 不存在目录（都走 PATH 回落），命中路径
+        // 无门禁：资源目录搜索序回归（join 段改错 / 搜索序颠倒）会静默
+        // 降级为 PATH 解析，镜像内 opencode 永不拉起且全部测试绿。
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let exe_name = if cfg!(target_os = "windows") {
+            "opencode.exe"
+        } else {
+            "opencode"
+        };
+
+        // 根目录放置（Docker 镜像布局：/app/resources/opencode——
+        // bootstrap 传 EGOSYNC_OPENCODE_PATH 的父目录）
+        let bin = dir.path().join(exe_name);
+        std::fs::write(&bin, b"stub").expect("write stub binary");
+        assert_eq!(
+            SidecarManager::resolve_binary_path(Some(dir.path().to_path_buf())),
+            Some(bin.clone()),
+            "资源目录内真实放置的 opencode 必须被命中（不得回落 PATH）"
+        );
+
+        // resources/ 子目录放置（桌面 tauri bundle 布局）——子目录优先
+        // 于根（search_dirs = [resources/, dir/]，与实现搜索序钉死）
+        let subdir = dir.path().join("resources");
+        std::fs::create_dir_all(&subdir).expect("create resources subdir");
+        let sub_bin = subdir.join(exe_name);
+        std::fs::write(&sub_bin, b"stub").expect("write stub binary");
+        assert_eq!(
+            SidecarManager::resolve_binary_path(Some(dir.path().to_path_buf())),
+            Some(sub_bin),
+            "两处均存在时 resources/ 子目录优先（与实现搜索序一致）"
+        );
+    }
+
     // 注：NSIS 安装钩子配置测试（原 test_nsis_preinstall_hook_configured_and_path_based）
     // 读取桌面壳 tauri.conf.json，属宿主打包配置，已随 Story 15.1 迁至
     // src-tauri/tests/packaging_config.rs。

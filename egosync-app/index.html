@@ -6,7 +6,10 @@
          横条 inset）；内联防 FOUC 脚本零改动（CSP hash byte 对 byte 契约）。 -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>EgoSync</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&family=Noto+Sans+SC:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <!-- Story 17.1：字体自托管（人工裁决 B）——Google Fonts 外链改经
+         @fontsource-variable npm 包随 dist 分发（见 src/index.css 头部
+         import），离线/内网一致性与隐私；CSP 同步收紧为零第三方域。
+         内联防 FOUC 脚本零改动（CSP hash byte 对 byte 契约不受影响）。 -->
     <script>
       (function(){
         var t=localStorage.getItem('egosync-theme');

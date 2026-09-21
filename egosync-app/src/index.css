@@ -1,3 +1,14 @@
+/* Story 17.1（人工裁决 B）：字体自托管——@fontsource-variable npm 包
+   （OFL 授权随包携带）取代 index.html 的 Google Fonts 外链。woff2 经
+   vite 打包进 dist/assets，unicode-range 分片按需下载；桌面（tauri
+   csp:null）与 web 同链本地加载——视觉零分叉、离线一致、零第三方
+   请求（CSP font-src/style-src 回归 'self'）。font-display: swap 与
+   原外链 display=swap 行为一致。可变字体单文件覆盖全字重（100-900），
+   取代外链时代的固定字重清单（300/400/500/600）。 */
+@import '@fontsource-variable/inter';
+@import '@fontsource-variable/jetbrains-mono';
+@import '@fontsource-variable/noto-sans-sc';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;

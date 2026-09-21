@@ -1,0 +1,101 @@
+# EgoSync 云端自托管编排（Story 17.1，epic AC 2/4）。
+#
+# 拓扑（架构 ⑤ 冻结）：两服务——egosync-server（engine + opencode 单
+# 容器，双 SQLite 挂命名卷 /data，WAL 模式）+ caddy（TLS 终结与代理，
+# 自动 HTTPS）。opencode 并入 server 镜像（非独立容器，sidecar 生命周期
+# 代码零改动）；Caddy 只做 TLS 终结与代理（内置 rustls TLS 是架构
+# Never——TLS 终结在反代）。
+#
+# 使用（详见 docs/user-guide/11-云端自托管部署.md）：
+#   1. 在本目录创建 .env（模板见部署指南：EGOSYNC_DOMAIN /
+#      EGOSYNC_TOKEN / 可选 TZ、RUST_LOG、EGOSYNC_SECRET_*）
+#   2. docker compose up -d
+#   3. 首访 https://<域名> 走初始化向导（或预设 EGOSYNC_TOKEN 跳过）
+#
+# 构建上下文为仓库根（compose 文件在 server/ 下：context: ..）。
+#
+# 顶层 name（17.1 评审 #3）：固定 compose 项目名为 egosync-server——
+# 命名卷实际名为 egosync-server_egosync-data 等，与部署指南备份/恢复
+# 命令一致（不设则项目名缺省取目录名 server，文档与实际漂移）。
+name: egosync-server
+
+services:
+  egosync-server:
+    build:
+      # path 依赖要求 build context 为仓库根（见 Dockerfile 头注）
+      context: ..
+      dockerfile: server/Dockerfile
+    image: egosync-server:local
+    # 生产不暴露端口给宿主机——唯一入口经 caddy；需要直连调试时
+    # 自行加 ports 映射（勿在公网裸暴露 HTTP）
+    expose:
+      - "8080"
+    environment:
+      EGOSYNC_DATA_DIR: /data
+      EGOSYNC_HOST: 0.0.0.0
+      EGOSYNC_PORT: "8080"
+      EGOSYNC_STATIC_DIR: /app/static
+      # opencode 注入（架构 ⑤「同一注入点两个值」——桌面传 tauri
+      # resource_dir，云端传此路径；bootstrap 解析文件→父目录）
+      EGOSYNC_OPENCODE_PATH: /app/resources/opencode
+      # 反代感知（17.1）：同源判定读 X-Forwarded-Proto + TLS 面 Cookie
+      # Secure——经 caddy 形态必开；改自有反代时同样保持开启
+      EGOSYNC_BEHIND_PROXY: "1"
+      TZ: ${TZ:-Asia/Shanghai}
+      RUST_LOG: ${RUST_LOG:-info}
+      # 预置访问令牌（可选）：未设则首访走浏览器初始化向导；公网部署
+      # 建议预设（消解 setup 抢占窗口——见部署指南「公网抢占窗口」节）
+      EGOSYNC_TOKEN: ${EGOSYNC_TOKEN:-}
+    # EGOSYNC_SECRET_*（LLM Key env 引导通道）与 EGOSYNC_TOKEN 等从
+    # .env 透传（compose 无法通配 environment 键——env_file 是机制）
+    env_file:
+      - .env
+    volumes:
+      # 双 SQLite（WAL）+ secrets.json + opencode workspace——唯一持久面
+      - egosync-data:/data
+    restart: unless-stopped
+    healthcheck:
+      # 存活级 healthz（深度级防误杀不用于存活探针——epic 裁决）
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    # 1C1G 预算护栏（常驻实测见部署指南「资源预算」节；按需调整）
+    mem_limit: ${EGOSYNC_MEM_LIMIT:-768m}
+    # 日志轮转（17.1 评审 #6）：JSON stdout 走 json-file 驱动，无上限的
+    # 默认配置是 1C1G 长跑最典型的磁盘爆掉路径（本故事开发期亲历 / 95%）；
+    # 单文件 10MB × 保留 3 份
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  caddy:
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      # Caddyfile 占位 {$EGOSYNC_DOMAIN}——域名经 env 注入
+      EGOSYNC_DOMAIN: ${EGOSYNC_DOMAIN:?请在 .env 设置 EGOSYNC_DOMAIN（域名或本机演练用 localhost）}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # 证书持久卷（独立于应用数据卷——升级/回滚互不影响）
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+    # 日志轮转（同 egosync-server——caddy 访问日志同走 json-file 驱动）
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    depends_on:
+      - egosync-server
+
+volumes:
+  egosync-data:
+  caddy_data:
+  caddy_config:

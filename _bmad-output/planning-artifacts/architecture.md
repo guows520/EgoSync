@@ -2649,7 +2649,7 @@ volumes: { egosync-data: {} }
 |------|------|
 | 令牌暴力破解 | Argon2id 哈希存储、常时比较、认证/setup 端点 IP 限流 5/min、失败统一 401 不泄露用户存在性 |
 | 中间人窃听 | TLS 强制（Caddy 自动 HTTPS 或用户既有反代）；healthz 之外全端点拒绝明文部署——文档明示 |
-| XSS 窃取会话/数据 | httpOnly Cookie（JS 不可读）；CSP（16.1 落地实文）：`default-src 'self'; script-src 'self' 'sha256-…'`（hash-source 放行 index.html 内联防 FOUC 主题脚本，byte 对 byte 契约测试守门）；`style-src 'self' 'unsafe-inline' https://fonts.googleapis.com` + `font-src 'self' https://fonts.gstatic.com`（与桌面 tauri csp:null 同链放行 Google Fonts——视觉零分叉，仅此两第三方域）；`connect-src 'self'`；另加 `X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer` 全响应下发 |
+| XSS 窃取会话/数据 | httpOnly Cookie（JS 不可读）；CSP（16.1 落地实文）：`default-src 'self'; script-src 'self' 'sha256-…'`（hash-source 放行 index.html 内联防 FOUC 主题脚本，byte 对 byte 契约测试守门）；`style-src 'self' 'unsafe-inline' https://fonts.googleapis.com` + `font-src 'self' https://fonts.gstatic.com`（与桌面 tauri csp:null 同链放行 Google Fonts——视觉零分叉，仅此两第三方域）【2026-09-21 Story 17.1 人工裁决修订（自托管字体）：两 Google 字体域撤除——字体改经 @fontsource-variable npm 包自托管随 dist 分发（woff2 本地命中，110 分片），`font-src`/`style-src` 回归 `'self'`，CSP 现为零第三方域；契约测试同步收紧为「全 policy 不得含任何 http(s) 外链源」+ dist 产物 woff2 正向断言。桌面（tauri csp:null）与 web 仍同链本地加载，视觉零分叉不变】；`connect-src 'self'`；另加 `X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer` 全响应下发 |
 | CSRF | Cookie SameSite=Strict + 全同源架构（静态/API/SSE 同域）；无跨源请求面 |
 | 浏览器侧数据残留 | V1 明确策略：业务数据仅内存态（React state），不写 localStorage/IndexedDB；刷新=从服务端重取（FR-45"刷新恢复"由服务端持久化兜底）；登出清 Cookie |
 | 密钥泄露至浏览器 | ④的结构性保证 + API 响应形状测试（断言无 key 字段） |

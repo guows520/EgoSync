@@ -1,6 +1,6 @@
 //! egosync-server bin 入口：tracing init + env 配置 + 完整引导 + 优雅退出。
 //!
-//! env（Story 15.4 冻结面 + 16.1 静态目录）：
+//! env（Story 15.4 冻结面 + 16.1 静态目录 + 17.1 部署面）：
 //! - `EGOSYNC_DATA_DIR`（必填）：数据目录（双库 + secrets.json + workspace）；
 //! - `EGOSYNC_TOKEN`（可选）：env 态引导令牌——存在即冻结为「login 仅常时
 //!   比对 env、setup 不挂载」形态；不存在走库态 Argon2id（首访 setup）；
@@ -9,7 +9,17 @@
 //!   警告并 API-only，进程不崩溃）；
 //! - `EGOSYNC_HOST`（默认 `127.0.0.1`——安全默认，公网暴露需显式声明）；
 //! - `EGOSYNC_PORT`（默认 `8080`）；
+//! - `EGOSYNC_BEHIND_PROXY`（可选，17.1）：`1`/`true` ⇒ 反代感知门控——
+//!   security 同源判定读取 X-Forwarded-Proto（TLS 反代缺省端口归一）、
+//!   auth 在 XFP=https 时 Cookie 加 `Secure`；未设/其他值 ⇒ 直连语义
+//!   （X-Forwarded-\* 一律忽略，dev/e2e 零影响）；
+//! - `EGOSYNC_OPENCODE_PATH`（可选，17.1）：opencode 二进制路径或其资源
+//!   目录——bootstrap 注入 SidecarManager（架构 ⑤「同一注入点两个值」，
+//!   桌面传 tauri resource_dir；缺省 PATH fallback）；
 //! - `RUST_LOG`（默认 info）。
+//!
+//! 日志（架构 ⑦，17.1 对齐）：stdout JSON 结构化输出（容器场景
+//! `docker logs` 直采；stderr 纯文本为 15.4 过渡形态）。
 //!
 //! 连接边界（F11，二轮评审修复 #2）：**空闲超时 120s（双向静默才断开，
 //! [`IDLE_TIMEOUT_SECS`]）+ 响应超时禁用**（chat 分钟级挂起是正常态）。
@@ -21,7 +31,7 @@
 
 use std::time::Duration;
 
-use egosync_server::bootstrap::build_app_state;
+use egosync_server::bootstrap::{build_app_state, parse_behind_proxy};
 use egosync_server::build_router;
 use egosync_server::idle_timeout::{IdleTimeoutListener, IDLE_TIMEOUT_SECS};
 
@@ -68,8 +78,11 @@ fn resolve_static_dir() -> Option<std::path::PathBuf> {
 
 #[tokio::main]
 async fn main() {
+    // 架构 ⑦「结构化日志」（17.1 对齐）：stdout JSON——容器场景 docker
+    // logs 直采；EnvFilter 沿用（RUST_LOG 覆盖面不变）。
     tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
+        .json()
+        .with_writer(std::io::stdout)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
@@ -106,11 +119,16 @@ async fn main() {
     };
     let addr = format!("{}:{}", host, port);
 
+    // 反代感知门控（17.1）：解析逻辑在 bootstrap::parse_behind_proxy
+    //（评审 #27：纯函数 + 单测钉死取值映射——解析回归曾可静默关闭
+    // TLS 修复全链且全部测试绿）
+    let behind_proxy = parse_behind_proxy(std::env::var("EGOSYNC_BEHIND_PROXY"));
+
     // 静态目录解析（16.1）：env 显式设置优先；未设时默认 ../egosync-app/dist
     // （存在即用）；两者皆缺 ⇒ API-only + tracing 警告（不崩溃）
     let static_dir = resolve_static_dir();
 
-    let state = build_app_state(data_dir, env_token)
+    let state = build_app_state(data_dir, env_token, behind_proxy)
         .await
         .unwrap_or_else(|e| {
             eprintln!("server 引导失败: {}", e);

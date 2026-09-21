@@ -11,6 +11,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  opencode-pin-consistency:
+    # Story 17.1 评审 #31：server/Dockerfile 与 release.yml 的 opencode
+    # 版本 pin 一致性门禁——只匹赋值行（`ARG OPENCODE_VERSION=` /
+    # `OPENCODE_VERSION="`），注释行数巧合对齐不构成校验；升版漏改
+    # 任何一处立即红。同时核对 Dockerfile 内两架构 sha256 pin 齐备
+    #（评审 #13：tarball 内容校验是部署供应链的一环）。
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: 比对 OPENCODE_VERSION pin（Dockerfile ⇄ release.yml）
+        run: |
+          DOCKER_PIN=$(grep -oP 'ARG OPENCODE_VERSION=\Kv[0-9.]+' server/Dockerfile)
+          RELEASE_PIN=$(grep -oP 'OPENCODE_VERSION="\Kv[0-9.]+' .github/workflows/release.yml | head -1)
+          echo "Dockerfile: ${DOCKER_PIN} / release.yml: ${RELEASE_PIN}"
+          [ -n "${DOCKER_PIN}" ] || { echo "server/Dockerfile 缺 OPENCODE_VERSION 赋值行"; exit 1; }
+          [ -n "${RELEASE_PIN}" ] || { echo "release.yml 缺 OPENCODE_VERSION 赋值行"; exit 1; }
+          [ "${DOCKER_PIN}" = "${RELEASE_PIN}" ] || { echo "opencode 版本 pin 分歧（升版漏改其一）"; exit 1; }
+      - name: 核对 Dockerfile 两架构 sha256 pin 齐备
+        run: |
+          for arch in x64 arm64; do
+            grep -q "OPENCODE_ARCH=${arch}; OPENCODE_SHA256=" server/Dockerfile \
+              || { echo "server/Dockerfile 缺 ${arch} 的 sha256 pin（升版时须同步 GitHub 官方 digest）"; exit 1; }
+          done
+          echo "sha256 pins ok"
+
   test-and-build:
     strategy:
       fail-fast: false

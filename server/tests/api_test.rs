@@ -933,9 +933,11 @@ async fn build_app_state_production_bootstrap_smoke() {
     // 生产同款引导（非 build_test_state）：完整桌面序列——双池、
     // AgentConfig 同步、custom tools 写盘、sidecar（PATH 无 opencode
     // ⇒ 优雅降级）、delegate 监听、EventRouter、调度器。
+    // （17.1 起第三参 behind_proxy——本冒烟走直连语义 false。）
     let state = build_app_state(
         temp_data_dir("prod-bootstrap"),
         Some("prod-smoke-token".into()),
+        false,
     )
     .await
     .expect("生产引导必须成功");

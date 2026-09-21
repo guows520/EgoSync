@@ -7,11 +7,13 @@ on:
       - relay-server/**
       - crates/companion-proto/**
       - .github/workflows/relay-docker.yml
+      - .dockerignore   # 17.1 起根 ignore 治理 relay 构建上下文——改动须触发 relay 镜像验证
   pull_request:
     paths:
       - relay-server/**
       - crates/companion-proto/**
       - .github/workflows/relay-docker.yml
+      - .dockerignore
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

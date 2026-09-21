@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-21
-last_updated: 2026-09-21T07:55:00+08:00
+last_updated: 2026-09-21T10:05:00+08:00
 project: "探索 (EgoSync)"
 project_key: NOKEY
 tracking_system: file-system
@@ -226,7 +226,7 @@ development_status:
   epic-16: in-progress
   16-1-web-entry-auth-and-first-visit-flow: done
   16-2-realtime-streaming-and-browser-compat: done
-  16-3-desktop-remote-mode-fr48-optional: review
+  16-3-desktop-remote-mode-fr48-optional: done
   epic-16-retrospective: optional
 
   # Epic 17: 自托管部署与运维 (Self-Hosted Deployment & Ops)

@@ -2,7 +2,7 @@
 title: '桌面客户端远程模式（Story 16.3，FR-48）'
 type: 'feature'
 created: '2026-09-20'
-status: 'in-review'
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 1
 baseline_commit: 'e285060c90c9a2311024863dd09ac188b9f2965b'

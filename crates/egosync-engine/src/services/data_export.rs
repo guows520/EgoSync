@@ -210,23 +210,28 @@ async fn query_q2_reminders(pool: &DbPool) -> Result<Vec<serde_json::Value>, App
 async fn query_big_rock_protection_reminders(
     pool: &DbPool,
 ) -> Result<Vec<serde_json::Value>, AppError> {
-    let rows = sqlx::query(
-        "SELECT id, task_id, reminded_count, last_reminded_at, created_at
-         FROM big_rock_protection_reminders ORDER BY created_at ASC",
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(|e| AppError::DbError(format!("查询大石头保护提醒记录失败: {}", e)))?;
+    // Story 17.2（决策 #7 替换迁移）：big_rock_protection_reminders 表已并入
+    // scheduler_triggers 统一表——导出段改由统一表合成，JSON 形状不变
+    //（bigRockProtectionReminders 段字段与旧导出包逐字段一致，跨形态互导兼容）。
+    // 同一 task 经 TZ 变更可能存多条 tz 维度行——仅取 last_triggered_at 最新
+    // 一条，保持旧表 UNIQUE(task_id) 的单行形状（多行会破旧消费方的主键/唯一约束）。
+    // id / createdAt 统一表不再持有：id 以 scope(task_id) 合成（导出包内唯一，
+    // 旧消费方 INSERT 主键可用）；createdAt 以最后触发时刻代理（字段在场即可，
+    // 新旧两侧导入均不消费该值）。
+    // 评审注记（保真度）：字段形状与旧导出包一致，但非逐字节相同——行序由
+    // 旧 created_at ASC 变为 scope ASC，id/createdAt 为合成/代理值；跨 034 边界
+    // 的备份逐字节 diff 会见整段重排与值跳变（语义等价，见 migration 034 头注）。
+    let rows = crate::db::scheduler_triggers::list_bigrock_protection_latest(pool).await?;
 
     Ok(rows
         .iter()
         .map(|row| {
             serde_json::json!({
-                "id": row.get::<String, _>("id"),
-                "taskId": row.get::<String, _>("task_id"),
-                "remindedCount": row.get::<i64, _>("reminded_count"),
-                "lastRemindedAt": row.get::<String, _>("last_reminded_at"),
-                "createdAt": row.get::<String, _>("created_at"),
+                "id": row.scope,
+                "taskId": row.scope,
+                "remindedCount": row.trigger_count,
+                "lastRemindedAt": row.last_triggered_at,
+                "createdAt": row.last_triggered_at,
             })
         })
         .collect())
@@ -757,7 +762,11 @@ const MAIN_DB_TABLES: &[&str] = &[
     "suggestions",
     "notifications",
     "q2_reminders",
-    "big_rock_protection_reminders",
+    // Story 17.2: big_rock_protection_reminders 已替换迁移入 scheduler_triggers
+    // 统一表（决策 #7）——销毁/导入前清空一并改道。触发侧行随清空即失（导入
+    // 包不含该段）⇒ 导入后首个周期可能重触发，生成侧自有去重兜底
+    //（briefings date UNIQUE / weekly_reviews week_start UNIQUE / 建议近 7 天标题查重）。
+    "scheduler_triggers",
     "mission",
     "conflicts",
     "briefings",
@@ -1056,18 +1065,29 @@ pub async fn import_json_data(
         .map_err(|e| AppError::DbError(format!("插入 q2_reminders 失败: {}", e)))?;
     }
 
-    // big_rock_protection_reminders
+    // big_rock_protection_reminders → scheduler_triggers 统一表（Story 17.2 决策 #7：
+    // 新旧导出包同形状——旧包为原表逐字段导出，新包由统一表合成——同一导入
+    // 落点：job='bigrock_protection'，scope=taskId，cycle 由 lastRemindedAt 按当前
+    // Local 折算日期，tz_offset 取当前偏移，计数保留。id/createdAt 在场校验后
+    // 不消费（统一表无对应列；形状不符走既有导入错误路径）。
     for r in &data.big_rock_protection_reminders {
-        let id = json_req_str(r, "id", "big_rock_protection_reminders")?;
+        let _id = json_req_str(r, "id", "big_rock_protection_reminders")?;
         let task_id = json_req_str(r, "taskId", "big_rock_protection_reminders")?;
         let reminded_count = json_req_i64(r, "remindedCount", "big_rock_protection_reminders")?;
         let last_reminded_at = json_req_str(r, "lastRemindedAt", "big_rock_protection_reminders")?;
-        let created_at = json_req_str(r, "createdAt", "big_rock_protection_reminders")?;
-        sqlx::query(
-            "INSERT INTO big_rock_protection_reminders (id, task_id, reminded_count, last_reminded_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+        let _created_at = json_req_str(r, "createdAt", "big_rock_protection_reminders")?;
+        let cycle = crate::db::scheduler_triggers::local_date_from_utc(last_reminded_at);
+        let tz_offset = chrono::Local::now().format("%:z").to_string();
+        crate::db::scheduler_triggers::upsert_imported_row(
+            &mut *tx,
+            crate::db::scheduler_triggers::JOB_BIGROCK_PROTECTION,
+            task_id,
+            &cycle,
+            &tz_offset,
+            last_reminded_at,
+            reminded_count,
         )
-        .bind(id).bind(task_id).bind(reminded_count).bind(last_reminded_at).bind(created_at)
-        .execute(&mut *tx).await
+        .await
         .map_err(|e| AppError::DbError(format!("插入 big_rock_protection_reminders 失败: {}", e)))?;
     }
 
@@ -1927,10 +1947,12 @@ mod tests {
             .await
             .expect("insert q2_reminder");
 
-        sqlx::query("INSERT INTO big_rock_protection_reminders (id, task_id, reminded_count, last_reminded_at, created_at) VALUES ('br1', 't1', 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
+        // Story 17.2: big_rock_protection_reminders 已替换迁移入 scheduler_triggers
+        // 统一表——种子数据改落统一表（job='bigrock_protection'）
+        sqlx::query("INSERT INTO scheduler_triggers (job, scope, cycle, tz_offset, last_triggered_at, trigger_count) VALUES ('bigrock_protection', 't1', '2026-01-01', '+00:00', '2026-01-01T00:00:00Z', 1)")
             .execute(&pool)
             .await
-            .expect("insert big_rock_protection_reminder");
+            .expect("insert scheduler_triggers (bigrock_protection)");
 
         sqlx::query("INSERT INTO forgotten_memory_sources (id, role_id, category, content, normalized_content, source_conversation_id, source_message_ids, forgotten_at) VALUES ('f1', 'r1', 'fact', '已遗忘', '已遗忘', 'c1', '[\"m1\"]', '2026-01-01T00:00:00Z')")
             .execute(&pool)
@@ -1990,7 +2012,8 @@ mod tests {
             "suggestions",
             "notifications",
             "q2_reminders",
-            "big_rock_protection_reminders",
+            // Story 17.2: big_rock_protection_reminders 替换迁移入统一表
+            "scheduler_triggers",
             "forgotten_memory_sources",
         ] {
             let count: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {}", table))
@@ -2443,6 +2466,178 @@ mod tests {
 
         let result = import_json_data(&pool, &conv_pool, &json_path).await;
         assert!(result.is_ok(), "旧版本 JSON 导入应成功（serde default 兜底）");
+    }
+
+    // ---- Story 17.2：bigrock 导出段跨形态互导（决策 #7 替换迁移） ----
+
+    #[tokio::test]
+    async fn bigrock_reminders_roundtrip_via_scheduler_triggers_keeps_export_shape() {
+        // 统一表行 → 导出合成旧 JSON 形状 → 销毁 → 导入 → 落回统一表
+        let (dir, pool, conv_pool) = setup_destroy_test_db().await;
+
+        // 统一表种子：task t1 两条 tz 维度行（模拟 TZ 变更历史）+ task t2 一条
+        //（t1 另有一条 work_loop 行——验证导出合成只取 bigrock_protection job）。
+        // 先清掉 setup 预置的 bigrock 行，使种子完全自控。
+        sqlx::query("DELETE FROM scheduler_triggers")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO scheduler_triggers (job, scope, cycle, tz_offset, last_triggered_at, trigger_count) VALUES
+                ('bigrock_protection', 't1', '2026-09-20', '+08:00', '2026-09-20T01:00:00Z', 3),
+                ('bigrock_protection', 't1', '2026-09-21', '+00:00', '2026-09-21T02:00:00Z', 1),
+                ('bigrock_protection', 't2', '2026-09-19', '+08:00', '2026-09-19T01:00:00Z', 7),
+                ('work_loop', 'r1', '2026-09-21 09:00', '+08:00', '2026-09-21T01:00:00Z', 1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let export_data = gather_export_data(&pool, &conv_pool).await.expect("gather export data");
+
+        // 导出形状不变：字段名与旧表逐字段一致；每 task 单行（取最新 last_triggered_at）
+        assert_eq!(export_data.big_rock_protection_reminders.len(), 2);
+        let t1 = export_data
+            .big_rock_protection_reminders
+            .iter()
+            .find(|r| r["taskId"] == "t1")
+            .expect("t1 entry");
+        assert_eq!(t1["lastRemindedAt"], "2026-09-21T02:00:00Z", "多 tz 行取最新");
+        assert_eq!(t1["remindedCount"], 1);
+        assert!(t1["id"].is_string() && t1["id"] != serde_json::json!(""), "id 非空（旧消费方主键可用）");
+        assert!(t1["createdAt"].is_string(), "createdAt 在场（旧消费方必填校验可用）");
+        let t2 = export_data
+            .big_rock_protection_reminders
+            .iter()
+            .find(|r| r["taskId"] == "t2")
+            .expect("t2 entry");
+        assert_eq!(t2["remindedCount"], 7);
+
+        let json = serde_json::to_string_pretty(&export_data).expect("serialize to json");
+        let json_path = dir.path().join("export_bigrock.json");
+        std::fs::write(&json_path, json).expect("write json file");
+
+        // 销毁（scheduler_triggers 一并清空）→ 导入
+        let app_data_dir = dir.path().join("app_data");
+        std::fs::create_dir_all(&app_data_dir).expect("create app_data dir");
+        destroy_all_data(&pool, &conv_pool, &InMemorySecretStore::default(), &app_data_dir)
+            .await
+            .expect("destroy");
+
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM scheduler_triggers")
+            .fetch_one(&pool)
+            .await
+            .expect("count after destroy");
+        assert_eq!(count, 0, "销毁须清空 scheduler_triggers");
+
+        import_json_data(&pool, &conv_pool, &json_path).await.expect("import");
+
+        // 落回统一表：task 维度 + 计数保留 + last_triggered_at 原样平移
+        let tz = chrono::Local::now().format("%:z").to_string();
+        let restored_t1 = crate::db::scheduler_triggers::get_trigger(
+            &pool,
+            crate::db::scheduler_triggers::JOB_BIGROCK_PROTECTION,
+            "t1",
+            &tz,
+        )
+        .await
+        .expect("get t1 trigger");
+        // 导出合成只保留最新一条 tz 行——导入后仅该行存在
+        let row = restored_t1.expect("t1 row restored");
+        assert_eq!(row.trigger_count, 1);
+        assert_eq!(row.last_triggered_at, "2026-09-21T02:00:00Z");
+        assert_eq!(row.cycle, crate::db::scheduler_triggers::local_date_from_utc("2026-09-21T02:00:00Z"));
+
+        let restored_t2 = crate::db::scheduler_triggers::get_trigger(
+            &pool,
+            crate::db::scheduler_triggers::JOB_BIGROCK_PROTECTION,
+            "t2",
+            &tz,
+        )
+        .await
+        .expect("get t2 trigger")
+        .expect("t2 row restored");
+        assert_eq!(restored_t2.trigger_count, 7);
+
+        // work_loop 行不随导出段往返（导出包无该段）——预期缺失
+        let work_loop = crate::db::scheduler_triggers::get_trigger(
+            &pool,
+            crate::db::scheduler_triggers::JOB_WORK_LOOP,
+            "r1",
+            &tz,
+        )
+        .await
+        .expect("get work_loop trigger");
+        assert!(work_loop.is_none());
+    }
+
+    #[tokio::test]
+    async fn import_legacy_bigrock_export_package_lands_in_scheduler_triggers() {
+        // FR-47 I/O 矩阵：含 bigRockProtectionReminders 段的旧导出包（原表逐字段
+        // 导出形状）导入新实例 ⇒ 正常落统一表
+        let (dir, pool, conv_pool) = setup_destroy_test_db().await;
+
+        // 原表形状：id 为 UUID、createdAt 为真实建行时间（统一表均不持有）
+        let legacy_json = serde_json::json!({
+            "roles": [],
+            "tasks": [],
+            "memories": [],
+            "suggestions": [],
+            "notifications": [],
+            "mission": null,
+            "conflicts": [],
+            "briefings": [],
+            "weeklyReviews": [],
+            "llmConfigs": [],
+            "appSettings": [],
+            "mcpServers": [],
+            "skills": [],
+            "skillBindings": [],
+            "q2Reminders": [],
+            "bigRockProtectionReminders": [
+                {
+                    "id": "5e2c8a34-1111-4222-8333-444455556666",
+                    "taskId": "legacy-task-1",
+                    "remindedCount": 4,
+                    "lastRemindedAt": "2026-09-20T09:30:00Z",
+                    "createdAt": "2026-09-01T00:00:00Z"
+                }
+            ],
+            "forgottenMemorySources": [],
+            "roleMcpServerBindings": [],
+            "conversations": [],
+            "messages": [],
+            "exportedAt": "2026-09-21T00:00:00Z",
+            "exportVersion": "1.0"
+        });
+        let json_path = dir.path().join("legacy_export.json");
+        std::fs::write(&json_path, serde_json::to_string_pretty(&legacy_json).unwrap()).unwrap();
+
+        import_json_data(&pool, &conv_pool, &json_path).await.expect("import legacy package");
+
+        let tz = chrono::Local::now().format("%:z").to_string();
+        let row = crate::db::scheduler_triggers::get_trigger(
+            &pool,
+            crate::db::scheduler_triggers::JOB_BIGROCK_PROTECTION,
+            "legacy-task-1",
+            &tz,
+        )
+        .await
+        .expect("get trigger")
+        .expect("legacy row lands in scheduler_triggers");
+        assert_eq!(row.trigger_count, 4, "计数保留");
+        assert_eq!(row.last_triggered_at, "2026-09-20T09:30:00Z");
+        assert_eq!(row.cycle, crate::db::scheduler_triggers::local_date_from_utc("2026-09-20T09:30:00Z"));
+
+        // 导出往返形状不变：导入后再导出，段形状与旧包逐字段一致
+        let re_export = gather_export_data(&pool, &conv_pool).await.expect("re-export");
+        assert_eq!(re_export.big_rock_protection_reminders.len(), 1);
+        let entry = &re_export.big_rock_protection_reminders[0];
+        assert_eq!(entry["taskId"], "legacy-task-1");
+        assert_eq!(entry["remindedCount"], 4);
+        assert_eq!(entry["lastRemindedAt"], "2026-09-20T09:30:00Z");
+        assert!(entry["id"].is_string());
+        assert!(entry["createdAt"].is_string());
     }
 
     #[tokio::test]

@@ -700,6 +700,155 @@ mod tests {
         );
     }
 
+    /// Story 17.2（FR-47）：034 替换迁移——big_rock_protection_reminders 数据
+    /// 无损迁入 scheduler_triggers 统一表、旧表删除、q2_reminders 原样不动。
+    /// 范式抄 llm_provider_extension 测试：过滤版 MIGRATOR 模拟升级前状态。
+    #[tokio::test]
+    async fn scheduler_triggers_migration_preserves_bigrock_data_and_drops_legacy_table() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("connect pre-upgrade db");
+        let pre_upgrade_migrator = Migrator {
+            migrations: std::borrow::Cow::Owned(
+                MIGRATOR
+                    .iter()
+                    .filter(|migration| migration.version < 34)
+                    .cloned()
+                    .collect(),
+            ),
+            ..Migrator::DEFAULT
+        };
+        pre_upgrade_migrator
+            .run(&pool)
+            .await
+            .expect("apply migrations 001-033");
+
+        // 升级前状态：旧表含 3 条提醒（count 各异；第三条 last_reminded_at 为
+        // 「今日」——round-trip 经 Local 构造，其 Local 日期即今日）+ q2 对照行。
+        // FK 生效（sqlx 默认 pragma foreign_keys=ON）⇒ 先落 roles/tasks 父行。
+        sqlx::query("INSERT INTO roles (id, name) VALUES ('role-1', '迁移测试角色')")
+            .execute(&pool)
+            .await
+            .expect("seed parent role row");
+        sqlx::query(
+            "INSERT INTO tasks (id, owner_type, role_id, title, created_at, updated_at) VALUES
+                ('task-1', 'role', 'role-1', '大石头一', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z'),
+                ('task-2', 'role', 'role-1', '大石头二', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z'),
+                ('task-3', 'role', 'role-1', '大石头三', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z')",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed parent task rows");
+        let now_utc_str = chrono::Local::now()
+            .with_timezone(&chrono::Utc)
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string();
+        sqlx::query(
+            "INSERT INTO big_rock_protection_reminders (id, task_id, reminded_count, last_reminded_at)
+             VALUES
+                ('br-1', 'task-1', 1, '2026-09-20T01:00:00Z'),
+                ('br-2', 'task-2', 5, '2026-09-01T00:00:00Z'),
+                ('br-3', 'task-3', 2, ?1)",
+        )
+        .bind(&now_utc_str)
+        .execute(&pool)
+        .await
+        .expect("seed legacy bigrock reminder rows");
+        sqlx::query(
+            "INSERT INTO q2_reminders (id, task_id, reminded_count, last_reminded_at, created_at)
+             VALUES ('q2-1', 'task-1', 2, '2026-09-10T00:00:00Z', '2026-09-10T00:00:00Z')",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed q2 reminder row");
+
+        MIGRATOR
+            .run(&pool)
+            .await
+            .expect("apply scheduler_triggers migration 034");
+
+        // 旧表已删（决策 #7 替换迁移）
+        let legacy_table: Option<String> = sqlx::query_scalar(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'big_rock_protection_reminders'",
+        )
+        .fetch_optional(&pool)
+        .await
+        .expect("query legacy table");
+        assert_eq!(legacy_table, None, "旧表必须被 DROP");
+
+        // 统一表在案
+        let unified_table: Option<String> = sqlx::query_scalar(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'scheduler_triggers'",
+        )
+        .fetch_optional(&pool)
+        .await
+        .expect("query unified table");
+        assert_eq!(unified_table.as_deref(), Some("scheduler_triggers"));
+
+        // 数据无损迁入：scope=task_id、count 保留、last_triggered_at 原样平移
+        let migrated: Vec<(String, String, String, i64)> = sqlx::query_as(
+            "SELECT scope, cycle, last_triggered_at, trigger_count
+             FROM scheduler_triggers
+             WHERE job = 'bigrock_protection'
+             ORDER BY scope ASC",
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("query migrated rows");
+        assert_eq!(migrated.len(), 3);
+
+        let (scope, cycle, last_at, count) = migrated[0].clone();
+        assert_eq!(scope, "task-1");
+        assert_eq!(count, 1, "reminded_count 保留");
+        assert_eq!(last_at, "2026-09-20T01:00:00Z", "last_reminded_at 原样平移");
+        // cycle = last_reminded_at 按当前 Local 折算日期（迁移 SQL 'localtime' 与
+        // chrono::Local 同读容器 TZ——用同一折算函数互证）
+        assert_eq!(
+            cycle,
+            crate::db::scheduler_triggers::local_date_from_utc("2026-09-20T01:00:00Z"),
+            "cycle 为 Local 日期折算"
+        );
+
+        let (scope2, _cycle2, _last2, count2) = migrated[1].clone();
+        assert_eq!(scope2, "task-2");
+        assert_eq!(count2, 5, "多行计数逐一保留");
+
+        // tz_offset 为当前 Local 偏移（与 chrono %:z 同源互证）
+        let tz_offset: String = sqlx::query_scalar(
+            "SELECT tz_offset FROM scheduler_triggers WHERE job = 'bigrock_protection' AND scope = 'task-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("query tz_offset");
+        let expected_tz = chrono::Local::now().format("%:z").to_string();
+        assert_eq!(tz_offset, expected_tz, "迁移时刻 tz_offset = Local UTC 偏移");
+
+        // 迁移后消费侧语义连续：升级前「今日已提醒」的行（task-3）经统一表
+        // has_triggered 判定为已触发——is_reminded_today 语义跨迁移无跳变
+        let today = chrono::Local::now().date_naive().format("%Y-%m-%d").to_string();
+        assert!(
+            crate::db::scheduler_triggers::has_triggered(
+                &pool,
+                crate::db::scheduler_triggers::JOB_BIGROCK_PROTECTION,
+                "task-3",
+                &today,
+                &expected_tz,
+            )
+            .await
+            .expect("has_triggered on migrated row"),
+            "迁移行 is_reminded_today 语义连续（cycle=今日 ⇒ 判定已提醒）"
+        );
+
+        // q2_reminders 原样不动（Never：不动 migration 018）
+        let q2_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM q2_reminders")
+            .fetch_one(&pool)
+            .await
+            .expect("count q2_reminders");
+        assert_eq!(q2_count, 1);
+    }
+
     #[tokio::test]
     async fn init_db_upgrades_legacy_auth_sessions_with_last_seen_at_column() {
         // spec-fix-migration-032-checksum 回归 ①：历史态库升级。

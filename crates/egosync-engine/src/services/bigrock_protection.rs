@@ -7,12 +7,22 @@
 //! - 周五生成汇总提醒（"还有 N 个未完成"）
 //! - 频率控制：每个大石头每日最多 1 次（DB 记录控制），已完成或当日有进展不提醒
 //! - 错误只 `tracing::warn!`，不 panic，不阻塞调度器
+//!
+//! Story 17.2（决策 #7 替换迁移消费侧）：频率控制的 DB 记录自
+//! `big_rock_protection_reminders` 旧表收编入 `scheduler_triggers` 统一表
+//! （job='bigrock_protection'，scope=task_id，cycle=当日 Local 日期）——
+//! "今日已提醒"判定与计数自增改走 `db::scheduler_triggers` 唯一存取层，
+//! 语义连续（原 is_reminded_today 的 parse-UTC-比-Local-当天 ⇒ cycle 折算；
+//! 原表 count++ ⇒ trigger_count 递增累计）。
 
 use chrono::{Datelike, Local};
 use sqlx::SqlitePool;
 
 use crate::db;
 use crate::db::pool::ConversationsPool;
+use crate::db::scheduler_triggers::{
+    has_triggered, parse_utc_to_local_date, record_trigger, JOB_BIGROCK_PROTECTION,
+};
 use crate::error::AppError;
 use crate::events::BIGROCK_PROTECTION_EVENT;
 use crate::models::task::CrossRoleTask;
@@ -32,27 +42,6 @@ pub struct BigRockProtectionPayload {
     pub notification_id: String,
 }
 
-/// 判断 `last_reminded_at`（ISO 8601 UTC）的本地日期是否与今天相同。
-fn is_reminded_today(last_reminded_at: &str) -> bool {
-    let now_local = Local::now().date_naive();
-    match parse_iso_to_local_date(last_reminded_at) {
-        Some(date) => date == now_local,
-        None => false,
-    }
-}
-
-/// 将 ISO 8601 UTC 字符串（如 `2026-06-22T12:30:00Z`）解析为本地日期。
-fn parse_iso_to_local_date(s: &str) -> Option<chrono::NaiveDate> {
-    let utc = chrono::DateTime::parse_from_rfc3339(s)
-        .map(|dt| dt.with_timezone(&chrono::Utc))
-        .or_else(|_| {
-            chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%SZ")
-                .map(|dt| chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(dt, chrono::Utc))
-        })
-        .ok()?;
-    Some(utc.with_timezone(&chrono::Local).date_naive())
-}
-
 /// 计算本周一日期（本地时间）。周一 = `num_days_from_monday()` 为 0，周日为 6。
 fn compute_this_week_monday() -> chrono::NaiveDate {
     let today = Local::now().date_naive();
@@ -63,7 +52,7 @@ fn compute_this_week_monday() -> chrono::NaiveDate {
 /// 判断 `updated_at`（ISO 8601 UTC）的本地日期是否在本周（本周一及之后）。
 fn is_updated_this_week(updated_at: &str) -> bool {
     let monday = compute_this_week_monday();
-    match parse_iso_to_local_date(updated_at) {
+    match parse_utc_to_local_date(updated_at) {
         Some(date) => date >= monday,
         None => false,
     }
@@ -82,7 +71,7 @@ fn is_friday() -> bool {
 
 /// 核心函数：检查本周无进展的大石头任务并生成保护提醒（AC1/AC3）。
 ///
-/// - `pool`: 主数据库连接池（tasks / notifications / big_rock_protection_reminders）
+/// - `pool`: 主数据库连接池（tasks / notifications / scheduler_triggers）
 /// - `conv_pool`: 对话数据库连接池（管家对话消息）
 /// - `events`: 可选，有则 emit `bigrock:protection` 事件给前端
 ///
@@ -139,14 +128,16 @@ async fn process_single_bigrock(
     events: Option<&dyn EngineEvents>,
     task: &CrossRoleTask,
 ) -> Result<(), AppError> {
-    // a. 查询已有提醒记录
-    let existing = db::big_rock_protection_reminders::get_reminder_for_task(pool, &task.id).await?;
+    // 调度判定时间源：容器 Local（三分表 ②）——cycle 取当日 Local 日期，
+    // tz_offset 取 Local UTC 偏移（TZ 变更 ⇒ 新键 ⇒ 至多一次重复，权衡见 17.2）
+    let now_local = Local::now();
+    let today = now_local.date_naive().format("%Y-%m-%d").to_string();
+    let tz_offset = now_local.format("%:z").to_string();
 
-    // b. 今日已提醒 → 跳过
-    if let Some(ref reminder) = existing {
-        if is_reminded_today(&reminder.last_reminded_at) {
-            return Ok(());
-        }
+    // a/b. 今日已提醒（统一表 cycle == 今日）→ 跳过
+    //（Story 17.2: 原 is_reminded_today 读旧表 last_reminded_at 的等价折算）
+    if has_triggered(pool, JOB_BIGROCK_PROTECTION, &task.id, &today, &tz_offset).await? {
+        return Ok(());
     }
 
     // c. 生成提醒文案（AC3 "当日有进展不提醒" 已由上游 `!is_updated_this_week` 过滤器保证，今天属于本周）
@@ -233,8 +224,9 @@ async fn process_single_bigrock(
         return Ok(());
     }
 
-    // g. 至少一项投递成功 → 自增提醒计数
-    db::big_rock_protection_reminders::upsert_reminder(pool, &task.id).await?;
+    // g. 至少一项投递成功 → 记录触发（Story 17.2: 统一表置位，trigger_count
+    // 递增累计——对齐旧表 upsert_reminder 的 count++ 语义）
+    record_trigger(pool, JOB_BIGROCK_PROTECTION, &task.id, &today, &tz_offset).await?;
 
     // h. emit 事件
     if let Some(bus) = events {
@@ -411,29 +403,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_iso_to_local_date_parses_rfc3339() {
-        let date = parse_iso_to_local_date("2026-06-22T12:30:00Z");
-        assert!(date.is_some());
-        assert_eq!(date.unwrap().format("%Y-%m-%d").to_string(), "2026-06-22");
-    }
-
-    #[test]
-    fn parse_iso_to_local_date_returns_none_for_invalid() {
-        assert!(parse_iso_to_local_date("not-a-date").is_none());
-        assert!(parse_iso_to_local_date("").is_none());
-    }
-
-    #[test]
-    fn is_reminded_today_returns_false_for_past_date() {
-        assert!(!is_reminded_today("2020-01-01T00:00:00Z"));
-    }
-
-    #[test]
-    fn is_reminded_today_returns_false_for_invalid() {
-        assert!(!is_reminded_today("invalid"));
-    }
-
-    #[test]
     fn compute_this_week_monday_returns_monday() {
         let monday = compute_this_week_monday();
         // 本周一的 weekday 应该是 Monday (num_days_from_monday == 0)
@@ -562,18 +531,19 @@ mod tests {
         .expect("failed to create app_settings table");
 
         sqlx::query(
-            "CREATE TABLE big_rock_protection_reminders (
-                id TEXT PRIMARY KEY NOT NULL,
-                task_id TEXT NOT NULL,
-                reminded_count INTEGER NOT NULL DEFAULT 1,
-                last_reminded_at TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-                UNIQUE(task_id)
+            "CREATE TABLE scheduler_triggers (
+                job TEXT NOT NULL,
+                scope TEXT NOT NULL,
+                cycle TEXT NOT NULL,
+                tz_offset TEXT NOT NULL,
+                last_triggered_at TEXT NOT NULL,
+                trigger_count INTEGER NOT NULL DEFAULT 1,
+                UNIQUE(job, scope, tz_offset)
             )",
         )
         .execute(&pool)
         .await
-        .expect("failed to create big_rock_protection_reminders table");
+        .expect("failed to create scheduler_triggers table");
 
         let conv_pool = ConversationsPool(
             sqlx::sqlite::SqlitePoolOptions::new()
@@ -662,12 +632,19 @@ mod tests {
         .unwrap();
         assert_eq!(msg_count, 1);
 
-        // 验证提醒记录已创建
-        let reminder = db::big_rock_protection_reminders::get_reminder_for_task(&pool, "task-1")
-            .await
-            .unwrap()
-            .expect("reminder should exist");
-        assert_eq!(reminder.reminded_count, 1);
+        // 验证提醒记录已创建（Story 17.2: 统一表置位，trigger_count 对齐旧表首记 1）
+        let now_local = Local::now();
+        let tz = now_local.format("%:z").to_string();
+        let trigger = db::scheduler_triggers::get_trigger(
+            &pool,
+            db::scheduler_triggers::JOB_BIGROCK_PROTECTION,
+            "task-1",
+            &tz,
+        )
+        .await
+        .unwrap()
+        .expect("trigger row should exist");
+        assert_eq!(trigger.trigger_count, 1);
     }
 
     #[tokio::test]
@@ -733,10 +710,19 @@ mod tests {
 
         insert_big_rock_task(&pool, "task-1", Some("role-1"), "竞品分析", false, "2020-01-01T00:00:00Z").await;
 
-        // 预先插入今日提醒记录
-        db::big_rock_protection_reminders::upsert_reminder(&pool, "task-1")
-            .await
-            .unwrap();
+        // 预先插入今日提醒记录（Story 17.2: 统一表置位，cycle=今日）
+        let now_local = Local::now();
+        let today = now_local.date_naive().format("%Y-%m-%d").to_string();
+        let tz = now_local.format("%:z").to_string();
+        db::scheduler_triggers::record_trigger(
+            &pool,
+            db::scheduler_triggers::JOB_BIGROCK_PROTECTION,
+            "task-1",
+            &today,
+            &tz,
+        )
+        .await
+        .unwrap();
 
         check_and_generate_protection_reminders_inner(&pool, &conv_pool, None)
             .await

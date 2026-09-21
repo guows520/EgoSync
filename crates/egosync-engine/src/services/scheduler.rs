@@ -11,8 +11,22 @@
 //! - 错误只 `tracing::warn!`，绝不 panic，绝不阻塞 Tauri setup
 //!
 //! Story 4.2: `run_work_loop_for_role` 调用建议生成服务，写入 pending 建议。
+//!
+//! Story 17.2（FR-47）：触发去重持久化——原五处循环局部内存去重
+//! （last_triggered_map / last_briefing_trigger_date / last_bigrock_trigger_week /
+//! last_review_trigger_week / last_bigrock_friday_check_date，重启即失忆——云端
+//! 7×24 场景同分钟重启会重复触发）统一收纳入 `scheduler_triggers` 表，
+//! 经 `db::scheduler_triggers` 唯一存取层读写：重启不重复、停机跨过的计划
+//! 时刻跳过不补发（诚实代价）、TZ 变更后首个周期至多一次跳过或重复
+//! （键含时区维度的已裁决权衡）。
+//!
+//! 时间源三分表（架构 ⑨ 冻结，本文件的三处落点）：
+//! - 持久化：`scheduler_triggers.last_triggered_at` 一律 `chrono_now_pub` 的
+//!   UTC RFC3339 串（禁改 Local）；
+//! - 调度判定：本文件全部时间比较一律容器 `Local::now()` 语义零改动（`TZ`
+//!   env 生效），派生维度见 `TriggerClock`；
+//! - 前端渲染：浏览器 TZ（组件不动，本文件不涉）。
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -22,6 +36,10 @@ use tokio::time::Instant;
 
 use crate::db;
 use crate::db::pool::ConversationsPool;
+use crate::db::scheduler_triggers::{
+    has_triggered, record_trigger, JOB_BIGROCK_FRIDAY_CHECK, JOB_BIGROCK_PLANNING, JOB_BRIEFING,
+    JOB_WEEKLY_REVIEW, JOB_WORK_LOOP, SCOPE_GLOBAL,
+};
 use crate::error::AppError;
 use crate::events::NOTIFICATION_NEW_EVENT;
 use crate::models::notification::NotificationNewPayload;
@@ -159,6 +177,121 @@ fn current_hhmm(now: &chrono::DateTime<Local>) -> String {
 /// 生成去重键："YYYY-MM-DD HH:MM"，确保同一角色同一时间点只触发一次。
 fn trigger_key(date: chrono::NaiveDate, hhmm: &str) -> String {
     format!("{} {}", date, hhmm)
+}
+
+/// Story 17.2: 触发时钟——从注入的 `now: DateTime<Local>` 派生调度判定所需的
+/// 全部键维度（表读判定与置位共用）。
+///
+/// 抽为显式结构是为让判定逻辑可注入时间做引擎测试（同分钟重启 / 停机跳过 /
+/// TZ 变更至多一次），运行态由循环内的 `Local::now()` 构造一次、全 tick 复用，
+/// 判定语义与既有 `Local::now()` 零改动。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TriggerClock {
+    /// "HH:MM"（Local，分钟级精确匹配基准）
+    pub hhmm: String,
+    /// "YYYY-MM-DD"（Local）
+    pub date: String,
+    /// "YYYY-Www" ISO 周（Local）
+    pub iso_week: String,
+    /// "+HH:MM"（Local 的 UTC 偏移，`%:z`）——触发键时区维度：TZ env 变更或
+    /// DST 偏移变化 ⇒ 键变化 ⇒ 首个周期至多一次跳过或重复（已裁决权衡）
+    pub tz_offset: String,
+    /// 1=周一 … 7=周日（Local，与 app_settings 中 day 配置同编码）
+    pub weekday: u32,
+}
+
+impl TriggerClock {
+    pub fn from_now(now: &chrono::DateTime<Local>) -> Self {
+        Self {
+            hhmm: current_hhmm(now),
+            date: now.date_naive().format("%Y-%m-%d").to_string(),
+            iso_week: iso_week_key(now),
+            tz_offset: now.format("%:z").to_string(),
+            weekday: now.weekday().num_days_from_monday() + 1,
+        }
+    }
+
+    /// work_loop 的 cycle：沿用 `trigger_key` 原样 "YYYY-MM-DD HH:MM"——
+    /// 同分钟重启去重精确成立（60s tick 内同分钟至多采样一次，重启后同分钟
+    /// 命中同 cycle 即跳过），同日不同时刻照常触发。
+    pub fn work_loop_cycle(&self) -> String {
+        trigger_key(
+            chrono::NaiveDate::parse_from_str(&self.date, "%Y-%m-%d")
+                .expect("date 由本结构构造，格式恒合法"),
+            &self.hhmm,
+        )
+    }
+}
+
+// ── Story 17.2: 判定函数（可注入 clock，读 scheduler_triggers 表） ──────────
+// 契约：Ok(true) = 本周期可触发（调用方置位后 spawn）；Ok(false) = 已触发或
+// 时间不匹配（跳过）；Err = 表读失败（调用方 warn 降级跳过本 tick，不 panic）。
+
+/// 工作循环判定：当前 HH:MM 命中该角色的触发时间点，且该 (role, 时刻) 未触发过。
+pub(crate) async fn should_trigger_work_loop(
+    pool: &SqlitePool,
+    clock: &TriggerClock,
+    role_id: &str,
+    trigger_times: &[String],
+) -> Result<bool, AppError> {
+    if !trigger_times.contains(&clock.hhmm) {
+        return Ok(false);
+    }
+    // has_triggered = 本周期已触发 ⇒ 应触发取反（行缺失/周期落后 ⇒ 可触发）
+    Ok(!has_triggered(
+        pool,
+        JOB_WORK_LOOP,
+        role_id,
+        &clock.work_loop_cycle(),
+        &clock.tz_offset,
+    )
+    .await?)
+}
+
+/// 晨间简报判定：当前 HH:MM 等于 briefing_time，且当日未触发过。
+/// （停机跨过计划时刻 ⇒ HH:MM 不再匹配 ⇒ 跳过不补发——诚实代价在此落死）
+pub(crate) async fn should_trigger_briefing(
+    pool: &SqlitePool,
+    clock: &TriggerClock,
+    briefing_time: &str,
+) -> Result<bool, AppError> {
+    if clock.hhmm != briefing_time {
+        return Ok(false);
+    }
+    Ok(!has_triggered(pool, JOB_BRIEFING, SCOPE_GLOBAL, &clock.date, &clock.tz_offset).await?)
+}
+
+/// 周期性 job（大石头规划提醒 / 周复盘）判定：星期与 HH:MM 均匹配，且本周未触发过。
+pub(crate) async fn should_trigger_weekly(
+    pool: &SqlitePool,
+    clock: &TriggerClock,
+    job: &str,
+    day: &str,
+    time: &str,
+) -> Result<bool, AppError> {
+    if clock.weekday.to_string() != day || clock.hhmm != time {
+        return Ok(false);
+    }
+    Ok(!has_triggered(pool, job, SCOPE_GLOBAL, &clock.iso_week, &clock.tz_offset).await?)
+}
+
+/// 周五大石头未完成检查判定：当天为周五，且当日未检查过
+/// （沿用既有语义：周五任意 tick 触发一次，无 HH:MM 匹配）。
+pub(crate) async fn should_trigger_friday_check(
+    pool: &SqlitePool,
+    clock: &TriggerClock,
+) -> Result<bool, AppError> {
+    if clock.weekday != 5 {
+        return Ok(false);
+    }
+    Ok(!has_triggered(
+        pool,
+        JOB_BIGROCK_FRIDAY_CHECK,
+        SCOPE_GLOBAL,
+        &clock.date,
+        &clock.tz_offset,
+    )
+    .await?)
 }
 
 /// 工作循环 — 调用建议生成服务，将生成的建议写入 DB。
@@ -332,13 +465,15 @@ pub async fn run_work_loop_for_role(
 
 /// 启动后台调度器。在 Tauri `setup` 中调用。
 ///
-/// 设计模式：短 tick（60 秒）+ 固定时间点 + 去重键。
+/// 设计模式：短 tick（60 秒）+ 固定时间点 + 持久化去重键。
 /// 每次 tick 查询活跃角色列表，检查当前本地时间是否命中该角色的触发时间点。
 /// 新建/归档/删除角色和 proactivity_level 变更自动生效。
 /// 时间点可由用户通过 `scheduler_set_times` 命令自定义，下次 tick 自动生效。
 ///
 /// 首次启动延迟：消耗 `interval.tick()` 的首次立即返回，避免启动时并发太多后台任务。
-/// 同一角色同一时间点（同一日期+同一 HH:MM）只触发一次，跨天自动重置。
+/// 同一角色同一时间点（同一日期+同一 HH:MM）只触发一次，跨天自动重置；
+/// 去重状态持久化于 `scheduler_triggers` 表（Story 17.2）——同分钟重启不重复，
+/// 停机跨过计划时刻跳过不补发。
 ///
 /// Story 15.2 接缝二/四：事件经 EngineEvents 注入；调用方（桌面壳 setup
 /// 同步上下文）注入宿主 runtime Handle 派生任务——裸 tokio::spawn 在无
@@ -354,21 +489,6 @@ pub fn spawn_scheduler(
         let mut interval = tokio::time::interval(Duration::from_secs(BASE_TICK_SECS));
         // 消耗首次立即 tick，避免启动时并发太多后台任务
         interval.tick().await;
-
-        // role_id → "YYYY-MM-DD HH:MM" 去重键
-        let mut last_triggered_map: HashMap<String, String> = HashMap::new();
-
-        // Story 6.1: 简报触发去重 — 记录上次触发日期，每天只触发一次
-        let mut last_briefing_trigger_date: Option<String> = None;
-
-        // Story 6.3: 大石头提醒去重 — 记录上次触发的 ISO 周，每周只触发一次
-        let mut last_bigrock_trigger_week: Option<String> = None;
-
-        // Story 6.4: 周复盘去重 — 记录上次触发的 ISO 周，每周只触发一次
-        let mut last_review_trigger_week: Option<String> = None;
-
-        // Story 6.6: 周五大石头未完成检查去重 — 记录上次触发日期，每天只触发一次
-        let mut last_bigrock_friday_check_date: Option<String> = None;
 
         // Story 6.2 (AC7): 启动时读取节奏化时间配置（review/bigrock 为预留读取，
         // 实际触发逻辑在 Story 6.3/6.4 实现）
@@ -392,13 +512,12 @@ pub fn spawn_scheduler(
                 }
             };
 
+            // 调度判定时间源：容器 Local（三分表 ②，TZ env 生效）
             let now_local = Local::now();
-            let current_hhmm = current_hhmm(&now_local);
-            let current_key = trigger_key(now_local.date_naive(), &current_hhmm);
+            let clock = TriggerClock::from_now(&now_local);
 
-            // 当前活跃角色 id 集合，用于 tick 末尾清理过期状态
-            let active_ids: std::collections::HashSet<&str> =
-                roles.iter().map(|r| r.id.as_str()).collect();
+            // 当前活跃角色 id 集合，用于 tick 末尾清理过期触发状态
+            let active_ids: Vec<String> = roles.iter().map(|r| r.id.clone()).collect();
 
             for role in &roles {
                 // 从 DB 读取该角色 proactivity_level 对应的触发时间点
@@ -415,18 +534,50 @@ pub fn spawn_scheduler(
                     }
                 };
 
-                // 检查当前 HH:MM 是否在触发时间点列表中
-                if !trigger_times.contains(&current_hhmm) {
+                // Story 17.2: 同一角色同一时间点只触发一次——判定读
+                // scheduler_triggers 表（重启不失忆）；表读失败 warn 跳过本 tick
+                let should = match should_trigger_work_loop(
+                    &pool,
+                    &clock,
+                    &role.id,
+                    &trigger_times,
+                )
+                .await
+                {
+                    Ok(should) => should,
+                    Err(e) => {
+                        tracing::warn!(
+                            role_id = %role.id,
+                            error = %e,
+                            "读取工作循环触发状态失败（降级跳过本 tick）"
+                        );
+                        continue;
+                    }
+                };
+                if !should {
                     continue;
                 }
 
-                // 同一角色同一时间点只触发一次
-                if last_triggered_map.get(&role.id) == Some(&current_key) {
+                // 标记已触发（置位保持 spawn 前——deferred-work #225：生成的
+                // 瞬时失败当天不重试；置位失败仅跳过本 tick——无写入记录，
+                // 下 tick 会重新判定并重试，与简报分支同语义）
+                // 评审修复：原注释「烧掉本槽位」与实际行为相反。
+                if let Err(e) = record_trigger(
+                    &pool,
+                    JOB_WORK_LOOP,
+                    &role.id,
+                    &clock.work_loop_cycle(),
+                    &clock.tz_offset,
+                )
+                .await
+                {
+                    tracing::warn!(
+                        role_id = %role.id,
+                        error = %e,
+                        "记录工作循环触发状态失败（降级跳过本 tick）"
+                    );
                     continue;
                 }
-
-                // 标记已触发
-                last_triggered_map.insert(role.id.clone(), current_key.clone());
 
                 // 每个角色独立 spawn 执行，互不阻塞
                 let pool_clone = pool.clone();
@@ -472,46 +623,72 @@ pub fn spawn_scheduler(
                 });
             }
 
-            // 清理已归档/删除角色的状态，避免内存随角色 churn 无界增长
-            last_triggered_map.retain(|id, _| active_ids.contains(id.as_str()));
+            // 清理已归档/删除角色的触发状态，避免表内随角色 churn 无界积行
+            // （原 last_triggered_map.retain 语义——仅 work_loop 行，走表 prune）
+            if let Err(e) = db::scheduler_triggers::prune_work_loop_rows(&pool, &active_ids).await
+            {
+                tracing::warn!(error = %e, "清理过期工作循环触发状态失败（降级继续）");
+            }
 
             // Story 6.1: 晨间简报触发 — 读取 app_settings 中的 briefing_time，
             // 当前 HH:MM 匹配且当天尚未触发时，spawn 异步生成简报
-            let today_date = now_local.date_naive().format("%Y-%m-%d").to_string();
-            if last_briefing_trigger_date.as_deref() != Some(&today_date) {
-                let briefing_time = match crate::services::briefing_generator::get_briefing_time(&pool).await {
-                    Ok(t) => t,
-                    Err(e) => {
-                        tracing::warn!(error = %e, "读取简报时间设置失败（降级跳过）");
-                        DEFAULT_BRIEFING_TIME_FALLBACK.to_string()
-                    }
-                };
-                if current_hhmm == briefing_time {
-                    last_briefing_trigger_date = Some(today_date.clone());
-                    let pool_clone = pool.clone();
-                    let conv_pool_clone = conv_pool.clone();
-                    let events_clone = events.clone();
-                    let secret_clone = secret.clone();
-                    tokio::spawn(async move {
-                        match crate::services::briefing_generator::generate_briefing_if_needed(
-                            &pool_clone,
-                            &conv_pool_clone,
-                            Some(events_clone.as_ref()),
-                            secret_clone.as_ref(),
-                        )
-                        .await
-                        {
-                            Ok(true) => {
-                                tracing::info!(date = %today_date, "调度器触发简报生成完成");
-                            }
-                            Ok(false) => {
-                                tracing::info!(date = %today_date, "简报已存在或被跳过");
-                            }
-                            Err(e) => {
-                                tracing::warn!(error = %e, date = %today_date, "调度器触发简报生成失败");
-                            }
+            // （去重改读 scheduler_triggers：Story 17.2）
+            let briefing_time = match crate::services::briefing_generator::get_briefing_time(&pool)
+                .await
+            {
+                Ok(t) => t,
+                Err(e) => {
+                    tracing::warn!(error = %e, "读取简报时间设置失败（降级跳过）");
+                    DEFAULT_BRIEFING_TIME_FALLBACK.to_string()
+                }
+            };
+            match should_trigger_briefing(&pool, &clock, &briefing_time).await {
+                Ok(true) => {
+                    // 置位保持 spawn 前；置位失败跳过本 tick（不冒重复触发风险）
+                    match record_trigger(
+                        &pool,
+                        JOB_BRIEFING,
+                        SCOPE_GLOBAL,
+                        &clock.date,
+                        &clock.tz_offset,
+                    )
+                    .await
+                    {
+                        Ok(()) => {
+                            let pool_clone = pool.clone();
+                            let conv_pool_clone = conv_pool.clone();
+                            let events_clone = events.clone();
+                            let secret_clone = secret.clone();
+                            let today_date = clock.date.clone();
+                            tokio::spawn(async move {
+                                match crate::services::briefing_generator::generate_briefing_if_needed(
+                                    &pool_clone,
+                                    &conv_pool_clone,
+                                    Some(events_clone.as_ref()),
+                                    secret_clone.as_ref(),
+                                )
+                                .await
+                                {
+                                    Ok(true) => {
+                                        tracing::info!(date = %today_date, "调度器触发简报生成完成");
+                                    }
+                                    Ok(false) => {
+                                        tracing::info!(date = %today_date, "简报已存在或被跳过");
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(error = %e, date = %today_date, "调度器触发简报生成失败");
+                                    }
+                                }
+                            });
                         }
-                    });
+                        Err(e) => {
+                            tracing::warn!(error = %e, "记录简报触发状态失败（降级跳过本 tick）");
+                        }
+                    }
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    tracing::warn!(error = %e, "读取简报触发状态失败（降级跳过本 tick）");
                 }
             }
 
@@ -540,108 +717,177 @@ pub fn spawn_scheduler(
 
             // Story 6.3: 大石头规划提醒触发检查
             // 读取 bigrock_reminder_day/time 配置，匹配星期 + HH:MM 时触发，每周只触发一次
-            let current_week = iso_week_key(&now_local);
-            if last_bigrock_trigger_week.as_deref() != Some(&current_week) {
-                let (bigrock_day, bigrock_time) = match get_bigrock_reminder_schedule(&pool).await {
-                    Ok((d, t)) => (d, t),
-                    Err(e) => {
-                        tracing::warn!(error = %e, "读取大石头提醒时间配置失败（降级跳过）");
-                        (String::new(), String::new())
-                    }
-                };
-                // 当前星期（1=周一 ~ 7=周日）
-                let current_day = (now_local.weekday().num_days_from_monday() + 1).to_string();
-                if current_day == bigrock_day && current_hhmm == bigrock_time {
-                    last_bigrock_trigger_week = Some(current_week.clone());
-                    let pool_clone = pool.clone();
-                    let conv_pool_clone = conv_pool.clone();
-                    let events_clone = events.clone();
-                    let week_clone = current_week.clone();
-                    tokio::spawn(async move {
-                        match crate::services::bigrock_reminder::check_and_remind_if_needed(
-                            &pool_clone,
-                            &conv_pool_clone,
-                            Some(events_clone.as_ref()),
-                        )
-                        .await
-                        {
-                            Ok(true) => {
-                                tracing::info!(week = %week_clone, "调度器触发大石头规划提醒完成");
-                            }
-                            Ok(false) => {
-                                tracing::info!(week = %week_clone, "本周已有大石头，跳过提醒");
-                            }
-                            Err(e) => {
-                                tracing::warn!(error = %e, week = %week_clone, "调度器触发大石头规划提醒失败");
-                            }
+            // （去重改读 scheduler_triggers：Story 17.2）
+            let (bigrock_day, bigrock_time) = match get_bigrock_reminder_schedule(&pool).await {
+                Ok((d, t)) => (d, t),
+                Err(e) => {
+                    tracing::warn!(error = %e, "读取大石头提醒时间配置失败（降级跳过）");
+                    (String::new(), String::new())
+                }
+            };
+            match should_trigger_weekly(
+                &pool,
+                &clock,
+                JOB_BIGROCK_PLANNING,
+                &bigrock_day,
+                &bigrock_time,
+            )
+            .await
+            {
+                Ok(true) => {
+                    match record_trigger(
+                        &pool,
+                        JOB_BIGROCK_PLANNING,
+                        SCOPE_GLOBAL,
+                        &clock.iso_week,
+                        &clock.tz_offset,
+                    )
+                    .await
+                    {
+                        Ok(()) => {
+                            let pool_clone = pool.clone();
+                            let conv_pool_clone = conv_pool.clone();
+                            let events_clone = events.clone();
+                            let week_clone = clock.iso_week.clone();
+                            tokio::spawn(async move {
+                                match crate::services::bigrock_reminder::check_and_remind_if_needed(
+                                    &pool_clone,
+                                    &conv_pool_clone,
+                                    Some(events_clone.as_ref()),
+                                )
+                                .await
+                                {
+                                    Ok(true) => {
+                                        tracing::info!(week = %week_clone, "调度器触发大石头规划提醒完成");
+                                    }
+                                    Ok(false) => {
+                                        tracing::info!(week = %week_clone, "本周已有大石头，跳过提醒");
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(error = %e, week = %week_clone, "调度器触发大石头规划提醒失败");
+                                    }
+                                }
+                            });
                         }
-                    });
+                        Err(e) => {
+                            tracing::warn!(error = %e, "记录大石头规划提醒触发状态失败（降级跳过本 tick）");
+                        }
+                    }
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    tracing::warn!(error = %e, "读取大石头规划提醒触发状态失败（降级跳过本 tick）");
                 }
             }
 
             // Story 6.4: 周复盘触发检查
             // 读取 review_day/time 配置，匹配星期 + HH:MM 时触发，每周只触发一次
-            if last_review_trigger_week.as_deref() != Some(&current_week) {
-                let (review_day, review_time) = match get_review_schedule(&pool).await {
-                    Ok((d, t)) => (d, t),
-                    Err(e) => {
-                        tracing::warn!(error = %e, "读取周复盘时间配置失败（降级跳过）");
-                        (String::new(), String::new())
-                    }
-                };
-                let current_day = (now_local.weekday().num_days_from_monday() + 1).to_string();
-                if current_day == review_day && current_hhmm == review_time {
-                    last_review_trigger_week = Some(current_week.clone());
-                    let pool_clone = pool.clone();
-                    let conv_pool_clone = conv_pool.clone();
-                    let events_clone = events.clone();
-                    let secret_clone = secret.clone();
-                    let week_clone = current_week.clone();
-                    tokio::spawn(async move {
-                        match crate::services::review_generator::generate_review_if_needed(
-                            &pool_clone,
-                            &conv_pool_clone,
-                            Some(events_clone.as_ref()),
-                            secret_clone.as_ref(),
-                        )
-                        .await
-                        {
-                            Ok(true) => {
-                                tracing::info!(week = %week_clone, "调度器触发周复盘生成完成");
-                            }
-                            Ok(false) => {
-                                tracing::info!(week = %week_clone, "本周复盘已存在或被跳过");
-                            }
-                            Err(e) => {
-                                tracing::warn!(error = %e, week = %week_clone, "调度器触发周复盘生成失败");
-                            }
+            // （去重改读 scheduler_triggers：Story 17.2）
+            let (review_day, review_time) = match get_review_schedule(&pool).await {
+                Ok((d, t)) => (d, t),
+                Err(e) => {
+                    tracing::warn!(error = %e, "读取周复盘时间配置失败（降级跳过）");
+                    (String::new(), String::new())
+                }
+            };
+            match should_trigger_weekly(
+                &pool,
+                &clock,
+                JOB_WEEKLY_REVIEW,
+                &review_day,
+                &review_time,
+            )
+            .await
+            {
+                Ok(true) => {
+                    match record_trigger(
+                        &pool,
+                        JOB_WEEKLY_REVIEW,
+                        SCOPE_GLOBAL,
+                        &clock.iso_week,
+                        &clock.tz_offset,
+                    )
+                    .await
+                    {
+                        Ok(()) => {
+                            let pool_clone = pool.clone();
+                            let conv_pool_clone = conv_pool.clone();
+                            let events_clone = events.clone();
+                            let secret_clone = secret.clone();
+                            let week_clone = clock.iso_week.clone();
+                            tokio::spawn(async move {
+                                match crate::services::review_generator::generate_review_if_needed(
+                                    &pool_clone,
+                                    &conv_pool_clone,
+                                    Some(events_clone.as_ref()),
+                                    secret_clone.as_ref(),
+                                )
+                                .await
+                                {
+                                    Ok(true) => {
+                                        tracing::info!(week = %week_clone, "调度器触发周复盘生成完成");
+                                    }
+                                    Ok(false) => {
+                                        tracing::info!(week = %week_clone, "本周复盘已存在或被跳过");
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(error = %e, week = %week_clone, "调度器触发周复盘生成失败");
+                                    }
+                                }
+                            });
                         }
-                    });
+                        Err(e) => {
+                            tracing::warn!(error = %e, "记录周复盘触发状态失败（降级跳过本 tick）");
+                        }
+                    }
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    tracing::warn!(error = %e, "读取周复盘触发状态失败（降级跳过本 tick）");
                 }
             }
 
-            // Story 6.6: 周五大石头未完成检查
-            let today_date = now_local.date_naive().format("%Y-%m-%d").to_string();
-            if last_bigrock_friday_check_date.as_deref() != Some(&today_date) {
-                let current_day = (now_local.weekday().num_days_from_monday() + 1).to_string();
-                if current_day == "5" {
-                    last_bigrock_friday_check_date = Some(today_date.clone());
-                    let pool_clone = pool.clone();
-                    let conv_pool_clone = conv_pool.clone();
-                    let events_clone = events.clone();
-                    tokio::spawn(async move {
-                        match crate::services::bigrock_protection::check_friday_bigrock_status(
-                            &pool_clone,
-                            &conv_pool_clone,
-                            Some(events_clone.as_ref()),
-                        )
-                        .await
-                        {
-                            Ok(true) => tracing::info!(date = %today_date, "周五大石头未完成检查已触发"),
-                            Ok(false) => tracing::info!(date = %today_date, "周五大石头检查跳过（无未完成或非周五）"),
-                            Err(e) => tracing::warn!(error = %e, date = %today_date, "周五大石头未完成检查失败"),
+            // Story 6.6: 周五大石头未完成检查（当天为周五且尚未检查过——
+            // 去重改读 scheduler_triggers：Story 17.2；无 HH:MM 匹配，周五首个
+            // tick 触发一次）
+            match should_trigger_friday_check(&pool, &clock).await {
+                Ok(true) => {
+                    match record_trigger(
+                        &pool,
+                        JOB_BIGROCK_FRIDAY_CHECK,
+                        SCOPE_GLOBAL,
+                        &clock.date,
+                        &clock.tz_offset,
+                    )
+                    .await
+                    {
+                        Ok(()) => {
+                            let pool_clone = pool.clone();
+                            let conv_pool_clone = conv_pool.clone();
+                            let events_clone = events.clone();
+                            let today_date = clock.date.clone();
+                            tokio::spawn(async move {
+                                match crate::services::bigrock_protection::check_friday_bigrock_status(
+                                    &pool_clone,
+                                    &conv_pool_clone,
+                                    Some(events_clone.as_ref()),
+                                )
+                                .await
+                                {
+                                    Ok(true) => tracing::info!(date = %today_date, "周五大石头未完成检查已触发"),
+                                    Ok(false) => tracing::info!(date = %today_date, "周五大石头检查跳过（无未完成或非周五）"),
+                                    Err(e) => tracing::warn!(error = %e, date = %today_date, "周五大石头未完成检查失败"),
+                                }
+                            });
                         }
-                    });
+                        Err(e) => {
+                            tracing::warn!(error = %e, "记录周五大石头检查触发状态失败（降级跳过本 tick）");
+                        }
+                    }
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    tracing::warn!(error = %e, "读取周五大石头检查触发状态失败（降级跳过本 tick）");
                 }
             }
 
@@ -1048,5 +1294,244 @@ mod tests {
             .and_local_timezone(chrono::Local)
             .unwrap();
         assert_eq!(sunday.weekday().num_days_from_monday() + 1, 7);
+    }
+
+    // ---- Story 17.2（FR-47）：触发判定表驱动测试 ----
+    // 判定逻辑的可注入时钟在测试内构造（运行态由循环内 Local::now() 构造）；
+    // 期望值的 tz 维度一律从同一 datetime 派生，测试不依赖本机时区。
+
+    async fn setup_triggers_db() -> SqlitePool {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("failed to create test db");
+
+        sqlx::query(
+            "CREATE TABLE scheduler_triggers (
+                job TEXT NOT NULL,
+                scope TEXT NOT NULL,
+                cycle TEXT NOT NULL,
+                tz_offset TEXT NOT NULL,
+                last_triggered_at TEXT NOT NULL,
+                trigger_count INTEGER NOT NULL DEFAULT 1,
+                UNIQUE(job, scope, tz_offset)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("failed to create scheduler_triggers table");
+
+        pool
+    }
+
+    fn local_dt(y: i32, m: u32, d: u32, h: u32, min: u32) -> chrono::DateTime<Local> {
+        chrono::NaiveDate::from_ymd_opt(y, m, d)
+            .expect("valid date")
+            .and_hms_opt(h, min, 0)
+            .expect("valid time")
+            .and_local_timezone(Local)
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn work_loop_same_minute_restart_does_not_retrigger() {
+        // FR-47 验收：简报/工作循环触发后同分钟重启，循环再跑不再触发当日该时刻
+        let pool = setup_triggers_db().await;
+        let now = local_dt(2026, 9, 21, 9, 0);
+        let clock = TriggerClock::from_now(&now);
+        let times = vec!["09:00".to_string(), "14:00".to_string()];
+
+        // 首个周期：未触发过 ⇒ 可触发
+        assert!(should_trigger_work_loop(&pool, &clock, "role-1", &times)
+            .await
+            .unwrap());
+        record_trigger(&pool, JOB_WORK_LOOP, "role-1", &clock.work_loop_cycle(), &clock.tz_offset)
+            .await
+            .unwrap();
+
+        // 同分钟重启（进程内内存态已失忆，表仍在）：同 cycle ⇒ 不再触发
+        assert!(!should_trigger_work_loop(&pool, &clock, "role-1", &times)
+            .await
+            .unwrap());
+
+        // 同日不同时刻（下一触发点 14:00）照常触发——cycle 含 HH:MM，非按日一刀切
+        let afternoon = local_dt(2026, 9, 21, 14, 0);
+        let afternoon_clock = TriggerClock::from_now(&afternoon);
+        assert!(should_trigger_work_loop(&pool, &afternoon_clock, "role-1", &times)
+            .await
+            .unwrap());
+
+        // 跨天同时刻照常触发
+        let tomorrow = local_dt(2026, 9, 22, 9, 0);
+        let tomorrow_clock = TriggerClock::from_now(&tomorrow);
+        assert!(should_trigger_work_loop(&pool, &tomorrow_clock, "role-1", &times)
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn work_loop_skips_when_downtime_crossed_planned_time() {
+        // FR-47 验收：停机跨过计划时刻 ⇒ 跳过不补发（诚实代价）
+        let pool = setup_triggers_db().await;
+        // 09:00 计划时刻停机错过，09:05 恢复
+        let now = local_dt(2026, 9, 21, 9, 5);
+        let clock = TriggerClock::from_now(&now);
+        let times = vec!["09:00".to_string()];
+
+        assert!(!should_trigger_work_loop(&pool, &clock, "role-1", &times)
+            .await
+            .unwrap(), "分钟级精确匹配 ⇒ 错过即跳过，不补发不堆积");
+    }
+
+    #[tokio::test]
+    async fn briefing_same_minute_restart_does_not_retrigger() {
+        let pool = setup_triggers_db().await;
+        let now = local_dt(2026, 9, 21, 8, 0);
+        let clock = TriggerClock::from_now(&now);
+
+        assert!(should_trigger_briefing(&pool, &clock, "08:00").await.unwrap());
+        record_trigger(&pool, JOB_BRIEFING, SCOPE_GLOBAL, &clock.date, &clock.tz_offset)
+            .await
+            .unwrap();
+
+        // 同分钟重启：当日已触发 ⇒ 跳过
+        assert!(!should_trigger_briefing(&pool, &clock, "08:00").await.unwrap());
+
+        // 当天晚些时候（简报时间已过）不因去重放开而补发
+        let later = local_dt(2026, 9, 21, 10, 30);
+        let later_clock = TriggerClock::from_now(&later);
+        assert!(!should_trigger_briefing(&pool, &later_clock, "08:00").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn briefing_skips_when_downtime_crossed_planned_time() {
+        // 昨日已触发（表行 cycle=昨日），今日 08:00 停机错过、09:00 恢复 ⇒ 不补发
+        let pool = setup_triggers_db().await;
+        let yesterday = local_dt(2026, 9, 20, 8, 0);
+        let yesterday_clock = TriggerClock::from_now(&yesterday);
+        record_trigger(&pool, JOB_BRIEFING, SCOPE_GLOBAL, &yesterday_clock.date, &yesterday_clock.tz_offset)
+            .await
+            .unwrap();
+
+        let now = local_dt(2026, 9, 21, 9, 0);
+        let clock = TriggerClock::from_now(&now);
+        assert!(!should_trigger_briefing(&pool, &clock, "08:00")
+            .await
+            .unwrap(), "HH:MM 不匹配 ⇒ 跳过（即便当日去重行不存在）");
+    }
+
+    #[tokio::test]
+    async fn tz_change_allows_at_most_one_retrigger() {
+        // FR-47 验收：TZ env 变更后首个周期至多一次跳过或重复（键含 tz 维度）
+        let pool = setup_triggers_db().await;
+        let now = local_dt(2026, 9, 21, 8, 0);
+        let clock = TriggerClock::from_now(&now);
+
+        record_trigger(&pool, JOB_BRIEFING, SCOPE_GLOBAL, &clock.date, &clock.tz_offset)
+            .await
+            .unwrap();
+        assert!(!should_trigger_briefing(&pool, &clock, "08:00").await.unwrap());
+
+        // TZ 变更（或 DST 偏移变化）⇒ tz_offset 键变化 ⇒ 新键无行 ⇒ 判定可触发
+        //（"至多一次重复"的来源；此后新键行接管去重，不再累积重复）
+        let changed_tz = if clock.tz_offset == "+08:00" { "+00:00" } else { "+08:00" };
+        let clock_after_tz_change = TriggerClock {
+            tz_offset: changed_tz.to_string(),
+            ..clock.clone()
+        };
+        assert!(should_trigger_briefing(&pool, &clock_after_tz_change, "08:00")
+            .await
+            .unwrap());
+        record_trigger(&pool, JOB_BRIEFING, SCOPE_GLOBAL, &clock_after_tz_change.date, &clock_after_tz_change.tz_offset)
+            .await
+            .unwrap();
+        assert!(!should_trigger_briefing(&pool, &clock_after_tz_change, "08:00")
+            .await
+            .unwrap(), "新键置位后同周期不再重复");
+    }
+
+    #[tokio::test]
+    async fn weekly_job_dedupes_within_iso_week_and_triggers_next_week() {
+        let pool = setup_triggers_db().await;
+        // 2026-09-21 是周一
+        let monday = local_dt(2026, 9, 21, 20, 0);
+        assert_eq!(monday.weekday().num_days_from_monday() + 1, 1);
+        let clock = TriggerClock::from_now(&monday);
+
+        assert!(should_trigger_weekly(&pool, &clock, JOB_WEEKLY_REVIEW, "1", "20:00")
+            .await
+            .unwrap());
+        record_trigger(&pool, JOB_WEEKLY_REVIEW, SCOPE_GLOBAL, &clock.iso_week, &clock.tz_offset)
+            .await
+            .unwrap();
+
+        // 同周一同星期+同时刻再次判定：去重分支真路径（星期/时刻门均放行，
+        // 仅 cycle 已置位——FR-47「同分钟重启不重复触发」的判定级锚点；
+        // 评审修复：原周三断言被星期门短路，去重分支零执行）
+        assert!(!should_trigger_weekly(&pool, &clock, JOB_WEEKLY_REVIEW, "1", "20:00")
+            .await
+            .unwrap(), "同 ISO 周内同星期+时刻（cycle 已置位）不再触发");
+        // 非配置星期不触发（星期门短路，与去重无关）
+        let wednesday = local_dt(2026, 9, 23, 20, 0);
+        let wednesday_clock = TriggerClock::from_now(&wednesday);
+        assert!(!should_trigger_weekly(&pool, &wednesday_clock, JOB_WEEKLY_REVIEW, "1", "20:00")
+            .await
+            .unwrap(), "非配置星期不触发");
+
+        // 次周同一时刻照常触发
+        let next_monday = local_dt(2026, 9, 28, 20, 0);
+        let next_clock = TriggerClock::from_now(&next_monday);
+        assert!(should_trigger_weekly(&pool, &next_clock, JOB_WEEKLY_REVIEW, "1", "20:00")
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn weekly_job_requires_both_day_and_time_match() {
+        let pool = setup_triggers_db().await;
+        let monday = local_dt(2026, 9, 21, 20, 0);
+        let clock = TriggerClock::from_now(&monday);
+
+        // 星期不匹配
+        assert!(!should_trigger_weekly(&pool, &clock, JOB_BIGROCK_PLANNING, "2", "20:00")
+            .await
+            .unwrap());
+        // 时刻不匹配
+        assert!(!should_trigger_weekly(&pool, &clock, JOB_BIGROCK_PLANNING, "1", "09:00")
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn friday_check_dedupes_per_day() {
+        let pool = setup_triggers_db().await;
+        // 2026-09-25 是周五
+        let friday = local_dt(2026, 9, 25, 10, 0);
+        assert_eq!(friday.weekday().num_days_from_monday() + 1, 5);
+        let clock = TriggerClock::from_now(&friday);
+
+        assert!(should_trigger_friday_check(&pool, &clock).await.unwrap());
+        record_trigger(&pool, JOB_BIGROCK_FRIDAY_CHECK, SCOPE_GLOBAL, &clock.date, &clock.tz_offset)
+            .await
+            .unwrap();
+        assert!(!should_trigger_friday_check(&pool, &clock).await.unwrap());
+
+        // 非周五不触发
+        let monday = local_dt(2026, 9, 21, 10, 0);
+        let monday_clock = TriggerClock::from_now(&monday);
+        assert!(!should_trigger_friday_check(&pool, &monday_clock).await.unwrap());
+    }
+
+    #[test]
+    fn trigger_clock_derives_all_dimensions_consistently() {
+        let now = local_dt(2026, 9, 21, 9, 5);
+        let clock = TriggerClock::from_now(&now);
+        assert_eq!(clock.hhmm, "09:05");
+        assert_eq!(clock.date, "2026-09-21");
+        assert_eq!(clock.iso_week, iso_week_key(&now));
+        assert_eq!(clock.tz_offset, now.format("%:z").to_string());
+        assert_eq!(clock.weekday, 1);
+        assert_eq!(clock.work_loop_cycle(), "2026-09-21 09:05");
     }
 }

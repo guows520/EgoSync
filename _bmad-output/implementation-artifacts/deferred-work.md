@@ -480,3 +480,12 @@ All items resolved in the same session:
 - source_spec: `_bmad-output/implementation-artifacts/17-1-docker-deploy-secrets-and-tls.md`
   summary: project-context.md 未收录 17.1 交付的部署拓扑与三个新 env（EGOSYNC_BEHIND_PROXY / EGOSYNC_OPENCODE_PATH / EGOSYNC_SECRET_{ref}）及 compose/Docker 部署面。
   evidence: 17.1 评审 #7b：agent-context 文件按分诊规则固定 defer；AGENTS.md 规定项目细节以 project-context.md 为准，后续故事执行者不可见新 env 面。
+- source_spec: `_bmad-output/implementation-artifacts/17-2-resident-work-loop-hardening-fr47.md`
+  summary: epic-17-context.md 仍写「三处内存去重 map」并漏 trigger_count 字段，与 17.2 落地的五处口径及 scheduler_triggers 表结构矛盾。
+  evidence: 17.2 评审 #16：同 diff 内两份规划工件口径打架，后续故事（17.3）执行者读 epic context 会拿到陈旧口径；agent-context 编译产物按分诊规则 defer，重编译时对齐 architecture.md 注记即可。
+- source_spec: `_bmad-output/implementation-artifacts/17-2-resident-work-loop-hardening-fr47.md`
+  summary: test:web（含新 web-resident-loop spec）不在任何 CI workflow，回归靠手跑，评审层 3 演示的接线回归（如误删 record 调用）CI 拦不住。
+  evidence: 17.2 评审缺口层：ci.yml 三链路（vitest/双 cargo/build）+ server-ci.yml 均无 web e2e；epic-17-context 明确 17.3 范围含「CI 三链路 + web e2e 冒烟」，空窗期缺口真实（缺腿时长 = 直至 17.3 交付）。
+- source_spec: `_bmad-output/implementation-artifacts/17-2-resident-work-loop-hardening-fr47.md`
+  summary: scheduler 循环体内 weekly/bigrock-planning 两个结构相同块的 job 常量接线无执行级验证（常量混用检测不出）。
+  evidence: 17.2 评审缺口层：判定函数级测试（含评审修复后的 weekly 同 cycle 真路径断言）各自通过，但循环块传参（JOB_BIGROCK_PLANNING vs JOB_WEEKLY_REVIEW）只有代码审读背书；闭合需 job 参数注入化重构或周级 e2e，超出 17.2 验证级别；e2e 重启腿已覆盖 work_loop 块的执行级接线。

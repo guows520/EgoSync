@@ -2,7 +2,7 @@
 title: '桌面客户端远程模式（Story 16.3，FR-48）'
 type: 'feature'
 created: '2026-09-20'
-status: 'in-review'
+status: 'in-progress'
 route: 'dispatch'
 review_loop_iteration: 1
 baseline_commit: 'e285060c90c9a2311024863dd09ac188b9f2965b'
@@ -77,24 +77,24 @@ context:
 
 （评审回环 1 后全部复位待重推导——原实现 aeee913 留存 git 历史作 KEEP 参照。）
 
-- [ ] `server/src/auth.rs` + `server/src/middleware`（或现有分层） — 全部 `/api/*` 接受 `Authorization: Bearer <token>` 叠加认证（校验 env/Argon2id 主令牌，非会话表；cookie 路径零变化）；`/api/auth/status` 支持 Bearer — 桌面远程客户端认证通道
-- [ ] `server/src/` SSE 票据 — `POST /api/events/ticket`（Bearer）发一次性 30s 票据（内存表）；`GET /api/events?ticket=` 校验后建流（cookie 路径不变）— EventSource 无法带头的解法
-- [ ] `server/src/` CORS 层 — Origin 白名单 `tauri://localhost`、`http://tauri.localhost`，放行 Authorization/content-type 头，覆盖 preflight 与 SSE 响应 — 桌面 webview 跨源访问
-- [ ] `egosync-app/src-tauri/src/services/desktop_mode.rs`（新） — `app_data_dir/desktop-mode.json` 读写（mode+remoteUrl，缺失/损坏回退 local）+ keyring 令牌存取（键 `remote_instance_token`）— DB 外模式源（先有鸡问题）；**[T2 修订] 读侧统一裁决：mode=remote 而 remoteUrl 缺失/空白 ⇒ 按 local 处理（read_mode 与 desktop_get_boot_config 同源裁决）——杜绝「Rust 进远程 builder / 前端回退 TauriTransport 直通」的砖死会话两层分歧**
-- [ ] `egosync-app/src-tauri/src/commands/desktop_mode.rs`（新） — `desktop_get_boot_config`（返 mode/URL/令牌）、`remote_mode_save_config`、`remote_mode_restart`（watchdog cancel+sidecar.stop 后 `app.restart()`）— 双模式常驻注册（不依赖引擎 state）；**[T7 修订] 前两命令 async 化（文件+keyring I/O 移出主线程——引导关键路径）；[T12 修订] 校验分支（未知 mode/空令牌/URL 形态/local 保留 URL）抽纯函数补单测**
-- [ ] `egosync-app/src-tauri/src/lib.rs` — setup 首行读模式：remote 跳过全部引擎装配、invoke_handler 只注册壳命令、Exit 分支按模式；local 路径字节级不变 — 启动恢复与切换的同一机制；**[T18 修订] 远程 builder 补 .setup（仅 Windows DWM 边框修复 + return Ok(())，仍零引擎装配）；[T8 修订] 守卫源码序测试删除 `.or_else` 兜底——精确匹配守卫语句，守卫删除/重排必须红**
-- [ ] `src/transport/index.ts` + `types.ts` — `setTransportBoot(boot)` 注入；getTransport 三路解析（browser 相对路径 / desktop-local Tauri / desktop-remote HttpTransport 绝对 base+Bearer）；getAuthStatus 直通仅 local — 进程内模式恒定；**[T4 修订] appMode 收敛单一事实源（transport 侧 getDesktopMode 重复导出撤销，消费面统一 appMode）；setDesktopMode 注入拒绝语义对齐 setTransportBoot（注释「重复调用静默忽略」兑现为 console.error + 忽略）**
-- [ ] `src/transport/http.ts` — 构造选项 {kind, baseUrl, token}；绝对 URL+Authorization 头；SSE 票据流程；remote 模式应用层退避 governor（1s→30s+抖动）；browser 分支行为不变
-- [ ] `src/appMode.ts`（新）+ `src/main.tsx` — 模块级模式态与 `getDesktopMode()`；main 异步引导（Tauri 宿主先 invoke boot config 再渲染，splash 覆盖；splash 兜底仅 Tauri 宿主——浏览器 checking 态仍由品牌 splash 覆盖）
-- [ ] `src/components/auth/AuthGate.tsx` + `LoginView.tsx`（或 RemoteLoginView 新） — 远程桌面跑完整状态机（去直通）；令牌重录（验证→keyring→重验）；离线屏加「切回本地」；401→重录；**[T3 修订] handleSwitchToLocal 失败后 rethrow（RemoteLoginView 侧 catch 生效 + finally 复位按钮，错误就地可见）；[T1 新增] 见下方增补任务**
-- [ ] `src/components/settings/GlobalSettingsModal.tsx` — 「远程模式」tab：local 态=URL+令牌+测试连接+切换（诚实代价确认→save+restart）；remote 态=连接信息+切回本地（确认→save+restart）
-- [ ] `src/hooks/useConnectionState.ts` + `ConnectionStatus.tsx` + `src/components/chat/ChatStream.tsx` + GlobalSettingsModal 各门控点 — 初始态按模式；REMOTE 徽标/横幅；desktop-only 门控加 `mode==='local'`；选工作目录远程态禁用+说明
-- [ ] 测试三面 — vitest：transport 解析矩阵 / http.ts remote 行为（URL、头、票据、退避——mock fetch+EventSource）/ AuthGate 远程分支 / 设置 tab 流程 / 门控；server cargo test：Bearer、票据一次性+TTL、CORS 头；src-tauri 单测：模式文件往返+损坏回退；**[T22 修订] ButlerSettingsContent.test/SettingsTab.test 补远程桌面用例（setDesktopMode('remote') 后 desktop-only 入口隐藏）；[T10 修订] AuthGate 远程重录测试桩补非 200 分流用例；[T11 修订] http.remote.test 补退避中间档（1s→2s→4s）断言**
+- [x] `server/src/auth.rs` + `server/src/middleware`（或现有分层） — 全部 `/api/*` 接受 `Authorization: Bearer <token>` 叠加认证（校验 env/Argon2id 主令牌，非会话表；cookie 路径零变化）；`/api/auth/status` 支持 Bearer — 桌面远程客户端认证通道
+- [x] `server/src/` SSE 票据 — `POST /api/events/ticket`（Bearer）发一次性 30s 票据（内存表）；`GET /api/events?ticket=` 校验后建流（cookie 路径不变）— EventSource 无法带头的解法
+- [x] `server/src/` CORS 层 — Origin 白名单 `tauri://localhost`、`http://tauri.localhost`，放行 Authorization/content-type 头，覆盖 preflight 与 SSE 响应 — 桌面 webview 跨源访问
+- [x] `egosync-app/src-tauri/src/services/desktop_mode.rs`（新） — `app_data_dir/desktop-mode.json` 读写（mode+remoteUrl，缺失/损坏回退 local）+ keyring 令牌存取（键 `remote_instance_token`）— DB 外模式源（先有鸡问题）；**[T2 修订] 读侧统一裁决：mode=remote 而 remoteUrl 缺失/空白 ⇒ 按 local 处理（read_mode 与 desktop_get_boot_config 同源裁决）——杜绝「Rust 进远程 builder / 前端回退 TauriTransport 直通」的砖死会话两层分歧**
+- [x] `egosync-app/src-tauri/src/commands/desktop_mode.rs`（新） — `desktop_get_boot_config`（返 mode/URL/令牌）、`remote_mode_save_config`、`remote_mode_restart`（watchdog cancel+sidecar.stop 后 `app.restart()`）— 双模式常驻注册（不依赖引擎 state）；**[T7 修订] 前两命令 async 化（文件+keyring I/O 移出主线程——引导关键路径）；[T12 修订] 校验分支（未知 mode/空令牌/URL 形态/local 保留 URL）抽纯函数补单测**
+- [x] `egosync-app/src-tauri/src/lib.rs` — setup 首行读模式：remote 跳过全部引擎装配、invoke_handler 只注册壳命令、Exit 分支按模式；local 路径字节级不变 — 启动恢复与切换的同一机制；**[T18 修订] 远程 builder 补 .setup（仅 Windows DWM 边框修复 + return Ok(())，仍零引擎装配）；[T8 修订] 守卫源码序测试删除 `.or_else` 兜底——精确匹配守卫语句，守卫删除/重排必须红**
+- [x] `src/transport/index.ts` + `types.ts` — `setTransportBoot(boot)` 注入；getTransport 三路解析（browser 相对路径 / desktop-local Tauri / desktop-remote HttpTransport 绝对 base+Bearer）；getAuthStatus 直通仅 local — 进程内模式恒定；**[T4 修订] appMode 收敛单一事实源（transport 侧 getDesktopMode 重复导出撤销，消费面统一 appMode）；setDesktopMode 注入拒绝语义对齐 setTransportBoot（注释「重复调用静默忽略」兑现为 console.error + 忽略）**
+- [x] `src/transport/http.ts` — 构造选项 {kind, baseUrl, token}；绝对 URL+Authorization 头；SSE 票据流程；remote 模式应用层退避 governor（1s→30s+抖动）；browser 分支行为不变
+- [x] `src/appMode.ts`（新）+ `src/main.tsx` — 模块级模式态与 `getDesktopMode()`；main 异步引导（Tauri 宿主先 invoke boot config 再渲染，splash 覆盖；splash 兜底仅 Tauri 宿主——浏览器 checking 态仍由品牌 splash 覆盖）
+- [x] `src/components/auth/AuthGate.tsx` + `LoginView.tsx`（或 RemoteLoginView 新） — 远程桌面跑完整状态机（去直通）；令牌重录（验证→keyring→重验）；离线屏加「切回本地」；401→重录；**[T3 修订] handleSwitchToLocal 失败后 rethrow（RemoteLoginView 侧 catch 生效 + finally 复位按钮，错误就地可见）；[T1 新增] 见下方增补任务**
+- [x] `src/components/settings/GlobalSettingsModal.tsx` — 「远程模式」tab：local 态=URL+令牌+测试连接+切换（诚实代价确认→save+restart）；remote 态=连接信息+切回本地（确认→save+restart）
+- [x] `src/hooks/useConnectionState.ts` + `ConnectionStatus.tsx` + `src/components/chat/ChatStream.tsx` + GlobalSettingsModal 各门控点 — 初始态按模式；REMOTE 徽标/横幅；desktop-only 门控加 `mode==='local'`；选工作目录远程态禁用+说明
+- [x] 测试三面 — vitest：transport 解析矩阵 / http.ts remote 行为（URL、头、票据、退避——mock fetch+EventSource）/ AuthGate 远程分支 / 设置 tab 流程 / 门控；server cargo test：Bearer、票据一次性+TTL、CORS 头；src-tauri 单测：模式文件往返+损坏回退；**[T22 修订] ButlerSettingsContent.test/SettingsTab.test 补远程桌面用例（setDesktopMode('remote') 后 desktop-only 入口隐藏）；[T10 修订] AuthGate 远程重录测试桩补非 200 分流用例；[T11 修订] http.remote.test 补退避中间档（1s→2s→4s）断言**
 
 **回环增补任务（review loop 1 —— T1 bad_spec 根因 + T5 待裁决项）：**
 
-- [ ] **[T1] 远程 setup 流（冻结矩阵第 5 行）** — `src/components/auth/` 新远程 setup 视图（或 SetupView 参数化）：远端 `setupRequired` 时桌面远程**不得**复用浏览器 SetupView（相对路径 fetch 在 webview 源下不可达远端）；走绝对 URL 直连 `POST {base}/api/setup {token}`（未初始化实例无令牌可验——此调用无 Bearer）→ 成功后令牌即主令牌：写 keyring（remote_mode_save_config mode=remote）→ updateRemoteToken → getAuthStatus 重验 → ready；**setup 态含「切回本地」逃生口**（矩阵行第三列「可中途切回本地」）。配套 vitest：setup 提交链（绝对 URL、成功落 keyring、重验进 ready、失败如实呈现、逃生口可切）
-- [ ] **[T5·已裁决 2026-09-21] Bearer 通道滥用防护（人工裁决：补）** — `require_auth` 的 Bearer 失败按 IP 计数限流：**仅计验证失败**（成功访问不计数、不限流），阈值/窗口沿用登录面口径（5 次/分钟/IP，滑动窗口，超限 429 统一形状）；计数器独立于 auth 路由限流器（AppState 新增实例）；`/api/cmd/*` 与 `/api/events/ticket` 均覆盖。server 测试：连续错误 Bearer 第 6 次 429、成功访问不计数、窗口滑动恢复
+- [x] **[T1] 远程 setup 流（冻结矩阵第 5 行）** — `src/components/auth/` 新远程 setup 视图（或 SetupView 参数化）：远端 `setupRequired` 时桌面远程**不得**复用浏览器 SetupView（相对路径 fetch 在 webview 源下不可达远端）；走绝对 URL 直连 `POST {base}/api/setup {token}`（未初始化实例无令牌可验——此调用无 Bearer）→ 成功后令牌即主令牌：写 keyring（remote_mode_save_config mode=remote）→ updateRemoteToken → getAuthStatus 重验 → ready；**setup 态含「切回本地」逃生口**（矩阵行第三列「可中途切回本地」）。配套 vitest：setup 提交链（绝对 URL、成功落 keyring、重验进 ready、失败如实呈现、逃生口可切）
+- [x] **[T5·已裁决 2026-09-21] Bearer 通道滥用防护（人工裁决：补）** — `require_auth` 的 Bearer 失败按 IP 计数限流：**仅计验证失败**（成功访问不计数、不限流），阈值/窗口沿用登录面口径（5 次/分钟/IP，滑动窗口，超限 429 统一形状）；计数器独立于 auth 路由限流器（AppState 新增实例）；`/api/cmd/*` 与 `/api/events/ticket` 均覆盖。server 测试：连续错误 Bearer 第 6 次 429、成功访问不计数、窗口滑动恢复
 
 **Acceptance Criteria:**
 
@@ -127,7 +127,16 @@ server：auth.rs（Bearer 叠加）、sse.rs（SseTicketStore + ticket_handler�
 - **main.tsx splash 兜底误伤浏览器**：引导完成即撤 splash 的兜底原为无条件执行——浏览器宿主 checking 态的品牌 splash（16.1 语义）会在 400ms 内被换成灰底兜底文案。已限定仅 Tauri 宿主执行兜底。
 - **实现子代理两度死于环境**：磁盘被 cargo target 瞬时填满（ENOSPC）→ 子代理崩溃遗留部分变更；第二次失败无输出。剩余工作由父代理接手直接完成（step-03 兜底条款），全部验证由父代理独立重跑。
 
-### 父代理验证轮（2026-09-21 step-03）
+### 重推导轮（2026-09-21 step-03，review loop 1 之后）
+
+- **执行方式**：分发实现子代理（规格为唯一事实源）——先恢复 KEEP 参照 aeee913 的代码面（36 文件原样），再逐条落地 12 项修订（净增量 18 文件 +1115/−115）。子代理一次成功（前轮两度死于磁盘 ENOSPC，本轮目标目录已预热、增量构建）。
+- **T5 落地形状**：`AppState.bearer_rate` 独立 `RateLimiter` 实例（与 auth 路由限流器互不侵占预算）；`require_auth` / `require_auth_with_sse_ticket` 的 Bearer 分支**校验先行、仅失败路径计数**（有效令牌始终放行）；三端点（/api/cmd/*、/api/events/ticket、/api/events Bearer 分支）共享计数器；超限 429 统一形状。集成测试：第 6 次失败 429、成功不计数不限流、端点共享、auth 限流器独立性；窗口滑动恢复经单测注入跨窗记录（60s 窗口不可在集成测试内等待）。
+- **T1 落地形状**：`RemoteSetupView`（绝对 URL 直连 `POST {base}/api/setup`，无 Bearer——未初始化实例无令牌可验）→ 成功后 keyring（模式文件幂等重写）→ `updateRemoteToken` → 重验进 ready；404（已初始化/env 锁定）统一锁定说明 + 返回登录；网络失败断网文案；setup 态含切回本地逃生口。测试 4 例（提交链全钉：绝对 URL/无 Bearer 头、keyring 落点、重验 Bearer、逃生口 save→restart 序）。
+- **T2 落地形状**：`services::desktop_mode::resolve_mode`（remote 缺/空 URL ⇒ local）为读侧统一裁决——`read_mode`（进程引导）与 `desktop_get_boot_config`（前端引导）同源引用；前端 index.ts 的 TauriTransport 回退保留为纵深防御（真实 boot 通道对该形态已不可达，index.remote.test 注释更新）。
+- **父代理验证轮**（独立重跑，不采信子代理自述）：build ✅ 零类型错误 / vitest 66 文件 865 例全绿（857 + 新增 8，零未处理错误）/ server cargo test 64 例（lib 9 + api 24 + csp 2 + desktop_remote 14 + parity 6 + secret 4 + web_entry 5）✅ / src-tauri cargo test 103 例 ✅ / engine cargo test 822 例 + crates/ 零 diff ✅ / http.ts 与 aeee913 逐字节一致（浏览器路径守门）✅ / test:web 3 specs 8 tests ✅（注：链式复验首跑 1 spec 偶发失败——紧接全部 cargo 套件后高负载所致，隔离复跑与子代理轮均全绿，判定环境偶发非回归）。矩阵 8 行逐行复核：第 5 行（远端未初始化）由 RemoteSetupView 4 例闭合。
+- **子代理自报变异验证**：T8 删守卫 → 测试红（掏空语义成立）；该变异在父代理轮 1 已由验证缺口层独立证实。
+
+### 首轮父代理验证轮（2026-09-21 step-03，评审回环 1 前的历史）
 
 全量独立重跑（不采信子代理自述）：build ✅ / vitest 857+13 例（含修复后零未处理错误——修复后全量复跑）/ server cargo test 61 例 ✅ / src-tauri cargo test 95 例 ✅ / engine cargo test 822 例 ✅ 且 crates/ 零 diff / test:web 3 specs ✅。I/O 矩阵 8 行逐行核对测试覆盖（RemoteModeSection.test 4 行、AuthGate.remote.test 3 行、http.remote.test SSE 行、lib.rs 源码序钉 + main.remote.test 启动恢复行、desktop_remote_test 12 例服务侧行）。
 

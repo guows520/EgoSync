@@ -31,7 +31,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::auth::AuthState;
 use crate::secret_store::ServerSecretStore;
-use crate::sse::{SseEvent, SseEventBus};
+use crate::sse::{SseEvent, SseEventBus, SseTicketStore, SSE_TICKET_TTL};
 use crate::AppState;
 
 /// 生产引导：完整桌面序列对等复刻（main.rs 与进程内复用）。
@@ -285,7 +285,11 @@ pub async fn build_app_state(
     Ok(Arc::new(AppState {
         ctx,
         auth,
+        // [T5 修订] Bearer 失败面限流器（独立实例——与 auth 路由限流器隔离）
+        bearer_rate: crate::auth::RateLimiter::default(),
         events_tx,
+        // Story 16.3：SSE 一次性票据表（内存态，与事件扇出同生命周期）
+        sse_tickets: SseTicketStore::new(SSE_TICKET_TTL),
         sidecar,
         cancel,
     }))
@@ -347,7 +351,11 @@ pub async fn build_test_state(
     Ok(Arc::new(AppState {
         ctx,
         auth,
+        // [T5 修订] Bearer 失败面限流器（测试态与生产态同语义）
+        bearer_rate: crate::auth::RateLimiter::default(),
         events_tx,
+        // Story 16.3：SSE 一次性票据表（测试态与生产态同语义）
+        sse_tickets: SseTicketStore::new(SSE_TICKET_TTL),
         sidecar,
         cancel: CancellationToken::new(),
     }))

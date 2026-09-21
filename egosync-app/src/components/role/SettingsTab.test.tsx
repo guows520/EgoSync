@@ -1,6 +1,7 @@
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { __resetTransportForTests } from '@/transport';
+import { __resetTransportForTests, setTransportBoot } from '@/transport';
+import { __resetDesktopModeForTests, setDesktopMode } from '@/appMode';
 import { SettingsTab } from './SettingsTab';
 import { roleService } from '../../services/roleService';
 import { skillService } from '../../services/skillService';
@@ -254,6 +255,26 @@ describe('SettingsTab role CRUD actions', () => {
     } finally {
       (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = tauriInternals;
       __resetTransportForTests();
+    }
+  });
+
+  // Story 16.3 [T22 修订]：远程桌面分支——desktop-only 入口（skill_pick_custom_directory，
+  // isLocalDesktop 门控）不渲染（此前无 setDesktopMode('remote') 用例：删门控无测试失败）。
+  it('远程桌面分支：skill 文件夹入口不渲染（远程态 = 浏览器等价物）', async () => {
+    setTransportBoot({ mode: 'remote', remoteUrl: 'https://instance.example.com', remoteToken: 'tk' });
+    setDesktopMode('remote');
+    try {
+      render(<SettingsTab role={baseRole} activeRoleCount={2} />);
+
+      // 设置区块照常渲染（skills 区默认展开——Skill 启用开关是 web-ok 面）
+      expect(await screen.findByText('自定义 Skill')).toBeInTheDocument();
+      // desktop-only 本机目录选择入口隐藏（远端不可达 skill_pick_custom_directory）
+      expect(screen.queryByRole('button', { name: '选择skill文件夹' })).not.toBeInTheDocument();
+      // 服务零调用（入口不可达）
+      expect(skillService.pickCustomDirectory).not.toHaveBeenCalled();
+    } finally {
+      __resetTransportForTests();
+      __resetDesktopModeForTests();
     }
   });
 

@@ -1,6 +1,7 @@
 import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { __resetTransportForTests } from '@/transport';
+import { __resetTransportForTests, setTransportBoot } from '@/transport';
+import { __resetDesktopModeForTests, setDesktopMode } from '@/appMode';
 import { ButlerSettingsContent } from './ButlerSettingsContent';
 import { appService } from '../../services/appService';
 import { scheduleService } from '../../services/scheduleService';
@@ -235,6 +236,29 @@ describe('ButlerSettingsContent', () => {
     } finally {
       (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = tauriInternals;
       __resetTransportForTests();
+    }
+  });
+
+  // Story 16.3 [T22 修订]：远程桌面分支——desktop-only 入口（skill_pick_custom_directory，
+  // isLocalDesktop 门控）不渲染。此前只有浏览器宿主用例、无 setDesktopMode('remote')
+  // 用例：删门控（isLocalDesktop 退回 isTauriHost）无测试失败（变异无红）。
+  it('远程桌面分支：skill 文件夹入口不渲染（远程态 = 浏览器等价物）', async () => {
+    vi.mocked(skillService.listAllRoleSkills).mockResolvedValue([customSkill]);
+    setTransportBoot({ mode: 'remote', remoteUrl: 'https://instance.example.com', remoteToken: 'tk' });
+    setDesktopMode('remote');
+    try {
+      render(<ButlerSettingsContent />);
+
+      // 设置区块照常渲染（Skill 列表/开关是 web-ok 面）
+      expect(await screen.findByText('自定义 Skill')).toBeInTheDocument();
+      // desktop-only 本机目录选择入口隐藏（远端不可达 skill_pick_custom_directory）
+      expect(screen.queryByRole('button', { name: '选择skill文件夹' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /选择中.../ })).not.toBeInTheDocument();
+      // 服务零调用（入口不可达）
+      expect(skillService.pickCustomDirectory).not.toHaveBeenCalled();
+    } finally {
+      __resetTransportForTests();
+      __resetDesktopModeForTests();
     }
   });
 

@@ -82,7 +82,7 @@ async function ensureChromedriver() {
  * 上次解压被磁盘满打断会留下残缺二进制，existsSync 幂等短路永不自愈，
  * 启动时才爆晦涩错误。能实际跑 --version 才算就位。
  */
-function chromeBinaryRuns(): boolean {
+function chromeBinaryRuns() {
   try {
     execFileSync(chromeBinary, ['--version', '--no-sandbox'], { stdio: 'ignore' });
     return true;

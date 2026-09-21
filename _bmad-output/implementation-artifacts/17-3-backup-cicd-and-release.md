@@ -179,6 +179,7 @@ context:
 - 桌面 e2e 套件与 wdio.conf.ts 零改动（git diff 为空）。
 - CI 侧本地复演（job 逻辑逐条同构重放，主代理亲跑）：五文件版本一致（0.1.6-alpha.3）✓、dockerignore 三副本一致（与 job 同款 patterns/diff 逻辑）✓、两 workflow YAML python yaml 解析 ✓（评审轮补丁后复验）、compose 插值 latest/钉版 0.1.6-alpha.3 两态 ✓（`docker compose config`）。
 - **诚实登记（无法本地验证的部分）**：server-docker.yml 的 `docker` job（buildx 构建 + ghcr 推送 + 镜像运行冒烟）与 server-ci.yml `web-e2e-smoke` job 的 CI 全链路（node 22 runner 内构建+驱动供给）无法本地执行——本 VM 无远端 registry 且本会话曾因磁盘预算耗尽中断一次，不再冒险做 20 分钟级本地镜像构建；首次 push main/tag 与首次 PR 后以 Actions run 观察为首次真实验证。
+- **★CI 首验实录（push e88f881 后，2026-09-22）**：`server-docker` **首跑全绿**（版本一致性 + dockerignore 一致性 + buildx 构建 + 镜像冒烟含静态首页断言 + ghcr 推送——上文诚实登记项正式销账）；`relay-docker` ✓；`server-ci` 的 server-test ✓ 但 **web-e2e-smoke 红**——`setup-web-drivers.mjs` 中评审补丁 P13 误用 TypeScript 语法（`function chromeBinaryRuns(): boolean`）于纯 .mjs，node 直接 SyntaxError（本地未暴露：tsc 不覆盖 .mjs、且冒烟跑时驱动已供给脚本未被调用）。已修（去类型注解）并以 fresh-HOME 全链路实跑验证（下载 175.4MB + 解压 + --version 校验通过）。桌面 `CI` 的 ubuntu/macos 腿 ✓，**Windows 腿红**——`csp.contract.test.ts:68` byte 对 byte CSP 哈希契约被 Windows 检出的 LF→CRLF 转换破坏（该测试 16.1 落地、属 31 个首推提交之一、非 17.3 改动；上次 Windows 全绿 #56 早于该测试存在）。已修：`.gitattributes` 为 index.html 钉 `text eol=lf`（与 sqlx 迁移同款问题同款既定解法——且 Windows 本机构建的 dist 也会真实触发 CSP 拒执行，钉 LF 同时修复潜在构建产物缺陷）。修复提交后以第二次 CI run 复验。
 
 **实现期事故与工程响应（如实披露）**
 

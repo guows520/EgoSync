@@ -6,3 +6,8 @@ egosync-app/src-tauri/migrations/*.sql text eol=lf
 # 脚本字节，测试哈希失配（CI Windows 腿红）且 Windows 本机构建的 dist
 # 会真实触发 CSP 拒执行主题脚本。钉 LF 与上方 sqlx 迁移同款问题同款解法。
 egosync-app/index.html text eol=lf
+# src-tauri/lib.rs：16.3 落地三个「源码扫描钉」测试（remote_mode 守卫
+# 序/重启清理序/远程注册面）内含跨行字面量匹配（"\n                return
+# Ok(());"）——Windows autocrlf 的 LF→CRLF 使匹配失配（CI Windows 腿红）。
+# 钉 LF 与 sqlx 迁移/index.html 同款问题同款既定解法。
+egosync-app/src-tauri/src/lib.rs text eol=lf

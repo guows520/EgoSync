@@ -83,10 +83,27 @@ describe('CSP hash-source 契约耦合（index.html ⇄ server security.rs）', 
     expect(policy).toContain("style-src 'self' 'unsafe-inline'");
     expect(policy).toContain("connect-src 'self'");
 
+    // img-src data:（2026-09-22 修复）：Vite 构建把小体积 SVG 内联为
+    // data:image/svg+xml URI（index.html 启动图标 + Logo 组件）。img-src
+    // 缺席时图片回退 default-src 'self'，data: URI 被拦 ⇒ web 宿主 logo
+    // 不显示（e2e chrome 日志实证 CSP violation）。指令被删即红——
+    // 回归即「logo 再消失」的守门。
+    expect(policy, "img-src 须放行 'self' data:（Vite 内联 SVG logo）").toContain(
+      "img-src 'self' data:"
+    );
+
     // 零第三方域（Story 17.1，人工裁决 B）：16.1 曾放行的两 Google 字体域
     // 已随自托管撤除——font-src/style-src 回归 'self'；字体经
     // @fontsource-variable npm 包随 dist 分发（woff2 本地命中）
     expect(policy).toContain("font-src 'self'");
+    // font-src data:（2026-09-22 修复）：Vite 对小于内联阈值的字体分片
+    // 内联为 `data:font/woff2` URI（dist 产物 CSS 实证）；`font-src
+    // 'self'` 拦 data: URI ⇒ 字体回退系统字体（e2e chrome 日志 SEVERE
+    // 级 CSP violation 实证）。指令被删即红——回归即「字体再被拦」的
+    // 守门（与 img-src data: 同机制、同放行理由）。
+    expect(policy, "font-src 须放行 'self' data:（Vite 内联小体积 woff2）").toContain(
+      "font-src 'self' data:"
+    );
     // 整个 policy 不得含任何第三方域（http/https 外链源）——隐私面
     // 最小化 + 离线一致；fontsource 的 woff2 与 css 都在 'self' 之下。
     // i 标志（17.1 评审 #15）：CSP 域名源大小写不敏感，`https://FONTS.`

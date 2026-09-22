@@ -6,6 +6,14 @@
          横条 inset）；内联防 FOUC 脚本零改动（CSP hash byte 对 byte 契约）。 -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>EgoSync</title>
+    <!-- 标签页图标（2026-09-22 web 宿主修复）：此前全无 icon 声明 ⇒
+         浏览器按惯例请求 /favicon.ico 得 404，标签页空白图标。桌面
+         Tauri 是独立窗口无标签栏，缺口从未在桌面暴露。资产随 public/
+         随 dist 分发：favicon.svg（现代浏览器）+ favicon.ico（兜底，
+         复用 tauri 桌面图标）。内联防 FOUC 脚本零改动（CSP hash byte
+         对 byte 契约不受影响）。 -->
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <!-- Story 17.1：字体自托管（人工裁决 B）——Google Fonts 外链改经
          @fontsource-variable npm 包随 dist 分发（见 src/index.css 头部
          import），离线/内网一致性与隐私；CSP 同步收紧为零第三方域。

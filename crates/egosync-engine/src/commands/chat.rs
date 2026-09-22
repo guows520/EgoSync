@@ -46,12 +46,13 @@ fn sync_role_config_warn(result: Result<(), AppError>, action: &str) {
     }
 }
 
-fn has_enough_complete_user_messages(messages: &[Message]) -> bool {
+/// 完整（非流式占位/非空）用户消息计数——记忆提取阈值门与「新对话」
+/// 交接判定共用（2026-09-22 由 bool 谓词改计数，供跳过日志写明差几条）。
+fn count_complete_user_messages(messages: &[Message]) -> usize {
     messages
         .iter()
         .filter(|m| m.role == "user" && m.is_complete && !m.content.trim().is_empty())
         .count()
-        >= 3
 }
 
 fn has_delegation_metadata(messages: &[Message]) -> bool {
@@ -73,7 +74,20 @@ async fn should_schedule_memory_extraction(
     conversation_id: &str,
 ) -> Result<bool, AppError> {
     let messages = conversations::list_messages(conv_pool, conversation_id).await?;
-    Ok(has_enough_complete_user_messages(&messages) || has_delegation_metadata(&messages))
+    // 2026-09-22（web 记忆空库案）：不达标时的静默跳过（Ok(false) 连
+    // debug 都不打）让「偏好为何没被提取」的排查只能靠猜——此处补
+    // info 级留痕（每条流结束都会过此门，短对话约产生 1-2 条，噪音
+    // 可控）。用户消息数写明日志，跳过原因一眼可读。
+    let complete_user_messages = count_complete_user_messages(&messages);
+    let eligible = complete_user_messages >= 3 || has_delegation_metadata(&messages);
+    if !eligible {
+        tracing::info!(
+            conversation_id,
+            complete_user_messages,
+            "记忆提取未排期：完整用户消息不足 3 条且无委派元数据（阈值门 MIN_COMPLETE_USER_MESSAGES）"
+        );
+    }
+    Ok(eligible)
 }
 
 fn spawn_memory_extraction_after_idle(
@@ -587,7 +601,7 @@ pub async fn chat_new_conversation(
                 return Ok(conv);
             }
         };
-        let should_extract_old_conversation = has_enough_complete_user_messages(&messages);
+        let should_extract_old_conversation = count_complete_user_messages(&messages) >= 3;
         let has_messages = messages.iter().any(|m| m.role == "user");
         let has_title = {
             let convs = conversations::list_all_conversations(conv_pool).await?;

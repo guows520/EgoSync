@@ -48,6 +48,10 @@ export default function App() {
   const [roles, setRoles] = useState<Role[]>([]);
   const [archivedRoles, setArchivedRoles] = useState<Role[]>([]);
   const [isLoadingRoles, setIsLoadingRoles] = useState(true);
+  // 2026-09-22（onboarding 劫持案）：首启门失败态与重试计数——失败时
+  // 显式报错给出重试入口，禁止静默落管家视图（详见首启门 effect 注释）。
+  const [launchGateError, setLaunchGateError] = useState(false);
+  const [gateRetryCount, setGateRetryCount] = useState(0);
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     const stored = localStorage.getItem('egosync-theme');
     if (stored === 'light' || stored === 'dark') return stored;
@@ -236,20 +240,56 @@ export default function App() {
     setButlerProposal(null);
   }, []);
 
+  // 2026-09-22（onboarding 劫持案修复）：首启门失败不再静默落管家视图。
+  // 原实现 `.catch(() => setIsLoadingRoles(false))` 在 app_is_first_launch
+  // 瞬时失败时让 currentView 保持默认 'butler' 直接可用——但
+  // onboarding_completed 标记并未落，用户在「未完成引导」状态下正常使用
+  // 后，下次页面加载即被 OnboardingView 劫持（历史对话入口被引导页顶掉，
+  // web UAT 实证）。改为对齐 ChatStream.initializeConversation 的自愈模式
+  // （e2e 取证结论：启动窗口瞬时 REST 失败需有限重试）：3 次尝试、1.5s
+  // 退避、代际守卫（重试/重挂载取消旧尝试）；终态失败显式报错给出重试
+  // 入口——禁止静默放行。
+  const launchGateGenerationRef = useRef(0);
   useEffect(() => {
-    appService.isFirstLaunch().then(isFirst => {
-      if (isFirst) {
-        setCurrentView('onboard');
-        setIsLoadingRoles(false);
-      } else {
-        refreshAllRoles().catch(() => {}).finally(() => {
+    const generation = ++launchGateGenerationRef.current;
+    let cancelled = false;
+
+    const runGate = async (attempt: number): Promise<void> => {
+      try {
+        const isFirst = await appService.isFirstLaunch();
+        if (cancelled || launchGateGenerationRef.current !== generation) return;
+        setLaunchGateError(false);
+        if (isFirst) {
+          setCurrentView('onboard');
           setIsLoadingRoles(false);
-        });
+        } else {
+          refreshAllRoles().catch(() => {}).finally(() => {
+            if (!cancelled && launchGateGenerationRef.current === generation) {
+              setIsLoadingRoles(false);
+            }
+          });
+        }
+      } catch {
+        if (cancelled || launchGateGenerationRef.current !== generation) return;
+        if (attempt < 2) {
+          setTimeout(() => { void runGate(attempt + 1); }, 1500);
+        } else {
+          console.error('首启判定连续失败（3 次尝试均失败），进入显式错误态');
+          setLaunchGateError(true);
+          setIsLoadingRoles(false);
+        }
       }
-    }).catch(() => {
-      setIsLoadingRoles(false);
-    });
-  }, [refreshAllRoles]);
+    };
+
+    void runGate(0);
+    return () => { cancelled = true; };
+  }, [refreshAllRoles, gateRetryCount]);
+
+  const handleLaunchGateRetry = useCallback(() => {
+    setIsLoadingRoles(true);
+    setLaunchGateError(false);
+    setGateRetryCount(c => c + 1);
+  }, []);
 
   // 加载完成后移除 splash 并显示窗口
   useEffect(() => {
@@ -403,7 +443,24 @@ export default function App() {
             className="flex-1 relative overflow-hidden rounded-tl-2xl border-t border-l border-slate-200/60 dark:border-slate-700/60 bg-[#F8F9FA] dark:bg-slate-900 backdrop-blur-3xl transition-colors duration-300"
             style={mainTint}
           >
-          {isLoadingRoles ? null : (
+          {launchGateError ? (
+            <div className="h-full flex items-center justify-center p-8" data-testid="launch-gate-error">
+              <div className="max-w-md text-center space-y-4">
+                <div className="text-slate-800 dark:text-slate-100 font-semibold text-lg">启动检查失败</div>
+                <p className="text-slate-500 dark:text-slate-400 text-[14px] leading-relaxed">
+                  无法确认是否为首次使用（已连续尝试 3 次）。<br />
+                  请检查服务连接后重试。
+                </p>
+                <button
+                  type="button"
+                  onClick={handleLaunchGateRetry}
+                  className="px-5 py-2.5 bg-slate-800 dark:bg-indigo-600 text-white rounded-xl text-[14px] font-medium shadow-sm hover:opacity-90 transition-opacity"
+                >
+                  重试
+                </button>
+              </div>
+            </div>
+          ) : isLoadingRoles ? null : (
           <>
           {currentView === 'onboard' && <OnboardingView onComplete={handleOnboardingComplete} onOpenSettings={() => setIsSettingsOpen(true)} />}
           {currentView === 'butler' && (

@@ -182,6 +182,42 @@ async fn run_conversations_migrations(pool: &SqlitePool) -> Result<(), AppError>
         .execute(pool)
         .await;
 
+    // 2026-09-22（web onboarding 劫持案次生修复）：回填存量空标题——对话
+    // 标题本应随「新对话」交接补生成，但 onboarding 路径不传旧对话 id，
+    // 被其顶掉的对话（以及从未被顶替过的管家对话）永远空标题，历史
+    // 下拉里成片「新对话」不可分辨。以首条完整用户消息截断兜底（与
+    // generate_title 空标题兜底同风格）；幂等：只动 title='' 且确有用户
+    // 消息的行，重复执行无副作用。运行时回填而非新增 SQLx 迁移：对话
+    // 库走懒迁移通道（与上方 ALTER 同款），不进 _sqlx_migrations 钉。
+    let title_backfill = sqlx::query(
+        "UPDATE conversations SET title = (
+            SELECT CASE WHEN length(m.content) > 20
+                THEN substr(m.content, 1, 20) || '...' ELSE m.content END
+            FROM messages m
+            WHERE m.conversation_id = conversations.id
+              AND m.role = 'user' AND m.is_complete = 1 AND trim(m.content) <> ''
+            ORDER BY m.created_at ASC, m.rowid ASC LIMIT 1
+        )
+        WHERE title = ''
+          AND EXISTS (
+            SELECT 1 FROM messages m
+            WHERE m.conversation_id = conversations.id
+              AND m.role = 'user' AND m.is_complete = 1 AND trim(m.content) <> ''
+          )",
+    )
+    .execute(pool)
+    .await;
+    match title_backfill {
+        Ok(result) if result.rows_affected() > 0 => {
+            tracing::info!(
+                rows = result.rows_affected(),
+                "已回填空标题对话（首条完整用户消息截断兜底）"
+            );
+        }
+        Err(e) => tracing::warn!("空标题对话回填失败（不影响启动）: {}", e),
+        _ => {}
+    }
+
     // Story 2.3: routing_metadata（管家委派审计 JSON），允许 NULL
     let _ = sqlx::raw_sql("ALTER TABLE messages ADD COLUMN routing_metadata TEXT")
         .execute(pool)

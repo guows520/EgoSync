@@ -45,6 +45,22 @@ pub async fn get_or_create_butler_conversation(
     }
 }
 
+/// 任意完整用户消息存在——首启判定守卫用（2026-09-22 web onboarding
+/// 劫持案）：用户亲口说过话 ⇒ 必非首次使用。刻意排除空内容（如
+/// `__onboarding_start__` 路径插入的空 user 占位行）与助手消息——
+/// 引导中途刷新不应误判为老用户（onboarding 仍可续走同一对话）。
+pub async fn has_user_authored_messages(
+    pool: &ConversationsPool,
+) -> Result<bool, AppError> {
+    let exists = sqlx::query_scalar::<_, i64>(
+        "SELECT EXISTS(SELECT 1 FROM messages WHERE role = 'user' AND is_complete = 1 AND trim(content) <> '')",
+    )
+    .fetch_one(&**pool)
+    .await
+    .map_err(|e| AppError::DbError(format!("查询用户消息存在性失败: {}", e)))?;
+    Ok(exists != 0)
+}
+
 pub async fn insert_message(
     pool: &ConversationsPool,
     conversation_id: &str,

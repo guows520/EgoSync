@@ -161,7 +161,13 @@ export function OnboardingView({ onComplete, onOpenSettings }: OnboardingViewPro
 
   const startOnboarding = async () => {
     try {
-      const conv = await chatService.newConversation();
+      // 2026-09-22（onboarding 劫持案）：复用当前管家对话而非每次
+      // newConversation() 新开——原实现不传旧对话 id，被引导页顶掉的
+      // 对话既不补标题也不触发记忆提取，且每次重挂载都孤儿化一条
+      // 空标题对话（历史下拉里成片「新对话」）。getButlerConversation
+      // 为 get_or_create：全新用户仍只创建一条；onboarding 提示词本就
+      // 按对话历史构建（build_onboarding_messages），复用无碍。
+      const conv = await chatService.getButlerConversation();
       setConversationId(conv.id);
       setIsStreaming(true);
       await chatService.sendMessage({

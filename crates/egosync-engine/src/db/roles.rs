@@ -302,6 +302,17 @@ pub async fn count_active_roles(pool: &SqlitePool) -> Result<i64, AppError> {
     Ok(count)
 }
 
+/// 任意角色存在（含归档）——首启判定守卫用（2026-09-22 web onboarding
+/// 劫持案）：建过角色 ⇒ 必非首次使用。单看 onboarding_completed 标记
+/// 会把「管家涌现提议建角色」（不落标记）的老用户误判回首启引导。
+pub async fn exists_any_role(pool: &SqlitePool) -> Result<bool, AppError> {
+    let exists = sqlx::query_scalar::<_, i64>("SELECT EXISTS(SELECT 1 FROM roles)")
+        .fetch_one(pool)
+        .await
+        .map_err(|e| AppError::DbError(format!("查询角色存在性失败: {}", e)))?;
+    Ok(exists != 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

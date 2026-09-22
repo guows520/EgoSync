@@ -16,8 +16,28 @@ use crate::services::agent_config::AgentConfigService;
 use crate::services::sidecar::SidecarManager;
 
 pub async fn app_is_first_launch(ctx: &EngineCtx) -> Result<bool, AppError> {
-    let value = app_settings::get_setting(&ctx.pool, "onboarding_completed").await?;
-    Ok(value.as_deref() != Some("true"))
+    if app_settings::get_setting(&ctx.pool, "onboarding_completed")
+        .await?
+        .as_deref()
+        == Some("true")
+    {
+        return Ok(false);
+    }
+    // 2026-09-22（web onboarding 劫持案）兜底守卫：标记缺失但存在历史
+    // 使用痕迹（建过角色 / 用户亲口说过话）⇒ 视为老用户并自愈补写标记
+    // ——否则下次页面加载会把正在使用的会话扔回引导页（历史对话入口
+    // 被顶掉）。痕迹判定刻意不含引导占位消息（空内容 user 行）与助手
+    // 消息：引导中途刷新仍算首启，onboarding 可续走同一对话不打断。
+    let has_usage_traces = crate::db::roles::exists_any_role(&ctx.pool).await?
+        || crate::db::conversations::has_user_authored_messages(&ctx.conv_pool).await?;
+    if has_usage_traces {
+        app_settings::set_setting(&ctx.pool, "onboarding_completed", "true").await?;
+        tracing::info!(
+            "onboarding_completed 标记缺失但检测到历史使用痕迹（角色/用户消息），自愈补写标记并跳过首启引导"
+        );
+        return Ok(false);
+    }
+    Ok(true)
 }
 
 pub async fn app_complete_onboarding(ctx: &EngineCtx) -> Result<(), AppError> {

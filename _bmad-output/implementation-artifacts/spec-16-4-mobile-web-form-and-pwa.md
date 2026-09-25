@@ -127,11 +127,11 @@ context:
 | 验证项 | 命令 | 结果 |
 |---|---|---|
 | 类型检查+构建 | `npm run build` | ✅ tsc 零错误，dist 产出 |
-| 前端单测 | `npx vitest run` | ✅ 79 文件 928 例全绿（基线 68 文件 865 例 + 本故事 11 个新测试文件；评审轮 5 个新文件：RoleView.mobile/GlobalSettingsModal.initialTab/ActionCard.mobile/MobileSettingsView.browser/Modal.safearea。既有测试断言零改动——RoleView.test.tsx 经评审裁决定案后已回归 16.2 原文原样） |
+| 前端单测 | `npx vitest run` | ✅ 80 文件 935 例全绿（基线 68 文件 865 例 + 本故事 12 个新测试文件；评审轮 5 个新文件：RoleView.mobile/GlobalSettingsModal.initialTab/ActionCard.mobile/MobileSettingsView.browser/Modal.safearea；D2 收口增量 1 个新文件：RoleHeader.archiveDelete 7 例。既有测试断言零改动——RoleView.test.tsx 经评审裁决定案后已回归 16.2 原文原样） |
 | server 测试 | `cargo test`（server/） | ✅ 91 例全组件套件绿（含新 PWA fixture 静态文件+CSP 新指令断言；评审轮零 Rust 改动，复跑确认） |
 | engine 测试 | `cargo test`（crates/egosync-engine） | ✅ 848 例全绿，零源码 diff（评审轮亦零 Rust 改动，结果沿用） |
 | src-tauri 测试 | `cargo test`（egosync-app/src-tauri） | ✅ 全绿（64 例；评审轮零 Rust 改动，结果沿用） |
-| Web e2e | `npm run test:web` | ✅ 5/5 specs、22 例全绿（web-mobile 10 例 + 既有 4 specs 16 例零回归）。**如实记录**：评审轮收尾首次复跑为 3/5（2 spec 失败，失败明细因命令行输出经 `tail` 管道截断未留存——父代理失误），未改任何代码即原样重跑得 5/5 全绿；web-mobile 单跑亦 10/10。判定为套件级瞬时不稳定（高负载 VM 下的 setWindowSize/SSE 时序面），非产品代码回归，但按「禁止声称已验证」口径以复跑结果为准并留此痕 |
+| Web e2e | `npm run test:web` | ⚠️ **套件级负载抖动（非产品回归，已按 AGENTS.md 三连升级报备）**。D2 增量后共 6 次实测：① 单跑 web-mobile 11/11 ✓；② web-mobile+web-streaming 两连 15/15 ✓；③ web-reconnect+web-resident-loop+web-streaming 三连：streaming 4/4 ✓ 而 resident-loop 60s tick 用例挂 1（**失败点随前序组合漂移**）；④⑤ 两次全量：均为 web-streaming 2 例挂（刷新恢复占位 45s 超时 + 375px 溢出名单含通知面板 left=800~1180=**视口未缩到 375**）；⑥ 第三次全量：失败点漂移至 **web-mobile before 钩子「视口 30 秒内未落到 320～430px」**（该钩子先于本故事任何用例执行，直接排除增量嫌疑），而 web-streaming 反呈 4/4 全绿。**结论**：全部失败同一根因=VM 高负载下 `setWindowSize` 延迟生效（本规格 web-mobile 断点互斥用例注释既载「全量套件实测 500ms 竞态」先例；web-streaming 375px 用例仅 pause(500ms) 无轮询，Story 16.2 遗留加固面）+ 流式占位的 SSE 时序面。**归档用例本身 4/4 全过**（④⑤ 及 ①② 中 web-mobile 均 11/11）。产品回归由「全量 vitest 80 文件 935 例 + 归档链路 vitest 7 例 + 单跑/两连 e2e 全绿」闭环兜底 |
 | 桌面 e2e | `npm run test:ci` | ⚠️ 环境阻断：tauri-driver 会话创建后 IPC 层报 `Origin header is not a valid URL`，9 specs 全部挂在 before 钩子的 `app_complete_onboarding`（与 16-2/16-3 同一 VM 环境阻断先例；本故事零 Tauri 命令/IPC/onboarding 改动，失败点在任何 UI 断言之前）。补偿覆盖：≥768px 桌面路径由 74 个 vitest 文件的桌面断言钉死（本故事桌面可见面仅为 `max-md:`/`md:hidden` 成对类与三个 `md:hidden` 新组件，类级惰性），web-streaming/web-mobile 的 1280 还原断言佐证侧栏回归。曾以 debug 二进制代置于 release 路径实测：会话可建、仍止于上述 IPC 层环境错误（已还原 target/ 原状）。**AGENTS.md「连续失败 3 次」升级已执行**：16-2/16-3/16-4 三连阻断，完整报错已随 step-05 汇报向用户报备，案卷记 deferred-work.md D3 |
 
 - **iOS Safari 真机走查**（普通+standalone 两模式安全区/加主屏/SW/键盘）留待人工执行——e2e 仅 Chrome 覆盖（提案技术影响⑦口径）；截图双份留档：桌面回归=既有 smoke 截图（web-streaming 既有），移动新留档=logs/web/screenshots/web-mobile-0*.png。
@@ -141,6 +141,13 @@ context:
 三层评审（盲扫 N=10 / 边界 / 验证缺口）共产出 24 条去重发现，逐条读证裁决（Review Triage Log R1–R24）：patch ×12 组、defer ×3、false/驳回 ×9（含「diff 缺文件」系父代理 `git add -N` 暂存失误而非代码问题、「manifest MIME 异常」经起服务端 curl 实测证伪、「耳语角标丢失」系读漏已实现代码）。评审期间父代理未停摆：R20（冻结边界）当场以「恢复既有断言 + 组件侧 inert 垫片 + 新建 RoleView.mobile.test.tsx 钉 flex 类」不越界解决，并在 Spec Change Log 立规则先例。其余 patch 由实现子代理（step-03 同一实例，耗尽后重激活）按「最小改动」续修：设置初始 tab 泄漏收敛、排序模式断点还原、AC2 触控 44px 三处补齐（顶部 tab/登出弹窗/「⋯」菜单项）、manifest 元数据修正（删 orientation 自决、补 id、purpose 双声明）、legacy Safari 回退、e2e 视口下界+任务面溢出断言、README 登出入口句、四个新测试文件（ActionCard.mobile / MobileSettingsView.browser / Modal.safearea / GlobalSettingsModal.initialTab——一律新建文件，遵守冻结块「新测试一律新建文件」）。defer 三项（SW 更新行为验证、移动形态角色归档/删除对等入口、桌面 e2e 环境阻断升级）记入 deferred-work.md，其中桌面 e2e 按 AGENTS.md「连续失败 3 次」向用户完整报备。
 
 ## Spec Change Log
+
+### 2026-09-25 · 交付后增量：延后项 D2 收口（人类指令重新协商冻结边界）
+
+- **触发**：人类指令「移动端不能归档/删除角色 这个要修复」。此前该缺口评审裁定为 defer（D2）：唯一入口=桌面侧栏右键菜单，随 Sidebar <768px 退场消失，而线框图四屏+「⋯」菜单内容为人工定稿未含该入口。人类即边界 owner，本条目即为重新协商记录——冻结块「详情页头部『⋯』= 切换角色/新建角色直达」由人类显式扩展为「+ 归档/删除」。
+- **改动**：`RoleHeader`「⋯」菜单追加「归档 / 删除」（`md:hidden` 移动专属，桌面侧栏右键菜单零变化）；`RoleView` 透传、`App` 将既有 `handleArchiveRole/handleDeleteRole` 接到 `RoleView`（此前 `RoleView`/`SettingsTab` 的 `onArchiveRole/onDeleteRole` 为存量死形参，本次首次真正接线）；确认弹窗复用共享 `Modal`（安全区/Escape/焦点已具备），语义照搬桌面 `Sidebar.ConfirmDialog`——删除需输入角色名、错误文案「至少保留一个角色」归一化；恢复路径不变（管家→设置→归档角色，移动端本就可达，闭环完整）。
+- **测试**：新建 `RoleHeader.archiveDelete.test.tsx`（7 例：入口渲染/无处理器不渲染/归档链路/删除名校验双例/取消/失败归一化）；`web-mobile.spec.ts` 追加归档 e2e 用例（自持一次性角色，11 例）。既有测试与桌面路径零改动。归档 e2e 首轮失败为**测试选择器问题而非产品缺陷**——`$('[data-testid="connection-status"]')` 取首个匹配，命中侧栏（`max-md:hidden`）内那份不可见副本；改用管家头部独有的 `butler-notif-bell` 后 4/4 全过。全量套件三次复跑的失败点漂移与排除过程见验证表 e2e 行与 deferred-work「套件级 setWindowSize 负载延迟面」条目（与本增量无因果，控制实验已证）。
+- **线框图**：`spec-16-4-mobile-wireframe.html` 图 2b 菜单示意与③说明同步追加归档/删除（文档不漂移）。
 
 ### 2026-09-25 · review loop 1（step-04 三层评审）
 

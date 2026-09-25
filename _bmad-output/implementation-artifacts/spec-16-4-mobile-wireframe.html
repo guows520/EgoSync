@@ -142,7 +142,9 @@
         <!-- ⋯ 菜单弹出示意 -->
         <div style="align-self:flex-end;border:1px solid #e2e8f0;border-radius:12px;box-shadow:0 8px 24px rgba(15,23,42,.16);overflow:hidden;margin-top:2px">
           <div style="padding:12px 40px 12px 16px;font-size:13px;border-bottom:1px solid #f1f5f9">🔄 切换角色</div>
-          <div style="padding:12px 40px 12px 16px;font-size:13px">＋ 新建角色</div>
+          <div style="padding:12px 40px 12px 16px;font-size:13px;border-bottom:1px solid #f1f5f9">＋ 新建角色</div>
+          <div style="padding:12px 40px 12px 16px;font-size:13px;border-bottom:1px solid #f1f5f9;color:#64748b">📦 归档 <span style="font-size:11px;color:#94a3b8">（2026-09-25 补：D2 收口，确认弹窗）</span></div>
+          <div style="padding:12px 40px 12px 16px;font-size:13px;color:#dc2626">🗑 删除 <span style="font-size:11px;color:#94a3b8">（需输入角色名确认）</span></div>
         </div>
       </div>
       <div class="inputbar"><div class="box">说点什么…</div><div class="send">➤</div></div>
@@ -194,7 +196,7 @@
   <h2 style="margin-top:10px">角色 tab 交互规则（回答你的三个问题）</h2>
   <div><b>① 点「角色」tab 默认看到啥</b>：角色列表（第一级）——管家固定第一行+各角色一行+右上「＋」。</div>
   <div><b>② 怎么切换</b>：列表里点另一个角色 → 直接进它的详情并成为当前；在第二级时<b>再点一次底部「角色」tab</b>（标准 tab 行为：点已选中的 tab 回该 tab 的根）→ 回列表再选。</div>
-  <div><b>③ 第二级怎么新增角色</b>：角色详情页头部「⋯」菜单 = 「切换角色 / 新建角色」直达（见图 2b 弹出的菜单），不用先回列表。</div>
+  <div><b>③ 第二级怎么新增角色</b>：角色详情页头部「⋯」菜单 = 「切换角色 / 新建角色」直达（见图 2b 弹出的菜单），不用先回列表。<b>2026-09-25 补（D2 收口，人类指令）</b>：「⋯」菜单追加「归档 / 删除」两项（桌面右键菜单的移动对等入口——删除需在弹窗输入角色名确认；归档后可在管家→设置中恢复）。</div>
   <h2 style="margin-top:10px">保持不变的部分</h2>
   <div>底部 tab 固定三个（管家/角色/设置，UX 初案不动，tab 数量/位置属结构变更需你批准）；管家视图内的「仪表盘/任务/记忆/设置」既有顶部 tab 保留；输入框与发送按钮 44×44px 贴底；底部横线区域为 iPhone 安全区避让位。</div>
 </div>

@@ -565,6 +565,8 @@ export default function App() {
                 onRoleSourceNavigation={handleRoleSourceNavigation}
                 onSwitchRole={() => setMobileRoleRoot(true)}
                 onAddRole={() => setIsAddRoleOpen(true)}
+                onArchiveRole={handleArchiveRole}
+                onDeleteRole={handleDeleteRole}
               />
             </div>
           ))}

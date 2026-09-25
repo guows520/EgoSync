@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
-import { ListTodo, BrainCircuit, Sliders, MoreHorizontal } from 'lucide-react';
+import { ListTodo, BrainCircuit, Sliders, MoreHorizontal, Archive, Trash2 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { getRoleIconComponent, normalizeColorHex } from '../../lib/roleIcons';
+import { Modal } from '../layout/Modal';
 import type { Role } from '../../types/role';
 
 export type RoleViewTab = 'tasks' | 'memory' | 'settings' | null;
@@ -14,6 +15,10 @@ interface RoleHeaderProps {
   onSwitchRole?: () => void;
   /** Story 16.4：移动端「⋯」菜单——新建角色直达 */
   onAddRole?: () => void;
+  /** Story 16.4 D2 收口（2026-09-25 人类指令）：移动端归档/删除入口——桌面
+   *  侧栏右键菜单在 <768px 随侧栏退场消失，能力对等缺口由本组补齐 */
+  onArchiveRole?: (id: string) => Promise<void> | void;
+  onDeleteRole?: (id: string) => Promise<void> | void;
 }
 
 /**
@@ -25,12 +30,18 @@ interface RoleHeaderProps {
  * - active tab 的着色用 inline style 注入 `role.color`，不引入 `role.text` 这种
  *   只在 mock 模式下有效的 Tailwind class
  */
-export function RoleHeader({ role, openTab, onToggleTab, onSwitchRole, onAddRole }: RoleHeaderProps) {
+export function RoleHeader({ role, openTab, onToggleTab, onSwitchRole, onAddRole, onArchiveRole, onDeleteRole }: RoleHeaderProps) {
   const RoleIcon = getRoleIconComponent(role.icon);
   const roleColor = normalizeColorHex(role.color);
   // Story 16.4：移动端「⋯」菜单状态（切换角色/新建角色直达——线框屏 2b）
   const [showMoreMenu, setShowMoreMenu] = useState(false);
   const moreMenuRef = useRef<HTMLDivElement>(null);
+  // Story 16.4 D2 收口：归档/删除确认态——语义照搬桌面 Sidebar ConfirmDialog
+  // （删除需输入角色名；错误文案含「至少保留一个角色」归一化）
+  const [confirmAction, setConfirmAction] = useState<'archive' | 'delete' | null>(null);
+  const [deleteConfirmName, setDeleteConfirmName] = useState('');
+  const [isConfirming, setIsConfirming] = useState(false);
+  const [confirmError, setConfirmError] = useState('');
 
   useEffect(() => {
     if (!showMoreMenu) return;
@@ -54,6 +65,26 @@ export function RoleHeader({ role, openTab, onToggleTab, onSwitchRole, onAddRole
       document.removeEventListener('keydown', handleKeyDown);
     };
   }, [showMoreMenu]);
+
+  // D2 收口：确认执行（与桌面 Sidebar.handleConfirm 同语义：删除校验输入名、
+  // 「至少保留一个角色」错误归一化；成功后由 App 处理器负责刷新与视图回退）
+  const handleConfirm = async () => {
+    if (!confirmAction) return;
+    if (confirmAction === 'delete' && deleteConfirmName.trim() !== role.name) return;
+    setIsConfirming(true);
+    setConfirmError('');
+    try {
+      if (confirmAction === 'archive') await onArchiveRole?.(role.id);
+      else await onDeleteRole?.(role.id);
+      setConfirmAction(null);
+      setDeleteConfirmName('');
+    } catch (e: any) {
+      const msg = typeof e === 'string' ? e : (e?.message || JSON.stringify(e));
+      setConfirmError(msg.includes('至少保留一个角色') ? '至少保留一个角色' : '操作失败，请稍后重试');
+    } finally {
+      setIsConfirming(false);
+    }
+  };
 
   const tabButton = (tab: Exclude<RoleViewTab, null>, Icon: typeof ListTodo, label: string) => {
     const isActive = openTab === tab;
@@ -109,7 +140,8 @@ export function RoleHeader({ role, openTab, onToggleTab, onSwitchRole, onAddRole
 
       <div className="ml-auto relative flex items-center gap-1.5 md:gap-2" ref={moreMenuRef}>
         {/* Story 16.4：「⋯」= 切换角色/新建角色直达（线框屏 2b）——md:hidden
-            桌面无此控件；触控 ≥44×44。 */}
+            桌面无此控件；触控 ≥44×44。D2 收口（2026-09-25 人类指令）追加
+            归档/删除两项——桌面侧栏右键菜单的移动对等入口。 */}
         {onSwitchRole && (
           <>
             <button
@@ -143,7 +175,87 @@ export function RoleHeader({ role, openTab, onToggleTab, onSwitchRole, onAddRole
                 >
                   新建角色
                 </button>
+                {/* D2 收口：归档/删除——桌面右键菜单的移动对等入口（仅 <768px
+                    菜单内可见；删除为破坏性操作，确认弹窗要求输入角色名） */}
+                {(onArchiveRole || onDeleteRole) && (
+                  <>
+                    <div className="my-1 border-t border-slate-100 dark:border-slate-700" role="separator" />
+                    {onArchiveRole && (
+                      <button
+                        role="menuitem"
+                        onClick={() => { setShowMoreMenu(false); setConfirmAction('archive'); }}
+                        data-testid="role-menu-archive"
+                        className="w-full text-left px-4 py-2.5 max-md:min-h-[44px] max-md:flex max-md:items-center gap-2 text-[13px] font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700/60"
+                      >
+                        <Archive size={14} /> 归档
+                      </button>
+                    )}
+                    {onDeleteRole && (
+                      <button
+                        role="menuitem"
+                        onClick={() => { setShowMoreMenu(false); setConfirmAction('delete'); }}
+                        data-testid="role-menu-delete"
+                        className="w-full text-left px-4 py-2.5 max-md:min-h-[44px] max-md:flex max-md:items-center gap-2 text-[13px] font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
+                      >
+                        <Trash2 size={14} /> 删除
+                      </button>
+                    )}
+                  </>
+                )}
               </div>
+            )}
+            {confirmAction && (
+              <Modal
+                ariaLabel={confirmAction === 'archive' ? '确认归档' : '确认删除'}
+                onClose={() => { setConfirmAction(null); setDeleteConfirmName(''); setConfirmError(''); }}
+                width="w-[360px]"
+              >
+                <div className="p-6">
+                  <h3 className="text-[16px] font-semibold text-slate-800 dark:text-slate-100 mb-3">
+                    {confirmAction === 'archive' ? '确认归档' : '确认删除'}
+                  </h3>
+                  <p className="text-[14px] text-slate-600 dark:text-slate-300 leading-relaxed mb-4">
+                    {confirmAction === 'archive'
+                      ? `归档「${role.name}」？归档后角色从列表消失，可在管家→设置中恢复。`
+                      : `删除「${role.name}」？该角色及其对话、任务、记忆将一并删除，且不可恢复。`}
+                  </p>
+                  {confirmAction === 'delete' && (
+                    <input
+                      value={deleteConfirmName}
+                      onChange={e => setDeleteConfirmName(e.target.value)}
+                      placeholder={`请输入角色名「${role.name}」以确认`}
+                      aria-label="输入角色名以确认删除"
+                      data-testid="role-delete-confirm-input"
+                      className="w-full mb-3 px-3 py-2.5 rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-[14px] text-slate-800 dark:text-slate-100 outline-none focus:border-indigo-400"
+                    />
+                  )}
+                  {confirmError && (
+                    <p className="mb-3 text-[13px] text-red-600 dark:text-red-400">{confirmError}</p>
+                  )}
+                  <div className="flex gap-2 max-md:gap-3">
+                    <button
+                      onClick={() => { setConfirmAction(null); setDeleteConfirmName(''); setConfirmError(''); }}
+                      data-testid="role-confirm-cancel"
+                      className="flex-1 min-h-[44px] rounded-lg text-[14px] font-medium text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors"
+                    >
+                      取消
+                    </button>
+                    <button
+                      onClick={handleConfirm}
+                      disabled={isConfirming || (confirmAction === 'delete' && deleteConfirmName.trim() !== role.name)}
+                      data-testid={confirmAction === 'archive' ? 'role-confirm-archive' : 'role-confirm-delete'}
+                      className={cn(
+                        'flex-1 min-h-[44px] rounded-lg text-[14px] font-medium transition-colors disabled:opacity-50',
+                        confirmAction === 'archive'
+                          ? 'text-white bg-indigo-600 hover:bg-indigo-700'
+                          : 'text-white bg-red-600 hover:bg-red-700',
+                      )}
+                    >
+                      {isConfirming ? '处理中…' : (confirmAction === 'archive' ? '确认归档' : '确认删除')}
+                    </button>
+                  </div>
+                </div>
+              </Modal>
             )}
           </>
         )}

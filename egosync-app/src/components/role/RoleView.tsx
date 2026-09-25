@@ -37,6 +37,8 @@ export function RoleView({
   initialTab,
   onTabConsumed,
   onUpdateRole,
+  onArchiveRole,
+  onDeleteRole,
   sourceNavigationTarget: externalSourceNavigationTarget,
   onSourceNavigationHandled,
   onButlerSourceNavigation,
@@ -86,7 +88,7 @@ export function RoleView({
 
   return (
     <div className="h-full flex flex-col transition-colors duration-300 animate-in fade-in duration-300">
-      <RoleHeader role={role} openTab={openTab} onToggleTab={toggleTab} onSwitchRole={onSwitchRole} onAddRole={onAddRole} />
+      <RoleHeader role={role} openTab={openTab} onToggleTab={toggleTab} onSwitchRole={onSwitchRole} onAddRole={onAddRole} onArchiveRole={onArchiveRole} onDeleteRole={onDeleteRole} />
 
       {/* Story 16.2 响应式基线：≥md 维持 65/35 双栏；小屏（375px 级）
           flex-col 堆叠——对话区 58% + 工作区 42%（断点方案归 UX 勘注定稿）。 */}

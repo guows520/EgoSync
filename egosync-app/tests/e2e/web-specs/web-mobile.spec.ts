@@ -415,6 +415,42 @@ describe('Web 移动端形态与 PWA（Story 16.4，375×812）', () => {
       }
     }
   });
+  // Story 16.4 D2 收口（2026-09-25 人类指令）：移动端归档对等入口——桌面右键
+  // 菜单的归档/删除随侧栏退场消失，由角色详情「⋯」菜单补齐。自持一次性角色，
+  // 不动其他用例的 seededRoleId；删除路径的输入名校验由 vitest 行为钉死
+  // （RoleHeader.archiveDelete.test.tsx），e2e 只走归档真实落库链路。
+  it('D2 收口：移动端「⋯」→ 归档角色（确认弹窗）→ 角色从列表消失且回管家', async () => {
+    const throwawayId = await seedRoleViaCommand(`移动归档角色-${Date.now().toString().slice(-6)}`);
+    await browser.refresh();
+    await waitForConnectionState('online', 60000);
+
+    // 角色 tab → 列表根 → 点进该角色详情
+    await $('[data-testid="bottom-tab-roles"]').click();
+    await $('[data-testid="role-list-butler"]').waitForDisplayed({ timeout: 15000 });
+    await $(`[data-testid="role-list-role-${throwawayId}"]`).click();
+    await $('[data-testid="role-more-menu"]').waitForDisplayed({ timeout: 15000 });
+
+    // 「⋯」→ 归档 → 确认弹窗 → 确认归档
+    await $('[data-testid="role-more-menu"]').click();
+    await $('[data-testid="role-menu-archive"]').waitForDisplayed({ timeout: 10000 });
+    await $('[data-testid="role-menu-archive"]').click();
+    await $('[data-testid="role-confirm-archive"]').waitForDisplayed({ timeout: 10000 });
+    await saveWebSmokeScreenshot('web-mobile-07-375px-role-archive');
+    await $('[data-testid="role-confirm-archive"]').click();
+
+    // 归档当前角色后 App 处理器切回管家视图。注意选择器：connection-status
+    // 在侧栏（max-md:hidden）与管家头部各有一份，$() 取首个匹配即移动端不可见
+    // 的侧栏副本——故以管家头部独有的通知铃铛为视图判据（16.4 搬迁证据）。
+    await browser.waitUntil(
+      async () => (await $('[data-testid="butler-notif-bell"]')).isDisplayed(),
+      { timeout: 15000, timeoutMsg: '归档后未回到管家视图' },
+    );
+
+    // 角色列表不再含该角色（已归档角色只出现在管家→设置的归档分区）
+    await $('[data-testid="bottom-tab-roles"]').click();
+    await $('[data-testid="role-list-butler"]').waitForDisplayed({ timeout: 15000 });
+    expect(await $(`[data-testid="role-list-role-${throwawayId}"]`).isExisting()).toBe(false);
+  });
 });
 
 /** JS click（绕开命中测试——面板/顶栏元素被覆盖时同款手段，web-streaming 先例）。 */

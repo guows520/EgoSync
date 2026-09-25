@@ -6,7 +6,7 @@
 // 刷新 → 历史重拉 → 未完成回复行呈「生成中」占位（非空气泡、非伪内容）。
 // 与桌面 llm-streaming.spec 同语义（其限制说明同款来源）。
 
-import { describe, it, before } from 'mocha';
+import { describe, it, before, after } from 'mocha';
 import { $, browser, expect } from '@wdio/globals';
 import {
   openWebAppAndLogin,
@@ -137,8 +137,20 @@ describe('Web 模式流式 + 刷新恢复（Story 16.2）', () => {
 
   it('375px 视口无横向溢出（响应式基线走查：管家视图 + 通知面板 + 模态）', async () => {
     // DevTools 模拟 iPhone 逻辑分辨率（CSS 像素 375 宽）
+    // setWindowSize 在 VM 高负载下可能延迟生效（16.4 全量套件实测：500ms
+    // 竞态；D2 收口后两次全量复跑均栽在未落定——通知面板仍按桌面宽
+    // left=800~1180 定位被记入溢出名单）——按区间轮询 innerWidth 落定
+    // 再做几何断言（范式照搬 web-mobile 的 waitForViewport；仅加固等待，
+    // 断言口径不动）
     await browser.setWindowSize(375, 812);
-    await browser.pause(500);
+    await browser.waitUntil(
+      async () => {
+        const w = (await browser.execute(() => window.innerWidth)) as number;
+        return w >= 320 && w <= 430;
+      },
+      { timeout: 60000, timeoutMsg: '视口 60 秒内未落到 320～430px 移动区间' },
+    );
+    await browser.pause(300);
 
     // 评审修复：scrollWidth 断言在双层 overflow-hidden 裁剪下结构性恒真
     // （真实溢出被裁掉、fixed 元素不计入文档滚动溢出）——改为
@@ -206,5 +218,16 @@ describe('Web 模式流式 + 刷新恢复（Story 16.2）', () => {
     // 关闭模态（Escape）
     await browser.keys('Escape');
     await browser.pause(300);
+  });
+
+  after(async () => {
+    // 还原桌面宽度（≥768 ⇒ 侧栏可见）——后续 spec 的桌面链路依赖；
+    // 同样等视口落定再收尾（视口纪律对齐 web-mobile after 钩子：
+    // 未落定 = 下一个 spec 的结构性失败源）
+    await browser.setWindowSize(1280, 800);
+    await browser.waitUntil(
+      async () => (await browser.execute(() => window.innerWidth)) >= 768,
+      { timeout: 30000, timeoutMsg: '视口 30 秒内未还原到桌面宽度' },
+    );
   });
 });

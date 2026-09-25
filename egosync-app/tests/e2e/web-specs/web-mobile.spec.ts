@@ -48,12 +48,14 @@ describe('Web 移动端形态与 PWA（Story 16.4，375×812）', () => {
     // 以浏览器报告的视口为准）。验收口径按 FR-45 的 375～430 CSS px 区间
     // （全量套件实测：紧邻 cargo 套件的高负载窗口曾把精确 375 断言拖过 15s
     // 超时——区间口径既守住验收又不把环境抖动当失败）。
+    let lastW = -1;
     await browser.waitUntil(
       async () => {
         const w = (await browser.execute(() => window.innerWidth)) as number;
-        return w >= 320 && w <= 430;
+        lastW = typeof w === 'number' ? w : -1;
+        return typeof w === 'number' && w >= 320 && w <= 430;
       },
-      { timeout: 30000, timeoutMsg: '视口 30 秒内未落到 320～430px 移动区间' },
+      { timeout: 60000, timeoutMsg: `视口 60 秒内未落到 320～430px 移动区间（末次观测 innerWidth=${lastW}）` },
     );
     await browser.pause(300);
   });
@@ -64,7 +66,7 @@ describe('Web 移动端形态与 PWA（Story 16.4，375×812）', () => {
     await browser.setWindowSize(1280, 800);
     await browser.waitUntil(
       async () => (await browser.execute(() => window.innerWidth)) >= 768,
-      { timeout: 15000, timeoutMsg: '视口 15 秒内未还原到桌面宽度' },
+      { timeout: 30000, timeoutMsg: '视口 30 秒内未还原到桌面宽度' },
     );
   });
 
@@ -304,7 +306,7 @@ describe('Web 移动端形态与 PWA（Story 16.4，375×812）', () => {
           const w = (await browser.execute(() => window.innerWidth)) as number;
           return inRange(w);
         },
-        { timeout: 15000, timeoutMsg: `视口 15 秒内未落到目标区间（请求 ${width}px）` },
+        { timeout: 30000, timeoutMsg: `视口 30 秒内未落到目标区间（请求 ${width}px）` },
       );
       await browser.pause(200);
     };

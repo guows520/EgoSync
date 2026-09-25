@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>16-4 移动端线框图：侧栏控件搬迁方案</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: #f1f5f9; padding: 32px 16px; color: #1e293b; }
+  h1 { font-size: 20px; text-align: center; margin-bottom: 8px; }
+  .sub { text-align: center; font-size: 13px; color: #64748b; margin-bottom: 28px; }
+  .row { display: flex; gap: 28px; justify-content: center; flex-wrap: wrap; }
+  .phone-wrap { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  .phone-label { font-size: 14px; font-weight: 600; color: #334155; }
+  .phone { width: 300px; height: 620px; border: 10px solid #0f172a; border-radius: 40px; background: #fff; display: flex; flex-direction: column; overflow: hidden; position: relative; box-shadow: 0 10px 30px rgba(15,23,42,.18); }
+  /* 顶部状态/刘海 */
+  .notch { height: 26px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .notch span { width: 90px; height: 16px; background: #0f172a; border-radius: 10px; }
+  /* 头部 */
+  .header { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid #e2e8f0; flex-shrink: 0; }
+  .avatar { width: 40px; height: 40px; border-radius: 12px; background: #4F46E5; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0; }
+  .header .title { font-size: 14px; font-weight: 600; flex: 1; }
+  .icon-btn { width: 44px; height: 44px; border-radius: 12px; border: 1.5px solid #e2e8f0; background: #f8fafc; display: flex; align-items: center; justify-content: center; font-size: 17px; position: relative; flex-shrink: 0; }
+  .dot { position: absolute; top: 7px; right: 7px; width: 8px; height: 8px; border-radius: 50%; background: #ef4444; }
+  .conn { width: 44px; height: 44px; border-radius: 12px; border: 1.5px solid #e2e8f0; background: #f8fafc; display: flex; align-items: center; justify-content: center; }
+  .conn i { width: 9px; height: 9px; border-radius: 50%; background: #10b981; display: block; }
+  /* 内部 tab 行 */
+  .tabs { display: flex; gap: 4px; padding: 8px 14px; border-bottom: 1px solid #e2e8f0; flex-shrink: 0; font-size: 12px; }
+  .tabs span { padding: 6px 10px; border-radius: 8px; background: #f1f5f9; color: #475569; white-space: nowrap; }
+  .tabs span.on { background: #eef2ff; color: #4F46E5; font-weight: 600; }
+  /* 主区 */
+  .body { flex: 1; overflow: hidden; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+  .bubble { max-width: 78%; padding: 9px 12px; border-radius: 14px; font-size: 12px; line-height: 1.5; }
+  .bubble.ai { align-self: flex-start; background: #f1f5f9; border-bottom-left-radius: 4px; }
+  .bubble.me { align-self: flex-end; background: #4F46E5; color: #fff; border-bottom-right-radius: 4px; }
+  .card { border: 1px solid #e2e8f0; border-radius: 12px; padding: 10px 12px; font-size: 12px; background: #fff; }
+  .card .t { font-weight: 600; margin-bottom: 4px; }
+  .card .btns { display: flex; gap: 6px; margin-top: 8px; }
+  .card .btns span { flex: 1; text-align: center; padding: 8px 0; border-radius: 8px; font-size: 11px; }
+  .ok { background: #4F46E5; color: #fff; } .no { background: #f1f5f9; color: #475569; }
+  .rowlist { display: flex; flex-direction: column; gap: 8px; }
+  .item { border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 12px; font-size: 12px; display: flex; justify-content: space-between; align-items: center; }
+  .item .val { color: #94a3b8; font-size: 11px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .metric { border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px; font-size: 11px; color: #64748b; }
+  .metric b { display: block; font-size: 16px; color: #0f172a; margin-top: 2px; }
+  /* 输入区 */
+  .inputbar { display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid #e2e8f0; flex-shrink: 0; align-items: center; }
+  .inputbar .box { flex: 1; height: 44px; border-radius: 22px; background: #f1f5f9; display: flex; align-items: center; padding: 0 14px; color: #94a3b8; font-size: 12px; }
+  .send { width: 44px; height: 44px; border-radius: 50%; background: #4F46E5; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0; }
+  /* 底部 tab 栏 */
+  .tabbar { display: flex; border-top: 1px solid #e2e8f0; flex-shrink: 0; padding-bottom: 14px; }
+  .tabbar div { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 0 4px; font-size: 10px; color: #94a3b8; }
+  .tabbar div i { font-size: 19px; font-style: normal; }
+  .tabbar div.on { color: #4F46E5; font-weight: 600; }
+  .homebar { height: 14px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .homebar span { width: 110px; height: 4px; border-radius: 3px; background: #cbd5e1; }
+  /* 搬迁标注 */
+  .moved { position: relative; border: 2px dashed #f59e0b !important; }
+  .moved::after { content: "搬迁"; position: absolute; top: -8px; right: -8px; background: #f59e0b; color: #fff; font-size: 9px; padding: 1px 5px; border-radius: 6px; font-weight: 600; }
+  .legend { max-width: 980px; margin: 26px auto 0; background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 18px 22px; font-size: 13px; line-height: 1.9; }
+  .legend h2 { font-size: 15px; margin-bottom: 6px; }
+  .legend .m { color: #b45309; font-weight: 600; }
+  .legend code { background: #f1f5f9; padding: 1px 6px; border-radius: 5px; font-size: 12px; }
+</style>
+</head>
+<body>
+<h1>16-4 移动端线框图（375px 视口）</h1>
+<p class="sub">方案：侧栏退场 → 底部 tab（管家 / 角色 / 设置）；侧栏专属控件收进既有界面。<span class="m">橙色虚线框 = 从桌面侧栏搬迁过来的控件</span></p>
+
+<div class="row">
+
+  <!-- 屏 1：管家 -->
+  <div class="phone-wrap">
+    <div class="phone-label">📱 管家（默认落地页）</div>
+    <div class="phone">
+      <div class="notch"><span></span></div>
+      <div class="header">
+        <div class="avatar">🏠</div>
+        <div class="title">数字分身管家</div>
+        <div class="icon-btn moved">🔔<span class="dot"></span></div>
+        <div class="conn moved"><i></i></div>
+      </div>
+      <div class="tabs"><span class="on">仪表盘</span><span>任务</span><span>记忆</span><span>设置</span></div>
+      <div class="body">
+        <div class="bubble me">帮我看下今天的安排</div>
+        <div class="bubble ai">早安！今天有 3 项重要任务，建议先处理「项目周报」…</div>
+        <div class="card">
+          <div class="t">建议：开启专注模式 1 小时</div>
+          <div class="btns"><span class="ok">立即处理</span><span class="no">暂不</span></div>
+        </div>
+      </div>
+      <div class="inputbar"><div class="box">说点什么…</div><div class="send">➤</div></div>
+      <div class="tabbar">
+        <div class="on"><i>🏠</i>管家</div>
+        <div><i>👥</i>角色</div>
+        <div><i>⚙️</i>设置</div>
+      </div>
+      <div class="homebar"><span></span></div>
+    </div>
+  </div>
+
+  <!-- 屏 2a：角色列表 -->
+  <div class="phone-wrap">
+    <div class="phone-label">📱 角色（第一级：列表切换）</div>
+    <div class="phone">
+      <div class="notch"><span></span></div>
+      <div class="header">
+        <div class="title" style="flex:1">角色</div>
+        <div class="icon-btn">＋</div>
+      </div>
+      <div class="body" style="gap:8px">
+        <div class="item" style="border-color:#4F46E5;background:#eef2ff">🏠 数字分身管家 <span class="val" style="color:#4F46E5">当前</span></div>
+        <div class="item">👤 产品经理 <span class="val">3 个任务 ›</span></div>
+        <div class="item">👤 健身教练 <span class="val">1 个任务 ›</span></div>
+        <div class="item">👤 读书伙伴 <span class="val">空闲 ›</span></div>
+      </div>
+      <div class="tabbar">
+        <div><i>🏠</i>管家</div>
+        <div class="on"><i>👥</i>角色</div>
+        <div><i>⚙️</i>设置</div>
+      </div>
+      <div class="homebar"><span></span></div>
+    </div>
+  </div>
+
+  <!-- 屏 2b：角色详情 -->
+  <div class="phone-wrap">
+    <div class="phone-label">📱 角色（第二级：详情）</div>
+    <div class="phone">
+      <div class="notch"><span></span></div>
+      <div class="header">
+        <div class="avatar" style="background:#6366F1">👤</div>
+        <div class="title">产品经理</div>
+        <div class="icon-btn">⋯</div>
+      </div>
+      <div class="tabs"><span class="on">对话</span><span>任务</span><span>记忆</span></div>
+      <div class="body">
+        <div class="bubble me">帮我起草需求文档</div>
+        <div class="bubble ai">好的，这是草稿：一、背景…</div>
+        <div class="card"><div class="t">📋 待办：评审原型</div></div>
+        <!-- ⋯ 菜单弹出示意 -->
+        <div style="align-self:flex-end;border:1px solid #e2e8f0;border-radius:12px;box-shadow:0 8px 24px rgba(15,23,42,.16);overflow:hidden;margin-top:2px">
+          <div style="padding:12px 40px 12px 16px;font-size:13px;border-bottom:1px solid #f1f5f9">🔄 切换角色</div>
+          <div style="padding:12px 40px 12px 16px;font-size:13px">＋ 新建角色</div>
+        </div>
+      </div>
+      <div class="inputbar"><div class="box">说点什么…</div><div class="send">➤</div></div>
+      <div class="tabbar">
+        <div><i>🏠</i>管家</div>
+        <div class="on"><i>👥</i>角色</div>
+        <div><i>⚙️</i>设置</div>
+      </div>
+      <div class="homebar"><span></span></div>
+    </div>
+  </div>
+
+  <!-- 屏 3：设置 -->
+  <div class="phone-wrap">
+    <div class="phone-label">📱 设置（主题 / 登出新家）</div>
+    <div class="phone">
+      <div class="notch"><span></span></div>
+      <div class="header">
+        <div class="title" style="flex:1">设置</div>
+      </div>
+      <div class="body" style="gap:8px">
+        <div class="item">🤖 模型服务 <span class="val">OpenAI 兼容 · gpt-4o ›</span></div>
+        <div class="item">🔌 MCP Server <span class="val">2 个已连接 ›</span></div>
+        <div class="item">⏰ 调度时间 <span class="val">晨报 08:00 ›</span></div>
+        <div class="item">💾 数据与隐私 <span class="val">导出 / 导入 / 销毁 ›</span></div>
+        <div class="item">🔔 通知 <span class="val">应用内 ›</span></div>
+        <div class="item moved">🌗 主题 <span class="val">浅色 / 深色 ›</span></div>
+        <div class="item moved">🚪 登出 <span class="val">退出当前账号 ›</span></div>
+      </div>
+      <div class="tabbar">
+        <div><i>🏠</i>管家</div>
+        <div><i>👥</i>角色</div>
+        <div class="on"><i>⚙️</i>设置</div>
+      </div>
+      <div class="homebar"><span></span></div>
+    </div>
+  </div>
+
+</div>
+
+<div class="legend">
+  <h2>四个搬迁控件的新家（对应你选的方案 A）</h2>
+  <div>🔔 <span class="m">通知铃铛</span> → 管家视图头部右上角（今天有什么新建议一眼可见），角标保留；</div>
+  <div>🟢 <span class="m">连接状态</span> → 管家视图头部（在线/重连中三态小圆点，断线时接管为横幅）；</div>
+  <div>🌗 <span class="m">主题切换</span> → 设置页首屏（浅色/深色一行切换，替代侧栏按钮）；</div>
+  <div>🚪 <span class="m">登出</span> → 设置页底部「账号」区（带确认，防误触）。</div>
+  <h2 style="margin-top:10px">移动端设置 = 桌面设置的全量（除桌面专属）</h2>
+  <div>设置 tab 列出的每一项打开的<b>就是桌面 GlobalSettingsModal 的同款内容</b>（同一批组件，不重写）：模型服务（LLM Provider）、MCP Server、调度时间、数据与隐私（导出/导入/销毁）、通知、主题、登出。桌面专属的「远程模式 / 手机伴侣」在浏览器宿主下由 capabilities 门控<b>自动不显示</b>；角色级设置（角色信息/主动性/技能/MCP）仍在角色详情内的「设置」tab，与桌面结构一致。</div>
+  <h2 style="margin-top:10px">角色 tab 交互规则（回答你的三个问题）</h2>
+  <div><b>① 点「角色」tab 默认看到啥</b>：角色列表（第一级）——管家固定第一行+各角色一行+右上「＋」。</div>
+  <div><b>② 怎么切换</b>：列表里点另一个角色 → 直接进它的详情并成为当前；在第二级时<b>再点一次底部「角色」tab</b>（标准 tab 行为：点已选中的 tab 回该 tab 的根）→ 回列表再选。</div>
+  <div><b>③ 第二级怎么新增角色</b>：角色详情页头部「⋯」菜单 = 「切换角色 / 新建角色」直达（见图 2b 弹出的菜单），不用先回列表。</div>
+  <h2 style="margin-top:10px">保持不变的部分</h2>
+  <div>底部 tab 固定三个（管家/角色/设置，UX 初案不动，tab 数量/位置属结构变更需你批准）；管家视图内的「仪表盘/任务/记忆/设置」既有顶部 tab 保留；输入框与发送按钮 44×44px 贴底；底部横线区域为 iPhone 安全区避让位。</div>
+</div>
+
+</body>
+</html>

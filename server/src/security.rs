@@ -2,17 +2,20 @@
 //! 安全响应头全响应下发 + 跨源显式拒绝 + panic 兜底。
 //!
 //! - CSP（架构 ⑧ 冻结内容 + 16.1 脚本 hash 裁量 + img-src/font-src data:
-//!   裁量）：`default-src 'self'; script-src 'self' 'sha256-…'; style-src
-//!   'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self';
-//!   img-src 'self' data:`——全响应下发（含 healthz / 401 / 404 / 静态
-//!   HTML）。`script-src` 追加 hash-source 放行 index.html 的内联防
-//!   FOUC 主题脚本（禁止整体放开 unsafe-inline；hash 与构建产物 byte
-//!   对 byte 钉死——前端 security 契约源码扫描测试守门）。`img-src` 的
-//!   `data:` 放行 Vite 内联 SVG（logo/启动图标——见 [`CSP_POLICY`] 注
-//!   释）；`font-src` 的 `data:` 放行 Vite 内联的小体积 woff2 字体分片
-//!   （同机制——见 [`CSP_POLICY`] 注释）。16.1 曾放行的两 Google 字体
-//!   域已随 Story 17.1 字体自托管（fontsource npm 包，woff2 随 dist
-//!   分发）撤除——零第三方域不变（离线/内网一致性与隐私）。
+//!   裁量 + 16.4 PWA manifest-src/worker-src 裁量）：`default-src 'self';
+//!   script-src 'self' 'sha256-…'; style-src 'self' 'unsafe-inline';
+//!   font-src 'self' data:; connect-src 'self'; img-src 'self' data:;
+//!   manifest-src 'self'; worker-src 'self'`——全响应下发（含 healthz /
+//!   401 / 404 / 静态 HTML）。`script-src` 追加 hash-source 放行
+//!   index.html 的内联防 FOUC 主题脚本（禁止整体放开 unsafe-inline；
+//!   hash 与构建产物 byte 对 byte 钉死——前端 security 契约源码扫描
+//!   测试守门）。`img-src` 的 `data:` 放行 Vite 内联 SVG（logo/启动
+//!   图标——见 [`CSP_POLICY`] 注释）；`font-src` 的 `data:` 放行 Vite
+//!   内联的小体积 woff2 字体分片（同机制——见 [`CSP_POLICY`] 注释）。
+//!   16.1 曾放行的两 Google 字体域已随 Story 17.1 字体自托管
+//!   （fontsource npm 包，woff2 随 dist 分发）撤除——零第三方域不变
+//!   （离线/内网一致性与隐私）。16.4 的 `manifest-src`/`worker-src`
+//!   `'self'` 放行 PWA manifest 与 Service Worker 注册（只增不减）。
 //! - 安全响应头（15-4 遗留补齐，16.1）：`X-Content-Type-Options: nosniff`
 //!   （MIME 嗅探防护）、`X-Frame-Options: DENY`（frame 嵌入防护）、
 //!   `Referrer-Policy: no-referrer`（引用泄露防护）——全响应叠加。
@@ -60,9 +63,17 @@ use crate::AppState;
 /// 小体积者——dist 产物 CSS 实证）；`font-src 'self'` 拦 data: URI ⇒
 /// 字体回退系统字体（e2e chrome 日志 SEVERE 级 CSP violation 实证）。
 /// 放行仅追加 `data:` scheme，零第三方域不变；契约测试同步钉死本指令。
+///
+/// `manifest-src 'self'; worker-src 'self'`（Story 16.4 PWA 增量，只增不
+/// 减）：浏览器加载 `/manifest.webmanifest`（PWA 安装元数据）与注册
+/// `/sw.js`（Service Worker）需显式放行同源——缺席时 manifest 请求被
+/// CSP 拦截（「添加到主屏幕」不可用）、SW 注册失败（离线外壳缺席）。
+/// 均为 `'self'` 单源，零第三方域红线不变；前端 csp.contract.test.ts
+/// 与 server web_entry fixture 同步钉死两条指令。
 pub const CSP_POLICY: &str = "default-src 'self'; script-src 'self' \
     'sha256-t7EoxfYkO3wNL2nCWqo4+0sb9alMtMK3TJiFg8kQUkQ='; style-src 'self' \
-    'unsafe-inline'; font-src 'self' data:; connect-src 'self'; img-src 'self' data:";
+    'unsafe-inline'; font-src 'self' data:; connect-src 'self'; img-src 'self' data:; \
+    manifest-src 'self'; worker-src 'self'";
 
 /// 全响应下发 CSP + 安全响应头（nosniff / X-Frame-Options / Referrer-Policy）。
 pub async fn security_headers(req: Request, next: Next) -> Response {

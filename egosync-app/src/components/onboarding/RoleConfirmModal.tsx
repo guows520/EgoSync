@@ -94,7 +94,9 @@ export function RoleConfirmModal({ open, proposal, onConfirm, onCancel, busy }: 
       role="dialog"
       aria-modal="true"
       aria-labelledby="role-confirm-modal-title"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
+      // Story 16.4：模态上下安全区避让（viewport-fit=cover 下 iOS 刘海/
+      // 底部横条不贴边；无 inset 设备 env()=0 零影响——桌面渲染不变）
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm pt-[max(0px,env(safe-area-inset-top))] pb-[max(0px,env(safe-area-inset-bottom))]"
       onClick={() => {
         if (!busy) onCancel();
       }}

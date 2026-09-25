@@ -1,0 +1,26 @@
+{
+  "id": "/",
+  "name": "EgoSync 数字分身",
+  "short_name": "EgoSync",
+  "description": "本地优先的个人多智能体管家：流式对话、任务管理、仪表盘与复盘",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "theme_color": "#4F46E5",
+  "background_color": "#F1F3F5",
+  "lang": "zh-CN",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

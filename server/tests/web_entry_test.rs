@@ -5,12 +5,15 @@
 //!   资产命中与缺失 404 / `/api/*` JSON 404 保持（GET 与 POST 皆不落入
 //!   静态面）/ 路由优先于 fallback（healthz 不被吞）/ 未配置目录
 //!   API-only；
+//! - PWA 外壳（Story 16.4）：manifest / sw.js / 图标静态命中且带 CSP
+//!   新指令（manifest-src / worker-src 'self'——只增不减）；
 //! - logout：有效会话删行 + Cookie 过期（Max-Age=0 同属性）+ 幂等 200
 //!   （无会话/已删会话/伪造值）+ 后续业务请求 401；
 //! - 安全头：CSP + nosniff + X-Frame-Options: DENY + Referrer-Policy:
 //!   no-referrer 全响应（HTML / JSON 404 / healthz）。
 //!
-//! fixture dist：测试自建临时目录（index.html + assets/app.js）——不读
+//! fixture dist：测试自建临时目录（index.html + assets/app.js +
+//! manifest/sw/icons）——不读
 //! 工作区真实 `../egosync-app/dist`（测试面与前端构建产物解耦，cargo test
 //! 无需前端产物即可运行）。
 //!
@@ -54,6 +57,19 @@ impl TestDirs {
                 .expect("写 fixture index.html");
             std::fs::write(dist.join("assets").join("app.js"), "// fixture asset\n")
                 .expect("写 fixture 资产");
+            // Story 16.4：PWA 外壳文件（manifest / Service Worker / 图标）——
+            // 与真实 public/ 布局同构，供静态命中 + CSP 新指令断言消费
+            std::fs::write(dist.join("manifest.webmanifest"), "{\"name\":\"fixture\"}\n")
+                .expect("写 fixture manifest");
+            std::fs::write(dist.join("sw.js"), "// fixture service worker\n")
+                .expect("写 fixture sw.js");
+            std::fs::create_dir_all(dist.join("icons")).expect("建 fixture icons 目录");
+            std::fs::write(dist.join("icons").join("icon-192.png"), "fixture-png\n")
+                .expect("写 fixture icon-192.png");
+            std::fs::write(dist.join("icons").join("icon-512.png"), "fixture-png\n")
+                .expect("写 fixture icon-512.png");
+            std::fs::write(dist.join("icons").join("apple-touch-icon.png"), "fixture-png\n")
+                .expect("写 fixture apple-touch-icon.png");
             dist
         });
         Self { _guard: guard, data, dist }
@@ -190,6 +206,49 @@ async fn static_dir_unconfigured_runs_api_only() {
         .post_json(&server.url("/api/auth/login"), Some(&body), None, None)
         .await;
     assert_eq!(res.status(), 200, "API-only 模式认证面照常");
+}
+
+// ── PWA 外壳文件（Story 16.4）：manifest / sw.js / 图标静态命中 + CSP 新指令 ──
+
+#[tokio::test]
+async fn static_serves_pwa_shell_files_with_csp_new_directives() {
+    let dirs = TestDirs::new("pwa-shell", true);
+    let state = build_test_state(dirs.data.clone(), Some("t".into()))
+        .await
+        .expect("测试状态装配");
+    let server = InProcessServer::start_with_static(state, dirs.dist.clone()).await;
+    let client = Client::new();
+
+    // CSP 含 16.4 增量指令（manifest-src / worker-src 'self'——PWA 安装
+    // 与 SW 注册的 CSP 放行面；常量被删即红）
+    assert!(
+        CSP_POLICY.contains("manifest-src 'self'"),
+        "CSP_POLICY 应含 manifest-src 'self'（PWA manifest 同源加载）"
+    );
+    assert!(
+        CSP_POLICY.contains("worker-src 'self'"),
+        "CSP_POLICY 应含 worker-src 'self'（Service Worker 同源注册）"
+    );
+
+    // 外壳文件逐一静态命中且全响应带 CSP（含 index/资产/api 同策略）
+    for path in [
+        "/manifest.webmanifest",
+        "/sw.js",
+        "/icons/icon-192.png",
+        "/icons/icon-512.png",
+        "/icons/apple-touch-icon.png",
+    ] {
+        let res = client.get(&server.url(path), None, None).await;
+        assert_eq!(res.status(), 200, "{} 应静态命中", path);
+        assert_eq!(
+            res.headers()
+                .get(reqwest::header::CONTENT_SECURITY_POLICY)
+                .and_then(|v| v.to_str().ok()),
+            Some(CSP_POLICY),
+            "{} 必须带 CSP（静态响应同策略）",
+            path
+        );
+    }
 }
 
 // ── logout：删行 + Cookie 过期 + 幂等 ──

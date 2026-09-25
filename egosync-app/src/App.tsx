@@ -3,11 +3,14 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { isTauriHost } from '@/transport';
 import { cn } from './lib/utils';
 import { Sidebar } from './components/layout/Sidebar';
+import { BottomTabBar, type BottomTab } from './components/layout/BottomTabBar';
+import { RoleListPanel } from './components/layout/RoleListPanel';
 import { TitleBar } from './components/layout/TitleBar';
 import { ButlerView } from './components/butler/ButlerView';
 import { RoleView } from './components/role/RoleView';
 import { OnboardingView } from './components/onboarding/OnboardingView';
 import { GlobalSettingsModal } from './components/settings/GlobalSettingsModal';
+import { MobileSettingsView } from './components/settings/MobileSettingsView';
 import { WeeklyReviewModal } from './components/modals/WeeklyReviewModal';
 import { TaskModal } from './components/modals/TaskModal';
 import { AddRoleModal } from './components/modals/AddRoleModal';
@@ -40,6 +43,38 @@ interface TaskModalContext {
 
 export default function App() {
   const [currentView, setCurrentView] = useState('butler');
+  // Story 16.4：移动端「角色」tab 两级——mobileRoleRoot=true 呈现角色
+  // 列表根（第一级）；点列表行切角色并进详情（false）。桌面不可达
+  // （BottomTabBar md:hidden）；跨断点互斥靠 max-md:hidden/md:hidden
+  // 类对（详情在根呈现时 max-md:hidden 让位，桌面宽度下无效）。
+  const [mobileRoleRoot, setMobileRoleRoot] = useState(false);
+  // Story 16.4：移动设置 tab 打开桌面同款 GlobalSettingsModal 的落点 tab
+  const [settingsInitialTab, setSettingsInitialTab] = useState<'llm' | 'mcp' | 'scheduler' | 'data'>('llm');
+  // Story 16.4：断点回桌面时收敛移动专属状态（BREAKPOINT_EDGE 矩阵行——
+  // 「互斥切换无残留」）：currentView='settings' 与 mobileRoleRoot 均由移动
+  // tab 产生，放大到 ≥768px 必须还原子（设置面残留/列表根残留均属布局残渣）
+  useEffect(() => {
+    const desktop = window.matchMedia('(min-width: 768px)');
+    const converge = () => {
+      if (!desktop.matches) return;
+      setCurrentView(v => (v === 'settings' ? 'butler' : v));
+      setMobileRoleRoot(false);
+    };
+    converge();
+    // 旧 Safari 回退（vite target safari13）：addEventListener 缺席时用
+    // legacy addListener/removeListener——iOS 13 上直接调用前者会抛
+    // TypeError 打断 effect（白屏风险）
+    if (typeof desktop.addEventListener === 'function') {
+      desktop.addEventListener('change', converge);
+      return () => desktop.removeEventListener('change', converge);
+    }
+    const legacy = desktop as MediaQueryList & {
+      addListener?: (cb: () => void) => void;
+      removeListener?: (cb: () => void) => void;
+    };
+    legacy.addListener?.(converge);
+    return () => legacy.removeListener?.(converge);
+  }, []);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isReviewOpen, setIsReviewOpen] = useState(false);
   const [reviewInitialPhase, setReviewInitialPhase] = useState<'review' | 'plan'>('review');
@@ -409,6 +444,20 @@ export default function App() {
     } as React.CSSProperties;
   }, [roles, currentView]);
 
+  // Story 16.4：移动设置入口——打开桌面同款 GlobalSettingsModal 并落指定
+  // tab（同一批组件不重写；通知=调度时间 tab 内的敲门通知声音设置）
+  const handleOpenSettingsTab = (tab: 'llm' | 'mcp' | 'scheduler' | 'data') => {
+    setSettingsInitialTab(tab);
+    setIsSettingsOpen(true);
+  };
+
+  // Story 16.4：底部 tab 激活态——角色 tab 在「角色详情」与「角色列表根」
+  // 两态均激活（标准 tab 行为：再点一次回根）
+  const isRoleView = roles.some(r => r.id === currentView);
+  const bottomActiveTab: BottomTab = currentView === 'settings'
+    ? 'settings'
+    : (mobileRoleRoot || isRoleView) ? 'roles' : 'butler';
+
   return (
     // Story 16.2：dvh 优先（iOS Safari 地址栏抖动缓解）、100vh 回退
     // （supports 门控变体与基础 h-screen 在 twMerge 中不冲突，双声明共存）；
@@ -422,7 +471,7 @@ export default function App() {
           currentView={currentView}
           isSettingsOpen={isSettingsOpen}
           onViewChange={setCurrentView}
-          onOpenSettings={() => setIsSettingsOpen(true)}
+          onOpenSettings={() => { setSettingsInitialTab('llm'); setIsSettingsOpen(true); }}
           onCloseSettings={() => setIsSettingsOpen(false)}
           onAddRole={() => setIsAddRoleOpen(true)}
           onArchiveRole={handleArchiveRole}
@@ -462,51 +511,102 @@ export default function App() {
             </div>
           ) : isLoadingRoles ? null : (
           <>
-          {currentView === 'onboard' && <OnboardingView onComplete={handleOnboardingComplete} onOpenSettings={() => setIsSettingsOpen(true)} />}
+          {/* Story 16.4：移动端「角色」tab 第一级（列表根）——md:hidden
+              桌面不可见；详情视图同时在树下挂载（根呈现时 max-md:hidden），
+              跨断点缩放互不留空白。 */}
+          {mobileRoleRoot && (
+            <div className="md:hidden h-full">
+              <RoleListPanel
+                roles={roles}
+                currentView={currentView}
+                onSelectButler={() => { setMobileRoleRoot(false); setCurrentView('butler'); }}
+                onSelectRole={(id: string) => { setMobileRoleRoot(false); setCurrentView(id); }}
+                onAddRole={() => setIsAddRoleOpen(true)}
+              />
+            </div>
+          )}
+          {currentView === 'onboard' && <OnboardingView onComplete={handleOnboardingComplete} onOpenSettings={() => { setSettingsInitialTab('llm'); setIsSettingsOpen(true); }} />}
           {currentView === 'butler' && (
-            <ButlerView
-              roles={roles}
-              onViewChange={setCurrentView}
-              archivedRoles={archivedRoles}
-              onRestoreRole={handleRestoreRole}
-              onUpdateRole={handleUpdateRole}
-              onRoleSourceNavigation={handleRoleSourceNavigation}
-              sourceNavigationTarget={pendingButlerSourceNavigation}
-              onSourceNavigationHandled={() => setPendingButlerSourceNavigation(null)}
-              onOpenTask={handleOpenTask}
-              onTasksApiReady={handleTasksApiReady}
-              knockNotifications={knockNotifications}
-              onDismissKnock={handleDismissKnock}
-              chatRefreshTrigger={butlerChatRefreshTrigger}
-            />
+            <div className={cn('h-full', mobileRoleRoot && 'max-md:hidden')}>
+              <ButlerView
+                roles={roles}
+                onViewChange={setCurrentView}
+                archivedRoles={archivedRoles}
+                onRestoreRole={handleRestoreRole}
+                onUpdateRole={handleUpdateRole}
+                onRoleSourceNavigation={handleRoleSourceNavigation}
+                sourceNavigationTarget={pendingButlerSourceNavigation}
+                onSourceNavigationHandled={() => setPendingButlerSourceNavigation(null)}
+                onOpenTask={handleOpenTask}
+                onTasksApiReady={handleTasksApiReady}
+                knockNotifications={knockNotifications}
+                onDismissKnock={handleDismissKnock}
+                chatRefreshTrigger={butlerChatRefreshTrigger}
+                isNotifOpen={isNotifOpen}
+                onToggleNotif={() => setIsNotifOpen(v => !v)}
+                unreadCount={alertUnreadCount}
+                whisperUnread={whisperUnreadCount}
+              />
+            </div>
           )}
           {roles.map(r => r.id === currentView && (
-            <RoleView
-              key={r.id}
-              role={r}
-              roles={roles}
-              onOpenTask={handleOpenTask}
-              onTasksApiReady={handleTasksApiReady}
-              initialTab={roleInitialTab}
-              onTabConsumed={() => setRoleInitialTab(null)}
-              onUpdateRole={handleUpdateRole}
-              sourceNavigationTarget={pendingRoleSourceNavigation?.roleId === r.id ? pendingRoleSourceNavigation : null}
-              onSourceNavigationHandled={() => setPendingRoleSourceNavigation(null)}
-              onButlerSourceNavigation={handleButlerSourceNavigation}
-              onRoleSourceNavigation={handleRoleSourceNavigation}
-            />
+            <div key={r.id} className={cn('h-full', mobileRoleRoot && 'max-md:hidden')}>
+              <RoleView
+                role={r}
+                roles={roles}
+                onOpenTask={handleOpenTask}
+                onTasksApiReady={handleTasksApiReady}
+                initialTab={roleInitialTab}
+                onTabConsumed={() => setRoleInitialTab(null)}
+                onUpdateRole={handleUpdateRole}
+                sourceNavigationTarget={pendingRoleSourceNavigation?.roleId === r.id ? pendingRoleSourceNavigation : null}
+                onSourceNavigationHandled={() => setPendingRoleSourceNavigation(null)}
+                onButlerSourceNavigation={handleButlerSourceNavigation}
+                onRoleSourceNavigation={handleRoleSourceNavigation}
+                onSwitchRole={() => setMobileRoleRoot(true)}
+                onAddRole={() => setIsAddRoleOpen(true)}
+              />
+            </div>
           ))}
+          {/* Story 16.4：移动端「设置」tab——桌面 GlobalSettingsModal 同款
+              全量的移动入口（7 项：模型服务/MCP/调度/数据/通知/主题/登出） */}
+          {currentView === 'settings' && (
+            <MobileSettingsView
+              onOpenSettings={handleOpenSettingsTab}
+              theme={theme}
+              onToggleTheme={toggleTheme}
+            />
+          )}
           </>
           )}
           </main>
         </div>
         </div>
 
+        {/* Story 16.4：底部 tab 导航（<768px 侧栏退场替代）。onboarding
+            聚焦期不呈现（首启流跑完进管家即出现）；launchGateError 主区
+            锁死错误屏与 isLoadingRoles 空窗期同样不呈现——避免可见但不
+            可点的死控件（与主区内容的呈现条件对齐）。 */}
+        {currentView !== 'onboard' && !launchGateError && !isLoadingRoles && (
+          <BottomTabBar
+            activeTab={bottomActiveTab}
+            onButlerTab={() => { setMobileRoleRoot(false); setCurrentView('butler'); }}
+            onRolesTab={() => {
+              setMobileRoleRoot(true);
+              // 从设置面切角色 tab：先落回管家上下文（设置面不挂条件让位
+              // 类——列表根与设置面同显会叠屏）
+              if (currentView === 'settings') setCurrentView('butler');
+            }}
+            onSettingsTab={() => { setMobileRoleRoot(false); setCurrentView('settings'); }}
+          />
+        )}
+
       {isSettingsOpen && (
         <GlobalSettingsModal
           onClose={() => setIsSettingsOpen(false)}
           onDataDestroyed={handleDataDestroyed}
           onDataImported={handleDataImported}
+          initialTab={settingsInitialTab}
         />
       )}
       {isReviewOpen && <WeeklyReviewModal roles={roles} onClose={() => { setIsReviewOpen(false); setReviewInitialPhase('review'); }} initialPhase={reviewInitialPhase} />}

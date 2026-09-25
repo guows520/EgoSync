@@ -104,6 +104,16 @@ describe('CSP hash-source 契约耦合（index.html ⇄ server security.rs）', 
     expect(policy, "font-src 须放行 'self' data:（Vite 内联小体积 woff2）").toContain(
       "font-src 'self' data:"
     );
+    // PWA（Story 16.4，只增不减）：manifest-src/worker-src 'self'——
+    // 浏览器加载 /manifest.webmanifest（「添加到主屏幕」元数据）与注册
+    // /sw.js（Service Worker，离线外壳）需 CSP 显式放行同源；任一缺席
+    // ⇒ 安装入口失效 / SW 注册失败。零 http(s) 外链源红线不变。
+    expect(policy, "manifest-src 须放行 'self'（PWA manifest 同源加载）").toContain(
+      "manifest-src 'self'"
+    );
+    expect(policy, "worker-src 须放行 'self'（Service Worker 同源注册）").toContain(
+      "worker-src 'self'"
+    );
     // 整个 policy 不得含任何第三方域（http/https 外链源）——隐私面
     // 最小化 + 离线一致；fontsource 的 woff2 与 css 都在 'self' 之下。
     // i 标志（17.1 评审 #15）：CSP 域名源大小写不敏感，`https://FONTS.`

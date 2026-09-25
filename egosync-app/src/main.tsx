@@ -58,6 +58,25 @@ function render() {
   )
 }
 
+// Story 16.4：PWA Service Worker 注册唯一入口（外部模块——index.html 禁加
+// inline script，CSP hash byte 契约钉死恰好 1 个内联脚本）。
+// - 仅生产构建注册（dev 期 HMR/模块图每次都变，SW 缓存只会干扰开发）；
+// - 仅浏览器宿主注册（桌面 Tauri 壳由 TauriTransport 供数，不走 SW——
+//   桌面渲染/行为零影响）；
+// - 注册失败（隐私模式等）静默降级：应用功能全可用，仅无离线外壳
+//   （I/O 矩阵 SW_FAIL）。缓存纪律见 public/sw.js 头注释——业务数据
+//   零落盘（NFR-C3）。
+function registerServiceWorker() {
+  if (!import.meta.env.PROD || isTauriHost()) return;
+  try {
+    void navigator.serviceWorker.register('/sw.js').catch(() => {
+      // 隐私模式/不支持 SW：静默降级，不阻断引导
+    });
+  } catch {
+    // navigator.serviceWorker 缺席（极端环境）——同上静默降级
+  }
+}
+
 bootstrap().finally(() => {
   render()
   // [评审轮2 U12] splash 兜底仅限 settings-demo 演示分支：它无
@@ -81,4 +100,7 @@ bootstrap().finally(() => {
   if (isRemoteDesktop()) {
     getCurrentWindow().show().catch(() => {});
   }
+  // Story 16.4：SW 注册（render 之后——不抢首屏资源；内部按 PROD +
+  // 浏览器宿主门控）
+  registerServiceWorker()
 })

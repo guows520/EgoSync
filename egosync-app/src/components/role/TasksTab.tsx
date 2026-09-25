@@ -1,5 +1,5 @@
-import { useState, type ReactNode } from 'react';
-import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Circle, Edit2, Filter, GripVertical, Loader2, Plus, Target, Trash2 } from 'lucide-react';
+import { useEffect, useState, type ReactNode } from 'react';
+import { AlertTriangle, ArrowUpDown, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Circle, Edit2, Filter, GripVertical, Loader2, Plus, Target, Trash2 } from 'lucide-react';
 import {
   DndContext,
   DragOverlay,
@@ -43,12 +43,22 @@ interface TaskCardCallbacks {
   onRequestDelete: (task: Task) => void;
 }
 
+/** Story 16.4：移动端排序模式（触屏拖拽降级）——卡片内 ↑/↓ 调序控件。
+ *  sortMode 开时 useSortable disabled（拖拽把隐藏），改由本控件发起重排
+ *  （复用 applyReorder 同款落库路径）。 */
+interface TaskCardSortControls {
+  canMoveUp: boolean;
+  canMoveDown: boolean;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+}
+
 const EMPTY_CLASSIFYING_IDS: Set<string> = new Set();
 
 const CARD_BASE_CLASS =
   'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-4 flex gap-3.5 shadow-sm group hover:border-indigo-300 dark:hover:border-indigo-600 hover:shadow-md transition-all duration-200 motion-reduce:transition-none';
 
-function TaskCardBody({ task, callbacks, dragHandle, isClassifying }: { task: Task; callbacks: TaskCardCallbacks; dragHandle?: ReactNode; isClassifying?: boolean }) {
+function TaskCardBody({ task, callbacks, dragHandle, isClassifying, sortControls }: { task: Task; callbacks: TaskCardCallbacks; dragHandle?: ReactNode; isClassifying?: boolean; sortControls?: TaskCardSortControls }) {
   return (
     <>
       {dragHandle}
@@ -58,7 +68,7 @@ function TaskCardBody({ task, callbacks, dragHandle, isClassifying }: { task: Ta
           callbacks.onToggle(task);
         }}
         className={cn(
-          'transition-colors shrink-0 mt-0.5',
+          'transition-colors shrink-0 mt-0.5 max-md:h-11 max-md:w-11 max-md:flex max-md:items-center max-md:justify-center',
           task.isCompleted ? 'text-emerald-500' : 'text-slate-300 dark:text-slate-600 hover:text-emerald-500',
         )}
         aria-label={`${task.isCompleted ? '撤销完成' : '完成'} ${task.title}`}
@@ -97,13 +107,35 @@ function TaskCardBody({ task, callbacks, dragHandle, isClassifying }: { task: Ta
           )}
         </div>
       </div>
-      <div className="flex items-start gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+      {/* Story 16.4：移动端排序模式 ↑/↓ 调序（拖拽降级的替代路径；触控 ≥44px） */}
+      {sortControls && (
+        <div className="flex md:hidden items-center gap-1 shrink-0">
+          <button
+            onClick={event => { event.stopPropagation(); sortControls.onMoveUp(); }}
+            disabled={!sortControls.canMoveUp}
+            aria-label={`上移 ${task.title}`}
+            className="w-11 h-11 flex items-center justify-center rounded-lg text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+          >
+            <ChevronUp size={18} />
+          </button>
+          <button
+            onClick={event => { event.stopPropagation(); sortControls.onMoveDown(); }}
+            disabled={!sortControls.canMoveDown}
+            aria-label={`下移 ${task.title}`}
+            className="w-11 h-11 flex items-center justify-center rounded-lg text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+          >
+            <ChevronDown size={18} />
+          </button>
+        </div>
+      )}
+      {/* 触屏无 hover：编辑/删除在小屏常显（desktop 仍 hover 显现，零变化） */}
+      <div className="flex items-start gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 max-md:opacity-100 transition-opacity">
         <button
           onClick={event => {
             event.stopPropagation();
             callbacks.onOpenTask(task);
           }}
-          className="p-1.5 rounded-md text-slate-400 dark:text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/30"
+          className="p-1.5 max-md:h-11 max-md:w-11 max-md:flex max-md:items-center max-md:justify-center rounded-md text-slate-400 dark:text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/30"
           aria-label={`编辑 ${task.title}`}
         >
           <Edit2 size={15} />
@@ -113,7 +145,7 @@ function TaskCardBody({ task, callbacks, dragHandle, isClassifying }: { task: Ta
             event.stopPropagation();
             callbacks.onRequestDelete(task);
           }}
-          className="p-1.5 rounded-md text-slate-400 dark:text-slate-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30"
+          className="p-1.5 max-md:h-11 max-md:w-11 max-md:flex max-md:items-center max-md:justify-center rounded-md text-slate-400 dark:text-slate-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30"
           aria-label={`删除 ${task.title}`}
         >
           <Trash2 size={15} />
@@ -128,7 +160,7 @@ function pointerWithinFallbackToClosestCenter(args: Parameters<typeof pointerWit
   return pointerCollisions.length > 0 ? pointerCollisions : closestCenter(args);
 }
 
-function SortableTaskCard({ task, callbacks, isClassifying, disabled = false }: { task: Task; callbacks: TaskCardCallbacks; isClassifying?: boolean; disabled?: boolean }) {
+function SortableTaskCard({ task, callbacks, isClassifying, disabled = false, sortControls }: { task: Task; callbacks: TaskCardCallbacks; isClassifying?: boolean; disabled?: boolean; sortControls?: TaskCardSortControls }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id, disabled });
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -144,6 +176,7 @@ function SortableTaskCard({ task, callbacks, isClassifying, disabled = false }: 
         task={task}
         callbacks={callbacks}
         isClassifying={isClassifying}
+        sortControls={sortControls}
         dragHandle={
           disabled ? undefined : (
             <button
@@ -209,6 +242,31 @@ export function TasksTab({ role, tasks, isLoading, error, classifyingIds = EMPTY
   const [actionError, setActionError] = useState('');
   const [quadrantFilter, setQuadrantFilter] = useState<TaskQuadrant | 'all'>('all');
   const [showBigRocksOnly, setShowBigRocksOnly] = useState(false);
+  // Story 16.4：移动端排序模式——触屏上 dnd-kit 拖拽体验差，降级为「排序」
+  // 开关 + 每卡 ↑/↓ 按钮（复用 applyReorder 同款重排落库路径；开时拖拽
+  // 禁用/拖拽把手隐藏，零新依赖）。
+  const [sortMode, setSortMode] = useState(false);
+  // Story 16.4 评审修复：断点回桌面（≥768px）必须还原排序模式——排序开关与
+  // ↑/↓ 均 md:hidden，而 useSortable 仍 disabled ⇒ 桌面用户失去重排入口
+  // （BREAKPOINT_EDGE「无残留」）。旧 Safari（addEventListener 缺席）回退
+  // legacy listener——vite target safari13 上直接调用前者会 TypeError。
+  useEffect(() => {
+    const desktop = window.matchMedia('(min-width: 768px)');
+    const resetSortMode = () => {
+      if (desktop.matches) setSortMode(false);
+    };
+    resetSortMode();
+    if (typeof desktop.addEventListener === 'function') {
+      desktop.addEventListener('change', resetSortMode);
+      return () => desktop.removeEventListener('change', resetSortMode);
+    }
+    const legacy = desktop as MediaQueryList & {
+      addListener?: (cb: () => void) => void;
+      removeListener?: (cb: () => void) => void;
+    };
+    legacy.addListener?.(resetSortMode);
+    return () => legacy.removeListener?.(resetSortMode);
+  }, []);
   // 按象限折叠已完成任务列表：默认折叠，避免占据大量空间淫没未完成任务
   const [expandedCompleted, setExpandedCompleted] = useState<Record<TaskQuadrant, boolean>>({
     Q1: false,
@@ -306,7 +364,13 @@ export function TasksTab({ role, tasks, isLoading, error, classifyingIds = EMPTY
     const oldIndex = list.findIndex(task => task.id === activeKey);
     const newIndex = list.findIndex(task => task.id === overKey);
     if (oldIndex === -1 || newIndex === -1) return;
-    const reordered = arrayMove(list, oldIndex, newIndex);
+    applyReorder(quadrant, arrayMove(list, oldIndex, newIndex));
+  };
+
+  // 重排落库单点（Story 16.4 抽出）：DragEnd 与排序模式 ↑/↓ 共用——
+  // 全量序 = 四象限「未完成（重排象限用新序）+ 已完成」拼接，服务端按
+  // 全局 sortOrder 重写（与既有拖拽路径逐字节同语义）。
+  const applyReorder = (quadrant: TaskQuadrant, reordered: Task[]) => {
     const fullOrder: string[] = [];
     allQuadrants.forEach(q => {
       const incomplete = q === quadrant ? reordered : incompleteByQuadrant[q];
@@ -318,6 +382,19 @@ export function TasksTab({ role, tasks, isLoading, error, classifyingIds = EMPTY
       console.error('任务排序失败:', e);
       setActionError('任务排序暂时保存失败，请稍后再试');
     });
+  };
+
+  // Story 16.4：排序模式 ↑/↓ 调序（守卫与 handleDragEnd 一致——筛选视图
+  // 下排序入口不渲染，双保险）
+  const handleMoveTask = (taskId: string, direction: -1 | 1) => {
+    if (isFiltered) return;
+    const quadrant = allQuadrants.find(q => incompleteByQuadrant[q].some(task => task.id === taskId));
+    if (!quadrant) return;
+    const list = incompleteByQuadrant[quadrant];
+    const index = list.findIndex(task => task.id === taskId);
+    const target = index + direction;
+    if (index === -1 || target < 0 || target >= list.length) return;
+    applyReorder(quadrant, arrayMove(list, index, target));
   };
 
   return (
@@ -422,15 +499,48 @@ export function TasksTab({ role, tasks, isLoading, error, classifyingIds = EMPTY
                   <span className="flex items-center gap-1.5">
                     {titleSpan}
                   </span>
-                  {countBadge}
+                  <span className="flex items-center gap-2">
+                    {countBadge}
+                    {/* Story 16.4：象限分组头「排序」开关（触屏拖拽降级入口；
+                        md:hidden 桌面仍用拖拽把手。筛选视图下不渲染——与
+                        handleDragEnd 守卫一致（筛选态不重排）。 */}
+                    {!isFiltered && (
+                      <button
+                        type="button"
+                        onClick={() => setSortMode(v => !v)}
+                        aria-pressed={sortMode}
+                        data-testid={`sort-mode-${quadrant}`}
+                        className={cn(
+                          'md:hidden inline-flex items-center gap-1 min-h-[44px] px-3 rounded-lg text-[12px] font-medium transition-colors motion-reduce:transition-none',
+                          sortMode
+                            ? 'bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-300'
+                            : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700',
+                        )}
+                      >
+                        <ArrowUpDown size={14} /> 排序
+                      </button>
+                    )}
+                  </span>
                 </div>
                 <div className="space-y-2.5">
                   <SortableContext
                     items={incompleteByQuadrant[quadrant].map(task => task.id)}
                     strategy={verticalListSortingStrategy}
                   >
-                    {incompleteByQuadrant[quadrant].map(task => (
-                      <SortableTaskCard key={task.id} task={task} callbacks={callbacks} isClassifying={classifyingIds.has(task.id)} disabled={isFiltered} />
+                    {incompleteByQuadrant[quadrant].map((task, taskIndex) => (
+                      <SortableTaskCard
+                        key={task.id}
+                        task={task}
+                        callbacks={callbacks}
+                        isClassifying={classifyingIds.has(task.id)}
+                        disabled={isFiltered || sortMode}
+                        sortControls={sortMode && !isFiltered ? {
+                          canMoveUp: taskIndex > 0,
+                          canMoveDown: taskIndex < incompleteByQuadrant[quadrant].length - 1,
+                          onMoveUp: () => handleMoveTask(task.id, -1),
+                          onMoveDown: () => handleMoveTask(task.id, 1),
+                        } : undefined}
+                      />
                     ))}
                   </SortableContext>
                   {completedTasks.length > 0 && (

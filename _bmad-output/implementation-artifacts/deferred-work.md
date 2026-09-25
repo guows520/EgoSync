@@ -517,3 +517,12 @@ All items resolved in the same session:
 - source_spec: `_bmad-output/implementation-artifacts/17-3-backup-cicd-and-release.md`
   summary: 全量 web e2e（test:web 4 spec）不在任何 CI workflow 也无 nightly——回归 100% 手工守护，17.2 D2 的空窗只被冒烟子集部分收口。
   evidence: 17.3 评审盲扫层 B14：spec/architecture/17.2 收口条目三处「留本地/夜跑」措辞已如实修正（本地手工），但真 nightly workflow（schedule: cron 跑全量 4 spec，约 8-10 分钟 runner + 已知 events/resident-loop 的负载敏感面需观察）从未存在。web-events/web-resident-loop 的回归守护当前为零自动化。
+- source_spec: `_bmad-output/implementation-artifacts/spec-16-4-mobile-web-form-and-pwa.md`
+  summary: SW_UPDATE 矩阵行（二次访问+服务端已发版 → index.html SWR 拿新版不白屏）无行为级验证；非 hash 外壳文件（manifest/图标）无再验证路径；SW 注册门控（PROD+浏览器宿主）无行为测试。
+  evidence: 16.4 评审盲扫层+验证缺口层（R9）：相邻覆盖存在（sw.js 文本契约 4 例、index.html no-cache 启动协商断言、OFFLINE e2e 缓存壳可开），但精确更新周期未执行。jsdom 无 SW runtime（caches/serviceWorker 缺席）、`import.meta.env.PROD` 在 vitest 不可 stub——行为钉在现测试栈脆弱且成本不成比例。 settle 条件：浏览器级 harness（如 Chrome + 真 serviceWorker 的最小 e2e）或把所有 SW 行为统一挪进 iOS Safari 人工清单（spec Manual checks 已有入口）。
+- source_spec: `_bmad-output/implementation-artifacts/spec-16-4-mobile-web-form-and-pwa.md`
+  summary: 移动形态无角色归档/删除对等入口（唯一入口=桌面侧栏右键菜单；Sidebar <768px 退场后消失；SettingsTab onArchiveRole/onDeleteRole 形参自 16.x 起存量未接线）。
+  evidence: 16.4 评审盲扫层（R10）：线框图四屏+设置 7 项+「⋯」菜单内容均为人工定稿（已进冻结块），未含该入口——intent 载体本身排除，故不判 bad_spec。但 web/移动宿主的能力对等是真实缺口：移动端能经 ButlerSettingsContent 恢复归档角色却不能归档/删除。 settle 条件：产品负责人对「移动形态角色管理范围」表态后，接线 SettingsTab 既有形参或在角色详情内加入口（复用 RoleConfirmModal 确认范式）。
+- source_spec: `_bmad-output/implementation-artifacts/spec-16-4-mobile-web-form-and-pwa.md`
+  summary: 桌面 e2e（tests/e2e test:ci）tauri-driver 会话层环境阻断，连续第三个故事（16-2/16-3/16-4）无法执行。
+  evidence: 16-4 实测：会话创建后 IPC 层 `Origin header is not a valid URL`（app_complete_onboarding），9 specs 全挂 before 钩子；另定位两层环境问题——PATH 未含 ~/.cargo/bin 致 tauri-driver spawn 失败、wdio.conf.ts 要求 target/release/egosync 而本机仅有 debug 产物（曾以 debug 二进制代置实测，仍止于 IPC 层）。按 AGENTS.md「连续失败 3 次」升级：已向用户完整报备。 settle 条件：根因排查（Origin 校验与 tauri-driver 版本/wry 0.55 的兼容性矩阵）+ CI 环境（有 GPU/显示或 webkit2gtk-driver 的容器）执行一次全绿，或明确改写 AGENTS.md DoD 中桌面 e2e 的执行口径。

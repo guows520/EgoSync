@@ -2677,6 +2677,19 @@ volumes: { egosync-data: {} }
   - **17.2 落地注记（2026-09-21，追加式）**：实现为一行-per-scope 小表 `UNIQUE(job, scope, tz_offset)`，行存最新 cycle + last_triggered_at + trigger_count；tz_offset 取触发时刻 Local 的 `%:z`（如 `+08:00`），DST 偏移跳变视同一次 TZ 变更（同语义，部署文档已明示）。实现期代码实测内存去重共**五处**（较本节规划口径多出 last_bigrock_trigger_week / last_bigrock_friday_check_date 两处同类失忆态），已一并纳入统一表；`q2_reminders`（migration 018）现状已 DB 持久化、无失忆缺陷，决策 #7 未裁决纳入——保持不动，登记为后续统一候选。migration 落地为 034（032/033 已被 auth_sessions 占用，规划期"032"为陈旧编号）。
 - **桌面侧边缘行为变化加注（诚实登记）**：决策 #7 的去重持久化是引擎级变更，桌面版同样获得——桌面"重启窗口内不再重复触发"（现状：重启后同分钟可再次触发）是行为变化而非回归，收口时不得误判
 
+### ⑩移动端适配与 PWA（Story 16.4 落地，2026-09-25 Correct Course 批准）
+
+> 依据：`sprint-change-proposal-2026-09-25.md`（已批准，Moderate，路由 DEV）；`epics.md` Story 16.4；`prd-egosync.md` FR-45 补条（2026-09-25）；决策 #20。本节为云端增量章节的追加决策，只加不回改。
+
+- **断点体系**：沿用 UX 规范既有断点——`--bp-tablet: 768px` / `--bp-mobile: 768px 以下`（CSS 逻辑像素，非物理像素）。`<768px` = 左侧 56px 侧栏退场 + 底部 tab 导航（管家/角色/设置——UX 勘定初案，结构变更须回报 boss）；`≥768px` 逐像素保持桌面布局（NFR-C4 硬边界）。实现模式 = 16.2 建立的 `md:` 桌面值 + `max-md:` 移动值双声明（守护既有桌面测试口径，非删测试改断言）。
+- **触屏与安全区**：触控目标 ≥44×44px（与 Android 伴侣设计语言一致——`spec-companion-android-design-language-parity` 密度/触控口径）；`viewport-fit=cover` 与 100dvh 已由 16.2 落地，本次补全底部 tab / 输入区 / 模态的 `env(safe-area-inset-*)` 避让；虚拟键盘弹出时输入区与发送按钮保持可达。
+- **PWA 三件套**：`manifest.webmanifest`（`display=standalone`、theme-color 取设计 token、192/512 maskable 图标、`start_url=/`）+ `apple-touch-icon` + `apple-mobile-web-app-capable` meta；安装入口依赖浏览器原生「添加到主屏幕」，不做侵入式安装弹窗（单用户自托管产品气质）。图标由实现期从既有 `public/favicon.svg` 生成（构建期脚本或提交静态 PNG，二选一，归 dev 决策）。
+- **Service Worker 缓存纪律（NFR-C3 边界重述，非放宽）**：SW 仅预缓存应用外壳——hash 静态资产 cache-first、`index.html` stale-while-revalidate + 16.1 的 no-cache 启动协商（防发版后白屏）；`/api/*` 与 SSE（EventSource）直通零缓存；**业务数据零落盘**（无 localStorage/IndexedDB 业务缓存，刷新=服务端重取语义不变）。
+- **CSP 增量**：新增 `manifest-src 'self'` 与 `worker-src 'self'`；契约测试同步收紧，既有「全 policy 不得含任何 http(s) 外链源」断言保持（零第三方域红线不变）。
+- **零新依赖**：手写 manifest + Service Worker（约百行、可单测），不引 vite-plugin-pwa / workbox（boring stack 纪律 + CSP byte 级契约可控）。
+- **推送显式后置（维持 ⑨ 既有裁决）**：iOS Safari 16.4+ 仅限加主屏 PWA 支持 Web Push——维持「WEB 端应用内通知」，PWA Web 推送登记 PRD Non-Goal，不进 16.4 范围。
+- **测试**：e2e 新增 `web-mobile.spec.ts`（Chrome DevTools 375×812 模拟：登录→流式对话→任务操作→仪表盘→通知全旅程 + manifest 字段断言 + SW 注册断言）；桌面 e2e / `npm run test:all` 零改动全绿为硬收口（显式失败原则）；截图双份留档（桌面回归 + 移动新留档，UX-C1 视觉零分叉守界）。
+
 ### Data Architecture（增量）
 
 - 云端版引擎同库同 schema，仅新增 `scheduler_triggers` 触发去重小表（migration 编号顺延）

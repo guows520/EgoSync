@@ -91,8 +91,10 @@ export function Sidebar({ roles, currentView, onViewChange, isSettingsOpen, onOp
   };
 
   return (
+    // Story 16.4：<768px 侧栏退场（max-md:hidden）——移动形态由
+    // BottomTabBar（管家/角色/设置）替代；桌面渲染零变化。
     <aside
-      className="w-16 flex flex-col items-center pt-6 pb-6 z-10 shrink-0 relative transition-colors duration-300 bg-[#F1F3F5] dark:bg-slate-800"
+      className="w-16 max-md:hidden flex flex-col items-center pt-6 pb-6 z-10 shrink-0 relative transition-colors duration-300 bg-[#F1F3F5] dark:bg-slate-800"
       role="navigation"
       aria-label="角色导航"
     >

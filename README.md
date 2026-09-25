@@ -173,6 +173,16 @@ cd egosync-app && npm run build   # 先产出 dist（server 伺服的就是它�
 cd ../server && cargo run         # http://localhost:8080
 ```
 
+### 移动端形态与 PWA
+
+同一构建产物在手机浏览器（<768px）自动切换移动形态，无需安装任何应用：
+
+- **底部 tab 导航**：侧栏退场，改「管家 / 角色 / 设置」三 tab（角色 tab 两级：列表 ⇄ 详情），主区全屏；触控目标 ≥44×44px，刘海/底部安全区自动避让。
+- **桌面布局零变化**：≥768px 仍是既有侧栏 + 双栏布局（逐像素回归由 e2e/单测守门）。
+- **可加到主屏（PWA）**：manifest + maskable 图标（192/512）+ `theme-color` 就位，浏览器原生「添加到主屏幕」即获 standalone 类原生入口；无侵入式安装弹窗。
+- **离线语义诚实**：Service Worker 只缓存应用外壳（hash 资产 cache-first、index.html stale-while-revalidate，与 no-cache 启动协商对齐）；**业务数据零落盘**——无 localStorage/IndexedDB 业务缓存，`/api/*` 与 SSE 直通零缓存；断网时界面可开但数据区如实呈现断线态，不为离线假装有数据。
+- **明确不做**：PWA Web 推送（维持「WEB 端应用内通知」）；iOS Safari 真机走查清单见 16-4 故事的 Manual checks。
+
 ### 环境变量全表
 
 | 变量 | 语义 | 默认 |
@@ -190,7 +200,7 @@ cd ../server && cargo run         # http://localhost:8080
 
 - **静态目录缺失 = API-only 警告运行**：`EGOSYNC_STATIC_DIR` 与默认路径皆无产物时 server 照常提供 API，日志告警——浏览器访问将得到 404；先 `npm run build` 再启动。
 - **重部署无需清缓存**：index.html 响应统一 `Cache-Control: no-cache`，带 hash 的资产可被浏览器安全长缓存。
-- **首访流程**：无凭据实例打开页面即进「初始化」向导（设置 ≥8 位令牌）；登录会话为 30 天持久 Cookie（关浏览器重开免重登），侧栏提供登出入口。
+- **首访流程**：无凭据实例打开页面即进「初始化」向导（设置 ≥8 位令牌）；登录会话为 30 天持久 Cookie（关浏览器重开免重登）。登出入口按宿主呈现：桌面端在侧栏，手机浏览器（<768px）在底部「设置」tab（带确认，防误触）。
 - **生产部署**：进程只讲 HTTP——置于 TLS 反代（Caddy/自有反代，反代要求见部署指南 11.4）之后；认证端点限流 5 次/分钟/IP（反代拓扑下所有外部请求来自代理容器，限流实际按实例计——XFF 感知限流见 deferred-work）。
 - **密钥安全**：LLM Key 只存于服务端内存与 `/data/secrets.json`（0600）；密钥缺失返回指明重录路径的结构化错误（设置 → 模型服务配置 → 重新保存密钥）。
 

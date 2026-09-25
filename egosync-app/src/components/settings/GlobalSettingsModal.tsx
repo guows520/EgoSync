@@ -56,8 +56,8 @@ const EMPTY_MCP_FORM: McpForm = {
   enabled: true,
 };
 
-export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }: any) {
-  const [tab, setTab] = useState('llm');
+export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported, initialTab = 'llm' }: any) {
+  const [tab, setTab] = useState(initialTab);
   const [configs, setConfigs] = useState<LlmConfig[]>([]);
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState<any>(null);
@@ -637,10 +637,15 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
   };
 
   return (
-    <div className="fixed top-0 right-0 bottom-0 left-16 z-50 animate-in slide-in-from-right duration-300">
-      <div className="h-full bg-white dark:bg-slate-900 shadow-2xl flex">
-        <div className="w-64 bg-slate-50 dark:bg-slate-800 border-r border-slate-200 dark:border-slate-700 p-6 flex flex-col gap-2 shrink-0">
-          <div className="flex items-center justify-between mb-8 px-3">
+    // Story 16.4：移动端全屏（max-md:left-0——小屏侧栏退场，左侧不留
+    // 64px 空白）；桌面 left-16（侧栏宽）零变化。nav 小屏转横向滚动行。
+    <div className="fixed top-0 right-0 bottom-0 left-16 max-md:left-0 z-50 animate-in slide-in-from-right duration-300">
+      <div className="h-full bg-white dark:bg-slate-900 shadow-2xl flex flex-col md:flex-row">
+        {/* Story 16.4：小屏 nav 转横向换行行（flex-wrap——不用 overflow-x
+            滚动：滚动内容 rect 仍出视口，375px 矩形级溢出走查会误报）；桌面
+            md:w-64 纵列原样。按钮触控 ≥44px（max-md 容器查询）。 */}
+        <div className="w-full md:w-64 bg-slate-50 dark:bg-slate-800 border-b md:border-b-0 md:border-r border-slate-200 dark:border-slate-700 p-3 md:p-6 flex flex-row md:flex-col flex-nowrap max-md:flex-wrap items-center md:items-stretch gap-1 md:gap-2 shrink-0 max-md:[&>button]:min-h-[44px] max-md:[&>button]:shrink-0 max-md:[&>button]:flex max-md:[&>button]:items-center">
+          <div className="hidden md:flex items-center justify-between mb-8 px-3">
             <h2 className="text-[16px] font-semibold text-slate-800 dark:text-slate-100">全局设置</h2>
           </div>
           <button onClick={() => { setTab('llm'); setIsEditing(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'llm' ? "bg-white dark:bg-slate-900 text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-700/50")}>模型服务配置</button>
@@ -665,9 +670,9 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
             <button onClick={() => { setTab('companion'); setIsEditing(false); setIsEditingMcp(false); }} className={cn("text-left px-3 py-2 rounded-lg text-[14px] font-medium transition-colors", tab === 'companion' ? "bg-white dark:bg-slate-900 text-indigo-600 shadow-sm border border-slate-200/60" : "text-slate-600 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-700/50")}>手机伴侣</button>
           )}
         </div>
-        <div className="flex-1 p-10 overflow-y-auto">
-          <div className="flex justify-between items-center mb-8">
-            <h3 className="text-[24px] font-semibold text-slate-800 dark:text-slate-100">{tab === 'llm' ? 'LLM Provider 配置' : tab === 'mcp' ? 'MCP Server配置' : tab === 'scheduler' ? '调度时间配置' : tab === 'companion' ? '手机伴侣' : tab === 'remote' ? '远程模式' : '数据与隐私'}</h3>
+        <div className="flex-1 min-w-0 p-4 md:p-10 overflow-y-auto">
+          <div className="flex justify-between items-center mb-6 md:mb-8">
+            <h3 className="text-[20px] md:text-[24px] font-semibold text-slate-800 dark:text-slate-100">{tab === 'llm' ? 'LLM Provider 配置' : tab === 'mcp' ? 'MCP Server配置' : tab === 'scheduler' ? '调度时间配置' : tab === 'companion' ? '手机伴侣' : tab === 'remote' ? '远程模式' : '数据与隐私'}</h3>
             <button
               onClick={() => {
                 if (tab === 'mcp' && isEditingMcp) {
@@ -685,7 +690,7 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported }
                 onClose();
               }}
               aria-label={tab === 'mcp' && isEditingMcp ? '返回 MCP 工具列表' : tab === 'llm' && isEditing ? '返回 LLM 配置列表' : '关闭全局设置'}
-              className="p-2 text-slate-400 dark:text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-full transition-colors"
+              className="p-2 max-md:h-11 max-md:w-11 max-md:flex max-md:items-center max-md:justify-center text-slate-400 dark:text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-full transition-colors"
             ><X size={24}/></button>
           </div>
           

@@ -48,7 +48,9 @@ export function Modal({ children, onClose, width = "w-[540px]", ariaLabel }: Mod
   }, []);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/20 backdrop-blur-sm animate-in fade-in duration-200">
+    // Story 16.4：上下安全区内边距（viewport-fit=cover 下 iOS 刘海/底部
+    // 横条不贴边；无 inset 设备 env()=0 零影响——桌面渲染不变）。
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/20 backdrop-blur-sm animate-in fade-in duration-200 pt-[max(0px,env(safe-area-inset-top))] pb-[max(0px,env(safe-area-inset-bottom))]">
       <div className="absolute inset-0" onClick={onClose}></div>
       <div
         ref={dialogRef}

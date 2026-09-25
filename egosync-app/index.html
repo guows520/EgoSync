@@ -14,6 +14,17 @@
          对 byte 契约不受影响）。 -->
     <link rel="icon" href="/favicon.ico" sizes="any" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <!-- Story 16.4：PWA 元数据（manifest + apple meta + theme-color）——
+         浏览器「添加到主屏幕」获 standalone 类原生入口；theme-color 取
+         logo 主色 #4F46E5（与 maskable 图标/启动屏一致）。CSP 同步增列
+         manifest-src 'self' 与 worker-src 'self'（契约测试钉死）。
+         FOUC 内联脚本（下方）零改动——CSP hash byte 契约不受影响。 -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <!-- 现代 Chrome/Edge 口径（apple-* 单独声明时控制台报 deprecated 的配对项） -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="theme-color" content="#4F46E5" />
     <!-- Story 17.1：字体自托管（人工裁决 B）——Google Fonts 外链改经
          @fontsource-variable npm 包随 dist 分发（见 src/index.css 头部
          import），离线/内网一致性与隐私；CSP 同步收紧为零第三方域。

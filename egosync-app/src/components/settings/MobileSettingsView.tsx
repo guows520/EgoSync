@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Bell, Bot, ChevronRight, Clock, LogOut, Moon, Plug, ShieldCheck, Sun } from 'lucide-react';
+import { Bot, ChevronRight, Clock, LogOut, Moon, Plug, ShieldCheck, Sun } from 'lucide-react';
 import { emitFrontendEvent, HttpTransportError, isTauriHost } from '@/transport';
 import { authService } from '../../services/authService';
 import { cn } from '../../lib/utils';
@@ -7,9 +7,10 @@ import { Modal } from '../layout/Modal';
 
 // Story 16.4：移动端「设置」tab（线框定稿 spec-16-4-mobile-wireframe.html
 // 屏 3）——桌面 GlobalSettingsModal 同款全量的移动入口：
-// - 5 个内容入口（模型服务 / MCP Server / 调度时间 / 数据与隐私 / 通知）
-//   打开的就是桌面同款组件（GlobalSettingsModal 对应 tab——同一批组件
-//   不重写；通知 = 调度时间 tab 内的敲门通知声音设置）；
+// - 4 个内容入口（模型服务 / MCP Server / 调度时间 / 数据与隐私）打开的
+//   就是桌面同款组件（GlobalSettingsModal 对应 tab——同一批组件不重写；
+//   敲门通知声音在「调度时间」tab 内可达——2026-09-26 移除与调度时间
+//   落点重复的「通知」行，桌面本就无该项）；
 // - 主题 / 登出 = 侧栏专属控件搬迁（人工裁决 2026-09-25）：主题为首页
 //   一行切换（浅色/深色，替代侧栏按钮）；登出在列表底部带确认（防误触）。
 // 桌面专属（远程模式/手机伴侣）由 capabilities 门控在
@@ -55,8 +56,6 @@ export function MobileSettingsView({ onOpenSettings, theme, onToggleTheme }: Mob
     { key: 'mcp', label: 'MCP Server', Icon: Plug, onClick: () => onOpenSettings('mcp') },
     { key: 'scheduler', label: '调度时间', Icon: Clock, onClick: () => onOpenSettings('scheduler') },
     { key: 'data', label: '数据与隐私', Icon: ShieldCheck, onClick: () => onOpenSettings('data') },
-    // 通知 = 调度时间 tab 内的敲门通知声音设置（桌面同款内容入口）
-    { key: 'notification', label: '通知', Icon: Bell, onClick: () => onOpenSettings('scheduler') },
   ];
 
   return (

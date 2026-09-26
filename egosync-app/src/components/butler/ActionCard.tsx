@@ -198,20 +198,23 @@ export function ActionCard({ suggestion, onConfirm, onReject, onDismiss, confirm
       </div>
 
       {status === 'pending' && !showRejectionReasons && (
-        // Story 16.4：小屏全宽堆叠（线框：确认/拒绝通栏纵排）+ 触控 ≥44px；
-        // 桌面维持 justify-end 紧凑排（零变化）。
-        <div className="flex max-md:flex-col gap-2 mt-3 max-md:justify-stretch justify-end">
+        // 2026-09-26 owner 裁决：小屏一行右对齐（原全宽纵排为 16.4 冻结
+        // 设计，已显式重协商）+ 触控 ≥44px；桌面维持 justify-end 紧凑排。
+        // flex-wrap：长标签组合放不下时整钮换行（review F3——调查卷
+        // Recommended Next Steps ② 原建议项；当前两组标签 375px 均放得下，
+        // 该类 inert，防未来自定义标签挤压/逐字换行）。
+        <div className="flex flex-wrap justify-end gap-2 mt-3">
           <button
             type="button"
             onClick={handleRejectClick}
-            className="px-3 py-1.5 max-md:min-h-[44px] max-md:flex-1 max-md:flex max-md:items-center max-md:justify-center rounded-lg text-[13px] font-medium text-slate-500 dark:text-slate-300 border border-slate-200 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700 hover:text-slate-700 dark:hover:text-slate-100 transition-colors motion-reduce:transition-none"
+            className="px-3 py-1.5 max-md:min-h-[44px] max-md:flex max-md:items-center max-md:justify-center rounded-lg text-[13px] font-medium text-slate-500 dark:text-slate-300 border border-slate-200 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700 hover:text-slate-700 dark:hover:text-slate-100 transition-colors motion-reduce:transition-none"
           >
             {rejectLabel}
           </button>
           <button
             type="button"
             onClick={handleConfirm}
-            className="px-4 py-1.5 max-md:min-h-[44px] max-md:flex-1 max-md:flex max-md:items-center max-md:justify-center rounded-lg text-[13px] font-medium bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm transition-colors motion-reduce:transition-none"
+            className="px-4 py-1.5 max-md:min-h-[44px] max-md:flex max-md:items-center max-md:justify-center rounded-lg text-[13px] font-medium bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm transition-colors motion-reduce:transition-none"
           >
             {confirmLabel}
           </button>

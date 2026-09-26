@@ -58,7 +58,7 @@ export function Modal({ children, onClose, width = "w-[540px]", ariaLabel }: Mod
         aria-modal="true"
         aria-label={ariaLabel}
         tabIndex={-1}
-        className={cn("bg-white rounded-2xl shadow-2xl overflow-hidden relative z-10 animate-in zoom-in-95 duration-200 outline-none", width, MODAL_MOBILE_WIDTH)}
+        className={cn("bg-white rounded-2xl shadow-2xl overflow-hidden relative z-10 animate-in zoom-in-95 duration-200 outline-none max-md:max-h-full max-md:overflow-y-auto", width, MODAL_MOBILE_WIDTH)}
       >
         {children}
       </div>

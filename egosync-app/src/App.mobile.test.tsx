@@ -198,14 +198,15 @@ describe('App 移动形态（Story 16.4）', () => {
 
     fireEvent.click(screen.getByTestId('bottom-tab-settings'));
     expect(screen.getByTestId('settings-row-llm')).toBeInTheDocument();
-    expect(screen.getByTestId('settings-row-notification')).toBeInTheDocument();
+    expect(screen.getByTestId('settings-row-scheduler')).toBeInTheDocument();
     expect(screen.getByTestId('settings-theme-light')).toBeInTheDocument();
     expect(screen.getByTestId('settings-logout')).toBeInTheDocument();
 
-    // 模型服务 → llm 落点；通知 → 调度时间 tab（敲门通知声音所在）
+    // 模型服务 → llm 落点；调度时间 → scheduler tab（敲门通知声音所在——
+    // 2026-09-26 移除与之落点重复的「通知」行，owner 授权同型改写本守门钉孔）
     fireEvent.click(screen.getByTestId('settings-row-llm'));
     expect(screen.getByTestId('settings-modal')).toHaveAttribute('data-initial-tab', 'llm');
-    fireEvent.click(screen.getByTestId('settings-row-notification'));
+    fireEvent.click(screen.getByTestId('settings-row-scheduler'));
     expect(screen.getByTestId('settings-modal')).toHaveAttribute('data-initial-tab', 'scheduler');
     fireEvent.click(screen.getByTestId('settings-row-data'));
     expect(screen.getByTestId('settings-modal')).toHaveAttribute('data-initial-tab', 'data');

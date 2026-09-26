@@ -881,7 +881,16 @@ export function ChatStream({
   useEffect(() => {
     if (pendingScrollMessageId || suppressAutoScrollRef.current) return;
     if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      // 即时贴底（症状⑤，owner 口径「直接显示最底部」）：临时把容器
+      // scrollBehavior 置 auto 再赋值、随后恢复——仅本次挂载/更新贴底
+      // 不走平滑动画；:238 来源消息居中的显式 smooth 与 :241 的赋值
+      // 修正、以及滚轮平滑均保持原行为（2026-09-26 review F4：直接删
+      // scroll-smooth 会让 :241 赋值即时化、抢占 :238 的平滑滚动）。
+      const el = scrollRef.current;
+      const prevBehavior = el.style.scrollBehavior;
+      el.style.scrollBehavior = 'auto';
+      el.scrollTop = el.scrollHeight;
+      el.style.scrollBehavior = prevBehavior;
     }
   }, [messages, pendingScrollMessageId, streamBubbles, streamStatus, thinkingContent]);
 

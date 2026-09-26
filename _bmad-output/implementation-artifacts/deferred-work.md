@@ -529,3 +529,16 @@ All items resolved in the same session:
 - source_spec: `_bmad-output/implementation-artifacts/spec-16-4-mobile-web-form-and-pwa.md`
   summary: 桌面 e2e（tests/e2e test:ci）tauri-driver 会话层环境阻断，连续第三个故事（16-2/16-3/16-4）无法执行。
   evidence: 16-4 实测：会话创建后 IPC 层 `Origin header is not a valid URL`（app_complete_onboarding），9 specs 全挂 before 钩子；另定位两层环境问题——PATH 未含 ~/.cargo/bin 致 tauri-driver spawn 失败、wdio.conf.ts 要求 target/release/egosync 而本机仅有 debug 产物（曾以 debug 二进制代置实测，仍止于 IPC 层）。按 AGENTS.md「连续失败 3 次」升级：已向用户完整报备。 settle 条件：根因排查（Origin 校验与 tauri-driver 版本/wry 0.55 的兼容性矩阵）+ CI 环境（有 GPU/显示或 webkit2gtk-driver 的容器）执行一次全绿，或明确改写 AGENTS.md DoD 中桌面 e2e 的执行口径。
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-web-mobile-adaptive-fixes.md`
+  summary: 共享 Modal 的移动滚动增强（`max-md:overscroll-contain` 抑制内层滚到边缘时向 body 的链式传导 + 模态打开期间背景滚动锁定）未做。
+  evidence: spec-web-mobile-adaptive-fixes.md Review Triage Log F10（盲扫层，low）：全库 8 个模态共享同一「打开期间不锁背景」既有模式，无任何 overscroll 用法；引入 overscroll-contain/滚动锁定=共享组件全局行为变化，超出五症状最小修复授权。symptom①的裁切/可滚本身已由 max-md:max-h-full + overflow-y-auto 解决（Modal.scroll.test.tsx 钉死）。
+- source_spec: `_bmad-output/implementation-artifacts/spec-web-mobile-adaptive-fixes.md`
+  summary: `epic-16-context.md:45`「ActionCard 全宽堆叠」小屏形态描述已 stale（owner 2026-09-26 重协商为一行右对齐），待授权修订该冻结规划件。
+  evidence: spec-web-mobile-adaptive-fixes.md Review Triage Log F12（盲扫层，medium）：该文件为人类所有的规划冻结件，不在本次 owner 授权清单（ActionCard.mobile.test.tsx / web-mobile.spec.ts / spec-16-4:31 / App.mobile.test.tsx 追加授权）内——重协商链已由 spec-16-4 Spec Change Log 2026-09-26 条目完整留痕，修订本文件属锦上添花，需 owner 显式授话。
+- source_spec: `_bmad-output/implementation-artifacts/spec-web-mobile-adaptive-fixes.md`
+  summary: TaskModal 375px 真机走查（新建/编辑任务全流程）留人工：共享 Modal 修复（max-md 高度/滚动）对 TaskModal 的覆盖是类级推导+仓内无人工验证记录。
+  evidence: spec-web-mobile-adaptive-fixes.md Review Triage Log F14（盲扫层 TaskModal 走查项）：Step-01 Side Findings 项「TaskModal 同族受益」+ 案卷验证表 TaskModal 行均只做代码级论证；真机确认须人工执行（与 iOS Safari 清单同批）。
+- source_spec: `_bmad-output/implementation-artifacts/spec-web-mobile-adaptive-fixes.md`
+  summary: iOS Safari 真机走查（五症状修复在真机的最终确认）留人工：项目基线 375×812 全为模拟器/浏览器窗口，safe-area、动态工具栏、iOS 滚动弹性等真机行为无自动化覆盖。
+  evidence: spec-web-mobile-adaptive-fixes.md Review Triage Log F14 + 案卷验证表 iOS 行：①④的 44px 触控与图标在小屏的实际命中、⑤的贴底即时性（iOS 程序化滚动与 CSS scroll-behavior 交互历史上有 quirks）、②③的换行行高均需真机确认；iOS 人工清单口径沿用 16.4 前案。

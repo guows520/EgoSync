@@ -8,7 +8,7 @@
 //    详情 → 「⋯」切换角色回根；
 // 4. 任务面：象限分组头「排序」开关 → ↑/↓ 调序（服务端事实源断言新序）；
 // 5. 仪表盘/通知面 + 375px 全程无横向溢出（矩形级，无视裁剪）；
-// 6. 设置 tab：7 项入口 + 打开桌面同款 GlobalSettingsModal（移动全屏）；
+// 6. 设置 tab：6 项入口 + 打开桌面同款 GlobalSettingsModal（移动全屏）；
 // 7. 断点互斥：768px 侧栏回归、底栏退场（BREAKPOINT_EDGE）；
 // 8. PWA：manifest 字段（name/start_url/display/theme_color/icons maskable）
 //    + Service Worker 注册 + sw.js 伺服 200。
@@ -304,12 +304,13 @@ describe('Web 移动端形态与 PWA（Story 16.4，375×812）', () => {
     );
   });
 
-  it('设置 tab：7 项入口 + 打开桌面同款 GlobalSettingsModal（移动全屏）', async () => {
+  it('设置 tab：6 项入口 + 打开桌面同款 GlobalSettingsModal（移动全屏）', async () => {
     await $('[data-testid="bottom-tab-settings"]').click();
     await $('[data-testid="settings-row-llm"]').waitForDisplayed({ timeout: 15000 });
 
-    // 7 项：模型服务 / MCP / 调度 / 数据 / 通知 / 主题 / 登出
-    for (const key of ['llm', 'mcp', 'scheduler', 'data', 'notification']) {
+    // 6 项：4 项内容入口（模型服务 / MCP / 调度 / 数据——2026-09-26 移除
+    // 与调度时间落点重复的「通知」行）+ 主题 / 登出
+    for (const key of ['llm', 'mcp', 'scheduler', 'data']) {
       expect(await $(`[data-testid="settings-row-${key}"]`).isDisplayed()).toBe(true);
     }
     expect(await $('[data-testid="settings-theme-light"]').isDisplayed()).toBe(true);
@@ -342,16 +343,6 @@ describe('Web 移动端形态与 PWA（Story 16.4，375×812）', () => {
     // 无横向溢出（矩形级——带 class 诊断，修复过程可定位）
     expect(await collectHorizontalOverflow()).toEqual([]);
 
-    await clickByJs('button[aria-label="关闭全局设置"]');
-    await browser.pause(300);
-
-    // 「通知」入口落点 = 桌面调度时间 tab（敲门通知声音设置所在）
-    await $('[data-testid="settings-row-notification"]').click();
-    await browser.pause(700);
-    await browser.waitUntil(
-      async () => (await $('h3*=调度时间配置')).isExisting(),
-      { timeout: 15000, timeoutMsg: '「通知」入口未落到调度时间 tab' },
-    );
     await clickByJs('button[aria-label="关闭全局设置"]');
     await browser.pause(300);
 

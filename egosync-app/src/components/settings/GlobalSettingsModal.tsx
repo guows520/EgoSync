@@ -638,13 +638,20 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported, 
 
   return (
     // Story 16.4：移动端全屏（max-md:left-0——小屏侧栏退场，左侧不留
-    // 64px 空白）；桌面 left-16（侧栏宽）零变化。nav 小屏转横向滚动行。
+    // 64px 空白）；桌面 left-16（侧栏宽）零变化。nav：小屏整列隐藏（见下），
+    // 桌面 md:w-64 纵列。
     <div className="fixed top-0 right-0 bottom-0 left-16 max-md:left-0 z-50 animate-in slide-in-from-right duration-300">
       <div className="h-full bg-white dark:bg-slate-900 shadow-2xl flex flex-col md:flex-row">
-        {/* Story 16.4：小屏 nav 转横向换行行（flex-wrap——不用 overflow-x
-            滚动：滚动内容 rect 仍出视口，375px 矩形级溢出走查会误报）；桌面
-            md:w-64 纵列原样。按钮触控 ≥44px（max-md 容器查询）。 */}
-        <div className="w-full md:w-64 bg-slate-50 dark:bg-slate-800 border-b md:border-b-0 md:border-r border-slate-200 dark:border-slate-700 p-3 md:p-6 flex flex-row md:flex-col flex-nowrap max-md:flex-wrap items-center md:items-stretch gap-1 md:gap-2 shrink-0 max-md:[&>button]:min-h-[44px] max-md:[&>button]:shrink-0 max-md:[&>button]:flex max-md:[&>button]:items-center">
+        {/* Story 16.4 布局修复（2026-09-26 人类指令）：小屏整列隐藏
+            （hidden md:flex）——移动端本模态必由设置列表带 initialTab 打开，
+            分区已选定、标题 h3 明示当前分区、X 关闭回列表重选，顶部切换行
+            无信息增量；桌面（自侧栏进入）nav 原样保留。 */}
+        {/* Story 16.4 原始注记（flex-wrap/≥44px 触控曾为小屏 nav 服务）：
+            2026-09-26 布局修复后小屏 nav 已 hidden，下列 max-md: 变体
+            （flex-wrap、[&>button]:* 44px）在小屏均为死类；保留不动是为
+            守住硬红线「桌面逐像素零变化、改动只加 max-md:/md: 类对」，
+            非疏忽。桌面 md:flex-col 纵列 + md:w-64 原样。 */}
+        <div className="hidden md:flex w-full md:w-64 bg-slate-50 dark:bg-slate-800 border-b md:border-b-0 md:border-r border-slate-200 dark:border-slate-700 p-3 md:p-6 flex flex-row md:flex-col flex-nowrap max-md:flex-wrap items-center md:items-stretch gap-1 md:gap-2 shrink-0 max-md:[&>button]:min-h-[44px] max-md:[&>button]:shrink-0 max-md:[&>button]:flex max-md:[&>button]:items-center">
           <div className="hidden md:flex items-center justify-between mb-8 px-3">
             <h2 className="text-[16px] font-semibold text-slate-800 dark:text-slate-100">全局设置</h2>
           </div>

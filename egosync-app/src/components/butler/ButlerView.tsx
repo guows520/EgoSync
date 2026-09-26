@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Home, BarChart2, ListTodo, BrainCircuit, Sliders, Bell } from 'lucide-react';
-import { cn } from '../../lib/utils';
+import { cn, isMobileViewport } from '../../lib/utils';
 import { ButlerWorkspacePanel } from './ButlerWorkspacePanel';
 import { ChatStream } from '../chat/ChatStream';
 import { ConnectionStatus } from '../layout/ConnectionStatus';
@@ -87,14 +87,19 @@ export function ButlerView({ roles, onViewChange, archivedRoles, onRestoreRole, 
       onRoleSourceNavigation?.(target);
       return;
     }
+    // 小屏 tab 全屏化（16.4 布局修复）：对话区 max-md:hidden 时来源跳转
+    // 无可见效果——先关工作区 tab 回对话，ChatStream 再滚动定位；桌面
+    // 双栏下对话区常驻可见，不关 tab，保持既有行为零变化
+    if (isMobileViewport()) setOpenTab(null);
     setSourceNavigationTarget(target);
   };
 
   return (
     <div className="h-full flex flex-col relative bg-white/40 dark:bg-slate-900/40 animate-in fade-in duration-500">
-      {/* Header — Story 16.2 响应式基线：小屏 px-4 + 高度自适应（tab 组可换行），
-          ≥px-8 与 h-[76px] 维持桌面原样 */}
-      <header className="h-auto md:h-[76px] py-2 md:py-0 border-b border-slate-200/60 dark:border-slate-700/60 bg-white/60 dark:bg-slate-800/60 backdrop-blur-md flex flex-wrap items-center px-4 md:px-8 gap-2 shrink-0 justify-between shadow-[0_1px_2px_rgba(0,0,0,0.02)]">
+      {/* Header — Story 16.2 响应式基线：小屏 px-4；16.4 布局修复：小屏改
+          两行（第一行=图标+标题+右端铃铛/连接状态——回归线框「右上角」；
+          第二行=tab 组），桌面 md:flex-row 单行与今天逐像素一致 */}
+      <header className="h-auto md:h-[76px] py-2 md:py-0 border-b border-slate-200/60 dark:border-slate-700/60 bg-white/60 dark:bg-slate-800/60 backdrop-blur-md flex flex-col md:flex-row md:flex-wrap md:items-center px-4 md:px-8 gap-2 shrink-0 md:justify-between shadow-[0_1px_2px_rgba(0,0,0,0.02)]">
         <div className="flex items-center gap-3 md:gap-4 min-w-0">
           <div className="w-[46px] h-[46px] rounded-xl bg-slate-800 dark:bg-indigo-600 text-white flex items-center justify-center shadow-sm">
             <Home size={24} strokeWidth={2} />
@@ -112,7 +117,7 @@ export function ButlerView({ roles, onViewChange, archivedRoles, onRestoreRole, 
                 aria-expanded={isNotifOpen}
                 data-testid="butler-notif-bell"
                 className={cn(
-                  'md:hidden relative w-11 h-11 flex items-center justify-center rounded-xl transition-colors',
+                  'md:hidden ml-auto relative w-11 h-11 flex items-center justify-center rounded-xl transition-colors',
                   isNotifOpen
                     ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-200 dark:shadow-indigo-900/50'
                     : 'text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-white/50 dark:hover:bg-slate-700/60',
@@ -149,16 +154,16 @@ export function ButlerView({ roles, onViewChange, archivedRoles, onRestoreRole, 
         </div>
       </header>
 
-      {/* Story 16.2 响应式基线：≥md 维持 65/35 双栏；小屏（375px 级）
-          flex-col 堆叠——对话区 58% + 工作区 42%（断点方案归 UX 勘注定稿）。 */}
-      {/* Story 16.4 修复注记：小屏比例高由百分比改为 max-md:flex-[58]/[42]
-          ——百分比高对 flex 列子项解析退化（实测工作区塌缩、内容溢出
-          外壳）；flex 比例对定高容器免疫。桌面零变化。 */}
+      {/* Story 16.2 响应式基线：≥md 维持 65/35 双栏；小屏 flex-col。
+          16.4 布局修复（2026-09-26 人类指令）：tab 打开时小屏对话区
+          max-md:hidden、工作区 max-md:flex-1 全屏——点「仪表盘/任务」等
+          只显示对应页面（drill-down 换页，替代原 58/42 堆叠）；再点一次
+          当前 tab 按钮关闭回对话（既有 toggle 语义）。桌面双栏零变化。 */}
       <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
         {/* Chat Area */}
-        <div className={cn(
+        <div data-testid="butler-chat-pane" className={cn(
           "flex flex-col relative bg-white/40 dark:bg-slate-900/40 transition-all duration-500 ease-in-out min-h-0",
-          openTab ? "w-full max-md:flex-[58] md:h-auto md:w-[65%] border-b md:border-b-0 md:border-r border-slate-200/60 dark:border-slate-700/60" : "w-full h-full",
+          openTab ? "w-full max-md:hidden md:h-auto md:w-[65%] border-b md:border-b-0 md:border-r border-slate-200/60 dark:border-slate-700/60" : "w-full h-full",
         )}>
           {knockNotifications.length > 0 && (
             <div className="px-4 pt-4 space-y-3 shrink-0">
@@ -200,7 +205,7 @@ export function ButlerView({ roles, onViewChange, archivedRoles, onRestoreRole, 
 
         {/* Workspace Panel */}
         {openTab && (
-          <div className="w-full max-md:flex-[42] md:h-auto md:w-[35%] bg-white dark:bg-slate-900 flex flex-col border-t md:border-t-0 md:border-l border-slate-200/60 dark:border-slate-700/60 animate-in slide-in-from-right-8 duration-300 min-h-0">
+          <div data-testid="butler-workspace-pane" className="w-full max-md:flex-1 md:h-auto md:w-[35%] bg-white dark:bg-slate-900 flex flex-col border-t md:border-t-0 md:border-l border-slate-200/60 dark:border-slate-700/60 animate-in slide-in-from-right-8 duration-300 min-h-0">
             <ButlerWorkspacePanel
               roles={roles}
               currentTab={openTab}

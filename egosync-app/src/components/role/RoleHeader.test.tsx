@@ -61,4 +61,27 @@ describe('RoleHeader', () => {
     // jsdom 会把 #4F46E5 标准化为 rgb(79, 70, 229)，断言等价值。
     expect(taskButton.style.color).toBe('rgb(79, 70, 229)');
   });
+
+  /// Story 16.4 布局修复（2026-09-26 人类指令）：小屏头部右侧控件顺序钉死——
+  /// 「⋯」更多菜单在「设置」按钮右边（原渲染在 tab 组左侧）。
+  it('「⋯」更多菜单渲染在「设置」按钮右边', () => {
+    const { container } = render(
+      <RoleHeader
+        role={baseRole}
+        openTab={null}
+        onToggleTab={vi.fn()}
+        onSwitchRole={vi.fn()}
+        onAddRole={vi.fn()}
+      />,
+    );
+    const cluster = container.querySelector('.ml-auto') as HTMLElement;
+    const settingsButton = screen.getByRole('button', { name: /设置/ });
+    const moreButton = screen.getByTestId('role-more-menu');
+    expect(cluster.contains(settingsButton)).toBe(true);
+    expect(cluster.contains(moreButton)).toBe(true);
+    // DOM 序钉死：settings 在前、more 紧随其后 ⇒ 视觉上「⋯」在设置按钮右边
+    expect(
+      settingsButton.compareDocumentPosition(moreButton) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
 });

@@ -139,8 +139,11 @@ export function RoleHeader({ role, openTab, onToggleTab, onSwitchRole, onAddRole
       </div>
 
       <div className="ml-auto relative flex items-center gap-1.5 md:gap-2" ref={moreMenuRef}>
+        {tabButton('tasks', ListTodo, '任务')}
+        {tabButton('memory', BrainCircuit, '记忆')}
+        {tabButton('settings', Sliders, '设置')}
         {/* Story 16.4：「⋯」= 切换角色/新建角色直达（线框屏 2b）——md:hidden
-            桌面无此控件；触控 ≥44×44。D2 收口（2026-09-25 人类指令）追加
+            桌面无此控件；触控 ≥44×44。2026-09-26 人类指令：整块移到三个 tab 按钮之后（「设置」右边）。D2 收口（2026-09-25 人类指令）追加
             归档/删除两项——桌面侧栏右键菜单的移动对等入口。 */}
         {onSwitchRole && (
           <>
@@ -259,9 +262,6 @@ export function RoleHeader({ role, openTab, onToggleTab, onSwitchRole, onAddRole
             )}
           </>
         )}
-        {tabButton('tasks', ListTodo, '任务')}
-        {tabButton('memory', BrainCircuit, '记忆')}
-        {tabButton('settings', Sliders, '设置')}
       </div>
     </header>
   );

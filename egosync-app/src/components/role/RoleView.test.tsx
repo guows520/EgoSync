@@ -165,9 +165,12 @@ describe('RoleView memory reference navigation', () => {
     fireEvent.click(screen.getByRole('button', { name: '任务' }));
 
     const openPanelShell = container.querySelector('[aria-hidden="false"]');
-    // Story 16.2 响应式基线：≥md 维持 35% 双栏（md:w-[35%]），小屏堆叠 h-[42%]
+    // Story 16.2 响应式基线：≥md 维持 35% 双栏（md:w-[35%]）；16.4 布局修复
+    // （2026-09-26 人类指令）：小屏 tab 全屏 max-md:flex-1，原 58/42 堆叠比例
+    // 与 inert h-[42%] 垫片一并移除
     expect(openPanelShell).toHaveClass('md:w-[35%]');
-    expect(openPanelShell).toHaveClass('h-[42%]');
+    expect(openPanelShell).toHaveClass('max-md:flex-1');
+    expect(openPanelShell).not.toHaveClass('h-[42%]');
     expect(openPanelShell).toHaveClass('duration-500');
     expect(openPanelShell).not.toHaveClass('slide-in-from-right-8');
     expect(screen.getByTestId('role-current-tab')).toHaveTextContent('tasks');

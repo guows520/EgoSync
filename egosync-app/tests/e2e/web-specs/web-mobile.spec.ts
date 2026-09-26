@@ -12,6 +12,10 @@
 // 7. 断点互斥：768px 侧栏回归、底栏退场（BREAKPOINT_EDGE）；
 // 8. PWA：manifest 字段（name/start_url/display/theme_color/icons maskable）
 //    + Service Worker 注册 + sw.js 伺服 200。
+// 9. 16.4 布局修复（2026-09-26 人类指令）：tab 全屏 drill-down（对话区退场）、
+//    铃铛/连接状态头部右端、设置模态小屏无 tab 切换行、角色「⋯」在设置右边
+//    ——①②④在本 spec 有几何/显隐断言，③的 DOM 顺序断言论 RoleHeader.test.tsx
+//    新增 it（compareDocumentPosition）。
 //
 // 视口纪律：登录态在桌面宽度下锚定（openWebAppAndLogin 的就绪探测依赖
 // 可见徽标），再切 375（CSS 媒体查询即时重排）；after 还原桌面宽度——
@@ -88,6 +92,15 @@ describe('Web 移动端形态与 PWA（Story 16.4，375×812）', () => {
     // 侧栏专属控件搬迁（人工裁决 2026-09-25）：通知铃铛 + 连接状态 → 管家视图头部
     expect(await $('[data-testid="butler-notif-bell"]').isDisplayed()).toBe(true);
     expect(await $('header [data-testid="connection-status"]').isDisplayed()).toBe(true);
+
+    // 16.4 布局修复：铃铛+连接状态靠头部右端（回归线框「右上角」裁决）——
+    // 连接状态为第一行最右元素，右缘与视口右缘间距 ≤ 头边距 16 + 余量
+    const connRightGap = await browser.execute(() => {
+      const conn = document.querySelector('header [data-testid="connection-status"]');
+      if (!conn) return null;
+      return window.innerWidth - conn.getBoundingClientRect().right;
+    });
+    expect(connRightGap as number).toBeLessThanOrEqual(24);
 
     // 管家主区全屏：聊天输入框在场且贴底可达
     const chatInput = await $('textarea, input[type="text"]');
@@ -173,6 +186,9 @@ describe('Web 移动端形态与 PWA（Story 16.4，375×812）', () => {
       { timeout: 15000, timeoutMsg: '任务面「排序」开关未呈现（四象限分组的排序入口缺席）' },
     );
 
+    // 16.4 布局修复（drill-down）：任务 tab 打开后对话区退场（max-md:hidden）
+    expect(await (await $('textarea, input[type="text"]')).isDisplayed()).toBe(false);
+
     // 排序模式开：拖拽把手退场、↑/↓ 登场
     await $('[data-testid^="sort-mode-"]').click();
     const moveDown = await $(`button[aria-label="下移 ${titleA}"]`);
@@ -204,7 +220,7 @@ describe('Web 移动端形态与 PWA（Story 16.4，375×812）', () => {
   });
 
   it('仪表盘 + 通知面走查：375px 全程无横向溢出（矩形级）', async () => {
-    // 回管家视图 → 仪表盘 tab（小屏工作区 h-[42%] 底栏面板）
+    // 回管家视图 → 仪表盘 tab（16.4 布局修复：小屏工作区全屏、对话区退场）
     await $('[data-testid="bottom-tab-butler"]').click();
     await browser.waitUntil(
       async () => (await $('textarea, input[type="text"]')).isDisplayed(),
@@ -212,6 +228,16 @@ describe('Web 移动端形态与 PWA（Story 16.4，375×812）', () => {
     );
     await $('button*=仪表盘').click();
     await browser.pause(800);
+
+    // 16.4 布局修复（drill-down）：tab 打开后只显示工作区——对话区
+    // max-md:hidden 退场、工作区 pane 全屏在场
+    expect(await $('[data-testid="butler-chat-pane"]').isDisplayed()).toBe(false);
+    expect(await $('[data-testid="butler-workspace-pane"]').isDisplayed()).toBe(true);
+    const workspaceHeight = await browser.execute(() => {
+      const pane = document.querySelector('[data-testid="butler-workspace-pane"]');
+      return pane ? pane.getBoundingClientRect().height / window.innerHeight : null;
+    });
+    expect(workspaceHeight as number).toBeGreaterThan(0.6);
 
     // 矩形级无溢出（无视 overflow 裁剪——真实溢出即报）
     const assertNoHorizontalOverflow = async () => {
@@ -274,6 +300,12 @@ describe('Web 移动端形态与 PWA（Story 16.4，375×812）', () => {
       return shell ? shell.getBoundingClientRect().left : null;
     });
     expect(modalLeft).toBe(0);
+
+    // 16.4 布局修复：小屏模态无顶部 tab 切换行（nav hidden md:flex）——DOM 在
+    // （桌面复用同一组件），小屏 display:none；分区由设置列表选定，X 关闭回列表
+    const llmNavButton = await $('button*=模型服务配置');
+    expect(await llmNavButton.isExisting()).toBe(true);
+    expect(await llmNavButton.isDisplayed()).toBe(false);
 
     // 无横向溢出（矩形级——带 class 诊断，修复过程可定位）
     expect(await collectHorizontalOverflow()).toEqual([]);

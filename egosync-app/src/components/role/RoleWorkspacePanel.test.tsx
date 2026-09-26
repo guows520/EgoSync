@@ -129,4 +129,12 @@ describe('RoleWorkspacePanel memory badge', () => {
     expect(screen.getByTestId('memory-category')).toHaveTextContent('all');
     expect(screen.getByTestId('memory-target')).toHaveTextContent('memory-2');
   });
+
+  /// 移动端去重钉孔（2026-09-26 人类指令，spec-web-mobile-tab-dedup）：面板
+  /// tab 条容器带 max-md:hidden——小屏退场（头部 RoleHeader 条替代）、桌面
+  /// 保留。误改为 hidden 或删该类会静默打破桌面面板条，本断言守桌面零变化。
+  it('tab 条容器带 max-md:hidden（小屏退场、桌面保留）', () => {
+    render(<RoleWorkspacePanel role={role} currentTab="tasks" setTab={vi.fn()} />);
+    expect(screen.getByTestId('role-panel-tab-bar')).toHaveClass('max-md:hidden');
+  });
 });

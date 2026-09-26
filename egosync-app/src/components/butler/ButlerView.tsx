@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Home, BarChart2, ListTodo, BrainCircuit, Sliders, Bell } from 'lucide-react';
+import { Home, BarChart2, ListTodo, BrainCircuit, Sliders, Bell, X } from 'lucide-react';
 import { cn, isMobileViewport } from '../../lib/utils';
 import { ButlerWorkspacePanel } from './ButlerWorkspacePanel';
 import { ChatStream } from '../chat/ChatStream';
@@ -136,6 +136,21 @@ export function ButlerView({ roles, onViewChange, archivedRoles, onRestoreRole, 
                 <ConnectionStatus />
               </div>
             </>
+          )}
+          {/* 移动端去重（2026-09-26 人类指令，spec-web-mobile-tab-dedup）：面板
+              自带 tab 条小屏退场后，关闭入口上移第一行右端——tab 行 4 钮 + X
+              在 375px 会溢出约 10px，故不放 tab 行；仅 <768px 显、仅 tab 打开
+              时显；toggle 语义关闭。右对齐由铃铛的 ml-auto 承担（X 自身不加
+              ml-auto——铃铛在时会成为死类，评审盲猎结论）。 */}
+          {openTab && (
+            <button
+              onClick={() => toggleTab(openTab)}
+              aria-label="关闭"
+              data-testid="butler-close-tab"
+              className="md:hidden w-11 h-11 flex items-center justify-center rounded-xl text-slate-400 dark:text-slate-500 hover:bg-white/50 dark:hover:bg-slate-700/60 transition-colors"
+            >
+              <X size={20} />
+            </button>
           )}
         </div>
         <div className="flex items-center gap-1.5 md:gap-2">

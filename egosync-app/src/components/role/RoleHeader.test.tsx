@@ -84,4 +84,30 @@ describe('RoleHeader', () => {
       settingsButton.compareDocumentPosition(moreButton) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
   });
+
+  /// 移动端去重（2026-09-26 人类指令，spec-web-mobile-tab-dedup）：面板自带
+  /// tab 条小屏退场后，关闭 X 上移头部——仅 tab 打开时渲染；onClick 复用
+  /// toggle 语义（onToggleTab(openTab) ⇒ 父组件再点当前 tab 即关闭），
+  /// 不新增 props；md:hidden 保证桌面无此控件、零变化。
+  it('tab 打开时头部渲染关闭钮，点击以当前 tab 回调 onToggleTab', () => {
+    const onToggleTab = vi.fn();
+    render(<RoleHeader role={baseRole} openTab="tasks" onToggleTab={onToggleTab} />);
+
+    const closeButton = screen.getByTestId('role-close-tab');
+    expect(closeButton).toHaveAttribute('aria-label', '关闭');
+    expect(closeButton).toHaveClass('md:hidden');
+    // DOM 序钉死：X 紧随「设置」tab（关闭入口与 tab 组相邻、在「⋯」左侧）
+    const settingsButton = screen.getByRole('button', { name: /设置/ });
+    expect(
+      settingsButton.compareDocumentPosition(closeButton) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    fireEvent.click(closeButton);
+    expect(onToggleTab).toHaveBeenCalledWith('tasks');
+  });
+
+  it('tab 未打开时头部不渲染关闭钮', () => {
+    render(<RoleHeader role={baseRole} openTab={null} onToggleTab={vi.fn()} />);
+    expect(screen.queryByTestId('role-close-tab')).not.toBeInTheDocument();
+  });
 });

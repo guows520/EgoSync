@@ -92,7 +92,10 @@ export function RoleWorkspacePanel({
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between border-b border-slate-200/80 dark:border-slate-700/80 px-6 pt-4 bg-white/60 dark:bg-slate-800/60 backdrop-blur-md shrink-0">
+      {/* 移动端去重（2026-09-26 人类指令，spec-web-mobile-tab-dedup）：头部
+          RoleHeader 已有一套同功能 tab（任务/记忆/设置），小屏两排相邻重复——
+          本行（含关闭 X）<768px 整条退场，桌面保留（零变化）。 */}
+      <div data-testid="role-panel-tab-bar" className="max-md:hidden flex items-center justify-between border-b border-slate-200/80 dark:border-slate-700/80 px-6 pt-4 bg-white/60 dark:bg-slate-800/60 backdrop-blur-md shrink-0">
         <div className="flex gap-8">
           <button
             onClick={() => setTab('tasks')}

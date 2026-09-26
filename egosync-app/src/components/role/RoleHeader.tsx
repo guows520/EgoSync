@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { ListTodo, BrainCircuit, Sliders, MoreHorizontal, Archive, Trash2 } from 'lucide-react';
+import { ListTodo, BrainCircuit, Sliders, MoreHorizontal, Archive, Trash2, X } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { getRoleIconComponent, normalizeColorHex } from '../../lib/roleIcons';
 import { Modal } from '../layout/Modal';
@@ -90,7 +90,7 @@ export function RoleHeader({ role, openTab, onToggleTab, onSwitchRole, onAddRole
     const isActive = openTab === tab;
     return (
       <button
-        onClick={() => onToggleTab(tab)}
+        onClick={() => { setShowMoreMenu(false); onToggleTab(tab); }}
         className={cn(
           // Story 16.4 评审修复：小屏触控 ≥44px（AC2 红线——px-2.5 py-2 仅
           // 约 36px）；桌面零变化
@@ -142,6 +142,22 @@ export function RoleHeader({ role, openTab, onToggleTab, onSwitchRole, onAddRole
         {tabButton('tasks', ListTodo, '任务')}
         {tabButton('memory', BrainCircuit, '记忆')}
         {tabButton('settings', Sliders, '设置')}
+        {/* 移动端去重（2026-09-26 人类指令，spec-web-mobile-tab-dedup）：面板
+            自带 tab 条小屏退场后，关闭入口上移头部——仅 <768px 显（md:hidden）、
+            仅 tab 打开时显；再点当前 tab 即关闭（既有 toggle 语义），不新增
+            props；触控 44×44。桌面无此按钮、零变化。
+            点击先收「⋯」菜单：菜单挂在本簇内（moreMenuRef），外部点击关闭逻辑
+            对簇内点击不生效——不先收菜单会出现「tab 关了菜单还悬浮」的断裂。 */}
+        {openTab && (
+          <button
+            onClick={() => { setShowMoreMenu(false); onToggleTab(openTab); }}
+            aria-label="关闭"
+            data-testid="role-close-tab"
+            className="md:hidden w-11 h-11 flex items-center justify-center rounded-lg text-slate-400 dark:text-slate-500 hover:bg-white/50 dark:hover:bg-slate-700/60 transition-colors"
+          >
+            <X size={20} />
+          </button>
+        )}
         {/* Story 16.4：「⋯」= 切换角色/新建角色直达（线框屏 2b）——md:hidden
             桌面无此控件；触控 ≥44×44。2026-09-26 人类指令：整块移到三个 tab 按钮之后（「设置」右边）。D2 收口（2026-09-25 人类指令）追加
             归档/删除两项——桌面侧栏右键菜单的移动对等入口。 */}

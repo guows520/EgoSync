@@ -16,6 +16,9 @@
 //    铃铛/连接状态头部右端、设置模态小屏无 tab 切换行、角色「⋯」在设置右边
 //    ——①②④在本 spec 有几何/显隐断言，③的 DOM 顺序断言论 RoleHeader.test.tsx
 //    新增 it（compareDocumentPosition）。
+// 10. 移动端页签去重（2026-09-26 人类指令，spec-web-mobile-tab-dedup）：工作区
+//    面板自带 tab 条小屏退场（条内钮不可见）、关闭 X 上移头部（角色=tab 簇右
+//    侧；管家=第一行右端）——点击 X 回对话；桌面双栏两条并存原样保留。
 //
 // 视口纪律：登录态在桌面宽度下锚定（openWebAppAndLogin 的就绪探测依赖
 // 可见徽标），再切 375（CSS 媒体查询即时重排）；after 还原桌面宽度——
@@ -189,6 +192,14 @@ describe('Web 移动端形态与 PWA（Story 16.4，375×812）', () => {
     // 16.4 布局修复（drill-down）：任务 tab 打开后对话区退场（max-md:hidden）
     expect(await (await $('textarea, input[type="text"]')).isDisplayed()).toBe(false);
 
+    // 移动端去重：面板自带 tab 条（任务清单/记忆档案/设置 + X）小屏整条退场
+    // （DOM 在——互斥是 max-md:hidden 类对；existing+displayed 双断言区分
+    // 「媒体查询隐藏」与「整条被删」），关闭入口上移头部
+    const rolePanelBar = await $('[data-testid="role-panel-tab-bar"]');
+    expect(await rolePanelBar.isExisting()).toBe(true);
+    expect(await rolePanelBar.isDisplayed()).toBe(false);
+    expect(await (await $('[data-testid="role-close-tab"]')).isDisplayed()).toBe(true);
+
     // 排序模式开：拖拽把手退场、↑/↓ 登场
     await $('[data-testid^="sort-mode-"]').click();
     const moveDown = await $(`button[aria-label="下移 ${titleA}"]`);
@@ -217,6 +228,13 @@ describe('Web 移动端形态与 PWA（Story 16.4，375×812）', () => {
     expect(await collectHorizontalOverflow()).toEqual([]);
 
     await saveWebSmokeScreenshot('web-mobile-04-375px-task-sort');
+
+    // 移动端去重收口：头部关闭 X 点击 → 对话区回归（toggle 关闭语义的显式入口）
+    await $('[data-testid="role-close-tab"]').click();
+    await browser.waitUntil(
+      async () => (await $('textarea, input[type="text"]')).isDisplayed(),
+      { timeout: 10000, timeoutMsg: '头部关闭 X 未让对话区回归' },
+    );
   });
 
   it('仪表盘 + 通知面走查：375px 全程无横向溢出（矩形级）', async () => {
@@ -238,6 +256,13 @@ describe('Web 移动端形态与 PWA（Story 16.4，375×812）', () => {
       return pane ? pane.getBoundingClientRect().height / window.innerHeight : null;
     });
     expect(workspaceHeight as number).toBeGreaterThan(0.6);
+
+    // 移动端去重：面板 tab 条（任务概览等）小屏退场——existing+displayed 双
+    // 断言（DOM 在、媒体查询隐藏）；关闭 X 上移第一行右端
+    const butlerPanelBar = await $('[data-testid="butler-panel-tab-bar"]');
+    expect(await butlerPanelBar.isExisting()).toBe(true);
+    expect(await butlerPanelBar.isDisplayed()).toBe(false);
+    expect(await (await $('[data-testid="butler-close-tab"]')).isDisplayed()).toBe(true);
 
     // 矩形级无溢出（无视 overflow 裁剪——真实溢出即报）
     const assertNoHorizontalOverflow = async () => {
@@ -270,6 +295,13 @@ describe('Web 移动端形态与 PWA（Story 16.4，375×812）', () => {
     expect(withPanel.offenders).toEqual([]);
     await clickByJs('button[aria-label="关闭通知中心"]');
     await browser.pause(300);
+
+    // 移动端去重收口：头部关闭 X 点击 → 对话区回归（工作区卸载）
+    await $('[data-testid="butler-close-tab"]').click();
+    await browser.waitUntil(
+      async () => (await $('[data-testid="butler-chat-pane"]')).isDisplayed(),
+      { timeout: 10000, timeoutMsg: '头部关闭 X 未让对话区回归' },
+    );
   });
 
   it('设置 tab：7 项入口 + 打开桌面同款 GlobalSettingsModal（移动全屏）', async () => {

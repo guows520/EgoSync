@@ -112,4 +112,38 @@ describe('ButlerView 小屏 tab 全屏化（Story 16.4 布局修复）', () => {
     expect(screen.getByTestId('butler-current-tab')).toHaveTextContent('dashboard');
     expect(screen.getByTestId('butler-source-target')).toHaveTextContent('msg-butler-source');
   });
+
+  /// 移动端去重（2026-09-26 人类指令，spec-web-mobile-tab-dedup）：面板 tab 条
+  /// 小屏退场后，关闭 X 上移头部第一行右端——tab 打开时渲染；点击经 toggle
+  /// 语义关闭工作区回对话（与再点当前 tab 等价）；md:hidden 桌面零变化。
+  it('tab 打开时头部渲染关闭钮，点击关闭工作区回对话', () => {
+    renderButler();
+
+    fireEvent.click(screen.getByRole('button', { name: /仪表盘/ }));
+    const closeButton = screen.getByTestId('butler-close-tab');
+    expect(closeButton).toHaveAttribute('aria-label', '关闭');
+    expect(closeButton).toHaveClass('md:hidden');
+
+    fireEvent.click(closeButton);
+    expect(screen.queryByTestId('butler-current-tab')).not.toBeInTheDocument();
+  });
+
+  it('tab 未打开时头部不渲染关闭钮', () => {
+    renderButler();
+    expect(screen.queryByTestId('butler-close-tab')).not.toBeInTheDocument();
+  });
+
+  /// 盲猎补漏（位置钉孔，与角色侧对等）：X 必须在头部第一行（标题行）内、
+  /// 且不在 tab 行——「不放 tab 行」是 spec 决策（tab 行 4 钮 + X 在 375px
+  /// 溢出约 10px），无本钉孔时误挪进 tab 行全绿漏网。
+  it('关闭钮位于头部第一行标题行内，不在 tab 行', () => {
+    renderButler();
+
+    fireEvent.click(screen.getByRole('button', { name: /仪表盘/ }));
+    const closeButton = screen.getByTestId('butler-close-tab');
+    const titleRow = (screen.getByText('数字分身管家').closest('div') as HTMLElement);
+    expect(titleRow.contains(closeButton)).toBe(true);
+    const tabRow = (screen.getByRole('button', { name: /仪表盘/ }).parentElement as HTMLElement);
+    expect(tabRow.contains(closeButton)).toBe(false);
+  });
 });

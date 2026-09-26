@@ -100,7 +100,10 @@ export function ButlerWorkspacePanel({
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between border-b border-slate-200/80 dark:border-slate-700/80 px-6 pt-4 bg-white/60 dark:bg-slate-800/60 backdrop-blur-md shrink-0">
+      {/* 移动端去重（2026-09-26 人类指令，spec-web-mobile-tab-dedup）：头部
+          ButlerView 已有一套同功能 tab（仪表盘/任务/记忆/设置），小屏两排相邻
+          重复——本行（含关闭 X）<768px 整条退场，桌面保留（零变化）。 */}
+      <div data-testid="butler-panel-tab-bar" className="max-md:hidden flex items-center justify-between border-b border-slate-200/80 dark:border-slate-700/80 px-6 pt-4 bg-white/60 dark:bg-slate-800/60 backdrop-blur-md shrink-0">
         <div className="flex gap-6">
           <button onClick={() => setTab('dashboard')} className={cn("pb-3.5 text-[14px] font-medium transition-colors border-b-[3px]", currentTab === 'dashboard' ? "text-indigo-600 border-current" : "border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200")}>
             仪表盘
@@ -115,7 +118,7 @@ export function ButlerWorkspacePanel({
             管家设置
           </button>
         </div>
-        <button onClick={() => setTab(null)} className="pb-3.5 text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 transition-colors">
+        <button onClick={() => setTab(null)} aria-label="关闭" className="pb-3.5 text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 transition-colors">
           <X size={18} />
         </button>
       </div>

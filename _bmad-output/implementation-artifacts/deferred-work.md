@@ -542,3 +542,12 @@ All items resolved in the same session:
 - source_spec: `_bmad-output/implementation-artifacts/spec-web-mobile-adaptive-fixes.md`
   summary: iOS Safari 真机走查（五症状修复在真机的最终确认）留人工：项目基线 375×812 全为模拟器/浏览器窗口，safe-area、动态工具栏、iOS 滚动弹性等真机行为无自动化覆盖。
   evidence: spec-web-mobile-adaptive-fixes.md Review Triage Log F14 + 案卷验证表 iOS 行：①④的 44px 触控与图标在小屏的实际命中、⑤的贴底即时性（iOS 程序化滚动与 CSS scroll-behavior 交互历史上有 quirks）、②③的换行行高均需真机确认；iOS 人工清单口径沿用 16.4 前案。
+- source_spec: `_bmad-output/implementation-artifacts/spec-web-mobile-control-density.md`
+  summary: 控件密度降档后真机 375px 视觉走查留人工：ActionCard「拒绝/确认」36px 档位 tap 观感/误触率、LLM/MCP 卡「当前启用」裸勾与三图标 36px 簇的视觉确认，仓内无改前/改后视觉对照记录（owner 两症状均为纯观感反馈，验收回路当前只由类级钉孔闭合）。
+  evidence: spec-web-mobile-control-density.md Review Triage Log G6（盲扫层，medium）：重协商 ≥44px 红线为全 App 级设计约束的局部例外，36px 在真机的可接受度需人工确认；与 deferred-work F14 iOS 清单、F14 TaskModal 走查同批执行。模拟器 375px 截图确认亦可先行，真机数据留 iOS/安卓清单。
+- source_spec: `_bmad-output/implementation-artifacts/spec-web-mobile-control-density.md`
+  summary: `epic-16-context.md:45` stale 范围扩展：除既有「ActionCard 全宽堆叠」外，新增「按钮小屏高度 44px→36px」维度（owner 2026-09-26 档位 B 重协商），该冻结规划件的高度描述同样需同批修订。
+  evidence: spec-web-mobile-control-density.md Review Triage Log G7（盲扫层，medium）：F12 条目（同文件全宽堆叠 stale）仍在 deferred，本次增量新增同一文件的高度维度漂移；修订需 owner 显式授权（冻结规划件），重协商链已由 spec-16-4 Spec Change Log「交付后增量二」留痕。
+- source_spec: `_bmad-output/implementation-artifacts/spec-web-mobile-control-density.md`
+  summary: 375px e2e 未覆盖控件密度断言（按钮高度/徽章形态/图标簇间距），提议的 web-mobile.spec.ts 高度与徽章断言未实施。
+  evidence: spec-web-mobile-control-density.md Review Triage Log G6（盲扫层）：本增量 owner 授权链止于「375px e2e 回归（防选择器波及）」，新增 e2e 断言超出授权范围；且该 spec 有已知 setWindowSize 负载 flake，新增断言前需先评估稳定性；类级钉孔（ActionCard.mobile.test.tsx / GlobalSettingsModal.mobileIcons.test.tsx）已闭合回归守门。

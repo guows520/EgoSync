@@ -715,14 +715,24 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported, 
                         <div className="flex items-center gap-3 max-md:min-w-0">
                           <input type="radio" id={`conf-${conf.id}`} name="activeConfig" checked={conf.isDefault} onChange={() => handleSetDefault(conf.id)} className="w-4 h-4 text-indigo-600 accent-indigo-600" />
                           <label htmlFor={`conf-${conf.id}`} className="font-medium text-[15px] text-slate-800 dark:text-slate-100 cursor-pointer">{conf.name}</label>
-                          {conf.isDefault && <span className="px-2 py-0.5 rounded text-[11px] font-medium bg-indigo-100 text-indigo-700 max-md:flex max-md:items-center max-md:gap-1"><Check size={12} className="md:hidden" /><span className="max-md:sr-only">当前启用</span></span>}
+                          {conf.isDefault && <span className="px-2 py-0.5 rounded text-[11px] font-medium bg-indigo-100 text-indigo-700 max-md:hidden">当前启用</span>}
                         </div>
-                        <div className="flex items-center gap-2">
-                          <button onClick={() => handleTestConnection(conf.id)} disabled={testingConfigId === conf.id} className="px-3 py-1.5 text-[13px] font-medium text-slate-600 dark:text-slate-300 hover:text-green-600 hover:bg-green-50 dark:hover:bg-green-900/30 rounded-lg transition-colors disabled:opacity-50 max-md:h-11 max-md:w-11 max-md:p-0 max-md:flex max-md:items-center max-md:justify-center">
+                        {/* 2026-09-26 owner 反馈：移动端「当前启用」去背景只留勾、四个图标（✓/⚡/✎/🗑）
+                            紧凑靠右成一簇——桌面 Chip 原样在名字旁（:718 max-md:hidden）；小屏勾簇
+                            （md:hidden，含 max-md:sr-only 可访问名）并入右组、右组 max-md:gap-1 收紧。
+                            桌面逐像素零变化。留痕：案卷 web-mobile-control-density-investigation.md */}
+                        <div className="flex items-center gap-2 max-md:gap-1">
+                          {conf.isDefault && (
+                            <span className="md:hidden max-md:flex max-md:items-center max-md:shrink-0">
+                              <Check size={12} className="text-indigo-600 dark:text-indigo-400" />
+                              <span className="max-md:sr-only">当前启用</span>
+                            </span>
+                          )}
+                          <button onClick={() => handleTestConnection(conf.id)} disabled={testingConfigId === conf.id} className="px-3 py-1.5 text-[13px] font-medium text-slate-600 dark:text-slate-300 hover:text-green-600 hover:bg-green-50 dark:hover:bg-green-900/30 rounded-lg transition-colors disabled:opacity-50 max-md:h-9 max-md:w-9 max-md:p-0 max-md:flex max-md:items-center max-md:justify-center">
                             {testingConfigId === conf.id ? <Loader2 size={14} className="animate-loading-spin" /> : <><span className="max-md:sr-only">测试连接</span><Zap size={14} className="md:hidden" /></>}
                           </button>
-                          <button onClick={() => handleEdit(conf)} className="px-3 py-1.5 text-[13px] font-medium text-slate-600 dark:text-slate-300 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 rounded-lg transition-colors max-md:h-11 max-md:w-11 max-md:p-0 max-md:flex max-md:items-center max-md:justify-center"><span className="max-md:sr-only">编辑</span><Pencil size={14} className="md:hidden" /></button>
-                          <button onClick={() => handleDelete(conf.id)} className="px-3 py-1.5 text-[13px] font-medium text-slate-600 dark:text-slate-300 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors max-md:h-11 max-md:w-11 max-md:p-0 max-md:flex max-md:items-center max-md:justify-center"><span className="max-md:sr-only">删除</span><Trash2 size={14} className="md:hidden" /></button>
+                          <button onClick={() => handleEdit(conf)} className="px-3 py-1.5 text-[13px] font-medium text-slate-600 dark:text-slate-300 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 rounded-lg transition-colors max-md:h-9 max-md:w-9 max-md:p-0 max-md:flex max-md:items-center max-md:justify-center"><span className="max-md:sr-only">编辑</span><Pencil size={14} className="md:hidden" /></button>
+                          <button onClick={() => handleDelete(conf.id)} className="px-3 py-1.5 text-[13px] font-medium text-slate-600 dark:text-slate-300 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors max-md:h-9 max-md:w-9 max-md:p-0 max-md:flex max-md:items-center max-md:justify-center"><span className="max-md:sr-only">删除</span><Trash2 size={14} className="md:hidden" /></button>
                         </div>
                       </div>
                       <div className="mt-3 pl-7 grid grid-cols-2 gap-y-2 text-[13px] text-slate-500 dark:text-slate-400">
@@ -857,7 +867,7 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported, 
                             </div>
                           )}
                         </div>
-                        <div className="flex shrink-0 items-center gap-2">
+                        <div className="flex shrink-0 items-center gap-2 max-md:gap-1">
                           <button
                             type="button"
                             role="switch"
@@ -876,11 +886,11 @@ export function GlobalSettingsModal({ onClose, onDataDestroyed, onDataImported, 
                               )}
                             />
                           </button>
-                          <button onClick={() => handleTestMcp(server.id)} disabled={testingMcpId === server.id} className="px-3 py-1.5 text-[13px] font-medium text-slate-600 dark:text-slate-300 hover:text-green-600 hover:bg-green-50 dark:hover:bg-green-900/30 rounded-lg transition-colors disabled:opacity-50 max-md:h-11 max-md:w-11 max-md:p-0 max-md:flex max-md:items-center max-md:justify-center">
+                          <button onClick={() => handleTestMcp(server.id)} disabled={testingMcpId === server.id} className="px-3 py-1.5 text-[13px] font-medium text-slate-600 dark:text-slate-300 hover:text-green-600 hover:bg-green-50 dark:hover:bg-green-900/30 rounded-lg transition-colors disabled:opacity-50 max-md:h-9 max-md:w-9 max-md:p-0 max-md:flex max-md:items-center max-md:justify-center">
                             {testingMcpId === server.id ? <Loader2 size={14} className="animate-loading-spin" /> : <><span className="max-md:sr-only">测试连接</span><Zap size={14} className="md:hidden" /></>}
                           </button>
-                          <button onClick={() => handleEditMcp(server)} className="px-3 py-1.5 text-[13px] font-medium text-slate-600 dark:text-slate-300 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 rounded-lg transition-colors max-md:h-11 max-md:w-11 max-md:p-0 max-md:flex max-md:items-center max-md:justify-center"><span className="max-md:sr-only">编辑</span><Pencil size={14} className="md:hidden" /></button>
-                          <button onClick={() => setPendingDeleteMcp(server)} className="px-3 py-1.5 text-[13px] font-medium text-slate-600 dark:text-slate-300 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors max-md:h-11 max-md:w-11 max-md:p-0 max-md:flex max-md:items-center max-md:justify-center"><span className="max-md:sr-only">删除</span><Trash2 size={14} className="md:hidden" /></button>
+                          <button onClick={() => handleEditMcp(server)} className="px-3 py-1.5 text-[13px] font-medium text-slate-600 dark:text-slate-300 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 rounded-lg transition-colors max-md:h-9 max-md:w-9 max-md:p-0 max-md:flex max-md:items-center max-md:justify-center"><span className="max-md:sr-only">编辑</span><Pencil size={14} className="md:hidden" /></button>
+                          <button onClick={() => setPendingDeleteMcp(server)} className="px-3 py-1.5 text-[13px] font-medium text-slate-600 dark:text-slate-300 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors max-md:h-9 max-md:w-9 max-md:p-0 max-md:flex max-md:items-center max-md:justify-center"><span className="max-md:sr-only">删除</span><Trash2 size={14} className="md:hidden" /></button>
                         </div>
                       </div>
                     </div>

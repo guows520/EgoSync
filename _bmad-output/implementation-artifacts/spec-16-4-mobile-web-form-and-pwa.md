@@ -17,7 +17,7 @@ context:
 
 **Problem:** 云端版 Web 客户端当前在手机浏览器（<768px）仍是桌面布局：56px 侧栏挤占屏幕、无移动导航、部分触控目标小于 44px、底部安全区避让不全；且无 PWA 能力（不能加到主屏、无外壳离线缓存）。16.2 建立了响应式基线但 UX 定稿级移动形态被显式延期，本次结清（依据 2026-09-25 批准的 sprint-change-proposal-2026-09-25.md）。
 
-**Approach:** <768px 时侧栏退场、改底部 tab 导航（管家/角色/设置），主区全屏；五大核心面按 16.2 响应式模式收敛（`md:` 桌面值 + `max-md:` 移动值双声明），触控目标 ≥44×44px，tab/输入区/模态/Toast 补 `env(safe-area-inset-*)` 避让；任务触屏拖拽降级为排序模式按钮（复用既有重排路径，dnd-kit `disabled` 零新依赖）；PWA 三件套手写落地：manifest + 静态 maskable 图标 + 约百行 Service Worker（仅外壳缓存，业务数据零落盘）；CSP 增列 `manifest-src 'self'` + `worker-src 'self'` 并同步契约测试；新增 375×812 移动视口 e2e 旅程。
+**Approach:** <768px 时侧栏退场、改底部 tab 导航（管家/角色/设置），主区全屏；五大核心面按 16.2 响应式模式收敛（`md:` 桌面值 + `max-md:` 移动值双声明），触控目标 ≥44×44px〔2026-09-26 owner 授权修订：ActionCard 小屏两按钮与 LLM/MCP 卡三个操作图标钮经 owner 显式重协商降至 36px（档位 B）——Spec Change Log 同日「交付后增量二」，其余触控面 ≥44px 不变〕，tab/输入区/模态/Toast 补 `env(safe-area-inset-*)` 避让；任务触屏拖拽降级为排序模式按钮（复用既有重排路径，dnd-kit `disabled` 零新依赖）；PWA 三件套手写落地：manifest + 静态 maskable 图标 + 约百行 Service Worker（仅外壳缓存，业务数据零落盘）；CSP 增列 `manifest-src 'self'` + `worker-src 'self'` 并同步契约测试；新增 375×812 移动视口 e2e 旅程。
 
 ## Boundaries & Constraints
 
@@ -141,6 +141,13 @@ context:
 三层评审（盲扫 N=10 / 边界 / 验证缺口）共产出 24 条去重发现，逐条读证裁决（Review Triage Log R1–R24）：patch ×12 组、defer ×3、false/驳回 ×9（含「diff 缺文件」系父代理 `git add -N` 暂存失误而非代码问题、「manifest MIME 异常」经起服务端 curl 实测证伪、「耳语角标丢失」系读漏已实现代码）。评审期间父代理未停摆：R20（冻结边界）当场以「恢复既有断言 + 组件侧 inert 垫片 + 新建 RoleView.mobile.test.tsx 钉 flex 类」不越界解决，并在 Spec Change Log 立规则先例。其余 patch 由实现子代理（step-03 同一实例，耗尽后重激活）按「最小改动」续修：设置初始 tab 泄漏收敛、排序模式断点还原、AC2 触控 44px 三处补齐（顶部 tab/登出弹窗/「⋯」菜单项）、manifest 元数据修正（删 orientation 自决、补 id、purpose 双声明）、legacy Safari 回退、e2e 视口下界+任务面溢出断言、README 登出入口句、四个新测试文件（ActionCard.mobile / MobileSettingsView.browser / Modal.safearea / GlobalSettingsModal.initialTab——一律新建文件，遵守冻结块「新测试一律新建文件」）。defer 三项（SW 更新行为验证、移动形态角色归档/删除对等入口、桌面 e2e 环境阻断升级）记入 deferred-work.md，其中桌面 e2e 按 AGENTS.md「连续失败 3 次」向用户完整报备。
 
 ## Spec Change Log
+
+### 2026-09-26 · 交付后增量二：移动端控件密度降档（owner 显式重协商触控红线）
+
+- **触发**：用户口述两症状（承接 b5f1ebd 五症状修复的细化反馈；根因与证据链见案卷 `investigations/web-mobile-control-density-investigation.md`，Confidence: High）：①建议卡「拒绝/确认」小屏 44px 观感过高（`ActionCard.tsx` 的 `max-md:min-h-[44px]`——内容仅需 ~31.5px）；②LLM 卡「当前启用」徽章要去背景只留勾、与三个操作图标紧凑靠右成一簇。症状①触及冻结块「触控目标 ≥44×44px」（同条目行 :20，与 2026-09-26 五症状④映射中「≥44px 触控」同源）；症状②为④图标化后的视觉细化，不触红线。owner 2026-09-26 两项裁决：**档位 B=36px** 重协商 44px 红线（仅限本条目列明组件，其余触控面 44px 不变——局部特例，防外推）；**徽章去背景只管手机**（桌面 Chip 原样，桌面 ≥768px 逐像素零变化红线不破）。
+- **改动**（硬红线同前：只加/改 `max-md:`/`md:` 类对，桌面零变化）：① `ActionCard.tsx` 两钮 `max-md:min-h-[44px]` → `max-md:min-h-[36px]`（两组标签「拒绝/确认」「立即处理/稍后」同享，`py-1.5`/`text-[13px]` 与容器 `flex flex-wrap justify-end gap-2 mt-3` 不动；文件注释补重协商留痕）。② `GlobalSettingsModal.tsx` LLM 卡：「当前启用」徽章拆分双断点双形态——桌面 = 名字旁 Chip 原样（加 `max-md:hidden`、去移动 Check 与 sr-only）；小屏 = 右组首勾簇（`md:hidden`，Check 12px `text-indigo-600 dark:text-indigo-400` + `max-md:sr-only` 可访问名）与三钮同组；右组桌面基线 `gap-2` 保留并追加 `max-md:gap-1`；三个操作钮 `max-md:h-11 max-md:w-11` → `max-md:h-9 max-md:w-9`（36px）。MCP 卡同步：三个操作钮同降 36px、右组（toggle+三钮）保留 `gap-2` 并追加 `max-md:gap-1`——两卡同族一致；MCP toggle 不动。图标钮机制（单按钮 + sr-only 文字 + md:hidden 图标、loading 纯 Loader2）零变化。
+- **测试**：owner 授权同型改写既有钉孔两处——`ActionCard.mobile.test.tsx`（`max-md:min-h-[44px]` → `max-md:min-h-[36px]`，另钉「非 44px/40px」档位痕迹；容器/桌面 py-1.5 断言不动）、`GlobalSettingsModal.mobileIcons.test.tsx`（`expectIconButton` 的 h-11/w-11 → h-9/w-9 并钉非 44/40px；徽章断言改双形态：桌面 Chip `max-md:hidden` + 无 svg、小屏勾簇 `md:hidden`/`max-md:flex`/Check `text-indigo-600` 且与三钮同组、右组 `max-md:gap-1`；MCP 右组同步 `max-md:gap-1` 钉孔；按名唯一命中与卡头 flex-wrap/min-w-0 断言保留）。既有 `GlobalSettingsModal.test.tsx` / `ActionCard.test.tsx` / `web-resident-loop.spec.ts` 零改动全绿；e2e `web-mobile.spec.ts` 无高度/徽章/图标簇断言（该类降档无 e2e 守门，验证以类级钉孔 + 375px 回归为主）。
+- **实现记录**：spec `spec-web-mobile-control-density.md`（oneshot，status done）。实现期一处调试修正：徽章文本成为 Chip 自身直接文本（非旧结构 sr-only 子 span），`getAllByText('当前启用')` 首项即 Chip 本体——断言相应改为取本体而非 parent（钉孔文件内修正，非产品代码问题）。
 
 ### 2026-09-26 · 交付后增量：移动自适应五症状修复（owner 显式重协商冻结边界）
 

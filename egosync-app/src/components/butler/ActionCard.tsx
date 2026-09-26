@@ -198,23 +198,30 @@ export function ActionCard({ suggestion, onConfirm, onReject, onDismiss, confirm
       </div>
 
       {status === 'pending' && !showRejectionReasons && (
-        // 2026-09-26 owner 裁决：小屏一行右对齐（原全宽纵排为 16.4 冻结
-        // 设计，已显式重协商）+ 触控 ≥44px；桌面维持 justify-end 紧凑排。
+        // 2026-09-26 owner 裁决一：小屏一行右对齐（原全宽纵排为 16.4 冻结
+        // 设计，已显式重协商）+ 触控 ≥44px〔同日经 owner 重协商降至 36px——
+        // 见裁决二〕；桌面维持 justify-end 紧凑排。
         // flex-wrap：长标签组合放不下时整钮换行（review F3——调查卷
         // Recommended Next Steps ② 原建议项；当前两组标签 375px 均放得下，
         // 该类 inert，防未来自定义标签挤压/逐字换行）。
+        // 2026-09-26 owner 裁决二：36px 触控降档——因 owner 反馈小屏按钮
+        // 44px 观感过高（内容仅需 ~31.5px），显式重协商 16.4 冻结的 ≥44px
+        // 红线（spec-16-4:20）至 36px（档位 B）。此为局部特例，勿外推至
+        // 其它触控面（BottomTabBar/ChatInput/TasksTab/RoleHeader 仍 44px）。
+        // 留痕：spec-16-4 Spec Change Log 2026-09-26 第二条目 + 案卷
+        // investigations/web-mobile-control-density-investigation.md。
         <div className="flex flex-wrap justify-end gap-2 mt-3">
           <button
             type="button"
             onClick={handleRejectClick}
-            className="px-3 py-1.5 max-md:min-h-[44px] max-md:flex max-md:items-center max-md:justify-center rounded-lg text-[13px] font-medium text-slate-500 dark:text-slate-300 border border-slate-200 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700 hover:text-slate-700 dark:hover:text-slate-100 transition-colors motion-reduce:transition-none"
+            className="px-3 py-1.5 max-md:min-h-[36px] max-md:flex max-md:items-center max-md:justify-center rounded-lg text-[13px] font-medium text-slate-500 dark:text-slate-300 border border-slate-200 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700 hover:text-slate-700 dark:hover:text-slate-100 transition-colors motion-reduce:transition-none"
           >
             {rejectLabel}
           </button>
           <button
             type="button"
             onClick={handleConfirm}
-            className="px-4 py-1.5 max-md:min-h-[44px] max-md:flex max-md:items-center max-md:justify-center rounded-lg text-[13px] font-medium bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm transition-colors motion-reduce:transition-none"
+            className="px-4 py-1.5 max-md:min-h-[36px] max-md:flex max-md:items-center max-md:justify-center rounded-lg text-[13px] font-medium bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm transition-colors motion-reduce:transition-none"
           >
             {confirmLabel}
           </button>
